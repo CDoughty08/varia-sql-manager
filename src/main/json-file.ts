@@ -2,7 +2,9 @@ import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-export type JsonRead = { kind: 'missing' } | { kind: 'invalid'; tooLarge: boolean } | { kind: 'ok'; value: unknown }
+/** Why a file's content was rejected; fixed values, so callers can show them without echoing file content. */
+export type JsonInvalidReason = 'size' | 'encoding' | 'json'
+export type JsonRead = { kind: 'missing' } | { kind: 'invalid'; tooLarge: boolean; reason?: JsonInvalidReason } | { kind: 'ok'; value: unknown }
 
 /**
  * Reads a bounded UTF-8 JSON file. File-system failures (permissions, locks, a directory at the path) are thrown so
@@ -13,15 +15,17 @@ export async function readJsonFile(path: string, limit: number): Promise<JsonRea
   try {
     const info = await stat(path)
     if (!info.isFile()) throw new Error('Expected a regular file at ' + path + '.')
-    if (info.size > limit) return { kind: 'invalid', tooLarge: true }
+    if (info.size > limit) return { kind: 'invalid', tooLarge: true, reason: 'size' }
     bytes = await readFile(path)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
     throw error
   }
-  if (bytes.length > limit) return { kind: 'invalid', tooLarge: true }
-  try { return { kind: 'ok', value: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } }
-  catch { return { kind: 'invalid', tooLarge: false } }
+  if (bytes.length > limit) return { kind: 'invalid', tooLarge: true, reason: 'size' }
+  let text: string
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { return { kind: 'invalid', tooLarge: false, reason: 'encoding' } }
+  try { return { kind: 'ok', value: JSON.parse(text) } }
+  catch { return { kind: 'invalid', tooLarge: false, reason: 'json' } }
 }
 
 /** Preserves an unreadable preferences file beside the original before defaults replace it. */

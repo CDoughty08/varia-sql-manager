@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -7,11 +7,15 @@ import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
+import { AppearanceService } from './appearance'
+import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import type { ApiResult, RpcMethod, RpcMethods, WorkbenchCommand } from '../shared/contracts'
 import { fileShortcut, menuShortcut } from '../shared/shortcuts'
+import { sanitizeLabel } from '../shared/theme/format'
+import type { ThemeState } from '../shared/theme/types'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererFile = join(here, '../renderer/index.html')
@@ -22,6 +26,7 @@ const files = new SqlFileStore()
 let closeApproved = false
 let openMenu: Menu | null = null
 let layouts: LayoutStore
+let appearance: AppearanceService
 // Renderer lifecycle: exit confirmation needs a live workbench that has subscribed to commands.
 let rendererLoaded = false
 let rendererReady = false
@@ -71,17 +76,59 @@ function rendererCanConfirm(window: BrowserWindow): boolean {
   return rendererReady && !rendererUnresponsive && !window.webContents.isCrashed()
 }
 
+const menuActions: ApplicationMenuActions = {
+  command,
+  // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
+  setTheme: patch => { appearance.setPreference(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
+  createTheme: () => {
+    appearance.createStarterTheme().then(path => shell.showItemInFolder(path), error => { void appearance.notify('The custom theme could not be created: ' + errorMessage(error, 'unknown error')) })
+  },
+  openThemesFolder: () => { openThemesFolder().catch(() => {}) },
+  reloadThemes: () => { void appearance.reload() }
+}
+
+function buildMenu(): void {
+  openMenu?.closePopup()
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform)))
+}
+
+/** The menu and the IPC call share this; a failure becomes a notice because the menu has no other way to report it. */
+async function openThemesFolder(): Promise<void> {
+  let failure: string
+  try { failure = await shell.openPath(await appearance.ensureFolder()) }
+  catch (error) { failure = errorMessage(error, 'unknown error') }
+  if (!failure) return
+  const message = 'The themes folder could not be opened: ' + sanitizeLabel(failure, 200)
+  void appearance.notify(message)
+  throw new Error(message)
+}
+
+/** Native chrome, the renderer, and the menu follow every published theme state; nothing reloads. */
+function applyAppearance(state: ThemeState): void {
+  const window = mainWindow
+  if (window && !window.isDestroyed()) {
+    const chrome = appearance.windowChrome()
+    window.setBackgroundColor(chrome.backgroundColor)
+    if (process.platform !== 'darwin') {
+      try { window.setTitleBarOverlay(chrome.overlay) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
+    }
+    window.webContents.send('varia:theme-changed', state)
+  }
+  buildMenu()
+}
+
 function createWindow(): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
   rendererLoaded = false
   rendererReady = false
   rendererUnresponsive = false
+  const chrome = appearance.windowChrome()
   mainWindow = new BrowserWindow({
     title: 'Varia SQL Manager', width: 1440, height: 960, minWidth: 1024, minHeight: 700,
-    backgroundColor: '#11151c', show: process.env.VARIA_SMOKE_TEST !== '1',
+    backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
-    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { color: '#181f2a', symbolColor: '#d9e1ec', height: 34 } }),
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
     webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1' }
   })
   const window = mainWindow, contents = window.webContents
@@ -150,7 +197,7 @@ function createWindow(): void {
   window.on('closed', () => { mainWindow = null; resetRendererState() })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!primaryInstance) return
   const root = app.getAppPath()
   backend = app.isPackaged
@@ -159,6 +206,15 @@ app.whenReady().then(() => {
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
+  // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
+  appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
+  await appearance.initialize()
+  appearance.onDidChange(applyAppearance)
+  nativeTheme.on('updated', () => appearance.systemChanged())
+  handle('varia:theme-state', () => appearance.state)
+  handle('varia:theme-set', value => appearance.setPreference(value))
+  handle('varia:themes-reload', () => appearance.reload())
+  handle('varia:themes-open-folder', () => openThemesFolder())
   ipcMain.on('varia:commands-ready', (event, ready: unknown) => { if (trusted(event)) rendererReady = ready === true })
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
   handle('varia:connections-save', value => connectionStore.save(connectionProfileInputSchema.parse(value)))
@@ -235,38 +291,10 @@ app.whenReady().then(() => {
     closeApproved = true
     app.quit()
   })
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { id: 'menu.file', label: 'File', submenu: [
-      { id: 'file.new', label: 'New Query', accelerator: 'CmdOrCtrl+N', click: () => command('file.new') },
-      { id: 'file.open', label: 'Open…', accelerator: 'CmdOrCtrl+O', click: () => command('file.open') },
-      { id: 'file.save', label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => command('file.save') },
-      { id: 'file.saveAs', label: 'Save As…', accelerator: 'CmdOrCtrl+Shift+S', click: () => command('file.saveAs') },
-      { type: 'separator' },
-      { id: 'file.close', label: 'Close Query', accelerator: 'CmdOrCtrl+W', click: () => command('file.close') },
-      { type: 'separator' }, { role: 'quit' }
-    ] },
-    { id: 'menu.edit', label: 'Edit', submenu: [
-      { id: 'edit.undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, click: () => command('edit.undo') },
-      { id: 'edit.redo', label: 'Redo', accelerator: process.platform === 'darwin' ? 'Cmd+Shift+Z' : 'Ctrl+Y', registerAccelerator: false, click: () => command('edit.redo') },
-      { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }
-    ] },
-    { id: 'menu.view', label: 'View', submenu: [
-      { id: 'layout.save', label: 'Save Layout…', click: () => command('layout.save') },
-      { id: 'layout.load', label: 'Load Layout…', click: () => command('layout.load') },
-      { id: 'layout.reset', label: 'Reset Layout', click: () => command('layout.reset') },
-      { type: 'separator' }, { role: 'reload' }, { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }
-    ] },
-    { id: 'menu.window', label: 'Window', submenu: [
-      { id: 'window.explorer', label: 'Object Explorer', click: () => command('window.explorer') },
-      { id: 'window.editor', label: 'Query Editor', click: () => command('window.editor') },
-      { id: 'window.output', label: 'Query Output', click: () => command('window.output') },
-      { type: 'separator' },
-      { label: 'Save Window Layout…', click: () => command('layout.save') },
-      { label: 'Load Window Layout…', click: () => command('layout.load') },
-      { label: 'Reset Window Layout', click: () => command('layout.reset') }
-    ] }
-  ]))
+  buildMenu()
   createWindow()
+  // The full catalogue only feeds the menu, so it loads after the window is on its way.
+  void appearance.scan()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 }).catch(error => { dialog.showErrorBox('Varia startup failed', error instanceof Error ? error.message : 'Unknown error'); app.quit() })
 
