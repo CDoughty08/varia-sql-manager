@@ -1,8 +1,9 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import type { WorkbenchCommand } from '../shared/contracts'
+import { themeChoice } from '../shared/theme/choice'
 import { sanitizeLabel } from '../shared/theme/format'
 import { builtinThemes } from '../shared/theme/palette'
-import type { ThemePreference, ThemePreferencePatch, ThemeState, ThemeSummary, ThemeType } from '../shared/theme/types'
+import type { ThemePreference, ThemePreferencePatch, ThemeState, ThemeType } from '../shared/theme/types'
 
 export interface ApplicationMenuModel { theme: Pick<ThemeState, 'preference' | 'themes'> }
 export interface ApplicationMenuActions {
@@ -15,13 +16,6 @@ export interface ApplicationMenuActions {
 
 const themeLabelLength = 48
 const slotOf = (type: ThemeType) => type === 'dark' ? 'darkTheme' as const : 'lightTheme' as const
-
-/** The preference change for a click in a theme list: a dual theme fills both slots, and a fixed mode follows the list. */
-export function themeChoice(preference: ThemePreference, theme: Pick<ThemeSummary, 'id' | 'types'>, list: ThemeType): ThemePreferencePatch {
-  const patch: ThemePreferencePatch = theme.types.length > 1 ? { darkTheme: theme.id, lightTheme: theme.id } : list === 'dark' ? { darkTheme: theme.id } : { lightTheme: theme.id }
-  if (preference.mode !== 'system' && preference.mode !== list) patch.mode = list
-  return patch
-}
 
 /** Theme names come from user files: sanitized, cut to 48 characters, and `&` escaped where Electron reads mnemonics. */
 export function themeLabel(name: string): string {

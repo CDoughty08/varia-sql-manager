@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
-import { applicationMenuTemplate, themeChoice, themeLabel, type ApplicationMenuActions, type ApplicationMenuModel } from '../src/main/application-menu'
+import { applicationMenuTemplate, themeLabel, type ApplicationMenuActions, type ApplicationMenuModel } from '../src/main/application-menu'
+import { themeChoice } from '../src/shared/theme/choice'
 import type { ThemePreference, ThemeSummary } from '../src/shared/theme/types'
 
 const builtins: ThemeSummary[] = [
