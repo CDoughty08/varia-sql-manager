@@ -1,3 +1,5 @@
+import { z } from 'zod'
+import { themeIdSchema } from './format'
 import type { ThemePreference, ThemePreferencePatch, ThemeSummary, ThemeType } from './types'
 
 /**
@@ -9,3 +11,6 @@ export function themeChoice(preference: ThemePreference, theme: Pick<ThemeSummar
   if (preference.mode !== 'system' && preference.mode !== list) patch.mode = list
   return patch
 }
+
+/** `varia:theme-preview`: a catalogue id and type, or null to end the preview. Main looks the id up; it is never a path. */
+export const themePreviewSchema = z.object({ id: themeIdSchema, type: z.enum(['dark', 'light']) }).strict().nullable()

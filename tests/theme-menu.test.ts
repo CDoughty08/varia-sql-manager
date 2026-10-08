@@ -36,16 +36,17 @@ describe('application menu', () => {
     expect(template.map(item => item.id)).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.window'])
     expect(submenu(template, 'menu.file').map(item => item.id ?? item.role ?? item.type)).toEqual(['connection.connect', 'connection.disconnect', 'separator', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'separator', 'file.close', 'separator', 'quit'])
     expect(submenu(template, 'menu.view').map(item => item.id ?? item.role ?? item.type)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'separator', 'layout.save', 'layout.load', 'layout.reset', 'separator', 'editor.toggleWordWrap', 'separator', 'view.theme', 'separator', 'reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen'])
-    expect(submenu(template, 'view.theme').map(item => item.id ?? item.type)).toEqual(['theme.mode.dark', 'theme.mode.light', 'theme.mode.system', 'separator', 'theme.dark', 'theme.light', 'separator', 'theme.create', 'theme.openFolder', 'theme.reload'])
+    expect(submenu(template, 'view.theme').map(item => item.id ?? item.type)).toEqual(['preferences.colorTheme', 'separator', 'theme.mode.dark', 'theme.mode.light', 'theme.mode.system', 'separator', 'theme.dark', 'theme.light', 'separator', 'theme.create', 'theme.openFolder', 'theme.reload'])
     click(find(template, 'file.saveAs'))
     click(find(template, 'window.output'))
-    expect(handlers.command.mock.calls).toEqual([['file.saveAs'], ['window.output']])
+    click(find(template, 'preferences.colorTheme'))
+    expect(handlers.command.mock.calls).toEqual([['file.saveAs'], ['window.output'], ['preferences.colorTheme']])
     expect(find(template, 'edit.redo').accelerator).toBe('Ctrl+Y')
     expect(find(applicationMenuTemplate(model(), handlers, 'darwin'), 'edit.redo').accelerator).toBe('Cmd+Shift+Z')
   })
   it('shows the mode and each list as radio groups, with dual themes in both and invalid themes disabled', () => {
     const template = applicationMenuTemplate(model({ mode: 'system', lightTheme: 'harbor' }), actions(), 'linux')
-    expect(submenu(template, 'view.theme').slice(0, 3).map(item => [item.id, item.label, item.type, item.checked])).toEqual([
+    expect(submenu(template, 'view.theme').slice(2, 5).map(item => [item.id, item.label, item.type, item.checked])).toEqual([
       ['theme.mode.dark', 'Dark', 'radio', false], ['theme.mode.light', 'Light', 'radio', false], ['theme.mode.system', 'Follow System', 'radio', true]
     ])
     expect(radios(submenu(template, 'theme.dark'))).toEqual([

@@ -22,7 +22,7 @@ describe('menu model', () => {
       expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'role:cut', 'role:copy', 'role:paste', 'role:selectAll', '-', 'edit.find', 'edit.replace', '-', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
       expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'editor.toggleWordWrap', '-', 'submenu:view.theme', '-', ...displayRoles])
       expect(outline('query', platform)).toEqual(['query.execute', 'query.cancel', '-', 'query.changeConnection', 'query.changeDatabase'])
-      expect(outline('theme', platform)).toEqual([])
+      expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
     }
     expect(applicationMenus.map(menu => menu.id)).toEqual(['file', 'edit', 'view', 'query', 'window'])
   })
@@ -128,7 +128,8 @@ describe('application menu template', () => {
 
 describe('menu state', () => {
   it('covers every command with a menubar placement and every toggle', () => {
-    expect(menuCommandIds).toEqual(commandIds.filter(id => id !== 'window.close' && id !== 'explorer.refresh'))
+    // The other theme commands are in the palette only: the Theme submenu keeps PR1's main-owned items for them.
+    expect(menuCommandIds).toEqual(commandIds.filter(id => !['window.close', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder', 'preferences.reloadThemes'].includes(id)))
     expect(toggleCommandIds).toEqual(['editor.toggleWordWrap'])
   })
   it('accepts unique catalogue ids only', () => {

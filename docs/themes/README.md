@@ -14,10 +14,12 @@ Both generated files come from `src/shared/theme/`; do not edit them by hand (se
 ## Choosing a theme
 
 **View ▸ Theme** holds every theme command. On Windows and Linux, open it from the title-bar **View** menu (**Alt+V**); on
-macOS, from the menu bar.
+macOS, from the menu bar. The command palette (**F1**) has them too, as **Preferences: Color Theme…**, **Preferences: Create
+Custom Theme…**, **Preferences: Open Themes Folder**, and **Preferences: Reload Themes**.
 
 | Item | Effect |
 | --- | --- |
+| **Color Theme…** | A searchable list of the modes and every theme. Each row previews live as it becomes active; Enter chooses it as the menu would, and Escape or clicking elsewhere puts the current theme back. A preview is never saved. |
 | **Dark**, **Light**, **Follow System** | The mode. Dark is the default. Native menus follow the mode too; system dialogs such as file pickers follow it on macOS and keep the system appearance on Windows and Linux. |
 | **Dark Theme ▸**, **Light Theme ▸** | The theme used in each mode. Choosing from the list opposite a fixed mode switches the mode as well. |
 | **Create Custom Theme…** | Writes a starter theme seeded with the current accent colors, selects it, and shows it in the file manager. |

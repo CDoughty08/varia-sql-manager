@@ -7,7 +7,7 @@ limits where the key works; for example, `editorFocus` means the query editor ha
 editor or the browser engine: menus show them, but Varia does not dispatch them. "Available when" is the condition
 under which menus, the toolbar, and the keyboard can run the command; the context keys it uses are listed below.
 
-## Commands (31)
+## Commands (35)
 
 ### File
 
@@ -66,6 +66,15 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | — |
+
+### Preferences
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Color Theme… | `preferences.colorTheme` | — | — | — | Always | View › Theme › Color Theme… |
+| Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | — |
+| Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | — |
+| Reload Themes | `preferences.reloadThemes` | — | — | — | Always | — |
 
 ### Other
 

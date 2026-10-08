@@ -8,6 +8,8 @@ export type ThemePreferencePatch = Partial<Pick<ThemePreference, 'mode' | 'darkT
 export interface SyntaxStyle { foreground: string; fontStyle: string }
 /** The canonical theme that crosses IPC: every registry key and SQL scope, as lowercase #rrggbb or #rrggbbaa. */
 export interface ResolvedTheme { id: string; name: string; type: ThemeType; colors: Record<ColorKey, string>; syntax: Record<SqlScope, SyntaxStyle> }
+/** A theme the palette's picker shows without choosing it: an id from the catalogue and the variant to show. */
+export interface ThemePreview { id: string; type: ThemeType }
 export interface ThemeSummary { id: string; name: string; source: 'builtin' | 'user'; types: ThemeType[]; usable: boolean; errors: number; warnings: number }
 /**
  * `revision` grows whenever anything changes; `noticeId` only when an action reports something (even the same text

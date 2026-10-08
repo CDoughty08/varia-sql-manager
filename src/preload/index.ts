@@ -52,6 +52,8 @@ const api: VariaApi = {
   },
   getThemeState: () => ipcRenderer.invoke('varia:theme-state'),
   setThemePreference: patch => ipcRenderer.invoke('varia:theme-set', patch),
+  previewTheme: selection => ipcRenderer.invoke('varia:theme-preview', selection),
+  createCustomTheme: () => ipcRenderer.invoke('varia:themes-create'),
   reloadThemes: () => ipcRenderer.invoke('varia:themes-reload'),
   openThemesFolder: () => ipcRenderer.invoke('varia:themes-open-folder'),
   onThemeChanged: callback => {

@@ -46,10 +46,14 @@ const withNotice = (state: ThemeState, notice: string): ThemeState => ({ ...stat
 /**
  * The active theme in the renderer. Main resolves themes; this re-validates each state, applies it through the target,
  * and only then publishes it, so subscribers (Dockview, connection accents, the notice) never see an unapplied theme.
+ * While the theme picker previews a theme, the snapshot is main's state with that theme as `active`.
  */
 export class ThemeService extends SnapshotStore<ThemeState> implements Disposable {
   private accents = new Map<string, string | undefined>()
-  private accentRevision: number
+  /** Accents depend only on the shown theme, which a preview changes without a new revision. */
+  private accentTheme: ResolvedTheme
+  /** Main's state while a preview is shown. */
+  private real?: ThemeState
   private disposed = false
 
   /** Resolves once a theme has been applied: main's state, or a built-in when main does not answer in time. */
@@ -88,7 +92,7 @@ export class ThemeService extends SnapshotStore<ThemeState> implements Disposabl
 
   private constructor(private readonly api: ThemeApi, private readonly target: ThemeTarget, initial: ThemeState, private readonly unsubscribe: () => void) {
     super(initial)
-    this.accentRevision = initial.revision
+    this.accentTheme = initial.active
     const applied = this.apply(initial.active)
     if (applied.ok) { if (applied.notice) this.publish(withNotice(initial, applied.notice)) }
     else if (initial.revision >= 0) {
@@ -97,21 +101,54 @@ export class ThemeService extends SnapshotStore<ThemeState> implements Disposabl
     }
   }
 
-  /** Applies a state from main if it is newer and valid; otherwise the current theme stays. */
+  /** Main's state, without any preview. */
+  get state(): ThemeState { return this.real ?? this.getSnapshot() }
+
+  /** Applies a state from main if it is newer and valid; otherwise the current theme stays. During a preview it is only stored. */
   receive(state: unknown): void {
     if (this.disposed) return
     const revision = typeof state === 'object' && state !== null ? (state as { revision?: unknown }).revision : undefined
     if (typeof revision === 'number' && revision <= this.getSnapshot().revision) return
     if (!isThemeState(state)) { onUnexpectedError(new Error('Ignored an invalid theme state from the main process.')); return }
+    if (this.real) {
+      this.real = state
+      this.publish({ ...state, active: this.getSnapshot().active })
+      return
+    }
     const applied = this.apply(state.active, this.getSnapshot().active)
     if (applied.ok) this.publish(applied.notice ? withNotice(state, applied.notice) : state)
+  }
+
+  /**
+   * Shows a theme main resolved for the picker without choosing it. The revision stays, so the theme notice keeps its
+   * dismissal, and main's later states are stored until `endPreview` applies them.
+   */
+  preview(theme: unknown): void {
+    if (this.disposed) return
+    if (!isResolvedTheme(theme)) { onUnexpectedError(new Error('Ignored an invalid preview theme from the main process.')); return }
+    const real = this.state
+    if (!this.apply(theme, this.getSnapshot().active).ok) return
+    this.real = real
+    this.publish({ ...real, active: theme })
+  }
+
+  /** Shows main's state again. */
+  endPreview(): void {
+    const real = this.real
+    if (!real || this.disposed) return
+    this.real = undefined
+    const applied = this.apply(real.active, this.getSnapshot().active)
+    // When main's theme cannot be applied the preview stays on screen, so the snapshot says so.
+    if (!applied.ok) this.publish({ ...real, active: this.getSnapshot().active })
+    // A state applied before the preview already carries its notice.
+    else this.publish(applied.notice && !real.notice?.includes(applied.notice) ? withNotice(real, applied.notice) : real)
   }
 
   /** The CSS color for a stored connection color; presets follow the theme through their variable. */
   accent = (stored: string | undefined): string | undefined => {
     if (!stored) return undefined
-    const { revision, active } = this.getSnapshot()
-    if (revision !== this.accentRevision || this.accents.size >= maxCachedAccents) { this.accents.clear(); this.accentRevision = revision }
+    const { active } = this.getSnapshot()
+    if (active !== this.accentTheme || this.accents.size >= maxCachedAccents) { this.accents.clear(); this.accentTheme = active }
     if (!this.accents.has(stored)) this.accents.set(stored, connectionAccent(stored, active))
     return this.accents.get(stored)
   }

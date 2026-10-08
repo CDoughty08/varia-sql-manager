@@ -12,6 +12,7 @@ import { queryContribution } from '../contributions/query'
 import { filesContribution } from '../contributions/files'
 import { editorContribution } from '../contributions/editor'
 import { paletteContribution } from '../contributions/palette'
+import { themeContribution } from '../contributions/theme'
 import { domFocusAdapter } from '../quickinput/focus'
 import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
@@ -57,12 +58,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, quickInput, documents, queries, connections, files, targets, editorOptions, theme, dispose: () => {
     if (disposed) return
     disposed = true
-    // Hiding the quick input first aborts its loads before the services they use go away.
+    // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
     listener.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
     cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); connections.dispose(); editorOptions.dispose(); theme.dispose(); events.dispose()
   } }
-  const contributions = [queryContribution(workbench, api), filesContribution(workbench), editorContribution(workbench), paletteContribution(workbench)]
+  const contributions = [queryContribution(workbench, api), filesContribution(workbench), editorContribution(workbench), paletteContribution(workbench), themeContribution(workbench, api)]
   // Capture on window runs before Monaco's own listeners, the title bar's document listener, and React's handlers.
   const listener = keybindings.attach(window)
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')

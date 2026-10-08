@@ -122,7 +122,7 @@ describe('ThemeService', () => {
     expect(service.getSnapshot()).toMatchObject({ revision: -1, active: { id: 'varia-dark' } })
     expect(service.getSnapshot().notice).toContain('could not be applied')
   })
-  it('turns presets into theme variables and custom colors into readable accents, cached per revision', async () => {
+  it('turns presets into theme variables and custom colors into readable accents, cached per shown theme', async () => {
     const { api, push } = fakeApi()
     const service = await ThemeService.create(api, fakeTarget().target)
     expect(service.accent('#e66b73')).toBe('var(--varia-connection-red)')

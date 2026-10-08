@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { AppearanceStore } from '../src/main/appearance-store'
-import { AppearanceService, type NativeThemeLike } from '../src/main/appearance'
+import { AppearanceService, windowChromeFor, type NativeThemeLike } from '../src/main/appearance'
 import { readRegularFile } from '../src/main/json-file'
 import { scanThemes, schemaFileName, writeSchemaFile } from '../src/main/theme-files'
 import { buildThemeJsonSchema } from '../src/shared/theme/schema'
@@ -443,5 +443,50 @@ describe('appearance service', () => {
     expect(appearance.state.notice).toBeUndefined()
     expect(published.map(state => state.active.id)).toEqual(['varia-dark', 'varia-light'])
     expect(nativeTheme.assignments).toEqual(['dark', 'light'])
+  })
+})
+
+describe('theme preview', () => {
+  it('resolves a catalogue theme by id and type without choosing, saving, or publishing anything', async () => {
+    await themeFiles({ 'dual.json': theme({ type: 'dual', name: 'Dual' }), 'lighter.json': theme({ type: 'light', name: 'Lighter' }), 'broken.json': '{' })
+    const { appearance, nativeTheme, published } = await service()
+    await appearance.scan()
+    const before = appearance.state, publications = published.length
+    expect(await appearance.preview({ id: 'dual', type: 'light' })).toMatchObject({ id: 'dual', name: 'Dual', type: 'light' })
+    expect(await appearance.preview({ id: 'dual', type: 'dark' })).toMatchObject({ id: 'dual', type: 'dark' })
+    expect(await appearance.preview({ id: 'varia-light', type: 'light' })).toEqual(resolveBuiltin('light'))
+    expect(await appearance.preview(null)).toBeNull()
+    // Unknown, unusable, and wrong-type ids are refused the same way a choice is.
+    for (const value of [{ id: 'nope', type: 'dark' }, { id: 'broken', type: 'dark' }, { id: 'lighter', type: 'dark' }, { id: 'varia-dark', type: 'light' }]) {
+      await expect(appearance.preview(value), JSON.stringify(value)).rejects.toThrow('Unknown or unusable theme.')
+    }
+    // Only a strict { id, type } or null: no paths, no extra fields, no other types.
+    for (const value of [{ id: 'dual', type: 'dark', extra: 1 }, { id: '../dual', type: 'dark' }, { id: 'Dual', type: 'dark' }, { id: 'dual' }, { id: 'dual', type: 'dual' }, { id: 'a'.repeat(49), type: 'dark' }, {}, undefined, 'dual', ['dual', 'dark']]) {
+      await expect(appearance.preview(value), JSON.stringify(value)).rejects.toThrow()
+    }
+    expect(appearance.state).toBe(before)
+    expect(published).toHaveLength(publications)
+    expect(nativeTheme.assignments).toEqual(['dark'])
+    expect(await readdir(directory)).toEqual(['themes'])
+  })
+  it('reads the whole folder first when startup read only the selected themes, and still publishes nothing', async () => {
+    await themeFiles({ 'other.json': theme({ name: 'Other' }) })
+    const { appearance, published } = await service()
+    expect(userThemes(appearance.state)).toEqual([])
+    expect(await appearance.preview({ id: 'other', type: 'dark' })).toMatchObject({ id: 'other', name: 'Other', type: 'dark' })
+    expect(published).toEqual([])
+    expect(appearance.state.revision).toBe(0)
+    // The scan's themes reach the menu with the next update.
+    await appearance.reload()
+    expect(userThemes(appearance.state)).toEqual(['other'])
+  })
+  it('gives the window chrome of any theme, so a preview can color the window without changing the active theme', async () => {
+    await themeFiles({ 'glass.json': theme({ colors: { 'editor.background': '#ff000080' } }) })
+    const { appearance } = await service()
+    expect(windowChromeFor(appearance.state.active)).toEqual(appearance.windowChrome())
+    expect(windowChromeFor(resolveBuiltin('light'))).toEqual({ backgroundColor: '#ffffff', overlay: expect.objectContaining({ color: expect.stringMatching(/^#[0-9a-f]{6}$/) }) })
+    const glass = await appearance.preview({ id: 'glass', type: 'dark' })
+    expect(windowChromeFor(glass!).backgroundColor).toBe('#800000')
+    expect(appearance.windowChrome().backgroundColor).toBe('#11151c')
   })
 })

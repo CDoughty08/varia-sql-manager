@@ -7,7 +7,7 @@ import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
-import { AppearanceService } from './appearance'
+import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
 import { userInfo } from 'node:os'
@@ -17,7 +17,7 @@ import type { ApiResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
 import { menuForMnemonic, menubarIds } from '../shared/commands/menus'
 import { sanitizeLabel } from '../shared/theme/format'
-import type { ThemeState } from '../shared/theme/types'
+import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererFile = join(here, '../renderer/index.html')
@@ -29,6 +29,9 @@ let closeApproved = false
 let openMenu: Menu | null = null
 let layouts: LayoutStore
 let appearance: AppearanceService
+// The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
+let previewTheme: ResolvedTheme | null = null
+let previewSeq = 0
 // Renderer lifecycle: exit confirmation needs a live workbench that has subscribed to commands.
 let rendererLoaded = false
 let rendererReady = false
@@ -72,6 +75,7 @@ function resetRendererState(): void {
   rendererReady = false
   openMenu = null
   menuBridge.reset()
+  endPreview()
   backend?.restart()
   files.clear()
 }
@@ -84,7 +88,7 @@ const menuActions: ApplicationMenuActions = {
   command,
   isChecked: id => menuBridge.isChecked(id),
   // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
-  setTheme: patch => { appearance.setPreference(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
+  setTheme: patch => { chooseTheme(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
   // The menu has no other way to report a failure, so it becomes the theme notice; the messages are fixed sentences.
   createTheme: () => {
     appearance.createStarterTheme().then(path => shell.showItemInFolder(path), error => { void appearance.notify(errorMessage(error, 'The custom theme could not be created.')) })
@@ -110,17 +114,35 @@ async function openThemesFolder(): Promise<void> {
   if (failure) throw new Error('The themes folder could not be opened: ' + sanitizeLabel(failure, 200))
 }
 
+function applyWindowChrome(): void {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  const chrome = windowChromeFor(previewTheme ?? appearance.state.active)
+  window.setBackgroundColor(chrome.backgroundColor)
+  if (process.platform !== 'darwin') {
+    try { window.setTitleBarOverlay(chrome.overlay) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
+  }
+}
+
+/** Drops any preview, including one still being resolved, and shows the active theme's chrome again. */
+function endPreview(): void {
+  previewSeq++
+  if (!previewTheme) return
+  previewTheme = null
+  applyWindowChrome()
+}
+
+/** A choice ends the preview only once it has applied, so the chrome never flashes the previous theme in between. */
+async function chooseTheme(value: unknown): Promise<ThemeState> {
+  previewSeq++
+  try { return await appearance.setPreference(value) } finally { endPreview() }
+}
+
 /** Native chrome, the renderer, and the menu follow every published theme state; nothing reloads. */
 function applyAppearance(state: ThemeState): void {
+  applyWindowChrome()
   const window = mainWindow
-  if (window && !window.isDestroyed()) {
-    const chrome = appearance.windowChrome()
-    window.setBackgroundColor(chrome.backgroundColor)
-    if (process.platform !== 'darwin') {
-      try { window.setTitleBarOverlay(chrome.overlay) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
-    }
-    window.webContents.send('varia:theme-changed', state)
-  }
+  if (window && !window.isDestroyed()) window.webContents.send('varia:theme-changed', state)
   buildMenu()
 }
 
@@ -215,9 +237,17 @@ app.whenReady().then(async () => {
   appearance.onDidChange(applyAppearance)
   nativeTheme.on('updated', () => appearance.systemChanged())
   handle('varia:theme-state', () => appearance.state)
-  handle('varia:theme-set', value => appearance.setPreference(value))
+  handle('varia:theme-set', value => chooseTheme(value))
+  // Results that arrive after a later preview, a choice, or a renderer reset are dropped.
+  handle('varia:theme-preview', async value => {
+    const seq = ++previewSeq
+    const theme = await appearance.preview(value)
+    if (seq === previewSeq) { previewTheme = theme; applyWindowChrome() }
+    return theme
+  })
   handle('varia:themes-reload', () => appearance.reload())
   handle('varia:themes-open-folder', () => openThemesFolder())
+  handle('varia:themes-create', async () => { shell.showItemInFolder(await appearance.createStarterTheme()) })
   ipcMain.on('varia:commands-ready', (event, ready: unknown) => { if (trusted(event)) rendererReady = ready === true })
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })

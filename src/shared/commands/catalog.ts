@@ -190,7 +190,15 @@ export const commandCatalog = {
   'edit.uncommentLines': {
     title: 'Uncomment Selection', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+k mod+u', native: true }], menus: [{ menu: 'edit', group: '4_comment', order: 3 }]
-  }
+  },
+  // Not theme.*: PR1's theme menu items (theme.mode.*, theme.create, …) are main-owned and keep those ids.
+  'preferences.colorTheme': {
+    title: 'Color Theme…', category: 'Preferences', icon: 'symbol-color', keywords: ['dark', 'light', 'appearance'],
+    menus: [{ menu: 'theme', group: '0_pick', order: 1 }]
+  },
+  'preferences.createTheme': { title: 'Create Custom Theme…', category: 'Preferences', icon: 'new-file', keywords: ['color'] },
+  'preferences.openThemesFolder': { title: 'Open Themes Folder', category: 'Preferences', icon: 'folder-opened', keywords: ['color'] },
+  'preferences.reloadThemes': { title: 'Reload Themes', category: 'Preferences', icon: 'refresh', keywords: ['color'] }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

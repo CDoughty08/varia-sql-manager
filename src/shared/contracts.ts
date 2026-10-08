@@ -1,6 +1,6 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
-import type { ThemePreferencePatch, ThemeState } from './theme/types'
+import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId } from './commands/catalog'
 import type { MenubarId, MenuState } from './commands/menus'
 
@@ -152,6 +152,10 @@ export interface VariaApi {
   onCommand(callback: (command: CommandId) => void): () => void
   getThemeState(): Promise<ApiResult<ThemeState>>
   setThemePreference(patch: ThemePreferencePatch): Promise<ApiResult<ThemeState>>
+  /** Resolves a catalogue theme for the palette's picker to show, and shows it in the window chrome; null ends that. */
+  previewTheme(selection: ThemePreview | null): Promise<ApiResult<ResolvedTheme | null>>
+  /** Writes a starter theme, selects it, and reveals it in the file manager. */
+  createCustomTheme(): Promise<ApiResult<void>>
   reloadThemes(): Promise<ApiResult<ThemeState>>
   openThemesFolder(): Promise<ApiResult<void>>
   onThemeChanged(callback: (state: ThemeState) => void): () => void
