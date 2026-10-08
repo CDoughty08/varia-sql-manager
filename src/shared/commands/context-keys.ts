@@ -32,6 +32,8 @@ export const contextKeys = {
   hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected.' },
   activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
+  anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
+  outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
   explorerNode: {
     type: 'enum', scope: 'target', menu: 'explorer.context', description: "The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object.",

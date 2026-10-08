@@ -15,6 +15,8 @@ export interface ShellHost {
   flushLayout(): Promise<void>
   showConnect(): void
   refreshExplorer(): void
+  /** Closes a panel as its × button does: its content and state are kept for when it is shown again. */
+  closePane(pane: PaneId): void
 }
 
 /**
@@ -37,7 +39,7 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo'): void
  * Commands the React shell carries out. App registers them in the same effect that subscribes to main's commands, so
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes'>, host: ShellHost): Disposable {
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }) }),
@@ -45,6 +47,12 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
     commands.register('window.editor', { run: () => host.reveal('editor') }),
     commands.register('window.output', { run: () => host.reveal('output') }),
+    // SSMS's Ctrl+R: hiding the results puts focus in the query editor; showing them leaves focus where it is.
+    commands.register('view.toggleResultsPane', { run: () => {
+      if (!panes.getSnapshot().output) { host.reveal('output'); return }
+      host.closePane('output')
+      if (documents.getSnapshot().documents.length) documents.boundEditor?.focus()
+    } }),
     commands.register('layout.save', { run: () => host.manageLayouts('save') }),
     commands.register('layout.load', { run: () => host.manageLayouts('load') }),
     commands.register('layout.reset', { run: () => host.resetLayout() }),

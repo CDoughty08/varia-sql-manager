@@ -22,23 +22,33 @@ const marked = (items: readonly ResolvedMenuItem[]): string[] => items.map(item 
 const command = (id: CommandId, title: string = id, extra: Partial<Extract<MenuEntry, { kind: 'command' }>> = {}): MenuEntry => ({ kind: 'command', id, nativeId: id, title, toggle: false, ...extra })
 
 describe('menu resolution', () => {
-  it('shows a menubar menu with mnemonics, chord labels, icons, and without Electron roles', () => {
+  it('shows a menubar menu with mnemonics, chord labels, icons, and role-backed commands, without bare Electron roles', () => {
     const edit = resolveMenu('edit', options())
-    expect(marked(edit)).toEqual(['&Undo', '&Redo', '-', '&Find', 'R&eplace', '-', 'Toggle &Line Comment', 'Co&mment Selection', 'U&ncomment Selection'])
-    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:0', 'edit.find', 'edit.replace', 'sep:1', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
+    expect(marked(edit)).toEqual(['&Undo', '&Redo', '-', 'Cu&t', '&Copy', '&Paste', '&Delete', 'Select &All', '-', '&Find', 'R&eplace', '-', 'Toggle &Line Comment', 'Co&mment Selection', 'U&ncomment Selection'])
+    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:0', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'sep:1', 'edit.find', 'edit.replace', 'sep:2',
+      'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
+    expect(edit.find(item => item.key === 'edit.paste')).toMatchObject({ icon: 'clippy', keybinding: { text: 'Ctrl+V' }, enabled: true })
     const [undo] = edit
     expect(undo).toEqual({ kind: 'command', key: 'edit.undo', id: 'edit.undo', title: 'Undo', mnemonic: 0, icon: 'discard', keybinding: { parts: ['Ctrl+Z'], text: 'Ctrl+Z', aria: 'Control+Z' }, enabled: true })
     expect(edit.find(item => item.key === 'edit.commentLines')).toMatchObject({ keybinding: { text: 'Ctrl+K Ctrl+C' } })
-    expect(marked(resolveMenu('window', options({ platform: 'linux' })))).toEqual(['&Object Explorer', 'Query &Editor', 'Q&uery Output', '-', '&Next Query', '&Previous Query', '-', '&Save Window Layout…', 'Lo&ad Window Layout…', '&Reset Window Layout'])
-    expect(marked(resolveMenu('file', options()))).toEqual(['Conn&ect to Server…', '&Disconnect from Server…', '-', '&New Query', '&Open…', '&Save', 'Save &As…', '-', '&Close Query'])
+    const windowMenu = ['&Object Explorer', 'Query &Editor', 'Q&uery Output', 'S&how Results Pane', '-', '&Next Query', '&Previous Query', 'C&lose All Documents', '-', '&Save Window Layout…', 'Lo&ad Window Layout…', '&Reset Window Layout']
+    expect(marked(resolveMenu('window', options({ platform: 'linux' })))).toEqual(windowMenu)
+    // macOS's Minimize and Zoom are bare Electron roles: only its native menu shows them.
+    expect(marked(resolveMenu('window', options({ platform: 'darwin' })))).toEqual(windowMenu)
+    expect(marked(resolveMenu('file', options()))).toEqual(['Conn&ect to Server…', '&Disconnect from Server…', '-', '&New Query', '&Open…', '&Save', 'Save &As…', '-', '&Close Query', '-', 'E&xit'])
+    expect(marked(resolveMenu('file', options({ platform: 'linux' }))).at(-1)).toBe('&Quit')
+    expect(resolveMenu('file', options({ platform: 'linux' })).at(-1)).toMatchObject({ id: 'window.close', keybinding: { text: 'Ctrl+Q' } })
+    expect(resolveMenu('file', options()).at(-1)).toMatchObject({ id: 'window.close', keybinding: { text: 'Alt+F4' } })
     expect(Object.isFrozen(edit) && edit.every(item => Object.isFrozen(item))).toBe(true)
   })
   it('takes enablement and checks from the command service, with the menu\'s arguments', () => {
     const args = { tabId: 'tab-2' }
     const resolved = options({ disabled: ['query.execute'], toggled: ['editor.toggleWordWrap'], args })
     const query = resolveMenu('query', resolved)
-    expect(query.map(item => item.kind === 'command' ? [item.id, item.enabled, item.args] : item.kind)).toEqual([
-      ['query.execute', false, args], ['query.cancel', true, args], 'separator', ['query.changeConnection', true, args], ['query.changeDatabase', true, args]
+    const shape = (items: readonly ResolvedMenuItem[]): unknown[] => items.map(item => item.kind === 'command' ? [item.id, item.enabled, item.args] : item.kind === 'submenu' ? shape(item.items) : item.kind)
+    expect(shape(query)).toEqual([
+      [['connection.connect', true, args], ['query.disconnect', true, args], ['query.disconnectAll', true, args], 'separator', ['query.changeConnection', true, args]],
+      ['query.changeDatabase', true, args], 'separator', ['query.execute', false, args], ['query.cancel', true, args]
     ])
     expect(resolved.commands.isEnabled).toHaveBeenCalledWith('query.execute', args)
     const wrap = resolveMenu('view', resolved).find(item => item.key === 'editor.toggleWordWrap')
@@ -71,7 +81,7 @@ describe('menu resolution', () => {
     const view = resolveMenu('view', options({ dynamic: { theme } }))
     const submenu = view.find(item => item.key === 'view.theme')
     if (submenu?.kind !== 'submenu') throw new Error('View › Theme is missing')
-    expect(marked(view).at(-1)).toBe('T&heme')
+    expect(marked(view)[view.indexOf(submenu)]).toBe('T&heme')
     expect(marked(submenu.items)).toEqual(['&Color Theme…', '-', '&Dark', '-', 'Dar&k Theme', 'Create Custom &Theme…'])
     expect(submenu.items[2]).toEqual({ kind: 'command', key: 'theme.mode.dark', id: 'preferences.colorTheme', title: 'Dark', mnemonic: 0, args: { tabId: 'dark' }, enabled: true, checked: true, radio: true })
     const dark = submenu.items[4]

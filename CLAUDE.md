@@ -9,7 +9,7 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the five Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the six Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
@@ -46,10 +46,12 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - Commands, keybindings and menu placements are declared only in `src/shared/commands/catalog.ts` (submenus in
   `menus.ts`; View › Theme's `theme.*` items in `src/shared/theme/menu.ts`). Main builds native menus from it and
-  accepts only command-id sets from the renderer (`menuStateSchema`); clicks send back a bare id. `KeybindingService`
-  (`src/renderer/src/core/keybindings.ts`) is the only workbench key dispatcher; main handles only Alt mnemonics and F10,
-  which `TitleBar.tsx` mirrors for keys that skip main (`tests/keyboard-lint.test.ts`). After catalogue changes,
-  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  accepts only command-id sets from the renderer (`menuStateSchema`); clicks send back a bare id. Windows/Linux render
+  the title-bar menus in `src/renderer/src/menus` (main's menu stays hidden); macOS shows the native menu bar.
+  `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to the menus
+  first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
+  the role, custom menus and the palette run it through `varia:run-role`. After catalogue changes, regenerate
+  `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 

@@ -77,6 +77,25 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
     })
   }
+  /**
+   * Closes the queries in tab order as one task, asking about each unsaved one; Cancel stops the rest, as in Visual
+   * Studio. Running queries stay open and are reported once the others are closed.
+   */
+  async closeMany(ids: readonly string[]): Promise<void> {
+    const wanted = new Set(ids)
+    await this.perform(async () => {
+      let running = 0
+      for (const { id } of this.documents.getSnapshot().documents.filter(document => wanted.has(document.id))) {
+        if (!this.documents.get(id)) continue
+        if (this.queries.isRunning(id)) { running++; continue }
+        if (!await this.confirmClose(id) || this.disposed) return
+        const file = this.documents.get(id)?.file
+        await this.documents.close(id)
+        if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
+      }
+      if (running) throw new Error(running === 1 ? '1 query is still running and stayed open.' : `${running} queries are still running and stayed open.`)
+    })
+  }
   async closeWindow(beforeClose: () => Promise<void>): Promise<void> {
     await this.perform(async () => {
       const approved = new Map<string, { model: NonNullable<ReturnType<DocumentService['getModel']>>; version: number }>()

@@ -41,11 +41,13 @@ async function dialogs(settings) {
     }
   }, settings)
 }
-async function chooseMenu(page, name, action) {
-  await application.evaluate((_electron, id) => { globalThis.variaMenuAction = id }, action)
-  await page.getByRole('menubar', { name: 'Application menu' }).getByRole('menuitem', { name, exact: true }).click()
-  await expect.poll(() => application.evaluate(() => globalThis.variaMenuPopups.at(-1)?.menu)).toBe('menu.' + name.toLowerCase())
-  await expect(page.getByRole('menuitem', { name, exact: true })).toHaveAttribute('aria-expanded', 'false')
+/** Opens a title-bar menu with the mouse and clicks one of its items, as a user would. */
+async function chooseMenu(page, name, label) {
+  const button = page.getByRole('menubar', { name: 'Application menu' }).getByRole('menuitem', { name, exact: true })
+  await button.click()
+  await page.getByRole('menu', { name, exact: true }).getByRole('menuitem', { name: label, exact: true }).click()
+  await expect(page.locator('.menu')).toHaveCount(0)
+  await expect(button).toHaveAttribute('aria-expanded', 'false')
 }
 try {
   const page = await application.firstWindow()
@@ -79,23 +81,8 @@ try {
   expect(titleBar.menus).toBe('no-drag')
   expect(titleBar.toolbarTop).toBe(titleBar.height)
   expect(titleBar.height).toBeLessThanOrEqual(34)
-  // Spy on OS popups while keeping the real validated IPC and menu item callbacks.
-  await application.evaluate(({ Menu }) => {
-    globalThis.variaMenuPopups = []
-    for (const id of ['menu.file', 'menu.edit', 'menu.view', 'menu.window']) {
-      const menu = Menu.getApplicationMenu().getMenuItemById(id).submenu
-      menu.popup = options => {
-        globalThis.variaMenuPopups.push({ menu: id, x: options.x, y: options.y, windowId: options.window.id })
-        const action = globalThis.variaMenuAction
-        globalThis.variaMenuAction = null
-        if (action) menu.getMenuItemById(action).click()
-        options.callback()
-      }
-    }
-  })
-  expect((await page.evaluate(() => window.varia.showMenu({ menu: 'shell', x: 0, y: 0 }))).ok).toBe(false)
-  expect((await page.evaluate(() => window.varia.showMenu({ menu: 'file', x: -1, y: 0 }))).ok).toBe(false)
-  expect(await application.evaluate(() => globalThis.variaMenuPopups)).toEqual([])
+  // The renderer draws the title-bar menus: no native popup or menu-focus channel is left to call.
+  expect(await page.evaluate(() => ({ showMenu: typeof window.varia.showMenu, onMenuFocus: typeof window.varia.onMenuFocus }))).toEqual({ showMenu: 'undefined', onMenuFocus: 'undefined' })
   const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
   async function typeSql(sql) {
     await page.locator('.monaco-editor [role="textbox"]').focus()
@@ -114,13 +101,13 @@ try {
 
   // Real menu callbacks, native-dialog IPC, and filesystem services; no database required.
   await dialogs({ savePath: null, openPaths: [], closeResponse: 2 })
-  await chooseMenu(page, 'File', 'file.new')
+  await chooseMenu(page, 'File', 'New Query')
   await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
   await typeSql('SELECT 42 AS answer;')
   const typed = await editorText()
-  await chooseMenu(page, 'Edit', 'edit.undo')
+  await chooseMenu(page, 'Edit', 'Undo')
   await expect.poll(editorText).not.toBe(typed)
-  await chooseMenu(page, 'Edit', 'edit.redo')
+  await chooseMenu(page, 'Edit', 'Redo')
   await expect.poll(editorText).toBe(typed)
   await page.keyboard.press('Control+Z')
   await expect.poll(editorText).not.toBe(typed)
@@ -144,12 +131,23 @@ try {
   await nativeKey('F10')
   await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
+  await expect(page.locator('.monaco-editor [role="textbox"]')).toBeFocused()
   await page.keyboard.press('Alt+v')
-  await expect.poll(() => application.evaluate(() => globalThis.variaMenuPopups.at(-1)?.menu)).toBe('menu.view')
+  await expect(page.getByRole('menu', { name: 'View', exact: true })).toBeVisible()
   await page.keyboard.press('Alt+w')
-  await expect.poll(() => application.evaluate(() => globalThis.variaMenuPopups.at(-1)?.menu)).toBe('menu.window')
+  await expect(page.getByRole('menu', { name: 'Window', exact: true })).toBeVisible()
+  await expect(page.getByRole('menu', { name: 'View', exact: true })).toHaveCount(0)
+  // Escape returns to the menubar, and again to the editor.
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('menuitem', { name: 'Window', exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.monaco-editor [role="textbox"]')).toBeFocused()
+  // A bare Alt tap focuses the menubar, as in Windows applications; Electron's own menu bar stays hidden.
   await page.keyboard.press('Alt')
+  await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
   expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMenuBarVisible())).toBe(false)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.monaco-editor [role="textbox"]')).toBeFocused()
   await page.locator('.query-tabs').getByRole('tab', { selected: true }).focus()
   await page.keyboard.press('Space')
   // The keyboard focus ring is a 1px inset outline: the strip would clip the default ring, and forced colors drop box shadows.

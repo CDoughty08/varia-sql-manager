@@ -16,7 +16,7 @@ const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConfl
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    expect(commandIds).toHaveLength(35)
+    expect(commandIds).toHaveLength(51)
   })
   it('has a handler for every command once all contributions have run', () => {
     const fixture = workbenchFixture()
@@ -57,11 +57,19 @@ describe('command catalogue', () => {
     const characters = getCodiconFontCharacters()
     for (const icon of codicons) expect(Object.hasOwn(characters, icon), icon).toBe(true)
   })
-  it('lets exactly undo, redo, and window close run behind a modal', () => {
-    expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['window.close', 'edit.undo', 'edit.redo'])
+  it('lets exactly window close and the text-editing commands run behind a modal', () => {
+    // Text fields in dialogs keep Undo, Redo, and the clipboard.
+    expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['window.close', 'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
   })
-  it('gives role-backed commands only native keys', () => {
+  it('gives role-backed commands only native keys, and platform titles without access keys', () => {
     for (const id of commandIds) if (commandDescriptor(id).role) for (const spec of commandDescriptor(id).keybindings ?? []) expect(spec.native, id).toBe(true)
+    expect(commandIds.filter(id => commandDescriptor(id).role)).toEqual(['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
+      'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools'])
+    for (const id of commandIds) for (const title of Object.values(commandDescriptor(id).platformTitles ?? {})) expect(title.includes('&'), id).toBe(false)
+    expect(commandDescriptor('window.close').platformTitles).toEqual({ win32: 'Exit', linux: 'Quit' })
+    // Ctrl+R and ⌘R toggle the results pane, as in SSMS; reloading the window has no key.
+    expect(commandDescriptor('developer.reloadWindow').keybindings).toBeUndefined()
+    expect(commandDescriptor('view.toggleResultsPane').keybindings).toEqual([{ key: 'mod+r' }])
   })
   it('uses only declared context keys, with state and static keys for enablement', () => {
     for (const id of commandIds) {

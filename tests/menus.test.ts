@@ -6,8 +6,8 @@ import { commandIds, type CommandId } from '../src/shared/commands/catalog'
 import { platforms, type Platform } from '../src/shared/commands/keybindings'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import {
-  applicationMenus, assignMnemonics, buildMenuModel, contextCommandIds, contextMenuIds, contextMenuRequestSchema, createContextMenuRequestSchema, menuCommandIds, menuForMnemonic, menuIds,
-  menuRoots, menuStateSchema, mnemonicIndex, nativeItemId, nativeMenuIds, pruneMenu, toggleCommandIds, trimSeparators, type ContextMenuId, type MenuEntry, type MenuId, type SubmenuId
+  applicationMenus, assignMnemonics, buildMenuModel, contextCommandIds, contextMenuIds, contextMenuRequestSchema, createContextMenuRequestSchema, menuAccelerator, menuCommandIds, menuForMnemonic, menuIds,
+  menuRoots, menuStateSchema, menuTitle, mnemonicIndex, nativeItemId, nativeMenuIds, pruneMenu, toggleCommandIds, trimSeparators, type ContextMenuId, type MenuEntry, type MenuId, type SubmenuId
 } from '../src/shared/commands/menus'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 
@@ -15,25 +15,29 @@ const brief = (entry: MenuEntry) => entry.kind === 'command' ? entry.nativeId : 
 const raw = (menu: MenuId, platform: Platform) => buildMenuModel(menu, platform).map(brief)
 /** What a native menu shows: the model without empty submenus. */
 const outline = (menu: MenuId, platform: Platform) => pruneMenu(buildMenuModel(menu, platform), () => true, id => buildMenuModel(id, platform)).map(brief)
-const displayRoles = ['role:reload', 'role:toggleDevTools', 'role:resetZoom', 'role:zoomIn', 'role:zoomOut', 'role:togglefullscreen']
 
 describe('menu model', () => {
   it('builds the menubar from the catalogue and the extras', () => {
+    const windowMenu = ['window.explorer', 'window.editor', 'window.output', 'view.toggleResultsPane', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
     for (const platform of ['win32', 'linux'] as const) {
-      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'role:quit'])
-      expect(outline('window', platform)).toEqual(['window.explorer', 'window.editor', 'window.output', '-', 'document.next', 'document.previous', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window'])
+      // Exit (Windows) and Quit (Linux): macOS quits from its app menu.
+      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'window.close'])
+      expect(outline('window', platform)).toEqual(windowMenu)
     }
     expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close'])
-    expect(outline('window', 'darwin')).toEqual(['window.explorer', 'window.editor', 'window.output', '-', 'document.next', 'document.previous', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window', '-', 'role:minimize', 'role:zoom'])
+    expect(outline('window', 'darwin')).toEqual([...windowMenu, '-', 'role:minimize', 'role:zoom'])
     for (const platform of platforms) {
-      expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'role:cut', 'role:copy', 'role:paste', 'role:selectAll', '-', 'edit.find', 'edit.replace', '-', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
-      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'editor.toggleWordWrap', '-', 'submenu:view.theme', '-', ...displayRoles])
-      expect(outline('query', platform)).toEqual(['query.execute', 'query.cancel', '-', 'query.changeConnection', 'query.changeDatabase'])
-      // Query › Connection is declared for PR3's connection commands; until it has some, it is left out.
-      expect(raw('query', platform)).toEqual(['submenu:query.connection', '-', ...outline('query', platform)])
-      expect(raw('query.connection', platform)).toEqual([])
+      expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', '-', 'edit.find', 'edit.replace', '-', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
+      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'editor.toggleWordWrap', '-', 'submenu:view.theme', '-',
+        'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
+      expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
+      expect(raw('query', platform)).toEqual(outline('query', platform))
+      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', '-', 'query.changeConnection'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
     }
+    expect(buildMenuModel('file', 'win32').at(-1)).toMatchObject({ id: 'window.close', title: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
+    expect(buildMenuModel('file', 'linux').at(-1)).toMatchObject({ id: 'window.close', title: 'Quit', role: 'quit', accelerator: 'Ctrl+Q' })
+    expect(buildMenuModel('file', 'linux').at(-1)).not.toHaveProperty('mnemonic')
     expect(applicationMenus.map(menu => menu.id)).toEqual(['file', 'edit', 'view', 'query', 'window'])
   })
   it('places submenus like commands, with their own native ids', () => {
@@ -155,7 +159,8 @@ describe('mnemonics', () => {
 
 describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
-    // PR3's later commits place commands in context menus; until then every tree is empty.
+    // The editor menu's Connection submenu is Query › Connection; PR3's later commits place the other context items.
+    expect(contextCommandIds('editor.context')).toEqual(['connection.connect', 'query.changeConnection', 'query.disconnect', 'query.disconnectAll'])
     for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => menuIds.some(inner => menuRoots(inner).includes(menu) && commandDescriptor(id).menus?.some(placement => placement.menu === inner))))
     expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['query.execute'], disabled: [], checked: [] }).success).toBe(false)
   })
@@ -202,14 +207,14 @@ describe('application menu template', () => {
       expect(item(items, 'menu.window').role, platform).toBe(platform === 'darwin' ? 'window' : undefined)
       for (const top of menubar) {
         const menu = top.id!.slice('menu.'.length) as Parameters<typeof buildMenuModel>[0]
-        const entries = (top.submenu as MenuItemConstructorOptions[]).map(entry => entry.type === 'separator' ? '-' : entry.role ? `role:${entry.role}` : entry.submenu ? `submenu:${entry.id}` : entry.id)
+        const entries = (top.submenu as MenuItemConstructorOptions[]).map(entry => entry.type === 'separator' ? '-' : entry.role && !entry.id ? `role:${entry.role}` : entry.submenu ? `submenu:${entry.id}` : entry.id)
         expect(entries, `${platform} ${menu}`).toEqual(outline(menu, platform))
       }
     }
   })
   it('labels command items and never registers their accelerators', () => {
     for (const platform of platforms) {
-      const commands = flatten(template(platform).items).filter(entry => entry.id && commandIds.includes(entry.id.split('@')[0] as CommandId))
+      const commands = flatten(template(platform).items).filter(entry => entry.id && !entry.role && commandIds.includes(entry.id.split('@')[0] as CommandId))
       expect(commands.length, platform).toBeGreaterThan(20)
       for (const entry of commands) expect(entry.registerAccelerator, `${platform} ${entry.id}`).toBe(false)
     }
@@ -220,6 +225,40 @@ describe('application menu template', () => {
     expect(item(items, 'editor.toggleWordWrap')).toMatchObject({ label: 'Word Wrap', type: 'checkbox', accelerator: 'Alt+Z' })
     expect(item(template('darwin').items, 'file.new')).toMatchObject({ accelerator: 'Cmd+N' })
     expect(item(items, 'view.theme').submenu).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'theme.mode.dark' })]))
+  })
+  it('renders role-backed commands as Electron roles with the catalogue\'s accelerator or none', () => {
+    for (const platform of platforms) {
+      const roles = flatten(template(platform).items).filter(entry => entry.role && entry.id && commandIds.includes(entry.id.split('@')[0] as CommandId))
+      expect(roles.map(entry => entry.id), platform).toEqual([...platform === 'darwin' ? [] : ['window.close'], 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
+        'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools'])
+      for (const entry of roles) {
+        const id = entry.id as CommandId
+        const label = menuTitle(id, platform, commandDescriptor(id).menus?.[0]?.title)
+        expect(entry, `${platform} ${id}`).toEqual({ id, label, role: commandDescriptor(id).role, accelerator: menuAccelerator(id, platform) ?? '' })
+      }
+      // Electron's own role accelerators never apply: every role item names its accelerator, if only as none.
+      for (const entry of flatten(template(platform).items)) if (entry.role && !['appMenu', 'window', 'minimize', 'zoom'].includes(entry.role)) expect(entry, `${platform} ${entry.role}`).toHaveProperty('accelerator')
+    }
+    const { items } = template('linux')
+    expect(item(items, 'edit.copy')).toMatchObject({ role: 'copy', accelerator: 'Ctrl+C' })
+    expect(item(items, 'edit.delete')).toMatchObject({ role: 'delete', accelerator: 'Delete' })
+    expect(item(items, 'view.zoomIn')).toMatchObject({ role: 'zoomIn', accelerator: 'Ctrl+=' })
+    // macOS menus show only keys with ⌘, so Delete has none there.
+    expect(item(template('darwin').items, 'edit.delete')).toMatchObject({ role: 'delete', accelerator: '' })
+    expect(item(template('darwin').items, 'view.toggleFullScreen')).toMatchObject({ role: 'togglefullscreen', accelerator: 'Cmd+Ctrl+F' })
+    expect(item(template('win32').items, 'window.close')).toMatchObject({ label: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
+    expect(item(template('linux').items, 'window.close')).toMatchObject({ label: 'Quit', role: 'quit', accelerator: 'Ctrl+Q' })
+  })
+  it('never gives Reload a key: Ctrl+R and ⌘R toggle the results pane', () => {
+    const reloadKeys = /^(?:Ctrl|Cmd|CmdOrCtrl|CommandOrControl|Control|Command)\+(?:Shift\+)?R$/i
+    for (const platform of platforms) {
+      const entries = flatten(template(platform).items)
+      const reload = entries.filter(entry => entry.role === 'reload' || entry.role === 'forceReload' || entry.id?.startsWith('developer.reloadWindow'))
+      expect(reload.map(entry => [entry.id, entry.role, entry.accelerator]), platform).toEqual([['developer.reloadWindow', 'reload', '']])
+      const keyed = entries.filter(entry => typeof entry.accelerator === 'string' && reloadKeys.test(entry.accelerator))
+      expect(keyed.map(entry => [entry.id, entry.role, entry.registerAccelerator]), platform).toEqual([['view.toggleResultsPane', undefined, false]])
+    }
+    expect(item(template('darwin').items, 'view.toggleResultsPane')).toMatchObject({ label: 'Show Results Pane', type: 'checkbox', accelerator: 'Cmd+R' })
   })
   it('sends clicks as command ids, and keeps checkboxes on the renderer\'s state', () => {
     const { items, actions } = template('linux', ['editor.toggleWordWrap'])
@@ -238,13 +277,16 @@ describe('application menu template', () => {
 describe('menu state', () => {
   it('covers every command in a native menu, except Electron roles, and every toggle', () => {
     // The other theme commands are in the palette only: the native Theme submenu keeps PR1's items for them.
-    expect(menuCommandIds).toEqual(commandIds.filter(id => !['window.close', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder', 'preferences.reloadThemes'].includes(id)))
-    expect(menuCommandIds).toContain('preferences.colorTheme')
+    const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
+    const unplaced = ['explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder', 'preferences.reloadThemes', 'preferences.setTheme']
+    expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
+    // Query › Connection is a native submenu too.
+    for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
     for (const id of commandIds) {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['editor.toggleWordWrap'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap'])
   })
   it('accepts unique catalogue ids only', () => {
     expect(menuStateSchema.parse({ disabled: ['file.save', 'query.cancel'], checked: ['editor.toggleWordWrap'] })).toEqual({ disabled: ['file.save', 'query.cancel'], checked: ['editor.toggleWordWrap'] })

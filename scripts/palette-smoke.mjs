@@ -187,14 +187,16 @@ try {
   await expect.poll(() => menuItem('editor.toggleWordWrap')).toMatchObject({ checked: true })
   await clickMenu('editor.toggleWordWrap')
   await expect.poll(() => menuItem('editor.toggleWordWrap')).toMatchObject({ checked: false })
-  await application.evaluate(({ Menu }) => {
-    globalThis.variaMenuPopups = []
-    const menu = Menu.getApplicationMenu().getMenuItemById('menu.query').submenu
-    menu.popup = options => { globalThis.variaMenuPopups.push(options.window.id); options.callback() }
-  })
+  // The title-bar Query menu opens with its first item focused; the custom menus show the same enablement.
   await textbox().focus()
   await page.keyboard.press('Alt+q')
-  await expect.poll(() => application.evaluate(() => globalThis.variaMenuPopups.length)).toBe(1)
+  const queryMenu = page.getByRole('menu', { name: 'Query', exact: true })
+  await expect(queryMenu).toBeVisible()
+  await expect(queryMenu.getByRole('menuitem', { name: 'Connection', exact: true })).toBeFocused()
+  await expect(queryMenu.getByRole('menuitem', { name: 'Execute', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(textbox()).toBeFocused()
   console.log('Palette checks: native menu clicks, enablement, checkbox state, and the Query menu mnemonic.')
 
   // Stub SQL responses so connected commands run without a server.

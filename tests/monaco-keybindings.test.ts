@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
+import { commandDescriptor } from '../src/shared/commands/catalog'
 import { defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
 
 /**
@@ -128,6 +129,15 @@ describe('Monaco keybinding drift', () => {
   })
   it.each(platforms)('labels only keys Monaco really binds as native on %s', platform => {
     const monaco = chordsByPlatform.get(platform)!
-    for (const rule of defaultRules(platform).filter(rule => rule.native)) expect(monaco.has(rule.chords.join(' ')), `${rule.command} ${rule.chords.join(' ')}`).toBe(true)
+    // Electron dispatches the keys of role-backed commands (Zoom In, Exit): their native menu items carry them.
+    for (const rule of defaultRules(platform).filter(rule => rule.native && !commandDescriptor(rule.command).role)) expect(monaco.has(rule.chords.join(' ')), `${rule.command} ${rule.chords.join(' ')}`).toBe(true)
+  })
+  it('leaves Ctrl+R and ⌘R to the results pane toggle: Monaco binds neither', () => {
+    for (const platform of platforms) {
+      const chord = platform === 'darwin' ? 'meta+r' : 'ctrl+r'
+      expect(chordsByPlatform.get(platform)!.has(chord), platform).toBe(false)
+      expect(workbenchRules(defaultRules(platform)).get(chord)?.map(rule => rule.command), platform).toEqual(['view.toggleResultsPane'])
+      expect(chordsByPlatform.get(platform)!.has(platform === 'darwin' ? 'shift+meta+r' : 'ctrl+shift+r'), platform).toBe(false)
+    }
   })
 })

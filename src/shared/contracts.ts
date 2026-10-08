@@ -1,8 +1,8 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
-import type { CommandId } from './commands/catalog'
-import type { MenubarId, MenuState } from './commands/menus'
+import type { CommandId, RendererRole } from './commands/catalog'
+import type { MenuState } from './commands/menus'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -113,17 +113,16 @@ export type RpcResponse =
   | { id: string | null; error: { code: string; message: string }; result?: never }
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
-export interface MenuPopup { menu: MenubarId; x: number; y: number }
 export interface SqlFile { id: string; name: string; path: string }
 export interface OpenSqlFile extends SqlFile { content: string }
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean }
 
 export interface VariaApi {
   readonly platform: string
-  showMenu(options: MenuPopup): Promise<ApiResult<void>>
-  onMenuFocus(callback: (menu: MenubarId | null) => void): () => void
   /** Which native menu items are disabled and checked; main validates the ids against its own catalogue. */
   setMenuState(state: MenuState): void
+  /** Runs an Electron role (Cut, Zoom In, Reload, …) on the window, for custom menus and the palette. */
+  runRole(role: RendererRole): Promise<ApiResult<void>>
   health(): Promise<ApiResult<BackendHealth>>
   connect(options: ConnectionOptions): Promise<ApiResult<ConnectionInfo>>
   discoverDatabases(options: ConnectionOptions): Promise<ApiResult<DatabaseInfo[]>>

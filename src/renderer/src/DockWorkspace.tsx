@@ -66,11 +66,14 @@ export interface WorkspaceHandle {
   reset(): void
   /** Shows a pane, and with `focus` moves keyboard focus into it. */
   reveal(id: PaneId, options?: { focus?: boolean }): void
+  /** Closes a panel as its × does, remembering where it was docked. */
+  close(id: PaneId): void
   flush(): Promise<void>
 }
 
 const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(function DockWorkspace(panes, ref) {
-  const themeType = useServiceSnapshot(useWorkbench().theme).active.type
+  const { theme, panes: shown } = useWorkbench()
+  const themeType = useServiceSnapshot(theme).active.type
   const [state, setState] = useState<LayoutState>(emptyLayoutState)
   const stateRef = useRef(state)
   const apiRef = useRef<DockviewApi | null>(null)
@@ -216,7 +219,15 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   useImperativeHandle(ref, () => ({ manage, flush, reset: () => {
     if (!defaultRef.current) return
     try { apply(defaultRef.current) } catch (error) { setError(message(error)) }
-  }, reveal }))
+  }, reveal, close }))
+  /** Showing: open, its tab selected in a visible group, and not behind another maximized group. */
+  function publishVisibility(api: DockviewApi) {
+    const showing = (id: PaneId) => {
+      const panel = api.getPanel(id)
+      return !!panel && panel.group.activePanel?.id === id && panel.group.api.isVisible && (!api.hasMaximizedGroup() || panel.group.api.isMaximized())
+    }
+    shown.set({ explorer: showing('explorer'), editor: showing('editor'), output: showing('output') })
+  }
   useEffect(() => () => { cancelTimer(); subscription.current?.dispose(); guides.current?.dispose(); ready.current = false; apiRef.current = null }, [])
   useEffect(() => {
     if (!showManager) return
@@ -248,7 +259,9 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       if (loaded.state.current) { try { apply(loaded.state.current) } catch (error) { setError('Could not restore the saved workspace layout: ' + message(error)) } }
       if (loaded.warning) setError(loaded.warning)
       ready.current = true
-      subscription.current = api.onDidLayoutChange(changed)
+      const layout = api.onDidLayoutChange(() => { changed(); publishVisibility(api) }), maximized = api.onDidMaximizedGroupChange(() => publishVisibility(api))
+      subscription.current = { dispose: () => { layout.dispose(); maximized.dispose() } }
+      publishVisibility(api)
       guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)))
       api.updateOptions({ dropPositionResolver: guides.current })
     })()

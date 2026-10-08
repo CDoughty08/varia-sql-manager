@@ -463,13 +463,13 @@
         },
         "titleBar.inactiveBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Title bar while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default @titleBar.activeBackground (Dark #181f2a, Light #e9edf2).",
-          "markdownDescription": "(VS Code) Title bar while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default `@titleBar.activeBackground` (Dark `#181f2a`, Light `#e9edf2`)."
+          "description": "(VS Code) Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive. Made opaque over editor.background. Default @titleBar.activeBackground (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(VS Code) Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive. Made opaque over `editor.background`. Default `@titleBar.activeBackground` (Dark `#181f2a`, Light `#e9edf2`)."
         },
         "titleBar.inactiveForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Window caption while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default @titleBar.activeForeground (Dark #9eafc5, Light #465366).",
-          "markdownDescription": "(VS Code) Window caption while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default `@titleBar.activeForeground` (Dark `#9eafc5`, Light `#465366`)."
+          "description": "(VS Code) Window caption and menubar labels while the window is inactive. Default @titleBar.activeForeground (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(VS Code) Window caption and menubar labels while the window is inactive. Default `@titleBar.activeForeground` (Dark `#9eafc5`, Light `#465366`)."
         },
         "titleBar.border": {
           "$ref": "#/definitions/value",
@@ -496,35 +496,45 @@
           "description": "(VS Code) Label of the open title-bar menu. Default $textStrong (Dark #ffffff, Light #0b1220).",
           "markdownDescription": "(VS Code) Label of the open title-bar menu. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
         },
+        "menubar.selectionBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Outline of the open, hovered, or focused title-bar menu; none by default. Default $accent/0 (Dark #8fb7ff00, Light #005fb800).",
+          "markdownDescription": "(VS Code) Outline of the open, hovered, or focused title-bar menu; none by default. Default `$accent/0` (Dark `#8fb7ff00`, Light `#005fb800`)."
+        },
         "menu.background": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Editor and dock context menus. Default $overlay (Dark #1a2230, Light #ffffff).",
-          "markdownDescription": "(VS Code) Editor and dock context menus. Default `$overlay` (Dark `#1a2230`, Light `#ffffff`)."
+          "description": "(VS Code) Title-bar and context menus. Default $overlay (Dark #1a2230, Light #ffffff).",
+          "markdownDescription": "(VS Code) Title-bar and context menus. Default `$overlay` (Dark `#1a2230`, Light `#ffffff`)."
         },
         "menu.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Context menu text. Default $text (Dark #d9e1ec, Light #1f2733).",
-          "markdownDescription": "(VS Code) Context menu text. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+          "description": "(VS Code) Title-bar and context menus. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Title-bar and context menus. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
         },
         "menu.selectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Highlighted menu item. The editor context menu highlights with list.hoverBackground instead. Not used yet; reserved for custom menus and the title bar. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
-          "markdownDescription": "(VS Code) Highlighted menu item. The editor context menu highlights with list.hoverBackground instead. Not used yet; reserved for custom menus and the title bar. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
+          "description": "(VS Code) Highlighted item in title-bar and context menus. The editor context menu highlights with list.hoverBackground instead. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(VS Code) Highlighted item in title-bar and context menus. The editor context menu highlights with list.hoverBackground instead. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
         },
         "menu.selectionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Text of the highlighted menu item. Not used yet; reserved for custom menus and the title bar. Default $textStrong (Dark #ffffff, Light #0b1220).",
-          "markdownDescription": "(VS Code) Text of the highlighted menu item. Not used yet; reserved for custom menus and the title bar. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
+          "description": "(VS Code) Highlighted item in title-bar and context menus. Default $textStrong (Dark #ffffff, Light #0b1220).",
+          "markdownDescription": "(VS Code) Highlighted item in title-bar and context menus. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
+        },
+        "menu.selectionBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Outline of the highlighted menu item; none by default. Default $accent/0 (Dark #8fb7ff00, Light #005fb800).",
+          "markdownDescription": "(VS Code) Outline of the highlighted menu item; none by default. Default `$accent/0` (Dark `#8fb7ff00`, Light `#005fb800`)."
         },
         "menu.separatorBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Context menu separators. Default $separator (Dark #354359, Light #cdd4de).",
-          "markdownDescription": "(VS Code) Context menu separators. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
+          "description": "(VS Code) Menu separators. Default $separator (Dark #354359, Light #cdd4de).",
+          "markdownDescription": "(VS Code) Menu separators. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
         },
         "menu.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Context menu border. Default @editorWidget.border (Dark #40516b, Light #c3ccd8).",
-          "markdownDescription": "(VS Code) Context menu border. Default `@editorWidget.border` (Dark `#40516b`, Light `#c3ccd8`)."
+          "description": "(VS Code) Menu border. Default @editorWidget.border (Dark #40516b, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Menu border. Default `@editorWidget.border` (Dark `#40516b`, Light `#c3ccd8`)."
         },
         "toolbar.background": {
           "$ref": "#/definitions/value",

@@ -15,6 +15,7 @@ import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
+import MenuLayer from './menus/MenuLayer'
 import { connectionDefaults } from '../../shared/connections'
 
 const emptyTab: QueryTab = { id: '', name: '', dirty: false, savedVersionId: null, database: 'master' }
@@ -70,7 +71,8 @@ export default function App() {
     resetLayout: () => workspaceRef.current?.reset(),
     flushLayout: async () => { await workspaceRef.current?.flush() },
     showConnect: () => setShowConnect(true),
-    refreshExplorer: () => setRefresh(value => value + 1)
+    refreshExplorer: () => setRefresh(value => value + 1),
+    closePane: pane => workspaceRef.current?.close(pane)
   }), [disconnectServer])
 
   useEffect(() => {
@@ -196,5 +198,6 @@ export default function App() {
     <footer className="status-bar" data-state={backendError ? 'error' : activeRunning ? 'executing' : !connection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${health ? 'online' : ''}`} />{health ? `${health.runtime} · Ready` : backendError ? 'Backend unavailable' : 'Starting backend…'}</span><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection?.server ?? 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}<span className="status-divider">|</span>1,000 row display limit</span></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => setShowConnect(false)} />}
     <QuickInput />
+    <MenuLayer />
   </div>
 }

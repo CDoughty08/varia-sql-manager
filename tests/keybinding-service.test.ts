@@ -3,7 +3,7 @@ import type { CommandId } from '../src/shared/commands/catalog'
 import { contextRecord, type ContextKeys } from '../src/shared/commands/context-keys'
 import { defaultRules, platforms, resolveKeybinding, type Platform } from '../src/shared/commands/keybindings'
 import { CommandService } from '../src/renderer/src/core/commands'
-import { KeybindingService, nativeChordTimeout, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
+import { KeybindingService, nativeChordTimeout, type KeyDownEvent, type MenuKeyRouter } from '../src/renderer/src/core/keybindings'
 import { workbenchFixture } from './fixtures/workbench'
 
 interface FakeEvent extends KeyDownEvent { consumed: boolean }
@@ -20,12 +20,12 @@ const editorNode = new EventTarget()
 const mod = (platform: Platform) => platform === 'darwin' ? { meta: true } : { ctrl: true }
 const letter = (character: string, platform: Platform, extra: Parameters<typeof key>[2] = {}) => key(`Key${character.toUpperCase()}`, extra.shift ? character.toUpperCase() : character, { ...mod(platform), ...extra })
 
-function service(platform: Platform = 'win32', options: { values?: Partial<ContextKeys>; modal?: boolean; textFocus?: boolean; rules?: ReturnType<typeof defaultRules> } = {}) {
+function service(platform: Platform = 'win32', options: { values?: Partial<ContextKeys>; modal?: boolean; textFocus?: boolean; rules?: ReturnType<typeof defaultRules>; menus?: MenuKeyRouter } = {}) {
   const state = { values: options.values ?? {}, modal: options.modal ?? false, textFocus: options.textFocus ?? false, now: 1_000_000 }
   const execute = vi.fn<CommandService['execute']>(async () => true)
   const keybindings = new KeybindingService({
     platform, commands: { execute }, context: { get: () => contextRecord(platform, state.values) }, modalOpen: () => state.modal, editorHasTextFocus: () => state.textFocus,
-    editorContains: target => target === editorNode, now: () => state.now, ...(options.rules ? { rules: options.rules } : {})
+    editorContains: target => target === editorNode, now: () => state.now, ...(options.rules ? { rules: options.rules } : {}), ...(options.menus ? { menus: options.menus } : {})
   })
   const press = (event: FakeEvent) => { keybindings.handleKeyDown(event); return event }
   const ran = () => execute.mock.calls.map(call => call[0])
@@ -165,7 +165,7 @@ describe('keybinding dispatch', () => {
     const listeners = new Map<string, EventListener>()
     const target = { addEventListener: vi.fn((type: string, listener: EventListener, _options?: boolean) => { listeners.set(type, listener) }), removeEventListener: vi.fn() }
     const attached = keybindings.attach(target as unknown as EventTarget)
-    expect(target.addEventListener.mock.calls.map(call => [call[0], call[2]])).toEqual([['keydown', true], ['focusout', true], ['blur', undefined]])
+    expect(target.addEventListener.mock.calls.map(call => [call[0], call[2]])).toEqual([['keydown', true], ['keyup', true], ['focusout', true], ['blur', undefined]])
     for (const type of ['focusout', 'blur']) {
       press(letter('k', 'win32'))
       listeners.get(type)!(new Event(type))
@@ -184,7 +184,7 @@ describe('keybinding dispatch', () => {
     listeners.get('keydown')!(event as unknown as Event)
     expect(event.consumed).toBe(true)
     attached.dispose()
-    expect(target.removeEventListener.mock.calls.map(call => call[0])).toEqual(['keydown', 'focusout', 'blur'])
+    expect(target.removeEventListener.mock.calls.map(call => call[0])).toEqual(['keydown', 'keyup', 'focusout', 'blur'])
   })
   it('consumes a key whose command is unavailable, and the command does not run', async () => {
     const fixture = workbenchFixture()
@@ -206,6 +206,44 @@ describe('keybinding dispatch', () => {
     const throwing = new KeybindingService({ platform: 'win32', commands: { execute: vi.fn() }, context: { get: () => { throw new Error('context') } }, modalOpen: () => false, editorHasTextFocus: () => false })
     expect(() => throwing.handleKeyDown(letter('n', 'win32'))).not.toThrow()
     expect(error).toHaveBeenCalledTimes(2)
+  })
+  it('gives keys to the menus first while they own the keyboard, then to menu access keys, then to rules', () => {
+    const calls: string[] = [], menu = { owns: false, result: 'consumed' as 'consumed' | 'passthrough', access: false }
+    const menus: MenuKeyRouter = {
+      noteKeyDown: event => { calls.push(`note ${event.key}`) }, ownsKeyboard: () => menu.owns,
+      handleKeyDown: event => { calls.push(`menu ${event.key}`); return menu.result },
+      handleAccessKey: chord => { calls.push(`access ${chord}`); return menu.access }, handleKeyUp: event => { calls.push(`up ${event.key}`) }
+    }
+    const { press, ran, state, keybindings } = service('win32', { menus, values: editorText, textFocus: true })
+    const step = (event: FakeEvent) => { calls.length = 0; press(event); return [...calls] }
+    expect(step(letter('n', 'win32'))).toEqual(['note n', 'access ctrl+n'])
+    expect(ran()).toEqual(['file.new'])
+    menu.owns = true
+    expect(step(letter('n', 'win32'))).toEqual(['note n', 'menu n'])
+    expect(ran()).toEqual(['file.new'])
+    // The menus closed for a shortcut, which then runs as usual.
+    menu.result = 'passthrough'
+    expect(step(letter('n', 'win32'))).toEqual(['note n', 'menu n', 'access ctrl+n'])
+    expect(ran()).toEqual(['file.new', 'file.new'])
+    menu.owns = false
+    menu.access = true
+    expect(step(key('F8', 'F8'))).toEqual(['note F8', 'access f8'])
+    expect(ran()).toEqual(['file.new', 'file.new'])
+    // Dialogs: the menus decide what access keys do there; rules not marked modal stay off.
+    menu.access = false
+    state.modal = true
+    expect(step(key('F8', 'F8'))).toEqual(['note F8', 'access f8'])
+    state.modal = false
+    // IME composition and handled events never reach the menus or the rules.
+    expect(step(letter('n', 'win32', { isComposing: true }))).toEqual(['note n'])
+    expect(step(letter('n', 'win32', { defaultPrevented: true }))).toEqual([])
+    // After Ctrl+K in editor text the next key is Monaco's, even F10.
+    press(letter('k', 'win32'))
+    expect(step(key('F10', 'F10'))).toEqual(['note F10'])
+    calls.length = 0
+    keybindings.handleKeyUp(key('AltLeft', 'Alt'))
+    expect(calls).toEqual(['up Alt'])
+    expect(ran()).toEqual(['file.new', 'file.new'])
   })
   it('labels primary keybindings per platform', () => {
     const labels = (platform: Platform, id: CommandId) => service(platform).keybindings.lookup(id)

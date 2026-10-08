@@ -4,10 +4,11 @@
 
 Every command, keybinding, and menu placement is declared in `src/shared/commands/catalog.ts`. A condition after a key
 limits where the key works; for example, `editorFocus` means the query editor has focus. Keys marked * belong to the
-editor or the browser engine: menus show them, but Varia does not dispatch them. "Available when" is the condition
-under which menus, the toolbar, and the keyboard can run the command; the context keys it uses are listed below.
+editor, the browser engine, or Electron (zoom, full screen, quit): menus show them, but Varia does not dispatch them.
+"Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
+keys it uses are listed below.
 
-## Commands (35)
+## Commands (51)
 
 ### File
 
@@ -18,6 +19,7 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save |
 | Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As… |
 | Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query |
+| Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents |
 
 ### Edit
 
@@ -25,6 +27,11 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | --- | --- | --- | --- | --- | --- | --- |
 | Undo | `edit.undo` | Ctrl+Z * | Ctrl+Z * | ⌘Z * | Always | Edit › Undo |
 | Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo |
+| Cut (not in the palette) | `edit.cut` | Ctrl+X * | Ctrl+X * | ⌘X * | Always | Edit › Cut |
+| Copy (not in the palette) | `edit.copy` | Ctrl+C * | Ctrl+C * | ⌘C * | Always | Edit › Copy |
+| Paste (not in the palette) | `edit.paste` | Ctrl+V * | Ctrl+V * | ⌘V * | Always | Edit › Paste |
+| Delete (not in the palette) | `edit.delete` | Delete * | Delete * | ⌦ * | Always | Edit › Delete |
+| Select All (not in the palette) | `edit.selectAll` | Ctrl+A * | Ctrl+A * | ⌘A * | Always | Edit › Select All |
 | Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find |
 | Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Replace |
 | Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Toggle Line Comment |
@@ -38,12 +45,17 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Show Object Explorer | `window.explorer` | F8 | F8 | F8 | Always | Window › Object Explorer |
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
+| Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
 | Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown | Ctrl+Tab, Ctrl+PageDown | ⌃⇥ | `multipleDocuments` | Window › Next Query |
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | View › Word Wrap |
+| Zoom In | `view.zoomIn` | Ctrl+= * | Ctrl+= * | ⌘= * | Always | View › Zoom In |
+| Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
+| Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
+| Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
 
 ### Query
 
@@ -51,14 +63,16 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | --- | --- | --- | --- | --- | --- | --- |
 | Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query |
-| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Change Connection… |
+| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
+| Disconnect | `query.disconnect` | — | — | — | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
+| Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
 | Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
 
 ### Connection
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server… |
+| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server… |
 
 ### Object Explorer
@@ -75,16 +89,24 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | — |
 | Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | — |
 | Reload Themes | `preferences.reloadThemes` | — | — | — | Always | — |
+| Set Color Theme (not in the palette) | `preferences.setTheme` | — | — | — | Always | — |
+
+### Developer
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Reload Window | `developer.reloadWindow` | — | — | — | Always | View › Reload Window |
+| Toggle Developer Tools | `developer.toggleDevTools` | Ctrl+Shift+I * | Ctrl+Shift+I * | ⌥⌘I * | Always | View › Toggle Developer Tools |
 
 ### Other
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Close Window (not in the palette) | `window.close` | — | — | — | Always | — |
+| Close Window (not in the palette) | `window.close` | Alt+F4 * | Ctrl+Q * | — | Always | File › Exit (Windows only); File › Quit (Linux only) |
 | Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette… |
 | Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
 
-## Context keys (20)
+## Context keys (22)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -109,6 +131,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasConnection` | boolean | state | At least one server is connected. |
 | `activeDocumentConnected` | boolean | state | The active query's server is connected. |
 | `queryRunning` | boolean | state | The active query is running. |
+| `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
+| `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
 | `explorerNode` | `'background'`, `'server'`, `'databasesFolder'`, `'systemDatabasesFolder'`, `'snapshotsFolder'`, `'database'`, `'tablesFolder'`, `'table'`, `'securityFolder'`, `'serverObjectsFolder'`, `'serverObject'`, `''` | target | The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object. |
 | `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
@@ -121,13 +145,13 @@ Workbench keybindings never use these keys, because menus, Electron, the operati
 | Reason | Windows | Linux | macOS |
 | --- | --- | --- | --- |
 | opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | — |
-| an Electron role or system key | Ctrl+R, Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu | Ctrl+R, Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu, Ctrl+Q | — |
+| an Electron role or system key | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu, Ctrl+Q | — |
 | clipboard or text editing | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | — |
 | find or comment in the editor | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\ | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\, Ctrl+Shift+A | ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, ⌘E, ⌘/, ⌥⌘C, ⌥⌘W, ⌥⌘R, ⌥⌘P, ⌥⌘L |
 | the editor's chord prefix | Ctrl+K | Ctrl+K | ⌘K |
 | moves focus or closes a widget | Tab, Shift+Tab, Escape, Alt+PageUp, Alt+PageDown | Tab, Shift+Tab, Escape, Alt+PageUp, Alt+PageDown | — |
 | a macOS system key | — | — | ⌘Q, ⌘H, ⌥⌘H, ⌘M, ⌘` |
-| an Electron role | — | — | ⌃⌘F, ⌥⌘I, ⌘R, ⌘0, ⌘=, ⇧⌘=, ⌘- |
+| an Electron role | — | — | ⌃⌘F, ⌥⌘I, ⌘0, ⌘=, ⇧⌘=, ⌘- |
 | clipboard or undo | — | — | ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z, ⇧⌘Z |
 | an emacs editing key | — | — | ⌃A, ⌃B, ⌃D, ⌃E, ⌃F, ⌃H, ⌃K, ⌃N, ⌃O, ⌃P, ⌃T |
 | AltGr types characters with Ctrl+Alt | Ctrl+Alt+any letter | Ctrl+Alt+any letter | — |

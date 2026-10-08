@@ -26,11 +26,33 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .title-bar-brand { display: grid; place-items: center; width: 26px; color: var(--varia-titleBar-iconForeground); }
 .title-bar-brand .icon { width: 15px; height: 15px; }
 .title-bar-menus { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
-.title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: 3px; font-size: 12px; }
-.title-bar-menus button.active { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); }
-.title-bar-menus button:focus-visible { outline-offset: -2px; }
+.title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: 3px; font-size: 12px; outline: 1px solid transparent; outline-offset: -1px; }
+.title-bar-menus button:hover, .title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); outline: 1px solid var(--varia-menubar-selectionBorder); outline-offset: -1px; }
 .title-bar-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 20px; font-size: 11px; color: var(--varia-titleBar-activeForeground); pointer-events: none; }
 .title-bar-spacer { width: 24px; flex-shrink: 0; }
+:root[data-window-focus="inactive"] .title-bar { background: var(--varia-titleBar-inactiveBackground); }
+:root[data-window-focus="inactive"] .title-bar-caption, :root[data-window-focus="inactive"] .title-bar-menus button:not(:hover, :focus-visible, .active) { color: var(--varia-titleBar-inactiveForeground); }
+/* Access keys are underlined only while the keyboard drives the menus, as in Windows. */
+.menu-mnemonic { text-decoration: none; }
+[data-mnemonics="visible"] .menu-mnemonic { text-decoration: underline; }
+/* Above the docking guides (15000), the quick input (19000), and dialogs (20000): text fields in dialogs get menus too. */
+.menu-layer { position: fixed; inset: 0; pointer-events: none; z-index: 30000; }
+.menu { position: fixed; pointer-events: auto; min-width: 200px; max-width: min(480px, 100vw - 8px); padding: 4px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 16px var(--varia-widget-shadow); font: 12px var(--varia-font-ui); -webkit-app-region: no-drag; user-select: none; outline: none; }
+.menu-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 20px; align-items: center; height: 24px; white-space: nowrap; cursor: default; outline: 1px solid transparent; outline-offset: -1px; }
+.menu-item[data-active] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline-color: var(--varia-menu-selectionBorder); }
+.menu-item[aria-disabled="true"] { color: var(--varia-disabledForeground); }
+.menu-item[aria-disabled="true"] .menu-gutter { opacity: .5; }
+.menu-gutter { display: grid; place-items: center; }
+.menu-label { overflow: hidden; text-overflow: ellipsis; }
+.menu-keybinding { padding-left: 32px; color: var(--varia-descriptionForeground); }
+.menu-item[data-active] .menu-keybinding { color: inherit; }
+.menu-chevron { display: grid; place-items: center; }
+.menu-separator { height: 1px; margin: 4px 8px 4px 28px; background: var(--varia-menu-separatorBackground); }
+@media (forced-colors: active) {
+  .menu { border-color: CanvasText; }
+  .menu-item[data-active] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .menu-item[aria-disabled="true"] { color: GrayText; }
+}
 .status-dot, .dirty-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
 .status-dot { background: var(--varia-statusBar-idleIndicator); }
 .dirty-dot { background: var(--varia-documentTabs-modifiedIndicator); }

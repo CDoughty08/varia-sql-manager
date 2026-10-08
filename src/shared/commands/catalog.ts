@@ -4,10 +4,14 @@ import type { MenuId } from './menus'
 export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'refresh',
-  'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color'] as const
+  'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
+  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right'] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
+/** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
+export const rendererRoles = ['cut', 'copy', 'paste', 'delete', 'selectAll', 'reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen'] as const satisfies readonly RoleName[]
+export type RendererRole = typeof rendererRoles[number]
 
 /**
  * One keybinding. `key` applies to every platform unless `win`, `linux`, or `mac` overrides it (`null` leaves that
@@ -97,7 +101,15 @@ export const commandCatalog = {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }], menus: [{ menu: 'file', group: '2_close', order: 1, mnemonic: 'c' }]
   },
-  'window.close': { title: 'Close Window', palette: false, allowInModal: true },
+  'file.closeAll': {
+    title: 'Close All', category: 'File', icon: 'close-all', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
+    menus: [{ menu: 'window', group: '2_documents', order: 3, title: 'Close All Documents', mnemonic: 'l' }]
+  },
+  // Custom menus run the renderer's close flow; native menus show Electron's quit role. Exit and Quit pick their own mnemonic.
+  'window.close': {
+    title: 'Close Window', palette: false, allowInModal: true, role: 'quit', platformTitles: { win32: 'Exit', linux: 'Quit' },
+    keybindings: [{ win: 'alt+f4', native: true }, { linux: 'ctrl+q', native: true }], menus: [{ menu: 'file', group: 'z_quit', order: 1, platforms: ['win32', 'linux'] }]
+  },
   'edit.undo': {
     title: 'Undo', category: 'Edit', icon: 'discard', allowInModal: true,
     keybindings: [{ key: 'mod+z', native: true }], menus: [{ menu: 'edit', group: '1_undo', order: 1, mnemonic: 'u' }]
@@ -106,6 +118,27 @@ export const commandCatalog = {
     title: 'Redo', category: 'Edit', icon: 'redo', allowInModal: true,
     keybindings: [{ win: 'ctrl+y', linux: 'ctrl+y', mac: 'mod+shift+z', native: true }, { win: 'ctrl+shift+z', linux: 'ctrl+shift+z', native: true }],
     menus: [{ menu: 'edit', group: '1_undo', order: 2, mnemonic: 'r' }]
+  },
+  // Electron's roles: Chromium edits text fields and the editor's EditContext itself, so these keys are only labels here.
+  'edit.cut': {
+    title: 'Cut', category: 'Edit', palette: false, allowInModal: true, role: 'cut',
+    keybindings: [{ key: 'mod+x', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 1, mnemonic: 't' }]
+  },
+  'edit.copy': {
+    title: 'Copy', category: 'Edit', icon: 'copy', palette: false, allowInModal: true, role: 'copy',
+    keybindings: [{ key: 'mod+c', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 2, mnemonic: 'c' }]
+  },
+  'edit.paste': {
+    title: 'Paste', category: 'Edit', icon: 'clippy', palette: false, allowInModal: true, role: 'paste',
+    keybindings: [{ key: 'mod+v', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 3, mnemonic: 'p' }]
+  },
+  'edit.delete': {
+    title: 'Delete', category: 'Edit', palette: false, allowInModal: true, role: 'delete',
+    keybindings: [{ key: 'delete', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 4, mnemonic: 'd' }]
+  },
+  'edit.selectAll': {
+    title: 'Select All', category: 'Edit', palette: false, allowInModal: true, role: 'selectAll',
+    keybindings: [{ key: 'mod+a', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 5, mnemonic: 'a' }]
   },
   'window.explorer': {
     title: 'Show Object Explorer', category: 'View', icon: 'list-tree', keywords: ['servers', 'tree'], keybindings: [{ key: 'f8' }],
@@ -118,6 +151,11 @@ export const commandCatalog = {
   'window.output': {
     title: 'Show Query Output', category: 'View', icon: 'output', keywords: ['results', 'messages'],
     menus: [{ menu: 'window', group: '1_panes', order: 3, title: 'Query Output', mnemonic: 'u' }]
+  },
+  // SSMS's Ctrl+R: hides the results (closing the panel keeps them) or shows them again. It never reloads the window.
+  'view.toggleResultsPane': {
+    title: 'Toggle Results Pane', category: 'View', icon: 'output', keywords: ['results', 'output', 'hide', 'show'], toggled: 'outputPaneVisible',
+    keybindings: [{ key: 'mod+r' }], menus: [{ menu: 'window', group: '1_panes', order: 4, title: 'Show Results Pane', mnemonic: 'h' }]
   },
   'layout.save': {
     title: 'Save Layout…', category: 'View', icon: 'layout',
@@ -152,7 +190,8 @@ export const commandCatalog = {
   },
   'connection.connect': {
     title: 'Connect to Server…', category: 'Connection', icon: 'plug', keywords: ['login', 'server'], precondition: 'backendReady',
-    unavailableHint: 'The backend is still starting.', menus: [{ menu: 'file', group: '0_connect', order: 1, mnemonic: 'e' }]
+    unavailableHint: 'The backend is still starting.',
+    menus: [{ menu: 'file', group: '0_connect', order: 1, mnemonic: 'e' }, { menu: 'query.connection', group: '1_connect', order: 1, title: 'Connect…', mnemonic: 'c' }]
   },
   'connection.disconnect': {
     title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
@@ -164,13 +203,21 @@ export const commandCatalog = {
   },
   'query.changeConnection': {
     title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && !queryRunning && !documentBusy',
-    menus: [{ menu: 'query', group: '2_target', order: 1, mnemonic: 'h' }]
+    menus: [{ menu: 'query.connection', group: '2_change', order: 1, mnemonic: 'h' }]
+  },
+  'query.disconnect': {
+    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentConnected && !queryRunning && !documentBusy',
+    unavailableHint: 'This query is not connected.', menus: [{ menu: 'query.connection', group: '1_connect', order: 2, mnemonic: 'd' }]
+  },
+  'query.disconnectAll': {
+    title: 'Disconnect All Queries', category: 'Query', precondition: 'anyDocumentConnected && !documentBusy', unavailableHint: 'No query is connected.',
+    menus: [{ menu: 'query.connection', group: '1_connect', order: 3, mnemonic: 'a' }]
   },
   'query.changeDatabase': {
     title: 'Change Database…', category: 'Query', icon: 'database', keywords: ['use', 'catalog'],
     precondition: 'activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
     // SSMS's Change Database key; Ctrl/⌘+K Ctrl/⌘+U in editor text still reaches Monaco (the dispatcher passes the chord through).
-    keybindings: [{ key: 'mod+u' }], menus: [{ menu: 'query', group: '2_target', order: 2, mnemonic: 'd' }]
+    keybindings: [{ key: 'mod+u' }], menus: [{ menu: 'query', group: '0_connection', order: 2, mnemonic: 'd' }]
   },
   'document.next': {
     title: 'Next Query', category: 'View', precondition: 'multipleDocuments', unavailableHint: secondQuery,
@@ -214,7 +261,28 @@ export const commandCatalog = {
   },
   'preferences.createTheme': { title: 'Create Custom Theme…', category: 'Preferences', icon: 'new-file', keywords: ['color'] },
   'preferences.openThemesFolder': { title: 'Open Themes Folder', category: 'Preferences', icon: 'folder-opened', keywords: ['color'] },
-  'preferences.reloadThemes': { title: 'Reload Themes', category: 'Preferences', icon: 'refresh', keywords: ['color'] }
+  'preferences.reloadThemes': { title: 'Reload Themes', category: 'Preferences', icon: 'refresh', keywords: ['color'] },
+  // View › Theme's theme and mode items in custom menus: the choice travels as the item's arguments.
+  'preferences.setTheme': { title: 'Set Color Theme', category: 'Preferences', palette: false },
+  'view.zoomIn': {
+    title: 'Zoom In', category: 'View', icon: 'zoom-in', role: 'zoomIn', keybindings: [{ key: 'mod+=', native: true }], menus: [{ menu: 'view', group: '4_zoom', order: 1, mnemonic: 'i' }]
+  },
+  'view.zoomOut': {
+    title: 'Zoom Out', category: 'View', icon: 'zoom-out', role: 'zoomOut', keybindings: [{ key: 'mod+-', native: true }], menus: [{ menu: 'view', group: '4_zoom', order: 2, mnemonic: 'o' }]
+  },
+  'view.resetZoom': {
+    title: 'Reset Zoom', category: 'View', role: 'resetZoom', keybindings: [{ key: 'mod+0', native: true }], menus: [{ menu: 'view', group: '4_zoom', order: 3, mnemonic: 'z' }]
+  },
+  'view.toggleFullScreen': {
+    title: 'Toggle Full Screen', category: 'View', icon: 'screen-full', role: 'togglefullscreen', keybindings: [{ win: 'f11', linux: 'f11', mac: 'ctrl+meta+f', native: true }],
+    menus: [{ menu: 'view', group: '4_zoom', order: 4, title: 'Full Screen', mnemonic: 'f' }]
+  },
+  // No key: Ctrl+R and ⌘R toggle the results pane, as in SSMS.
+  'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', role: 'reload', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },
+  'developer.toggleDevTools': {
+    title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
+    menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
+  }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

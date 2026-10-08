@@ -68,14 +68,13 @@ export type MenuEntry =
 interface Slot { readonly group: string; readonly order: number; readonly platforms?: readonly Platform[] }
 export type ExtraEntry = Slot & { readonly kind: 'role'; readonly role: MenuRole }
 
-const windowsAndLinux: readonly Platform[] = ['win32', 'linux']
 const roles = (group: string, list: readonly MenuRole[], platforms?: readonly Platform[]): ExtraEntry[] =>
   list.map((role, index) => ({ kind: 'role', role, group, order: index + 1, ...(platforms ? { platforms } : {}) }))
-/** Menu content that is not a command: Electron roles, placed by group like commands. */
+/**
+ * Menu content that is not a command: Electron roles, placed by group like commands. Every other role is a command
+ * (`role` in the catalogue), so it also reaches custom menus and the palette.
+ */
 export const menuExtras: Readonly<Partial<Record<MenuId, readonly ExtraEntry[]>>> = {
-  file: roles('z_quit', ['quit'], windowsAndLinux),
-  edit: roles('2_clipboard', ['cut', 'copy', 'paste', 'selectAll']),
-  view: roles('4_display', ['reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen']),
   window: roles('4_window', ['minimize', 'zoom'], ['darwin'])
 }
 

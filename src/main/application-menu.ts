@@ -33,7 +33,10 @@ function themeItems(items: readonly ThemeMenuItem[], actions: ApplicationMenuAct
 }
 
 function commandItem(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions): MenuItemConstructorOptions {
-  const { id, toggle } = entry
+  const { id, toggle, role } = entry
+  // Electron runs a role itself, so its keys work while the renderer is busy. Its accelerator is always the catalogue's,
+  // or none: Electron's own defaults would give Reload Ctrl+R and ⌘R, which toggle the results pane.
+  if (role) return { id: entry.nativeId, label: entry.title, role, accelerator: entry.accelerator ?? '' }
   // Main never resolves keys (the renderer's dispatcher owns them), so the accelerator is only a label.
   return {
     id: entry.nativeId, label: entry.title, ...(entry.accelerator ? { accelerator: entry.accelerator } : {}), registerAccelerator: false, type: toggle ? 'checkbox' : 'normal',

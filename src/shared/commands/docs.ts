@@ -1,7 +1,7 @@
 import { commandDescriptor, commandIds, type Category, type CommandId } from './catalog'
 import { contextKeyNames, contextKeys, type ContextKeyDeclaration } from './context-keys'
 import { keybindingLabel, platforms, reservedChords, resolveKeybinding, type Platform } from './keybindings'
-import { applicationMenus, type MenuId } from './menus'
+import { applicationMenus, menuTitle, type MenuId } from './menus'
 
 const categories: readonly (Category | undefined)[] = ['File', 'Edit', 'View', 'Query', 'Connection', 'Object Explorer', 'Preferences', 'Developer', undefined]
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
@@ -25,9 +25,11 @@ function keys(id: CommandId, platform: Platform): string {
 }
 
 function menus(id: CommandId): string {
-  const placements = (commandDescriptor(id).menus ?? []).map(placement => {
-    const only = placement.platforms ? ` (${placement.platforms.map(platform => platformNames[platform]).join(', ')} only)` : ''
-    return `${menuNames[placement.menu]} › ${placement.title ?? commandDescriptor(id).title}${only}`
+  const placements = (commandDescriptor(id).menus ?? []).flatMap(placement => {
+    // A placement can read differently per platform, such as Exit on Windows and Quit on Linux.
+    const titles = new Map<string, Platform[]>()
+    for (const platform of placement.platforms ?? platforms) { const title = menuTitle(id, platform, placement.title); titles.set(title, [...titles.get(title) ?? [], platform]) }
+    return [...titles].map(([title, shown]) => `${menuNames[placement.menu]} › ${title}${shown.length < platforms.length ? ` (${shown.map(platform => platformNames[platform]).join(', ')} only)` : ''}`)
   })
   return placements.join('; ') || '—'
 }
@@ -61,8 +63,9 @@ export function renderCommandDocs(): string {
     '',
     'Every command, keybinding, and menu placement is declared in `src/shared/commands/catalog.ts`. A condition after a key',
     'limits where the key works; for example, `editorFocus` means the query editor has focus. Keys marked * belong to the',
-    'editor or the browser engine: menus show them, but Varia does not dispatch them. "Available when" is the condition',
-    'under which menus, the toolbar, and the keyboard can run the command; the context keys it uses are listed below.',
+    'editor, the browser engine, or Electron (zoom, full screen, quit): menus show them, but Varia does not dispatch them.',
+    '"Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context',
+    'keys it uses are listed below.',
     '',
     `## Commands (${commandIds.length})`
   ]

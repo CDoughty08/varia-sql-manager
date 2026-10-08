@@ -10,12 +10,12 @@ import { ConnectionStore } from './connection-store'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
+import { runRole } from './window-roles'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import type { ApiResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
-import { menuForMnemonic, menubarIds } from '../shared/commands/menus'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 
@@ -26,7 +26,8 @@ let mainWindow: BrowserWindow | null = null
 let backend: BackendClient
 const files = new SqlFileStore()
 let closeApproved = false
-let openMenu: Menu | null = null
+// The title bar starts active, so a window that never gets OS focus (smoke tests) keeps the active colors.
+let windowActive = true
 let layouts: LayoutStore
 let appearance: AppearanceService
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
@@ -73,7 +74,6 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
 /** A reloaded or crashed renderer can no longer address its sessions, so end them with the backend process. */
 function resetRendererState(): void {
   rendererReady = false
-  openMenu = null
   menuBridge.reset()
   endPreview()
   backend?.restart()
@@ -104,7 +104,6 @@ const menuBridge = new NativeMenuBridge({
 })
 
 function buildMenu(): void {
-  openMenu?.closePopup()
   menuBridge.rebuild()
 }
 
@@ -117,7 +116,7 @@ async function openThemesFolder(): Promise<void> {
 function applyWindowChrome(): void {
   const window = mainWindow
   if (!window || window.isDestroyed()) return
-  const chrome = windowChromeFor(previewTheme ?? appearance.state.active)
+  const chrome = windowChromeFor(previewTheme ?? appearance.state.active, { active: windowActive })
   window.setBackgroundColor(chrome.backgroundColor)
   if (process.platform !== 'darwin') {
     try { window.setTitleBarOverlay(chrome.overlay) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
@@ -149,6 +148,7 @@ function applyAppearance(state: ThemeState): void {
 function createWindow(): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
+  windowActive = true
   rendererLoaded = false
   rendererReady = false
   rendererUnresponsive = false
@@ -162,18 +162,12 @@ function createWindow(): void {
   })
   const window = mainWindow, contents = window.webContents
   if (process.platform !== 'darwin') {
+    // The application menu stays hidden: the renderer draws the title-bar menus and handles F10 and Alt itself.
     mainWindow.setAutoHideMenuBar(false)
     mainWindow.setMenuBarVisibility(false)
-    // Only menu access is handled here: Chromium would otherwise act on bare Alt and F10. Command keys belong to the renderer.
-    contents.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown' || input.control || input.meta || input.shift) return
-      const key = input.key.toLowerCase()
-      const menu = input.alt ? menuForMnemonic(key) : undefined
-      if (menu || (key === 'f10' && !input.alt)) {
-        event.preventDefault()
-        mainWindow?.webContents.send('varia:menu-focus', menu ?? null)
-      }
-    })
+    const activate = (active: boolean) => { windowActive = active; applyWindowChrome() }
+    window.on('focus', () => activate(true))
+    window.on('blur', () => activate(false))
   }
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   contents.on('will-navigate', event => event.preventDefault())
@@ -267,22 +261,8 @@ app.whenReady().then(async () => {
     await layouts.export(selection.filePath, layout)
     return true
   })
-  handle('varia:menu-popup', async value => {
-    const options = z.object({ menu: z.enum(menubarIds), x: z.number().int().min(0).max(32767), y: z.number().int().min(0).max(32767) }).strict().parse(value)
-    const menu = Menu.getApplicationMenu()?.getMenuItemById('menu.' + options.menu)?.submenu
-    if (!menu || !mainWindow) throw new Error('The application menu is unavailable.')
-    const window = mainWindow
-    const bounds = window.getContentBounds()
-    const zoom = window.webContents.getZoomFactor()
-    openMenu?.closePopup(window)
-    await new Promise<void>(resolve => {
-      openMenu = menu
-      menu.popup({ window, x: Math.min(bounds.width - 1, Math.round(options.x * zoom)), y: Math.min(bounds.height - 1, Math.round(options.y * zoom)), callback: () => {
-        if (openMenu === menu) openMenu = null
-        resolve()
-      } })
-    })
-  })
+  // Custom menus and the palette run Electron's roles on the trusted window: a fixed set of window methods, never quit.
+  handle('varia:run-role', value => { if (mainWindow) runRole(value, mainWindow) })
   ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {
     if (!trusted(event)) {
       return { ok: false, error: 'Untrusted IPC sender.' }

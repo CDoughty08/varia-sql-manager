@@ -17,7 +17,7 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const menus = 'custom menus and the title bar', tree = 'the Object Explorer tree', grid = 'the results grid', toasts = 'notifications'
+const tree = 'the Object Explorer tree', grid = 'the results grid', toasts = 'notifications'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -42,19 +42,21 @@ const groups = {
   'Title bar, menus, and toolbar': {
     'titleBar.activeBackground': ['V', '$chrome', 'Title bar, and the native window-controls overlay on Windows and Linux.', 'css native', { opaqueOver: 'editor.background' }],
     'titleBar.activeForeground': ['V', '$textTertiary', 'Window caption in the title bar.', 'css'],
-    'titleBar.inactiveBackground': ['V', '@titleBar.activeBackground', 'Title bar while the window is inactive.', '', { reserved: menus }],
-    'titleBar.inactiveForeground': ['V', '@titleBar.activeForeground', 'Window caption while the window is inactive.', '', { reserved: menus }],
+    'titleBar.inactiveBackground': ['V', '@titleBar.activeBackground', 'Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive.', 'css native', { opaqueOver: 'editor.background' }],
+    'titleBar.inactiveForeground': ['V', '@titleBar.activeForeground', 'Window caption and menubar labels while the window is inactive.', 'css'],
     'titleBar.border': ['V', '$border', 'Line below the title bar.', 'css'],
     'titleBar.iconForeground': ['X', '$accentMuted', 'Application icon in the title bar.', 'css'],
     'titleBar.controlsForeground': ['X', '$text', 'Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable.', 'native', { opaqueOver: 'titleBar.activeBackground' }],
     'menubar.selectionBackground': ['V', '$active', 'Open title-bar menu.', 'css'],
     'menubar.selectionForeground': ['V', '$textStrong', 'Label of the open title-bar menu.', 'css'],
-    'menu.background': ['V', '$overlay', 'Editor and dock context menus.', 'css monaco'],
-    'menu.foreground': ['V', '$text', 'Context menu text.', 'css monaco'],
-    'menu.selectionBackground': ['V', '$selectionStrong', 'Highlighted menu item. The editor context menu highlights with list.hoverBackground instead.', '', { reserved: menus }],
-    'menu.selectionForeground': ['V', '$textStrong', 'Text of the highlighted menu item.', '', { reserved: menus }],
-    'menu.separatorBackground': ['V', '$separator', 'Context menu separators.', 'monaco'],
-    'menu.border': ['V', '@editorWidget.border', 'Context menu border.', 'monaco'],
+    'menubar.selectionBorder': ['V', '$accent/0', 'Outline of the open, hovered, or focused title-bar menu; none by default.', 'css'],
+    'menu.background': ['V', '$overlay', 'Title-bar and context menus.', 'css monaco'],
+    'menu.foreground': ['V', '$text', 'Title-bar and context menus.', 'css monaco'],
+    'menu.selectionBackground': ['V', '$selectionStrong', 'Highlighted item in title-bar and context menus. The editor context menu highlights with list.hoverBackground instead.', 'css'],
+    'menu.selectionForeground': ['V', '$textStrong', 'Highlighted item in title-bar and context menus.', 'css'],
+    'menu.selectionBorder': ['V', '$accent/0', 'Outline of the highlighted menu item; none by default.', 'css'],
+    'menu.separatorBackground': ['V', '$separator', 'Menu separators.', 'css monaco'],
+    'menu.border': ['V', '@editorWidget.border', 'Menu border.', 'css monaco'],
     'toolbar.background': ['X', '@titleBar.activeBackground', 'Main toolbar.', 'css'],
     'toolbar.border': ['X', '@titleBar.border', 'Line below the main toolbar.', 'css'],
     'toolbar.hoverBackground': ['V', '$text/12', 'Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color.', 'css monaco'],

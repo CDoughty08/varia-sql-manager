@@ -15,7 +15,7 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/menu tests (after check)
 npm run test:electron   # Both of the above
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
@@ -37,7 +37,7 @@ The .NET SDK is selected through `global.json`. npm and NuGet lockfiles pin reso
 
 File operations use native dialogs and opaque file IDs, with atomic saves. UTF-8 and UTF-16 LE (with BOM) SQL files are supported, with a 5 MB file limit. Existing encoding is preserved when saving. Native Undo/Redo menu actions use Monaco's document history; Ctrl+Z/Ctrl+Y continue to work in the editor.
 
-The window uses a single compact title bar with **File / Edit / View / Query / Window** menus and the current query name. Windows retains native minimize/maximize/close controls, while the empty title area can be dragged to move the window. The query action toolbar sits immediately below. Menus use native dropdowns that show command keys and grey out commands that cannot run; **F10** focuses the menu bar, arrow keys move between menus, and **Alt+F / Alt+E / Alt+V / Alt+Q / Alt+W** open them on Windows/Linux. **Escape** returns focus to the editor or input. This uses Electron's [custom title bar and native controls overlay](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar).
+The window uses a single compact title bar with **File / Edit / View / Query / Window** menus and the current query name. Windows retains native minimize/maximize/close controls, while the empty title area can be dragged to move the window. The query action toolbar sits immediately below. On Windows and Linux the menus are drawn in the current theme. They show command keys and grey out commands that cannot run; **F10** or a tap of **Alt** focuses the menu bar, arrow keys move between menus, an underlined letter chooses an item, and **Alt+F / Alt+E / Alt+V / Alt+Q / Alt+W** open the menus (in the editor's find widget **Alt+W** still toggles Whole Word). **Escape** returns focus to the editor or input. macOS keeps its native menu bar. This uses Electron's [custom title bar and native controls overlay](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar).
 
 Passwords are kept in memory only; application exit or disconnecting releases the backend connection profile and clears its connection pool. Closing a query tab ends its SQL session; tab sessions are not pooled, so an open transaction rolls back and releases its locks immediately. The UI clears the password after connecting, selecting another saved connection, or dismissing the dialog. Saved profiles contain server/login names and connection settings, with passwords omitted.
 
@@ -58,6 +58,7 @@ The shortcuts follow SSMS where SSMS has one:
 | Close the query | Ctrl+W, Ctrl+F4 | ⌘W |
 | Next or previous query | Ctrl+Tab or Ctrl+Shift+Tab, Ctrl+PageDown or Ctrl+PageUp | ⌃⇥ or ⌃⇧⇥ |
 | Show Object Explorer and move focus to it | F8 | F8 |
+| Hide or show the results pane (Window → Show Results Pane) | Ctrl+R | ⌘R |
 | Refresh Object Explorer (when it has focus) | F5 | F5 |
 | Toggle word wrap | Alt+Z | View menu |
 | Comment or uncomment the selection | Ctrl+K Ctrl+C or Ctrl+K Ctrl+U | ⌘K ⌘C or ⌘K ⌘U |
@@ -101,7 +102,7 @@ Interface labels, menus, tabs, and status text disable browser text selection. T
 
 **View → Theme** switches between **Dark** (the default), **Light**, and **Follow System**, and chooses the theme used in each mode. Switching is live: queries, undo history, connections, and the layout are untouched, and the native title bar and menus follow the mode (system dialogs such as file pickers follow it on macOS only). The choice is saved in `appearance.json` in Electron's user-data directory. **Color Theme…** (in that menu, or **Preferences: Color Theme…** in the command palette) lists the modes and every theme: each row previews as you move to it, Enter chooses it, and Escape puts the current theme back without saving anything.
 
-Custom themes are JSON files in the `themes` folder there (**View → Theme → Open Themes Folder**). A theme overrides any of 61 named palette slots, 188 color keys (VS Code names where the meaning matches), and the SQL token colors, on top of Varia Dark or Varia Light; one file can provide both variants. **Create Custom Theme…** writes a starter seeded with the current accent colors; edit it, then choose **Reload Themes**. Theme files are validated strictly and never modified. Problems are listed in a banner with their JSON path, a bad entry keeps its default, and a theme that cannot be used falls back to the built-in theme of its type while keeping your choice. See the [theme guide](docs/themes/README.md), the [token reference](docs/themes/tokens.md), and the [JSON Schema](docs/themes/varia-theme.schema.json).
+Custom themes are JSON files in the `themes` folder there (**View → Theme → Open Themes Folder**). A theme overrides any of 61 named palette slots, 190 color keys (VS Code names where the meaning matches), and the SQL token colors, on top of Varia Dark or Varia Light; one file can provide both variants. **Create Custom Theme…** writes a starter seeded with the current accent colors; edit it, then choose **Reload Themes**. Theme files are validated strictly and never modified. Problems are listed in a banner with their JSON path, a bad entry keeps its default, and a theme that cannot be used falls back to the built-in theme of its type while keeping your choice. See the [theme guide](docs/themes/README.md), the [token reference](docs/themes/tokens.md), and the [JSON Schema](docs/themes/varia-theme.schema.json).
 
 ## Architecture
 
@@ -144,7 +145,7 @@ One UTF-8 JSON message per line. Responses may arrive out of order and are match
 {"id":"db807cb6-d4d9-42d7-8d1a-cd0b8ea6a3de","result":{"protocolVersion":1,"runtime":".NET 10.x","platform":"...","smoVersion":"...","sqlClientVersion":"..."}}
 ```
 
-Errors use `{"id":"...","error":{"code":"...","message":"..."}}`. At the preload boundary they become a typed `{ ok: false, error }` result, so the UI can display failures without losing the Electron process. A failed backend requires an application restart. Reloading the workbench (View → Reload) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
+Errors use `{"id":"...","error":{"code":"...","message":"..."}}`. At the preload boundary they become a typed `{ ok: false, error }` result, so the UI can display failures without losing the Electron process. A failed backend requires an application restart. Reloading the workbench (View → Reload Window, which has no shortcut) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
 
 `query.execute` takes the query tab's UUID as `sessionId`, a separate execution UUID as `queryId`, and an optional selected-text `startLine`. Its result contains `status` (`completed`, `failed`, `cancelled`, or `timedOut`), any SQL error, completed/total batch counts, the resulting database context, and retained output. SQL execution failures return this result so earlier rows and messages survive. Validation errors and missing, busy, or invalid sessions/connections still use the protocol error envelope. `query.session.close` releases a tab's session; server retargeting closes that session before changing the target.
 

@@ -13,7 +13,7 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 export class TargetService {
   constructor(
     private readonly documents: DocumentService,
-    private readonly queries: Pick<QueryService, 'clear'>,
+    private readonly queries: Pick<QueryService, 'clear' | 'isRunning'>,
     private readonly connections: Pick<ConnectionService, 'get'>,
     private readonly files: Pick<FileService, 'clearError' | 'reportError'>,
     private readonly api: Pick<VariaApi, 'closeQuerySession'>
@@ -41,6 +41,19 @@ export class TargetService {
     })
   }
   changeDatabase(tabId: string, database: string): void { this.update(tabId, { database }) }
+  /** Disconnects every query that is not running, ending its session; the running ones stay connected and are reported. */
+  async disconnectAll(): Promise<void> {
+    await this.runDocumentTask(async () => {
+      let running = 0
+      for (const { id, connectionId } of this.documents.getSnapshot().documents) {
+        if (connectionId === undefined) continue
+        if (this.queries.isRunning(id)) { running++; continue }
+        unwrap(await this.api.closeQuerySession(id))
+        this.update(id, { connectionId: undefined })
+      }
+      if (running) throw new Error(running === 1 ? '1 query is still running and stayed connected.' : `${running} queries are still running and stayed connected.`)
+    })
+  }
   /** Runs a task under the document lock, reporting failures in the file error banner. */
   async runDocumentTask(action: () => Promise<void>): Promise<void> {
     if (this.documents.getSnapshot().busy) return

@@ -38,6 +38,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   // Monaco's context menu highlights with the list hover colors and keeps menu.foreground on them.
   ...text(['menu.foreground'], ['menu.background'], ['menu.background', 'list.hoverBackground']),
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
+  // Keybinding labels in title-bar menus; the highlighted item shows them in menu.selectionForeground.
+  ...text(['descriptionForeground'], ['menu.background']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
   ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),
   ...text(['inputValidation.errorForeground'], ['editorWidget.background', 'inputValidation.errorBackground']),
@@ -107,7 +109,9 @@ export const contrastPairs: readonly ContrastPair[] = [
  */
 export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs)),
-  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar)
+  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar),
+  // The highlighted menu item follows the pointer and the keyboard alike.
+  ...pairs(1.2, ['menu.selectionBackground'], ['menu.background'])
 ]
 
 /** Reported, not enforced: the Dark control borders are below 3:1 until the owner decides on a heavier look. */

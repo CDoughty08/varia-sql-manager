@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (188)
+## Color keys (190)
 
 ### Base
 
@@ -102,19 +102,21 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | --- | --- | --- | --- | --- | --- |
 | `titleBar.activeBackground` | VS Code | `$chrome` | `#181f2a` | `#e9edf2` | Title bar, and the native window-controls overlay on Windows and Linux. Made opaque over `editor.background`. |
 | `titleBar.activeForeground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Window caption in the title bar. |
-| `titleBar.inactiveBackground` | VS Code | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Title bar while the window is inactive. Not used yet; reserved for custom menus and the title bar. |
-| `titleBar.inactiveForeground` | VS Code | `@titleBar.activeForeground` | `#9eafc5` | `#465366` | Window caption while the window is inactive. Not used yet; reserved for custom menus and the title bar. |
+| `titleBar.inactiveBackground` | VS Code | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive. Made opaque over `editor.background`. |
+| `titleBar.inactiveForeground` | VS Code | `@titleBar.activeForeground` | `#9eafc5` | `#465366` | Window caption and menubar labels while the window is inactive. |
 | `titleBar.border` | VS Code | `$border` | `#2b3443` | `#d3d9e2` | Line below the title bar. |
 | `titleBar.iconForeground` | Varia | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Application icon in the title bar. |
 | `titleBar.controlsForeground` | Varia | `$text` | `#d9e1ec` | `#1f2733` | Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. |
 | `menubar.selectionBackground` | VS Code | `$active` | `#2e3c51` | `#ccd6e3` | Open title-bar menu. |
 | `menubar.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Label of the open title-bar menu. |
-| `menu.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Editor and dock context menus. |
-| `menu.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Context menu text. |
-| `menu.selectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Highlighted menu item. The editor context menu highlights with list.hoverBackground instead. Not used yet; reserved for custom menus and the title bar. |
-| `menu.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Text of the highlighted menu item. Not used yet; reserved for custom menus and the title bar. |
-| `menu.separatorBackground` | VS Code | `$separator` | `#354359` | `#cdd4de` | Context menu separators. |
-| `menu.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Context menu border. |
+| `menubar.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the open, hovered, or focused title-bar menu; none by default. |
+| `menu.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Title-bar and context menus. |
+| `menu.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Title-bar and context menus. |
+| `menu.selectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Highlighted item in title-bar and context menus. The editor context menu highlights with list.hoverBackground instead. |
+| `menu.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Highlighted item in title-bar and context menus. |
+| `menu.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the highlighted menu item; none by default. |
+| `menu.separatorBackground` | VS Code | `$separator` | `#354359` | `#cdd4de` | Menu separators. |
+| `menu.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Menu border. |
 | `toolbar.background` | Varia | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Main toolbar. |
 | `toolbar.border` | Varia | `@titleBar.border` | `#2b3443` | `#d3d9e2` | Line below the main toolbar. |
 | `toolbar.hoverBackground` | VS Code | `$text/12` | `#d9e1ec1f` | `#1f27331f` | Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. |
