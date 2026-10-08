@@ -27,6 +27,12 @@ describe('IPC wire lint', () => {
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
   })
+  it('keeps the method policies loadable by the fake backend: erasable, with type-only imports', () => {
+    const file = join('src', 'shared', 'ipc', 'methods.ts')
+    const source = readFileSync(file, 'utf8')
+    expect(() => stripTypeScriptTypes(source, { mode: 'strip' })).not.toThrow()
+    for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type /)
+  })
   it('never imports the differential-test MessagePack library from application code', () => {
     for (const file of files('src')) expect(readFileSync(file, 'utf8').includes('@msgpack/msgpack'), file).toBe(false)
   })

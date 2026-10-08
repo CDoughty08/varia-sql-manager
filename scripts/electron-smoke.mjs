@@ -55,7 +55,9 @@ try {
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok).toBe(true)
-  expect(health.value.protocolVersion).toBe(1)
+  expect(health.value.protocolVersion).toBe(2)
+  // Backend failures reach the renderer with their protocol v2 error code.
+  expect(await page.evaluate(() => window.varia.databases(crypto.randomUUID()))).toEqual({ ok: false, error: 'Connect to a SQL Server first.', code: 'NOT_CONNECTED' })
   expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined' })
   expect(await application.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox'))).toBe(process.platform === 'linux' && !launchOptions.chromiumSandbox)
   await expect(page.locator('.app-header')).toHaveCount(0)

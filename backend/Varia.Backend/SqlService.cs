@@ -6,17 +6,26 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
+using Varia.Backend.Protocol;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IDisposable
+internal sealed class SqlService : IRequestDispatcher
 {
+    /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
+    public static readonly string[] MethodNames =
+    [
+        "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
+        "databases.list", "server.objects.list", "tables.list", "tables.script", "query.execute", "query.cancel", "query.session.close"
+    ];
+
     private readonly ConcurrentDictionary<string, string> connections = new();
     private readonly ConcurrentDictionary<string, RunningQuery> queries = new();
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
+    private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
     {
@@ -27,26 +36,52 @@ internal sealed class SqlService : IDisposable
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
     }
 
-    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json) => method switch
+    public IReadOnlyList<string> Methods => MethodNames;
+
+    /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
+    /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots.</summary>
+    public RequestLane LaneOf(string method) => method switch
     {
-        "system.health" => new
+        "query.execute" => RequestLane.Query,
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" => RequestLane.Control,
+        _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
+        _ => RequestLane.Metadata
+    };
+
+    /// <summary>The result memory budget: a quarter of the memory available to the process (container-aware), within
+    /// 256 MiB to 2 GiB, and at most half of it for one query.</summary>
+    public (long GlobalBytes, long QueryBytes) ResultBudget
+    {
+        get
         {
-            ProtocolVersion = 1,
+            var global = Math.Clamp(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4, 256L << 20, 2L << 30);
+            return (global, global / 2);
+        }
+    }
+
+    /// <summary>The request's token: CANCEL frames and its header deadline. Live checks call without a context.</summary>
+    private static CancellationToken Token(RequestContext? context) => context?.Token ?? CancellationToken.None;
+
+    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context = null) => method switch
+    {
+        "system.health" => health ??= new
+        {
+            ProtocolVersion = ProtocolLimits.Version,
             Runtime = RuntimeInformation.FrameworkDescription,
             Platform = RuntimeInformation.OSDescription,
             SmoVersion = typeof(Server).Assembly.GetName().Version?.ToString(),
             SqlClientVersion = typeof(SqlConnection).Assembly.GetName().Version?.ToString()
         },
-        "connections.connect" => await ConnectAsync(Read<ConnectOptions>(parameters, json)),
-        "connections.databases" => await DiscoverDatabasesAsync(Read<ConnectOptions>(parameters, json)),
+        "connections.connect" => await ConnectAsync(Read<ConnectOptions>(parameters, json), Token(context)),
+        "connections.databases" => await DiscoverDatabasesAsync(Read<ConnectOptions>(parameters, json), Token(context)),
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
         "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
         "connections.disconnect" => Disconnect(Read<ConnectionArgs>(parameters, json)),
-        "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json)),
-        "server.objects.list" => await ServerObjectsAsync(Read<ServerObjectArgs>(parameters, json)),
-        "tables.list" => await TablesAsync(Read<DatabaseArgs>(parameters, json)),
-        "tables.script" => await ScriptAsync(Read<TableArgs>(parameters, json)),
-        "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json)),
+        "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
+        "server.objects.list" => await ServerObjectsAsync(Read<ServerObjectArgs>(parameters, json), Token(context)),
+        "tables.list" => await TablesAsync(Read<DatabaseArgs>(parameters, json), Token(context)),
+        "tables.script" => await ScriptAsync(Read<TableArgs>(parameters, json), Token(context)),
+        "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
         "query.session.close" => CloseSession(Read<SessionArgs>(parameters, json)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
@@ -62,7 +97,7 @@ internal sealed class SqlService : IDisposable
         return value;
     }
 
-    private async Task<ConnectionInfo> ConnectAsync(ConnectOptions options)
+    private async Task<ConnectionInfo> ConnectAsync(ConnectOptions options, CancellationToken token)
     {
         if (options.Authentication is not ("windows" or "sql"))
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
@@ -70,20 +105,21 @@ internal sealed class SqlService : IDisposable
             throw new RequestException("AUTH_UNSUPPORTED", "Windows authentication in this bootstrap requires Windows. Use SQL authentication on other platforms.");
         var builder = ConnectionSettings.Build(options);
         await using var connection = new SqlConnection(builder.ConnectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(token);
         var id = Guid.NewGuid().ToString();
         connections[id] = builder.ConnectionString;
         pools[id] = new() { [builder.ConnectionString] = 0 };
         return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout);
     }
 
-    private static async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options)
+    private static async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
     {
         // Use the login's default database to discover choices, even if the typed database is stale.
         var builder = ConnectionSettings.Build(options with { Database = "", Advanced = (options.Advanced ?? new()) with { AttachDbFilename = "" } });
         builder.Pooling = false;
         await using var connection = new SqlConnection(builder.ConnectionString);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
         await connection.OpenAsync(deadline.Token);
         return await ReadDatabasesAsync(connection, deadline.Token);
     }
@@ -122,11 +158,11 @@ internal sealed class SqlService : IDisposable
         return new SqlConnection(builder.ConnectionString);
     }
 
-    private async Task<List<DatabaseInfo>> DatabasesAsync(ConnectionArgs args)
+    private async Task<List<DatabaseInfo>> DatabasesAsync(ConnectionArgs args, CancellationToken token)
     {
         await using var connection = CreateConnection(args.ConnectionId);
-        await connection.OpenAsync();
-        return await ReadDatabasesAsync(connection, CancellationToken.None);
+        await connection.OpenAsync(token);
+        return await ReadDatabasesAsync(connection, token);
     }
 
     private static async Task<List<DatabaseInfo>> ReadDatabasesAsync(SqlConnection connection, CancellationToken token)
@@ -140,7 +176,7 @@ internal sealed class SqlService : IDisposable
         return result;
     }
 
-    private async Task<List<ServerObjectInfo>> ServerObjectsAsync(ServerObjectArgs args)
+    private async Task<List<ServerObjectInfo>> ServerObjectsAsync(ServerObjectArgs args, CancellationToken token)
     {
         // Fixed catalog queries keep renderer input out of SQL identifiers and expressions.
         var sql = args.Kind switch
@@ -154,35 +190,36 @@ internal sealed class SqlService : IDisposable
             _ => throw new RequestException("INVALID_PARAMS", "Unsupported server object category.")
         };
         await using var connection = CreateConnection(args.ConnectionId, "master");
-        await connection.OpenAsync();
+        await connection.OpenAsync(token);
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.CommandTimeout = 30;
-        await using var reader = await command.ExecuteReaderAsync();
+        await using var reader = await command.ExecuteReaderAsync(token);
         var result = new List<ServerObjectInfo>();
-        while (await reader.ReadAsync()) result.Add(new(reader.GetString(0), reader.GetString(1)));
+        while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetString(1)));
         return result;
     }
 
-    private async Task<List<TableInfo>> TablesAsync(DatabaseArgs args)
+    private async Task<List<TableInfo>> TablesAsync(DatabaseArgs args, CancellationToken token)
     {
         await using var connection = CreateConnection(args.ConnectionId, args.Database);
-        await connection.OpenAsync();
+        await connection.OpenAsync(token);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = 30;
         command.CommandText = "SELECT s.name, t.name FROM sys.tables AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id WHERE t.is_ms_shipped = 0 ORDER BY s.name, t.name;";
-        await using var reader = await command.ExecuteReaderAsync();
+        await using var reader = await command.ExecuteReaderAsync(token);
         var result = new List<TableInfo>();
-        while (await reader.ReadAsync()) result.Add(new(reader.GetString(0), reader.GetString(1)));
+        while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetString(1)));
         return result;
     }
 
-    private async Task<object> ScriptAsync(TableArgs args)
+    private async Task<object> ScriptAsync(TableArgs args, CancellationToken token)
     {
         Name(args.Schema);
         Name(args.Name);
         await using var connection = CreateConnection(args.ConnectionId, args.Database);
-        await connection.OpenAsync();
+        // SMO cannot be interrupted once it runs; the host answers TIMEOUT at the deadline and keeps the slot until it returns.
+        await connection.OpenAsync(token);
         var serverConnection = new ServerConnection(connection) { StatementTimeout = 30 };
         try
         {
@@ -201,7 +238,7 @@ internal sealed class SqlService : IDisposable
         finally { serverConnection.Disconnect(); }
     }
 
-    private async Task<QueryResult> ExecuteAsync(QueryArgs args)
+    private async Task<QueryResult> ExecuteAsync(QueryArgs args, RequestContext? context)
     {
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows is < 1 or > 5000
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
@@ -212,6 +249,8 @@ internal sealed class SqlService : IDisposable
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
         if (!queries.TryAdd(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
+        // A CANCEL frame for this request: main's backstop means its deadline passed; any other reason stops it like query.cancel.
+        using var cancelled = context?.Token.Register(() => { if (context.Reason == CancelReason.Deadline) TryCancel(cancellation); else running.Cancel(); });
         QuerySession? session = null;
         var entered = false;
         var messages = new QueryMessages();

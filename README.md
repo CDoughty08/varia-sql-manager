@@ -110,8 +110,8 @@ Monaco / React renderer
         ↓ narrow typed window.varia API
 Sandboxed Electron preload
         ↓ validated IPC from the application main frame only
-Electron main process / BackendClient
-        ↓ correlated newline-delimited JSON on stdin/stdout
+Electron main process / BackendSupervisor
+        ↓ length-prefixed MessagePack frames (protocol v2) on stdin/stdout
 .NET 10 sidecar
         ├── SqlClient: connections, metadata, queries, cancellation
         └── SMO: table CREATE scripts and future management operations
@@ -121,7 +121,7 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 
 - `src/shared/contracts.ts`: typed operations, parameters, and results.
 - `src/main/validation.ts`: allowlist and runtime validation before requests leave Electron.
-- `src/main/backend-client.ts`: child process, request correlation, timeouts, and failure handling.
+- `src/main/backend/`: the backend process: `connection.ts` (one process: handshake, framing, request correlation, deadlines, limits, and failure handling) and `supervisor.ts` (its lifetime across reloads); `src/shared/ipc/` holds the wire format and the per-method policies.
 - `src/main/layout-store.ts` / `src/shared/layouts.ts`: atomic preferences, layout files, and bounded layout validation.
 - `src/preload/index.ts`: explicit public methods; no generic IPC or shell API exposed.
 - `backend/Varia.Backend`: independent C# console host and SQL services.
@@ -137,14 +137,14 @@ The renderer uses context isolation, sandboxing, no Node integration, a Content 
 
 ### Protocol
 
-One UTF-8 JSON message per line. Responses may arrive out of order and are matched by request UUID. `system.health` returns protocol version 1 and loaded assembly versions. Methods are allowlisted in both the main process and .NET dispatcher.
+Protocol v2: every frame is a 16-byte little-endian header (magic `56 0A`, kind, flags, body length, request id, and a kind-specific argument such as the request's deadline) followed by one MessagePack body. Main and the backend first exchange HELLO; main refuses a backend that speaks another version or lacks a method it may call (a stale build), and a protocol 1 backend is recognised from the JSON line it answers with. Responses may arrive out of order and are matched by request id; every request gets exactly one response. `system.health` returns protocol version 2 and loaded assembly versions. Methods are allowlisted in both the main process and .NET dispatcher.
 
-```json
-{"id":"db807cb6-d4d9-42d7-8d1a-cd0b8ea6a3de","method":"system.health","params":{}}
-{"id":"db807cb6-d4d9-42d7-8d1a-cd0b8ea6a3de","result":{"protocolVersion":1,"runtime":".NET 10.x","platform":"...","smoVersion":"...","sqlClientVersion":"..."}}
+```text
+56 0A 02 00 1E 00 00 00 01 00 00 00 10 27 00 00 | {"method":"system.health","params":{}} as MessagePack
+REQUEST, 30-byte body, id 1, deadline 10,000 ms
 ```
 
-Errors use `{"id":"...","error":{"code":"...","message":"..."}}`. At the preload boundary they become a typed `{ ok: false, error }` result, so the UI can display failures without losing the Electron process. A failed backend requires an application restart. Reloading the workbench (View → Reload) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
+Errors are `{ error: { code, message } }` bodies. At the preload boundary they become a typed `{ ok: false, error, code }` result, so the UI can display failures without losing the Electron process. Each method has a deadline after which the backend answers `TIMEOUT`, and main gives up 5 seconds later. A backend that stops or breaks the protocol fails its pending requests (nothing is retried) and stays failed until the workbench is reloaded or the application restarts. Reloading the workbench (View → Reload) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
 
 `query.execute` takes the query tab's UUID as `sessionId`, a separate execution UUID as `queryId`, and an optional selected-text `startLine`. Its result contains `status` (`completed`, `failed`, `cancelled`, or `timedOut`), any SQL error, completed/total batch counts, the resulting database context, and retained output. SQL execution failures return this result so earlier rows and messages survive. Validation errors and missing, busy, or invalid sessions/connections still use the protocol error envelope. `query.session.close` releases a tab's session; server retargeting closes that session before changing the target.
 

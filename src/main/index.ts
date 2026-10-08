@@ -2,7 +2,9 @@ import { app, BrowserWindow, ipcMain, Menu, dialog, nativeTheme, shell, type Ipc
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { BackendClient } from './backend-client'
+import { BackendSupervisor } from './backend/supervisor'
+import { BackendError } from './backend/errors'
+import { backendSpawnSpec } from './backend/spawn-spec'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
@@ -23,7 +25,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const rendererFile = join(here, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 let mainWindow: BrowserWindow | null = null
-let backend: BackendClient
+let backend: BackendSupervisor
 const files = new SqlFileStore()
 let closeApproved = false
 let openMenu: Menu | null = null
@@ -76,7 +78,7 @@ function resetRendererState(): void {
   openMenu = null
   menuBridge.reset()
   endPreview()
-  backend?.restart()
+  void backend?.restart('reload')
   files.clear()
 }
 
@@ -225,9 +227,11 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   if (!primaryInstance) return
   const root = app.getAppPath()
-  backend = app.isPackaged
-    ? new BackendClient(join(process.resourcesPath, 'backend', process.platform === 'win32' ? 'Varia.Backend.exe' : 'Varia.Backend'), [], root)
-    : new BackendClient('dotnet', [join(root, 'backend/Varia.Backend/bin', process.env.VARIA_SMOKE_TEST === '1' ? 'Release' : 'Debug', 'net10.0/Varia.Backend.dll')], root)
+  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1' }), {
+    appVersion: app.getVersion(),
+    // Frame kinds, ids and lengths only; never bodies.
+    trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined
+  })
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
@@ -289,15 +293,13 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      const seconds = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).timeoutSeconds : method === 'connections.connect' ? (validated as RpcMethods['connections.connect']['params']).advanced?.connectTimeout ?? 15 : undefined
-      const timeout = seconds === undefined ? 45_000 : seconds === 0 ? 0 : (seconds + 30) * 1000
-      const result = await backend.request(method as RpcMethod, validated as never, timeout)
+      const result = await backend.request(method as RpcMethod, validated as never)
       if (method === 'connections.connect') {
         try { await connectionStore.remember(validated as RpcMethods['connections.connect']['params']) }
         catch { (result as RpcMethods['connections.connect']['result']).historyWarning = 'Connected successfully, but recent connections could not be saved.' }
       }
       return { ok: true, value: result }
-    } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.') } }
+    } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
   handle('varia:files-open', async () => {
     const selected = await dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] })
@@ -338,4 +340,4 @@ app.on('before-quit', event => {
   if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); command('window.close') }
 })
 // A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is certain.
-app.on('will-quit', () => { backend?.stop() })
+app.on('will-quit', () => { void backend?.stop() })

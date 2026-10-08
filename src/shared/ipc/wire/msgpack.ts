@@ -37,6 +37,8 @@ const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 const TWO_32 = 4294967296
 
 export class MsgPackWriter {
+  /** Zero every buffer this writer outgrows, because it holds a password. */
+  sensitive = false
   private buffer: Uint8Array
   private view: DataView
   private length = 0
@@ -53,11 +55,18 @@ export class MsgPackWriter {
 
   reset(): void { this.length = 0 }
 
+  /** Zeroes the buffer and empties the writer. */
+  wipe(): void {
+    this.buffer.fill(0)
+    this.length = 0
+  }
+
   private ensure(bytes: number): void {
     const needed = this.length + bytes
     if (needed <= this.buffer.length) return
     const next = new Uint8Array(Math.max(needed, this.buffer.length * 2))
     next.set(this.buffer.subarray(0, this.length))
+    if (this.sensitive) this.buffer.fill(0)
     this.buffer = next
     this.view = new DataView(next.buffer)
   }
@@ -188,6 +197,17 @@ export function encodeControl(value: unknown, limits: ControlLimits = controlLim
   const writer = new MsgPackWriter()
   writeControl(writer, value, limits, 0)
   return writer.finish()
+}
+
+/** encodeControl for a body that holds a password: the writer's own buffers are zeroed, so the returned array is the
+ *  only copy, and the caller zeroes it once written. (The JavaScript strings it came from cannot be zeroed.) */
+export function encodeSensitiveControl(value: unknown, limits: ControlLimits = controlLimits): Uint8Array {
+  const writer = new MsgPackWriter(4096)
+  writer.sensitive = true
+  try {
+    writeControl(writer, value, limits, 0)
+    return writer.finish()
+  } finally { writer.wipe() }
 }
 
 function writeControl(writer: MsgPackWriter, value: unknown, limits: ControlLimits, depth: number): void {

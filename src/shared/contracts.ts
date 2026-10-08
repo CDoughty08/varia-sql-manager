@@ -3,6 +3,7 @@ import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId } from './commands/catalog'
 import type { MenubarId, MenuState } from './commands/menus'
+import type { ErrorCode } from './ipc/wire/protocol'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -108,10 +109,8 @@ export interface RpcMethods {
   'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
 }
 export type RpcMethod = keyof RpcMethods
-export type RpcResponse =
-  | { id: string | null; result: unknown; error?: never }
-  | { id: string | null; error: { code: string; message: string }; result?: never }
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string }
+/** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode }
 
 export interface MenuPopup { menu: MenubarId; x: number; y: number }
 export interface SqlFile { id: string; name: string; path: string }

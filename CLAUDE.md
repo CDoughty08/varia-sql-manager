@@ -1,7 +1,8 @@
 # Varia SQL Manager
 
 SSMS-style SQL Server workbench. Electron 44 + React 19 + Monaco 0.57 + Dockview renderer; a .NET 10 sidecar
-(Microsoft.Data.SqlClient 7.1, SMO 181) speaks newline-delimited JSON over stdio. It is not a VS Code fork.
+(Microsoft.Data.SqlClient 7.1, SMO 181) speaks length-prefixed MessagePack frames (protocol v2) over stdio. It is not a
+VS Code fork.
 README.md documents user-facing behaviour, limits, and the protocol.
 
 ## Commands
@@ -13,7 +14,7 @@ README.md documents user-facing behaviour, limits, and the protocol.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
-  (`backend-client.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
+  (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
 
 ## Environment
 
@@ -34,14 +35,16 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, blocked navigation and popups.
   It reaches the system only through `window.varia` (`src/preload/index.ts`); never expose generic IPC or shell APIs,
   and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`).
-- A backend method must be added in all four places: `RpcMethods` in `src/shared/contracts.ts`, a strict zod schema in
-  `requestSchemas` (`src/main/validation.ts`), a preload method, and a `SqlService.DispatchAsync` case with its record in
-  `backend/Varia.Backend/Contracts.cs`. Unknown methods and unknown JSON members are rejected on both sides.
-- Backend stdout carries protocol lines only (one JSON object per LF-terminated line). Never log SQL text, credentials,
-  or connection strings. Passwords stay in memory: not in `connections.json`, process arguments, or previews.
-- Bound every input and output: 1.1M-character request lines, 1M-character scripts, 256 pending requests, a 30-second
-  default request timeout, and explicit truncation of results and messages. New string inputs need max lengths in both
-  zod and C#.
+- A backend method must be added in all five places: `RpcMethods` in `src/shared/contracts.ts`, a strict zod schema in
+  `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
+  and a `SqlService.DispatchAsync` case plus its `MethodNames` entry, with its record in `backend/Varia.Backend/Contracts.cs`.
+  Unknown methods and unknown members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
+- Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
+  connection strings. Passwords stay in memory: not in `connections.json`, process arguments, or previews.
+- Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
+  per backend generation, a deadline per method (`methodPolicies`), and explicit truncation of results and messages.
+  New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
+  never re-sent.
 - Preferences are written atomically (`src/main/json-file.ts`); unreadable files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - Commands, keybindings and menu placements are declared only in `src/shared/commands/catalog.ts` (View › Theme's

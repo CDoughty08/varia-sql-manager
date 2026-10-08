@@ -62,6 +62,7 @@ try { ConnectionSettings.Build(settings with { Advanced = new(ColumnEncryption: 
 catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requires an attestation URL"); }
 ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
+HostChecks.Run(Check);
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");

@@ -1,10 +1,5 @@
-using System.Text.Json;
-
 namespace Varia.Backend;
 
-internal sealed record RpcRequest(string Id, string Method, JsonElement Params);
-internal sealed record RpcError(string Code, string Message);
-internal sealed record RpcResponse(string? Id, object? Result, RpcError? Error);
 internal sealed record ConnectOptions(string Server, string Database, string Authentication, string? Username, string? Password, bool TrustServerCertificate,
     string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, AdvancedConnectionOptions? Advanced = null);
 internal sealed record AdvancedConnectionOptions(
