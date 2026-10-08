@@ -5,7 +5,7 @@ export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Obje
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'refresh',
   'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
-  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows'] as const
+  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table'] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
@@ -218,15 +218,47 @@ export const commandCatalog = {
   'connection.connect': {
     title: 'Connect to Server…', category: 'Connection', icon: 'plug', keywords: ['login', 'server'], precondition: 'backendReady',
     unavailableHint: 'The backend is still starting.',
-    menus: [{ menu: 'file', group: '0_connect', order: 1, mnemonic: 'e' }, { menu: 'query.connection', group: '1_connect', order: 1, title: 'Connect…', mnemonic: 'c' }]
+    menus: [
+      { menu: 'file', group: '0_connect', order: 1, mnemonic: 'e' }, { menu: 'query.connection', group: '1_connect', order: 1, title: 'Connect…', mnemonic: 'c' },
+      { menu: 'explorer.context', group: '0_connect', order: 1, title: 'Connect…', mnemonic: 'c', when: "explorerNode == 'server' || explorerNode == 'background'" }
+    ]
   },
   'connection.disconnect': {
     title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
-    menus: [{ menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' }]
+    // A server node's menu disconnects that server without asking which.
+    menus: [{ menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' }, { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server'" }]
   },
+  // F5 and a node's menu refresh that node's lists (a leaf's parent list); the toolbar button refreshes everything.
   'explorer.refresh': {
     title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer,
-    keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }]
+    keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }],
+    menus: [{ menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: "explorerNode != 'table' && explorerNode != 'serverObject'" }]
+  },
+  // An Object Explorer node's menu: the node comes from the menu's target, so these have no keys and are not in the palette.
+  'explorer.newQuery': {
+    title: 'New Query', category: 'Object Explorer', icon: 'new-file', palette: false, precondition: '!documentBusy',
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'q', when: "explorerNode == 'server' || explorerNode == 'database'" }]
+  },
+  'explorer.selectTopRows': {
+    title: 'Select Top 1000 Rows', category: 'Object Explorer', icon: 'table', palette: false, precondition: 'backendReady && !documentBusy',
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'w', when: "explorerNode == 'table'" }]
+  },
+  // Clicking a table also runs this, as before the menu existed.
+  'explorer.scriptCreateToNewQuery': {
+    title: 'Script Table as CREATE to New Query Editor Window', category: 'Object Explorer', palette: false, precondition: 'backendReady && !documentBusy',
+    menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 1, title: 'New Query Editor Window', mnemonic: 'n' }]
+  },
+  'explorer.scriptCreateToFile': {
+    title: 'Script Table as CREATE to File…', category: 'Object Explorer', icon: 'save-as', palette: false, precondition: 'backendReady && !documentBusy',
+    menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 2, title: 'File…', mnemonic: 'f' }]
+  },
+  'explorer.scriptCreateToClipboard': {
+    title: 'Script Table as CREATE to Clipboard', category: 'Object Explorer', icon: 'clippy', palette: false, precondition: 'backendReady',
+    menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 3, title: 'Clipboard', mnemonic: 'l' }]
+  },
+  'explorer.copyName': {
+    title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false,
+    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "explorerNode == 'server' || explorerNode == 'database' || explorerNode == 'table' || explorerNode == 'serverObject'" }]
   },
   'query.changeConnection': {
     title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && !queryRunning && !documentBusy',

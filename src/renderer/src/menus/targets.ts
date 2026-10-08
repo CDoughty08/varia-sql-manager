@@ -57,6 +57,7 @@ export function argsFor(target: MenuTarget): CommandArgs {
   return { target, ...(tabId ? { tabId } : {}) }
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
+export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
 
 const textTypes: ReadonlySet<string> = new Set(['text', 'search', 'email', 'url', 'tel', 'number', 'password'])
 /**

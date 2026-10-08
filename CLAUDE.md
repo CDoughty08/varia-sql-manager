@@ -21,7 +21,7 @@ README.md documents user-facing behaviour, limits, and the protocol.
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 80 checks instead of 40, and
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 83 checks instead of 41, and
   `connections-smoke.mjs` connects for real. Never print the password.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.

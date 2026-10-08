@@ -22,6 +22,7 @@ const api: VariaApi = {
   serverObjects: (connectionId, kind) => request('server.objects.list', { connectionId, kind }),
   tables: (connectionId, database) => request('tables.list', { connectionId, database }),
   scriptTable: (connectionId, database, schema, name) => request('tables.script', { connectionId, database, schema, name }),
+  tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
   closeQuerySession: sessionId => request('query.session.close', { sessionId }),

@@ -407,6 +407,8 @@ describe('context menus', () => {
     const menus = new MenuService({ platform: 'win32', commands: fixture.commands, context: fixture.context, keybindings: fixture.keybindings, theme: fixture.theme,
       focus: { capture: () => undefined, restore: () => {} }, modalOpen: () => false, targets })
     cleanups.push(() => menus.dispose())
+    // Every context menu has items for some target today, so resolution is made to hide them all.
+    vi.spyOn(menus, 'resolve').mockReturnValue([{ kind: 'separator', key: 'sep:0' }])
     expect(menus.openForElement(background.dom, { keyboard: true })).toBe(false)
     menus.openFromEvent(event(background))
     expect([menus.ownsKeyboard(), background.hasAttribute('data-menu-target')]).toEqual([false, false])

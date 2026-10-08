@@ -4,7 +4,7 @@ import type { Disposable } from '../core/types'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
 
-type FileApi = Pick<VariaApi, 'openSqlFiles' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow'>
+type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow'>
 export interface FileSnapshot { readonly error: string }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
@@ -52,6 +52,13 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   async save(id = this.documents.getSnapshot().activeId, saveAs = false): Promise<void> {
     if (!this.canSave(id)) return
     await this.perform(async () => { await this.documents.save(id, saveAs) })
+  }
+  /** Saves text to a file the user picks (Script … to File…), without opening it as a query; Cancel saves nothing. */
+  async saveCopy(name: string, content: string): Promise<void> {
+    await this.perform(async () => {
+      const file = unwrap(await this.api.saveSqlFile({ name, content, saveAs: true }))
+      if (file) unwrap(await this.api.releaseSqlFile(file.id))
+    })
   }
   private async confirmClose(id: string): Promise<boolean> {
     const document = this.documents.get(id), model = this.documents.getModel(id)

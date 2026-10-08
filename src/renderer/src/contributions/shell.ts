@@ -2,7 +2,7 @@ import type { PaneId } from '../../../shared/layouts'
 import { modalOpen } from '../core/modal'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { inputOf } from '../menus/targets'
+import { explorerNodeOf, inputOf } from '../menus/targets'
 import type { PaneLocation } from '../services/panes'
 import { serverItems } from './query'
 
@@ -16,7 +16,6 @@ export interface ShellHost {
   resetLayout(): void
   flushLayout(): Promise<void>
   showConnect(): void
-  refreshExplorer(): void
   /** Closes a panel as its × button does: its content and state are kept for when it is shown again. */
   closePane(pane: PaneId): void
   paneLocation(pane: PaneId): PaneLocation
@@ -73,11 +72,18 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('edit.undo', { when: args => inputOf(args)?.canUndo ?? true, run: args => edit(documents, 'undo', args) }),
     commands.register('edit.redo', { when: args => inputOf(args)?.canRedo ?? true, run: args => edit(documents, 'redo', args) }),
     commands.register('connection.connect', { run: () => host.showConnect() }),
-    commands.register('connection.disconnect', { run: () => quickInput.show({
-      ariaLabel: 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
-      items: serverItems(connections.getSnapshot(), id => queries.isConnectionRunning(id)), onDidAccept: item => host.disconnect(item.id)
-    }) }),
-    commands.register('explorer.refresh', { run: () => host.refreshExplorer() }),
+    // From a server node's menu, that server; otherwise the user picks one.
+    commands.register('connection.disconnect', {
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!!connections.get(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
+      run: args => {
+        const node = explorerNodeOf(args)
+        if (node?.kind === 'server') return host.disconnect(node.connectionId)
+        quickInput.show({
+          ariaLabel: 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
+          items: serverItems(connections.getSnapshot(), id => queries.isConnectionRunning(id)), onDidAccept: item => host.disconnect(item.id)
+        })
+      }
+    }),
     commands.register('pane.float', { when: args => located(args, 'grid'), run: onPane(pane => host.floatPane(pane)) }),
     commands.register('pane.dock', { when: args => located(args, 'floating'), run: onPane(pane => host.dockPane(pane)) }),
     commands.register('pane.close', { when: args => !!paneOf(args) && !located(args, 'closed'), run: onPane(pane => host.closePane(pane)) })

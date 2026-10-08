@@ -59,6 +59,11 @@ try { ConnectionSettings.Build(settings with { Advanced = new(PacketSize: 1) });
 catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects invalid advanced ranges"); }
 try { ConnectionSettings.Build(settings with { Advanced = new(ColumnEncryption: true, SecureEnclaves: true, AttestationProtocol: "HGS") }); throw new Exception("Missing attestation URL accepted"); }
 catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requires an attestation URL"); }
+using (var offline = new SqlService())
+{
+    try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }
+    catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "table columns reject an overlong name before looking up the connection"); }
+}
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
@@ -85,6 +90,10 @@ try
 {
     var discovered = await Call<List<DatabaseInfo>>("connections.databases", Live("DatabaseThatDoesNotExist"));
     Check(discovered.Any(database => database.Name == "master") && discovered.Any(database => database.Name == "tempdb"), "live database discovery ignores a stale selected database and closes its temporary connection");
+    var columns = await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"));
+    Check(columns.Columns.Count > 2 && columns.Columns[0] == new ColumnInfo("name", "sysname") && columns.Columns[1] == new ColumnInfo("object_id", "int") && !columns.Truncated, "table columns come in column order with their types");
+    try { await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects]")); throw new Exception("A closing bracket matched another table"); }
+    catch (RequestException error) { Check(error.Code == "NOT_FOUND", "table columns quote names, so a bracket cannot change which table they read"); }
     result = await Run("SELECT DB_NAME();", timeout: 0);
     Check(result.Status == "completed", "zero timeout allows execution without a deadline");
     result = await Run("SET STATISTICS TIME, IO ON;\nGO\nCREATE TABLE #VariaBatchTest (id int);\nINSERT #VariaBatchTest VALUES (1);\nGO\nINSERT #VariaBatchTest VALUES (2);\nGO 2\nSELECT COUNT(*) AS count FROM #VariaBatchTest;\nGO");

@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (58)
+## Commands (64)
 
 ### File
 
@@ -78,14 +78,20 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect… |
-| Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server… |
+| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
+| Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
 
 ### Object Explorer
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | — |
+| Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
+| New Query (not in the palette) | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
+| Select Top 1000 Rows (not in the palette) | `explorer.selectTopRows` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
+| Script Table as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › New Query Editor Window |
+| Script Table as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › File… |
+| Script Table as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady` | Object Explorer context menu › Script Table as › CREATE To › Clipboard |
+| Copy Name (not in the palette) | `explorer.copyName` | — | — | — | Always | Object Explorer context menu › Copy Name |
 
 ### Preferences
 

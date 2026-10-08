@@ -140,7 +140,7 @@ describe('command execution', () => {
     await commands.execute('explorer.refresh', undefined, 'keybinding')
     for (const id of ['window.explorer', 'window.output', 'layout.save', 'layout.load', 'layout.reset'] as const) await commands.execute(id, undefined, 'menu')
     await commands.execute('window.close', undefined, 'menu')
-    expect([host.showConnect, host.refreshExplorer, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1, 1])
+    expect([host.showConnect, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1])
     // Object Explorer also takes focus (SSMS's F8), so a following F5 refreshes it.
     expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['output']])
     expect(vi.mocked(host.manageLayouts).mock.calls).toEqual([['save'], ['load']])

@@ -83,3 +83,46 @@ input.context, for an empty text field
   &Delete  Delete  ----
   ---
   Select &All  Ctrl+A  ----
+explorer.context, for Object Explorer's empty area
+  &Connect…  ++++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for a server
+  &Connect…  ++++
+  &Disconnect  -+--
+  ---
+  New &Query  -++-
+  ---
+  Copy &Name  -+++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for the databasesFolder node
+  Re&fresh  F5  -+++
+explorer.context, for the systemDatabasesFolder node
+  Re&fresh  F5  -+++
+explorer.context, for the snapshotsFolder node
+  Re&fresh  F5  -+++
+explorer.context, for the securityFolder node
+  Re&fresh  F5  -+++
+explorer.context, for a database
+  New &Query  -++-
+  ---
+  Copy &Name  -+++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for a Tables folder
+  Re&fresh  F5  -+++
+explorer.context, for a table
+  Select Top 1000 Ro&ws  -++-
+  ---
+  &Script Table as >
+    &CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+  ---
+  Copy &Name  -+++
+explorer.context, for a server object folder
+  Re&fresh  F5  -+++
+explorer.context, for a server object
+  Copy &Name  -+++

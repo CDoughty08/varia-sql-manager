@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { connectionInfo, workbenchFixture } from './fixtures/workbench'
 import { deferred, TestEditor } from './fixtures/documents'
 import type { CommandArgs } from '../src/renderer/src/core/types'
-import type { InputTarget } from '../src/renderer/src/menus/targets'
+import type { ExplorerNode, InputTarget } from '../src/renderer/src/menus/targets'
+import { fakeDocument, FakeElement } from './fixtures/elements'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -237,5 +238,100 @@ describe('context menu commands', () => {
     expect(open.mock.calls).toEqual([[focused, { keyboard: true }]])
     quickInput.show({ ariaLabel: 'Command Palette', placeholder: '', noun: 'commands', items: [], onDidAccept: () => {} })
     expect(commands.isEnabled('workbench.showContextMenu')).toBe(false)
+  })
+})
+
+describe('Object Explorer commands', () => {
+  const on = (node: ExplorerNode): CommandArgs => ({ target: { kind: 'explorer', node } })
+  const server = { connectionId: 'server-a' }, appData = { ...server, database: 'AppData' }, orders = on({ kind: 'table', ...appData, schema: 'dbo', name: 'Orders' })
+  function connected() {
+    const fixture = setup()
+    fixture.context.set({ backendReady: true })
+    fixture.connections.add(connectionInfo('server-a'))
+    return fixture
+  }
+  it('open a new query on a server\'s or database\'s connection and put focus in its editor', async () => {
+    const { commands, documents } = connected()
+    const editor = new FocusableEditor()
+    documents.create('SQLQuery1.sql', '', 'master')
+    const binding = documents.bindEditor(editor.asEditor())
+    cleanups.push(() => binding.dispose())
+    expect(await commands.execute('explorer.newQuery', on({ kind: 'server', ...server }), 'menu')).toBe(true)
+    expect(documents.active).toMatchObject({ connectionId: 'server-a', database: 'master', dirty: false })
+    expect(await commands.execute('explorer.newQuery', on({ kind: 'database', ...appData }), 'menu')).toBe(true)
+    expect(documents.active).toMatchObject({ connectionId: 'server-a', database: 'AppData' })
+    expect(editor.focus).toHaveBeenCalledTimes(2)
+    for (const args of [on({ kind: 'server', connectionId: 'gone' }), orders, on({ kind: 'databasesFolder', ...server }), undefined]) expect(commands.isEnabled('explorer.newQuery', args)).toBe(false)
+  })
+  it('select the top 1000 rows of a table by its columns and run them on its database', async () => {
+    const { commands, documents, api, model } = connected()
+    expect(await commands.execute('explorer.selectTopRows', orders, 'menu')).toBe(true)
+    expect(api.tableColumns.mock.calls).toEqual([['server-a', 'AppData', 'dbo', 'Orders']])
+    const script = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [Id]', '      ,[CustomerName]', '  FROM [AppData].[dbo].[Orders]'].join('\n')
+    const tab = documents.active!
+    expect(model(tab.id).getValue()).toBe(script)
+    // The menu can make it again, so closing it asks nothing. It ran on AppData (the result then names the database).
+    expect(tab).toMatchObject({ connectionId: 'server-a', dirty: false })
+    expect(api.execute.mock.calls.map(([options]) => [options.sql, options.database, options.sessionId])).toEqual([[script, 'AppData', tab.id]])
+    api.tableColumns.mockResolvedValueOnce({ ok: false, error: 'Table was not found.' })
+    expect(await commands.execute('explorer.selectTopRows', orders, 'menu')).toBe(false)
+    expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Select Top 1000 Rows”: Table was not found.')
+    expect(documents.getSnapshot().documents).toHaveLength(1)
+    expect(commands.isEnabled('explorer.selectTopRows', on({ kind: 'tablesFolder', ...appData }))).toBe(false)
+  })
+  it('script a table as CREATE to a new query, a file, or the clipboard', async () => {
+    const { commands, documents, api, model } = connected()
+    const created = 'CREATE TABLE [dbo].[Orders] (Id int);'
+    expect(await commands.execute('explorer.scriptCreateToNewQuery', orders, 'toolbar')).toBe(true)
+    expect(documents.active).toMatchObject({ name: 'dbo.Orders.sql', connectionId: 'server-a', database: 'AppData', dirty: true })
+    expect(model(documents.active!.id).getValue()).toBe(created)
+    expect(await commands.execute('explorer.scriptCreateToFile', orders, 'menu')).toBe(true)
+    expect(api.saveSqlFile.mock.calls).toEqual([[{ name: 'dbo.Orders.sql', content: created, saveAs: true }]])
+    expect(api.releaseSqlFile.mock.calls).toEqual([['file-id']])
+    expect(await commands.execute('explorer.scriptCreateToClipboard', orders, 'menu')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([[created]])
+    expect(api.scriptTable).toHaveBeenCalledTimes(3)
+    expect(documents.getSnapshot().documents).toHaveLength(1)
+    api.scriptTable.mockResolvedValueOnce({ ok: false, error: 'Table was not found.' })
+    expect(await commands.execute('explorer.scriptCreateToNewQuery', orders, 'toolbar')).toBe(false)
+    expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Script Table as CREATE to New Query Editor Window”: Table was not found.')
+  })
+  it('copy a node\'s name: the server as connected to, or the quoted object name', async () => {
+    const { commands, api } = connected()
+    for (const node of [{ kind: 'server', ...server }, { kind: 'database', ...appData }, { kind: 'serverObject', ...server, objectKind: 'logins', name: 'sa' }] as const) {
+      expect(await commands.execute('explorer.copyName', on(node), 'menu'), node.kind).toBe(true)
+    }
+    expect(await commands.execute('explorer.copyName', orders, 'menu')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([['server-a.example'], ['[AppData]'], ['[sa]'], ['[dbo].[Orders]']])
+    for (const args of [on({ kind: 'tablesFolder', ...appData }), on({ kind: 'background' }), on({ kind: 'server', connectionId: 'gone' }), undefined]) expect(commands.isEnabled('explorer.copyName', args)).toBe(false)
+  })
+  it('refresh the node the menu is for, else the focused node, else everything', async () => {
+    const { commands, explorer, menuTargets } = connected()
+    const refresh = vi.spyOn(explorer, 'refresh')
+    await commands.execute('explorer.refresh', on({ kind: 'tablesFolder', ...appData }), 'menu')
+    await commands.execute('explorer.refresh', on({ kind: 'background' }), 'toolbar')
+    const doc = fakeDocument(), focused = new FakeElement(doc, 'button')
+    menuTargets.register(focused.dom, () => orders.target!)
+    vi.stubGlobal('document', { activeElement: focused })
+    cleanups.push(() => vi.unstubAllGlobals())
+    await commands.execute('explorer.refresh', undefined, 'keybinding')
+    vi.stubGlobal('document', { activeElement: null })
+    await commands.execute('explorer.refresh', undefined, 'keybinding')
+    expect(refresh.mock.calls).toEqual([[['s', 'server-a', 'd', 'AppData', 't']], [undefined], [['s', 'server-a', 'd', 'AppData', 't']], [undefined]])
+  })
+  it('disconnect a server node\'s server without asking which, unless a query runs on it', async () => {
+    const { commands, documents, host, quickInput, startQuery } = connected()
+    const node = on({ kind: 'server', ...server })
+    expect(await commands.execute('connection.disconnect', node, 'menu')).toBe(true)
+    expect(vi.mocked(host.disconnect).mock.calls).toEqual([['server-a']])
+    expect(quickInput.getSnapshot()).toMatchObject({ visible: false })
+    documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
+    const running = startQuery()
+    expect(commands.isEnabled('connection.disconnect', node)).toBe(false)
+    expect(commands.isEnabled('connection.disconnect', on({ kind: 'server', connectionId: 'gone' }))).toBe(false)
+    // The picker stays available; it disables that server's row instead.
+    expect(commands.isEnabled('connection.disconnect')).toBe(true)
+    await running.finish()
+    expect(commands.isEnabled('connection.disconnect', node)).toBe(true)
   })
 })

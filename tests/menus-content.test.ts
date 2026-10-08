@@ -3,7 +3,7 @@ import type { Platform } from '../src/shared/commands/keybindings'
 import { applicationMenus } from '../src/shared/commands/menus'
 import type { ThemeState, ThemeSummary } from '../src/shared/theme/types'
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
-import { menuForTarget, type InputTarget, type MenuTarget } from '../src/renderer/src/menus/targets'
+import { menuForTarget, type ExplorerNode, type InputTarget, type MenuTarget } from '../src/renderer/src/menus/targets'
 import { connectionInfo, workbenchFixture } from './fixtures/workbench'
 import { deferred } from './fixtures/documents'
 
@@ -44,7 +44,8 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
 
 /**
  * Every context menu for each kind of target, resolved in the same states: the editor, a saved and an unsaved query's
- * tab, a docked and a floating panel's tab, and text fields that are editable, read-only, a password, or empty.
+ * tab, a docked and a floating panel's tab, text fields that are editable, read-only, a password, or empty, and every
+ * kind of Object Explorer node (on server-a, which connects in the second state).
  */
 async function resolveContexts(platform: Platform): Promise<{ labels: string[]; snapshots: (readonly ResolvedMenuItem[])[][] }> {
   const fixture = workbenchFixture({ platform })
@@ -53,12 +54,19 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   const unsaved = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
   const saved = fixture.documents.create('saved.sql', 'SELECT 2', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql' })
   vi.mocked(fixture.host.paneLocation).mockImplementation(pane => pane === 'output' ? 'floating' : 'grid')
+  const node = (value: ExplorerNode): MenuTarget => ({ kind: 'explorer', node: value })
+  const server = { connectionId: 'server-a' }, database = { ...server, database: 'AppData' }
   const field = (facts: Partial<InputTarget>): MenuTarget => ({ kind: 'input', element: {} as HTMLElement, readOnly: false, secret: false, hasSelection: true, empty: false, canUndo: true, canRedo: false, ...facts })
   const targets: [string, MenuTarget][] = [
     ['the query editor', { kind: 'editor', tabId: saved.id }], ['a saved query\'s tab', { kind: 'documentTab', tabId: saved.id }], ['an unsaved query\'s tab', { kind: 'documentTab', tabId: unsaved.id }],
     ['a docked panel\'s tab', { kind: 'dockTab', pane: 'explorer', floating: false }], ['a floating panel\'s tab', { kind: 'dockTab', pane: 'output', floating: true }],
     ['a text field with selected text', field({})], ['a read-only text field', field({ readOnly: true })], ['a password field', field({ secret: true })],
-    ['an empty text field', field({ empty: true, hasSelection: false, canUndo: false })]
+    ['an empty text field', field({ empty: true, hasSelection: false, canUndo: false })],
+    ['Object Explorer\'s empty area', node({ kind: 'background' })], ['a server', node({ kind: 'server', ...server })],
+    ...(['databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'securityFolder'] as const).map((kind): [string, MenuTarget] => [`the ${kind} node`, node({ kind, ...server })]),
+    ['a database', node({ kind: 'database', ...database })], ['a Tables folder', node({ kind: 'tablesFolder', ...database })],
+    ['a table', node({ kind: 'table', ...database, schema: 'dbo', name: 'Orders' })], ['a server object folder', node({ kind: 'serverObjectsFolder', ...server, objectKind: 'logins' })],
+    ['a server object', node({ kind: 'serverObject', ...server, objectKind: 'logins', name: 'sa' })]
   ]
   const snapshots: (readonly ResolvedMenuItem[])[][] = []
   const capture = () => { snapshots.push(targets.map(([, target]) => fixture.menus.resolve(menuForTarget[target.kind], target))) }

@@ -54,6 +54,8 @@ export const serverObjectKinds = ['logins', 'serverRoles', 'credentials', 'crypt
 export type ServerObjectKind = typeof serverObjectKinds[number]
 export interface ServerObjectInfo { name: string; description: string }
 export interface TableInfo { schema: string; name: string }
+/** A table's columns in order; `truncated` means it has more than the 4,096 returned. */
+export interface TableColumns { columns: { name: string; dataType: string }[]; truncated: boolean }
 export interface BackendHealth {
   protocolVersion: number
   runtime: string
@@ -103,6 +105,7 @@ export interface RpcMethods {
   'server.objects.list': { params: { connectionId: string; kind: ServerObjectKind }; result: ServerObjectInfo[] }
   'tables.list': { params: { connectionId: string; database: string }; result: TableInfo[] }
   'tables.script': { params: { connectionId: string; database: string; schema: string; name: string }; result: { sql: string } }
+  'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
   'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
@@ -136,6 +139,7 @@ export interface VariaApi {
   serverObjects(connectionId: string, kind: ServerObjectKind): Promise<ApiResult<ServerObjectInfo[]>>
   tables(connectionId: string, database: string): Promise<ApiResult<TableInfo[]>>
   scriptTable(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<{ sql: string }>>
+  tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>

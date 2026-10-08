@@ -135,6 +135,20 @@ describe('file commands', () => {
     expect(files.getSnapshot().error).toBe('1 query is still running and stayed open.')
     expect(documents.getSnapshot().documents.map(document => document.name)).toEqual(['a.sql'])
   })
+  it('saves a copy to a file the user picks without opening it, and saves nothing on Cancel', async () => {
+    const { documents, api, files } = fixture()
+    await files.saveCopy('dbo.Orders.sql', 'CREATE TABLE dbo.Orders (Id int);')
+    expect(api.saveSqlFile.mock.calls).toEqual([[{ name: 'dbo.Orders.sql', content: 'CREATE TABLE dbo.Orders (Id int);', saveAs: true }]])
+    // Main keeps a handle for each saved file; nothing holds this one, so it is released at once.
+    expect(api.releaseSqlFile.mock.calls).toEqual([['file-id']])
+    expect(documents.getSnapshot()).toMatchObject({ busy: false, documents: [{ name: 'SQLQuery1.sql' }] })
+    api.saveSqlFile.mockResolvedValueOnce({ ok: true, value: null })
+    await files.saveCopy('dbo.Orders.sql', 'x')
+    expect(api.releaseSqlFile).toHaveBeenCalledOnce()
+    api.saveSqlFile.mockResolvedValueOnce({ ok: false, error: 'Disk full.' })
+    await files.saveCopy('dbo.Orders.sql', 'x')
+    expect(files.getSnapshot().error).toBe('Disk full.')
+  })
   it('keeps a running tab open without prompting', async () => {
     const { documents, queries, api, commands } = fixture()
     queries.isRunning.mockReturnValue(true)
