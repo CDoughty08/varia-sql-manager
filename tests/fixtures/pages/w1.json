@@ -1,0 +1,14 @@
+{"resultId":1,"firstRow":0,"columns":[{"name":"id","dataType":"int","wire":"text"},{"name":"name","dataType":"nvarchar(50)","wire":"text"},{"name":"created","dataType":"datetime2(7)","wire":"text"},{"name":"amount","dataType":"decimal(18,2)","wire":"text"},{"name":"key","dataType":"uniqueidentifier","wire":"text"},{"name":"note","dataType":"nvarchar(200)","wire":"text"},{"name":"active","dataType":"bit","wire":"text"},{"name":"score","dataType":"int","wire":"text"}],
+  "rows": [
+    [["0",0],["Customer 0000000000 GmbH",0],["2026-01-01 00:00:00.0000000",0],["0.00",0],["00000000-0000-4A1F-9C2E-00C04FC90000",0],["Note 0: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["1",0],["0",0]],
+    [["1",0],["Customer 0000000001 GmbH",0],["2026-01-01 00:00:01.1234567",0],["79.19",0],["00000001-0000-4A1F-9C2E-00C04FC90001",0],["Note 1: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["0",0],["31",0]],
+    [["2",0],["Customer 0000000002 GmbH",0],["2026-01-01 00:00:02.2469134",0],["158.38",0],["00000002-0000-4A1F-9C2E-00C04FC90002",0],["Note 2: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["0",0],["62",0]],
+    [["3",0],["Société 0000000003 SARL",0],["2026-01-01 00:00:03.3703701",0],["237.57",0],["00000003-0000-4A1F-9C2E-00C04FC90003",0],["Note 3: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["1",0],["93",0]],
+    [["4",0],["Customer 0000000004 GmbH",0],["2026-01-01 00:00:04.4938268",0],["316.76",0],["00000004-0000-4A1F-9C2E-00C04FC90004",0],["Note 4: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["0",0],[null,1]],
+    [["5",0],["Customer 0000000005 GmbH",0],["2026-01-01 00:00:05.6172835",0],["-395.95",0],["00000005-0000-4A1F-9C2E-00C04FC90005",0],["Note 5: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["0",0],["155",0]],
+    [["6",0],["Customer 0000000006 GmbH",0],["2026-01-01 00:00:06.7407402",0],["475.14",0],["00000006-0000-4A1F-9C2E-00C04FC90006",0],["Note 6: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["1",0],["186",0]],
+    [["7",0],["Customer 0000000007 GmbH",0],["2026-01-01 00:00:07.8641969",0],["554.33",0],["00000007-0000-4A1F-9C2E-00C04FC90007",0],["Note 7: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["0",0],["217",0]],
+    [["8",0],["Customer 0000000008 GmbH",0],["2026-01-01 00:00:08.9876536",0],["633.52",0],["00000008-0000-4A1F-9C2E-00C04FC90008",0],["Note 8: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["0",0],["248",0]],
+    [["9",0],["Customer 0000000009 GmbH",0],["2026-01-01 00:00:09.1111103",0],["712.71",0],["00000009-0000-4A1F-9C2E-00C04FC90009",0],["Note 9: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod ",0],["1",0],[null,1]]
+  ]
+}

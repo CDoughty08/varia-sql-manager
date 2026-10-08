@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Varia.Backend;
+using Varia.Backend.Tests;
 
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -59,6 +60,8 @@ try { ConnectionSettings.Build(settings with { Advanced = new(PacketSize: 1) });
 catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects invalid advanced ranges"); }
 try { ConnectionSettings.Build(settings with { Advanced = new(ColumnEncryption: true, SecureEnclaves: true, AttestationProtocol: "HGS") }); throw new Exception("Missing attestation URL accepted"); }
 catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requires an attestation URL"); }
+ProtocolChecks.Run(Check);
+PageChecks.Run(Check);
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
