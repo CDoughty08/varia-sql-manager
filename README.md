@@ -15,7 +15,7 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme tests (after check)
 npm run test:electron   # Both of the above
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
@@ -72,6 +72,12 @@ Use **Layouts** in the query toolbar or **View → Save Layout… / Load Layout�
 Layouts contain only open panel identities and their geometry/presentation. Query documents, result data, SQL targets, and credentials stay out of layout files. Imported files are versioned, validated, and limited to 200 KB; inconsistent references or unsupported components leave the current layout intact. Ordinary Dockview size constraints and visibility metadata are accepted. Validation errors identify the offending field rather than requiring every panel to exist. Preferences use atomic writes. Invalid preferences recover to the default layout while preserving the original file as an `.invalid-<id>.json` backup. Native detached windows and auto-hide tool strips are future work. Docking uses the MIT-licensed [Dockview React library](https://dockview.dev/docs/overview/introduction/) with application-owned guide controls.
 
 Interface labels, menus, tabs, and status text disable browser text selection. Text editors and inputs, result cells, statistics/messages, XML plans, and error details remain selectable for copying.
+
+## Themes
+
+**View → Theme** switches between **Dark** (the default), **Light**, and **Follow System**, and chooses the theme used in each mode. Switching is live: queries, undo history, connections, and the layout are untouched, and the native title bar, menus, and dialogs follow the mode. The choice is saved in `appearance.json` in Electron's user-data directory.
+
+Custom themes are JSON files in the `themes` folder there (**View → Theme → Open Themes Folder**). A theme overrides any of 58 named palette slots, 180 color keys (VS Code names where the meaning matches), and the SQL token colors, on top of Varia Dark or Varia Light; one file can provide both variants. **Create Custom Theme…** writes a starter seeded with the current accent colors; edit it, then choose **Reload Themes**. Theme files are validated strictly and never modified. Problems are listed in a banner with their JSON path, a bad entry keeps its default, and a theme that cannot be used falls back to the built-in theme of its type while keeping your choice. See the [theme guide](docs/themes/README.md), the [token reference](docs/themes/tokens.md), and the [JSON Schema](docs/themes/varia-theme.schema.json).
 
 ## Architecture
 
