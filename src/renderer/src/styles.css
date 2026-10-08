@@ -278,13 +278,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .quick-input-list { max-height: 288px; overflow-y: auto; overflow-x: hidden; margin-bottom: 4px; }
 .quick-input-row { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; line-height: 16px; white-space: nowrap; cursor: pointer; }
 .quick-input-row:hover { background: var(--varia-list-hoverBackground); }
+/* $accent falls just below 4.5:1 on the Light hover fill, so matches (still bold) and the group label take the row's color there. */
+.quick-input-row:hover .quick-input-hl, .quick-input-row:hover .quick-input-group { color: inherit; }
 .quick-input-row.separated { border-top: 1px solid var(--varia-pickerGroup-border); }
-.quick-input-row.active { background: var(--varia-quickInputList-focusBackground); color: var(--varia-quickInputList-focusForeground); }
+/* The edge marks the active row by more than hue: in Light the hover fill is as light as the active one. */
+.quick-input-row.active { background: var(--varia-quickInputList-focusBackground); color: var(--varia-quickInputList-focusForeground); box-shadow: inset 2px 0 var(--varia-focusBorder); }
 /* Muted and accent text is too faint on the active row's fill, so it takes the row's color there (matches stay bold). */
 .quick-input-row.active .quick-input-description, .quick-input-row.active .quick-input-hl, .quick-input-row.active .quick-input-group, .quick-input-row.active kbd { color: inherit; }
 /* The key outline (keybindingLabel.border) all but vanishes on the active row's fill. */
 .quick-input-row.active kbd { border-color: currentColor; }
-.quick-input-row.disabled .quick-input-label, .quick-input-row.disabled .quick-input-icon { color: var(--varia-disabledForeground); }
+/* After the active and hover rules, so an unavailable row is dimmed throughout, its key included, wherever it is. */
+.quick-input-row.disabled .quick-input-label, .quick-input-row.disabled .quick-input-icon, .quick-input-row.disabled .quick-input-description, .quick-input-row.disabled .quick-input-group, .quick-input-row.disabled kbd { color: var(--varia-disabledForeground); }
+.quick-input-row.active.disabled kbd { border-color: var(--varia-keybindingLabel-border); }
 /* Matches stay bold on a disabled row but take its dimmed color, so the row does not look partly available. */
 .quick-input-row.disabled .quick-input-hl { color: inherit; }
 .quick-input-icon { width: 16px; height: 16px; flex: 0 0 16px; }

@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandId } from '../src/shared/commands/catalog'
 import { platforms } from '../src/shared/commands/keybindings'
 import type { DatabaseInfo } from '../src/shared/contracts'
+import { databaseItems } from '../src/renderer/src/contributions/query'
 import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/history'
-import { QuickInputService, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
-import { deferred } from './fixtures/documents'
+import { QuickInputService, quickInputLimits, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
+import { quickInputKeyAction, resultStatus, type QuickInputKeyEvent } from '../src/renderer/src/quickinput/view-model'
+import { deferred, TestEditor } from './fixtures/documents'
 import { connectionInfo, fakeFocus, manualTimers, memoryStorage, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -172,6 +174,50 @@ describe('quick input sessions', () => {
   })
 })
 
+describe('quick input keys', () => {
+  const press = (key: string, modifiers: Partial<QuickInputKeyEvent> = {}): QuickInputKeyEvent =>
+    ({ key, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, repeat: false, isComposing: false, keyCode: 0, ...modifiers })
+  it.each(platforms)('maps list navigation keys on %s', platform => {
+    const mac = platform === 'darwin', action = (event: QuickInputKeyEvent) => quickInputKeyAction(event, platform)
+    expect(action(press('ArrowDown'))).toEqual({ handled: true, move: 'next' })
+    expect(action(press('ArrowUp'))).toEqual({ handled: true, move: 'previous' })
+    expect(action(press('PageDown'))).toEqual({ handled: true, move: 'pageNext' })
+    expect(action(press('PageUp'))).toEqual({ handled: true, move: 'pagePrevious' })
+    // ⌘↓ and ⌘↑ go to the ends of the list on macOS; elsewhere Meta+Arrow is the system's.
+    expect(action(press('ArrowDown', { metaKey: true }))).toEqual(mac ? { handled: true, move: 'last' } : { handled: false })
+    expect(action(press('ArrowUp', { metaKey: true }))).toEqual(mac ? { handled: true, move: 'first' } : { handled: false })
+    // Ctrl+Home and Ctrl+End do that on Windows and Linux; on macOS they, like Home and End, stay with the caret.
+    expect(action(press('Home', { ctrlKey: true }))).toEqual(mac ? { handled: false } : { handled: true, move: 'first' })
+    expect(action(press('End', { ctrlKey: true }))).toEqual(mac ? { handled: false } : { handled: true, move: 'last' })
+    for (const key of ['Home', 'End']) expect(action(press(key)), key).toEqual({ handled: false })
+    // Modified arrows select text or move the caret.
+    for (const modifier of ['shiftKey', 'altKey', 'ctrlKey'] as const) expect(action(press('ArrowDown', { [modifier]: true })), modifier).toEqual({ handled: false })
+  })
+  it.each(platforms)('accepts on a single plain Enter, cancels on Escape, keeps Tab, and leaves IME keys alone on %s', platform => {
+    const action = (event: QuickInputKeyEvent) => quickInputKeyAction(event, platform)
+    expect(action(press('Enter'))).toEqual({ handled: true, accept: true })
+    expect(action(press('Enter', { repeat: true }))).toEqual({ handled: true })
+    for (const modifier of ['shiftKey', 'altKey', 'ctrlKey', 'metaKey'] as const) expect(action(press('Enter', { [modifier]: true })), modifier).toEqual({ handled: false })
+    expect(action(press('Escape'))).toEqual({ handled: true, cancel: true })
+    expect(action(press('Tab'))).toEqual({ handled: true })
+    expect(action(press('Tab', { shiftKey: true }))).toEqual({ handled: true })
+    for (const event of [press('Enter', { isComposing: true }), press('Enter', { keyCode: 229 }), press('Escape', { isComposing: true }), press('ArrowDown', { keyCode: 229 })]) {
+      expect(action(event)).toEqual({ handled: false })
+    }
+    expect(action(press('a'))).toEqual({ handled: false })
+    expect(action(press('Backspace'))).toEqual({ handled: false })
+  })
+  it('announces the number of rows, or no match, and leaves a failed load to its message', () => {
+    const row = { item: { id: 'a', label: 'a' }, ranges: [], descriptionRanges: [] }
+    expect(resultStatus({ rows: [row], loading: false, noun: 'databases' })).toBe('1 result')
+    expect(resultStatus({ rows: Array.from({ length: 1200 }, () => row), loading: false, noun: 'databases' })).toBe('1,200 results')
+    expect(resultStatus({ rows: [], loading: false, noun: 'databases' })).toBe('No matching databases')
+    expect(resultStatus({ rows: [], loading: true, noun: 'databases' })).toBe('')
+    expect(resultStatus({ rows: [], loading: false, noun: 'databases', message: { text: 'Could not load databases: Timeout.', severity: 'error' } })).toBe('')
+    expect(resultStatus({ rows: [], loading: false, noun: 'items', message: { text: 'Only the first 50,000 items can be searched', severity: 'info' } })).toBe('No matching items')
+  })
+})
+
 describe('quick input loading', () => {
   it('shows busy only after 150 ms, then the loaded rows with the requested active row', async () => {
     const { service, clock, view, labels, active } = controller(), load = deferred<readonly QuickPickItem[]>()
@@ -251,16 +297,49 @@ describe('quick input loading', () => {
     service.filter('x')
     expect(view()).toMatchObject({ visible: true, rows: [] })
   })
-  it('caps items, labels, and descriptions, and accepts the original item', () => {
+  it('caps labels and descriptions, and accepts the original item', () => {
     const { service, view } = controller(), accept = vi.fn()
-    const many = Array.from({ length: 5001 }, (_, index) => ({ id: String(index), label: index ? `item ${index}` : 'x'.repeat(600), description: 'd'.repeat(300) }))
-    service.show(options({ items: many, sort: 'none', onDidAccept: accept }))
-    expect(view().rows).toHaveLength(5000)
-    expect(view().message).toEqual({ text: 'Showing the first 5,000 items; type to narrow the list', severity: 'info' })
+    const long = [{ id: '0', label: 'x'.repeat(600), description: 'd'.repeat(300) }]
+    service.show(options({ items: long, onDidAccept: accept }))
     expect(view().rows[0].item.label).toHaveLength(512)
     expect(view().rows[0].item.description).toHaveLength(256)
     service.accept()
-    expect(accept.mock.calls[0][0]).toBe(many[0])
+    expect(accept.mock.calls[0][0]).toBe(long[0])
+  })
+  it('shows at most 5,000 rows but filters every item, so typing reaches the last', () => {
+    const { service, view, labels } = controller(), accept = vi.fn()
+    const many = [...Array.from({ length: 5000 }, (_, index) => ({ id: String(index), label: `tenant_${String(index).padStart(5, '0')}` })), { id: 'master', label: 'master' }]
+    service.show(options({ noun: 'databases', items: many, onDidAccept: accept }))
+    expect(view().rows).toHaveLength(quickInputLimits.rows)
+    expect(view().message).toEqual({ text: 'Showing 5,000 of 5,001 databases; type to narrow the list', severity: 'info' })
+    service.filter('master')
+    expect(labels()).toEqual(['master'])
+    expect(view().message).toBeUndefined()
+    service.accept()
+    expect(accept).toHaveBeenCalledWith(many[5000])
+    // The message is there only while rows are cut.
+    service.show(options({ noun: 'databases', items: many }))
+    service.filter('tenant')
+    expect(view()).toMatchObject({ message: undefined })
+    expect(view().rows).toHaveLength(5000)
+    service.filter('t')
+    expect(view().message?.text).toBe('Showing 5,000 of 5,001 databases; type to narrow the list')
+    // Beyond what a picker keeps at all, the list says so.
+    const huge = Array.from({ length: quickInputLimits.items + 1 }, (_, index) => ({ id: String(index), label: `row ${index}` }))
+    service.show(options({ items: huge }))
+    expect(view().message?.text).toBe('Only the first 50,000 items can be searched')
+    service.filter(`row ${quickInputLimits.items - 1}`)
+    expect(labels()).toEqual([`row ${quickInputLimits.items - 1}`])
+  })
+  it('lists system databases first, so the rows shown at once always include them', () => {
+    const tenants = Array.from({ length: 6000 }, (_, index): DatabaseInfo => ({ name: `tenant_${index}`, isSystem: false, isSnapshot: false }))
+    const system = ['master', 'model', 'msdb', 'tempdb'].map((name): DatabaseInfo => ({ name, isSystem: true, isSnapshot: false }))
+    const rows = databaseItems([...tenants, { name: 'tenant_snap', isSystem: false, isSnapshot: true }, ...system])
+    expect(rows.slice(0, 5).map(row => [row.label, row.group])).toEqual([['master', 'system databases'], ['model', 'system databases'], ['msdb', 'system databases'], ['tempdb', 'system databases'], ['tenant_0', 'databases']])
+    expect(rows.at(-1)).toMatchObject({ label: 'tenant_snap', group: 'database snapshots' })
+    const { service, labels } = controller()
+    service.show(options({ noun: 'databases', items: rows }))
+    expect(labels().slice(0, 4)).toEqual(['master', 'model', 'msdb', 'tempdb'])
   })
 })
 
@@ -409,6 +488,8 @@ describe('command palette', () => {
     quickInput.filter('?')
     expect(view()).toMatchObject({ ariaLabel: 'Quick Access Help', prefix: '?' })
     expect(view().rows.map(row => [row.item.label, row.item.description, row.item.keybinding?.text])).toEqual([['…', 'Go to Query', 'Ctrl+P'], ['>', 'Run Command', 'Ctrl+Shift+P']])
+    // Screen readers hear the key too, as the row shows it.
+    expect(view().rows.map(row => row.item.ariaLabel)).toEqual(['Go to Query, type a query name, Control+P', 'Run Command, type > and a command name, Control+Shift+P'])
     quickInput.move('next')
     quickInput.accept()
     expect(view()).toMatchObject({ visible: true, ariaLabel: 'Command Palette', input: { value: '>', selection: 'end' } })
@@ -460,7 +541,7 @@ describe('command palette', () => {
     class FakeElement { isContentEditable = false; constructor(readonly inEditor: boolean) {} matches(selector: string) { return selector === 'input, textarea' } closest(selector: string) { return this.inEditor && selector === '.monaco-editor' ? this : null } }
     const field = new FakeElement(false), editorText = new FakeElement(true), execCommand = vi.fn()
     vi.stubGlobal('HTMLElement', FakeElement)
-    vi.stubGlobal('document', { get activeElement() { return focus.focused === 'quick input' ? field : editorText }, execCommand })
+    vi.stubGlobal('document', { get activeElement() { return focus.focused === 'quick input' ? field : editorText }, execCommand, querySelector: () => null })
     documents.create('a.sql', 'SELECT 7;', 'master')
     await key('workbench.showCommands')
     focus.focused = 'quick input'
@@ -473,6 +554,31 @@ describe('command palette', () => {
     expect(execCommand.mock.calls).toEqual([['undo'], ['redo']])
     await commands.execute('layout.reset', undefined, 'menu')
     expect(quickInput.visible).toBe(false)
+  })
+  it('runs Undo and Redo behind an open dialog only on its text fields, never on the editor behind it', async () => {
+    const { commands, documents } = palette({ platform: 'darwin' })
+    // The menu (⌘Z on macOS) runs them while a dialog is open; shell.ts reads the DOM focus and whether a dialog is open.
+    class FakeElement { isContentEditable = false; constructor(readonly text: boolean, readonly inDialog: boolean) {} matches(selector: string) { return this.text && selector === 'input, textarea' } closest(selector: string) { return this.inDialog && selector === '[aria-modal="true"]' ? this : null } }
+    const execCommand = vi.fn(), state = { focused: new FakeElement(false, true), modal: true }
+    vi.stubGlobal('HTMLElement', FakeElement)
+    vi.stubGlobal('document', { get activeElement() { return state.focused }, execCommand, querySelector: (selector: string) => state.modal && selector === '[aria-modal="true"]' ? {} : null })
+    documents.create('a.sql', 'SELECT 42;', 'master')
+    const editor = Object.assign(new TestEditor(), { focus: vi.fn(), trigger: vi.fn() })
+    documents.bindEditor(editor.asEditor())
+    const run = async () => { for (const id of ['edit.undo', 'edit.redo'] as const) await expect(commands.execute(id, undefined, 'menu')).resolves.toBe(true) }
+    // The dialog's Cancel button, the page behind it (after a click on the dialog's background), then a field outside it.
+    for (const focused of [new FakeElement(false, true), new FakeElement(false, false), new FakeElement(true, false)]) { state.focused = focused; await run() }
+    expect(editor.focus).not.toHaveBeenCalled()
+    expect(editor.trigger).not.toHaveBeenCalled()
+    expect(execCommand).not.toHaveBeenCalled()
+    state.focused = new FakeElement(true, true)
+    await run()
+    expect(execCommand.mock.calls).toEqual([['undo'], ['redo']])
+    state.modal = false
+    state.focused = new FakeElement(false, false)
+    await run()
+    expect(editor.trigger.mock.calls).toEqual([['menu', 'undo', null], ['menu', 'redo', null]])
+    expect(editor.focus).toHaveBeenCalledTimes(2)
   })
   it('does not open behind a modal dialog', async () => {
     let modal = true
@@ -577,7 +683,7 @@ describe('server and database pickers', () => {
     await done
     await settle()
     expect(api.databases).toHaveBeenCalledWith('server-a')
-    expect(view().rows.map(row => [row.item.label, row.group])).toEqual([['AppData', 'databases'], ['Sales', undefined], ['master', 'system databases'], ['AppData_snap', 'database snapshots']])
+    expect(view().rows.map(row => [row.item.label, row.group])).toEqual([['master', 'system databases'], ['AppData', 'databases'], ['Sales', undefined], ['AppData_snap', 'database snapshots']])
     expect(view().rows[view().activeIndex].item.label).toBe('master')
     quickInput.filter('AppD')
     expect(view().rows.map(row => row.item.label)).toEqual(['AppData', 'AppData_snap'])

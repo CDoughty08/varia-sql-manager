@@ -3,7 +3,7 @@ import type { CommandId } from '../src/shared/commands/catalog'
 import { contextRecord, type ContextKeys } from '../src/shared/commands/context-keys'
 import { defaultRules, platforms, resolveKeybinding, type Platform } from '../src/shared/commands/keybindings'
 import { CommandService } from '../src/renderer/src/core/commands'
-import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
+import { KeybindingService, nativeChordTimeout, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import { workbenchFixture } from './fixtures/workbench'
 
 interface FakeEvent extends KeyDownEvent { consumed: boolean }
@@ -21,11 +21,11 @@ const mod = (platform: Platform) => platform === 'darwin' ? { meta: true } : { c
 const letter = (character: string, platform: Platform, extra: Parameters<typeof key>[2] = {}) => key(`Key${character.toUpperCase()}`, extra.shift ? character.toUpperCase() : character, { ...mod(platform), ...extra })
 
 function service(platform: Platform = 'win32', options: { values?: Partial<ContextKeys>; modal?: boolean; textFocus?: boolean; rules?: ReturnType<typeof defaultRules> } = {}) {
-  const state = { values: options.values ?? {}, modal: options.modal ?? false, textFocus: options.textFocus ?? false }
+  const state = { values: options.values ?? {}, modal: options.modal ?? false, textFocus: options.textFocus ?? false, now: 1_000_000 }
   const execute = vi.fn<CommandService['execute']>(async () => true)
   const keybindings = new KeybindingService({
     platform, commands: { execute }, context: { get: () => contextRecord(platform, state.values) }, modalOpen: () => state.modal, editorHasTextFocus: () => state.textFocus,
-    editorContains: target => target === editorNode, ...(options.rules ? { rules: options.rules } : {})
+    editorContains: target => target === editorNode, now: () => state.now, ...(options.rules ? { rules: options.rules } : {})
   })
   const press = (event: FakeEvent) => { keybindings.handleKeyDown(event); return event }
   const ran = () => execute.mock.calls.map(call => call[0])
@@ -128,6 +128,25 @@ describe('keybinding dispatch', () => {
     press(letter('k', platform))
     expect(press(letter('u', platform)).consumed).toBe(true)
     expect(ran()).toEqual(['query.changeDatabase', 'query.changeDatabase'])
+  })
+  // Monaco stops waiting for the second key after 5 s (and on a dead key); a later key is the workbench's again.
+  it.each(platforms)('gives keys back to the workbench once Monaco stops waiting for the chord on %s', platform => {
+    const { press, ran, state } = service(platform, { values: editorText, textFocus: true })
+    press(letter('k', platform))
+    state.now += nativeChordTimeout
+    expect(press(letter('u', platform)).consumed).toBe(false)
+    expect(ran()).toEqual([])
+    press(letter('k', platform))
+    state.now += nativeChordTimeout + 1
+    expect(press(key('F5', 'F5')).consumed).toBe(true)
+    press(letter('k', platform))
+    state.now += nativeChordTimeout + 1
+    expect(press(letter('u', platform)).consumed).toBe(true)
+    expect(ran()).toEqual(['query.execute', 'query.changeDatabase'])
+    press(letter('k', platform))
+    expect(press(key('Quote', 'Dead')).consumed).toBe(false)
+    expect(press(letter('u', platform)).consumed).toBe(true)
+    expect(ran()).toEqual(['query.execute', 'query.changeDatabase', 'query.changeDatabase'])
   })
   it('forgets a pending chord prefix when focus moves or the window loses focus', () => {
     const { keybindings, press, ran } = service('win32', { values: editorText, textFocus: true })

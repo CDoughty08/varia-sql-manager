@@ -14,6 +14,7 @@ const activeSelection: ColorKey[] = ['editorWidget.background', 'list.activeSele
 const inactiveSelection: ColorKey[] = ['sideBar.background', 'list.inactiveSelectionBackground']
 const panelTitle: ColorKey[] = ['panelTitle.background'], titleBar: ColorKey[] = ['titleBar.activeBackground']
 const quickInput: ColorKey[] = ['quickInput.background'], quickInputActive: ColorKey[] = ['quickInput.background', 'quickInputList.focusBackground']
+const quickInputHover: ColorKey[] = ['quickInput.background', 'list.hoverBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
@@ -58,6 +59,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   // On the active row these parts take quickInputList.focusForeground (styles.css), as in VS Code: $textMuted and $accent
   // fall below 4.5:1 on the focused row's fill.
   ...text(['list.highlightForeground', 'descriptionForeground', 'keybindingLabel.foreground', 'pickerGroup.foreground'], quickInput),
+  // A hovered row keeps its muted parts; its matches and group label take quickInput.foreground (styles.css).
+  ...text(['quickInput.foreground', 'descriptionForeground', 'keybindingLabel.foreground'], quickInputHover),
   ...text(['banner.warningForeground'], ['quickInput.background', 'banner.warningBackground']),
   ...text(['banner.errorForeground'], ['quickInput.background', 'banner.errorBackground']),
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
@@ -82,7 +85,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
 
-  ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, strip, input, ...dockTabBackgrounds.map(dockTabs)),
+  // On the active quick input row it is the edge that marks the row.
+  ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, strip, input, quickInputActive, ...dockTabBackgrounds.map(dockTabs)),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground', 'objectExplorer.actionForeground'], sideBar),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], sideBarHover),
   ...graphic(['titleBar.iconForeground'], titleBar),

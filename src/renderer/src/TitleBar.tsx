@@ -7,7 +7,7 @@ import Icon from './Icon'
 interface ControlsOverlay extends EventTarget { visible: boolean }
 
 export default function TitleBar({ title }: { title: string }) {
-  const { menuState } = useWorkbench()
+  const { menuState, documents } = useWorkbench()
   const root = useRef<HTMLElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const pending = useRef(false)
@@ -17,8 +17,11 @@ export default function TitleBar({ title }: { title: string }) {
   const [overlayVisible, setOverlayVisible] = useState(false)
 
   const restoreFocus = useCallback(() => {
-    if (previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true })
-  }, [])
+    const target = previousFocus.current
+    if (target?.isConnected) target.focus({ preventScroll: true })
+    // It is gone, such as the palette's input once F10 closed the palette: return to the query editor, as the palette would.
+    else if (target && !modalOpen() && documents.getSnapshot().documents.length) documents.boundEditor?.focus()
+  }, [documents])
   const open = useCallback(async (id: MenubarId) => {
     if (pending.current) return
     const button = root.current?.querySelector<HTMLButtonElement>('[data-menu="' + id + '"]')

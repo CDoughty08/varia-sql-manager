@@ -56,11 +56,16 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       onDidAccept: item => { documents.activate(item.id); documents.boundEditor?.focus() }
     }
   }
+  // The name replaces what the row shows (an option's children are not read), so it carries the key too.
+  const helpItem = (id: string, label: string, description: string, hint: string, command: CommandId): QuickPickItem => {
+    const keybinding = keybindings.lookup(command)
+    return { id, label, description, keybinding, ariaLabel: [description, hint, keybinding?.aria].filter(Boolean).join(', ') }
+  }
   const helpPicker = (): Picker => ({
     ariaLabel: 'Quick Access Help', placeholder: 'Select what to search', noun: 'modes', sort: 'none', matchOnDescription: true, hideOnAccept: false,
     items: [
-      { id: '', label: '…', description: 'Go to Query', keybinding: keybindings.lookup('workbench.quickOpen'), ariaLabel: 'Go to Query, type a query name' },
-      { id: '>', label: '>', description: 'Run Command', keybinding: keybindings.lookup('workbench.showCommands'), ariaLabel: 'Run Command, type > and a command name' }
+      helpItem('', '…', 'Go to Query', 'type a query name', 'workbench.quickOpen'),
+      helpItem('>', '>', 'Run Command', 'type > and a command name', 'workbench.showCommands')
     ],
     onDidAccept: item => quickInput.setValue(item.id, 'end')
   })

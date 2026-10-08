@@ -24,6 +24,7 @@ export interface QuickPickItem {
   readonly ariaLabel?: string
 }
 export type HideReason = 'accept' | 'cancel' | 'blur' | 'replace'
+export type QuickInputMove = 'next' | 'previous' | 'pageNext' | 'pagePrevious' | 'first' | 'last'
 export type ValueSelection = 'end' | 'afterPrefix' | 'all'
 export interface QuickInputMessage { readonly text: string; readonly severity: 'info' | 'error' }
 export interface QuickPickOptions<T extends QuickPickItem> {
@@ -75,7 +76,11 @@ export interface QuickInputView {
   readonly input: QuickInputValue
 }
 
-export const quickInputLimits = { items: 5000, label: 512, description: 256, value: 256, busyDelay: 150, loadTimeout: 30_000 } as const
+/**
+ * `items` bounds what a picker keeps and filters, above SQL Server's 32,767 databases per instance, so typing can reach
+ * every row; `rows` bounds what it shows at once.
+ */
+export const quickInputLimits = { items: 50_000, rows: 5000, label: 512, description: 256, value: 256, busyDelay: 150, loadTimeout: 30_000 } as const
 const descriptionWeight = 0.8
 
 interface Entry { readonly source: QuickPickItem; readonly view: QuickPickItem; readonly recentRank?: number }
@@ -95,6 +100,8 @@ interface Session {
   loading: boolean
   busy: boolean
   loadMessage?: QuickInputMessage
+  /** Set while the filter matches more rows than are shown. */
+  truncation?: QuickInputMessage
   hint?: QuickInputMessage
 }
 
@@ -196,7 +203,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     if (value !== session.value) this.filter(value)
     else this.publishSession(session)
   }
-  move(to: 'next' | 'previous' | 'pageNext' | 'pagePrevious' | 'first' | 'last', page = 1): void {
+  move(to: QuickInputMove, page = 1): void {
     const session = this.current
     if (!session || !session.rows.length) return
     const count = session.rows.length, active = session.activeIndex, step = Math.max(1, page - 1)
@@ -327,7 +334,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
       return view ? [{ source, view, recentRank: recent.get(view.id) }] : []
     })
     session.matched = undefined
-    if (items.length > quickInputLimits.items) session.loadMessage = { text: `Showing the first ${formatCount(quickInputLimits.items)} ${noun}; type to narrow the list`, severity: 'info' }
+    if (items.length > quickInputLimits.items) session.loadMessage = { text: `Only the first ${formatCount(quickInputLimits.items)} ${noun} can be searched`, severity: 'info' }
     this.applyFilter(session, session.options.activeId)
   }
   private applyFilter(session: Session, activeId?: string): void {
@@ -361,10 +368,13 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
       }
       ordered = scored
     }
-    session.rowEntries = ordered.map(row => row.entry)
-    session.rows = ordered.map((row, index) => ({
+    const shown = ordered.length > quickInputLimits.rows ? ordered.slice(0, quickInputLimits.rows) : ordered
+    session.truncation = shown.length < ordered.length
+      ? { text: `Showing ${formatCount(shown.length)} of ${formatCount(ordered.length)} ${noun}; type to narrow the list`, severity: 'info' } : undefined
+    session.rowEntries = shown.map(row => row.entry)
+    session.rows = shown.map((row, index) => ({
       item: row.entry.view, ranges: row.ranges, descriptionRanges: row.descriptionRanges,
-      ...row.group !== undefined && (index === 0 || ordered[index - 1].group !== row.group) ? { group: row.group } : {}
+      ...row.group !== undefined && (index === 0 || shown[index - 1].group !== row.group) ? { group: row.group } : {}
     }))
     const wanted = activeId === undefined ? -1 : session.rowEntries.findIndex(entry => entry.source.id === activeId)
     session.activeIndex = session.rows.length ? Math.max(0, wanted) : -1
@@ -388,7 +398,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     const { options } = session
     this.publish({
       visible: true, session: session.id, ariaLabel: options.ariaLabel, placeholder: options.placeholder, title: options.title, noun: options.noun, prefix: options.prefix ?? '',
-      rows: session.rows, activeIndex: session.activeIndex, busy: session.busy, loading: session.loading, message: session.hint ?? session.loadMessage, input: this.input
+      rows: session.rows, activeIndex: session.activeIndex, busy: session.busy, loading: session.loading, message: session.hint ?? session.loadMessage ?? session.truncation, input: this.input
     })
   }
 }

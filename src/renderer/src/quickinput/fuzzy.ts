@@ -1,7 +1,8 @@
 /**
  * The quick input's matcher. Every query word must match the label or a keyword, in any order; a keyword match scores
- * less and highlights nothing, and counts only when it beats the label's. Per word the first strategy that matches wins:
- * a contiguous substring, then word-start initials ("fsa" for "File: Save As…"), then a subsequence that starts a word.
+ * less, highlights nothing, must start at a word start, and counts only when it beats the label's. Per word the first
+ * strategy that matches wins: a contiguous substring, then word-start initials ("fsa" for "File: Save As…"), then a
+ * subsequence that starts a word.
  * Work is linear in the capped label length.
  */
 export type MatchRange = readonly [start: number, end: number]
@@ -45,15 +46,18 @@ export function prepareQuery(query: string): PreparedQuery {
   return { words: words.slice(0, fuzzyLimits.words) }
 }
 
-function substring(word: string, { original, text }: Subject, titleStart: number): FuzzyMatch | undefined {
+/** `wordStartOnly` rejects an occurrence inside a word, which would match without a visible reason in a keyword. */
+function substring(word: string, { original, text }: Subject, titleStart: number, wordStartOnly: boolean): FuzzyMatch | undefined {
+  // The title's own start wins over an earlier word start, such as the same word in the category ("Connection: Connect…").
+  if (text.startsWith(word, titleStart) && isWordStart(original, titleStart)) return { score: bestWordScore, ranges: [[titleStart, titleStart + word.length]] }
   let first = -1, best = -1
   for (let index = text.indexOf(word), seen = 0; index >= 0 && seen < fuzzyLimits.occurrences; index = text.indexOf(word, index + 1), seen++) {
     if (first < 0) first = index
     if (isWordStart(original, index)) { best = index; break }
   }
-  if (first < 0) return undefined
+  if (best < 0 && (first < 0 || wordStartOnly)) return undefined
   const at = best < 0 ? first : best
-  return { score: 100 + (best < 0 ? 0 : 50) + (at === titleStart ? 25 : 0), ranges: [[at, at + word.length]] }
+  return { score: 100 + (best < 0 ? 0 : 50), ranges: [[at, at + word.length]] }
 }
 
 function initials(word: string, { original, text }: Subject): FuzzyMatch | undefined {
@@ -98,8 +102,8 @@ function subsequence(word: string, { original, text }: Subject): FuzzyMatch | un
   return { score: Math.max(1, Math.min(59, score - Math.min(gaps, 20))), ranges }
 }
 
-function matchWord(word: string, target: Subject, titleStart = 0): FuzzyMatch | undefined {
-  return substring(word, target, titleStart) ?? initials(word, target) ?? subsequence(word, target)
+function matchWord(word: string, target: Subject, titleStart = 0, wordStartOnly = false): FuzzyMatch | undefined {
+  return substring(word, target, titleStart, wordStartOnly) ?? initials(word, target) ?? subsequence(word, target)
 }
 
 /** Sorted, disjoint ranges within `[0, length]`, with touching ranges joined. */
@@ -132,7 +136,7 @@ export function scoreQuery(query: string | PreparedQuery, label: string, keyword
     // A strong keyword match ("use" for Change Database…) beats a weak one in the label.
     if (!match || match.score < bestWordScore * keywordWeight) {
       keywordTargets ??= keywords.slice(0, fuzzyLimits.keywords).map(keyword => subject(keyword.slice(0, fuzzyLimits.keyword)))
-      for (const keyword of keywordTargets) keywordScore = Math.max(keywordScore, (matchWord(word, keyword)?.score ?? 0) * keywordWeight)
+      for (const keyword of keywordTargets) keywordScore = Math.max(keywordScore, (matchWord(word, keyword, 0, true)?.score ?? 0) * keywordWeight)
     }
     if (match && match.score >= keywordScore) { score += match.score; ranges = ranges.concat(match.ranges) }
     else if (keywordScore) score += keywordScore

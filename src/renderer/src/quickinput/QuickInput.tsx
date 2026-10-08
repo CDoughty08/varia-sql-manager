@@ -4,6 +4,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Keybinding from '../Keybinding'
 import type { MatchRange } from './fuzzy'
 import type { QuickInputMessage, QuickInputRow, QuickInputView } from './QuickInputService'
+import { quickInputKeyAction, resultStatus } from './view-model'
 
 const rowHeight = 24, visibleRows = 12, overscan = 6, windowedAbove = 100
 // Each message gets its own text node, so the live region announces a hint again when the same row is accepted again.
@@ -70,32 +71,19 @@ function Widget({ view }: { view: QuickInputView }) {
     }
     setScrollTop(element.scrollTop)
   }, [activeIndex, rows])
-  const statusText = view.loading && !rows.length ? '' : rows.length ? `${rows.length.toLocaleString('en-US')} result${rows.length === 1 ? '' : 's'}` : `No matching ${view.noun}`
+  const statusText = resultStatus(view)
   useEffect(() => {
     const timer = setTimeout(() => setStatus(statusText), 300)
     return () => clearTimeout(timer)
   }, [statusText])
 
   function keyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return
-    const mac = platform === 'darwin', plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
-    const page = Math.min(visibleRows, rows.length)
-    let handled = true
-    switch (event.key) {
-      case 'ArrowDown': if (mac && event.metaKey) quickInput.move('last'); else if (plain) quickInput.move('next'); else handled = false; break
-      case 'ArrowUp': if (mac && event.metaKey) quickInput.move('first'); else if (plain) quickInput.move('previous'); else handled = false; break
-      case 'PageDown': quickInput.move('pageNext', page); break
-      case 'PageUp': quickInput.move('pagePrevious', page); break
-      case 'Home': if (!mac && event.ctrlKey) quickInput.move('first'); else handled = false; break
-      case 'End': if (!mac && event.ctrlKey) quickInput.move('last'); else handled = false; break
-      // A held Enter must not also accept a row in the picker the first press opened.
-      case 'Enter': if (!plain) handled = false; else if (!event.repeat) quickInput.accept(); break
-      case 'Escape': quickInput.hide('cancel'); break
-      // Focus stays in the input.
-      case 'Tab': break
-      default: handled = false
-    }
-    if (handled) { event.preventDefault(); event.stopPropagation() }
+    const { key, ctrlKey, altKey, metaKey, shiftKey, repeat, keyCode } = event
+    const action = quickInputKeyAction({ key, ctrlKey, altKey, metaKey, shiftKey, repeat, keyCode, isComposing: event.nativeEvent.isComposing }, platform)
+    if (action.move) quickInput.move(action.move, Math.min(visibleRows, rows.length))
+    else if (action.accept) quickInput.accept()
+    else if (action.cancel) quickInput.hide('cancel')
+    if (action.handled) { event.preventDefault(); event.stopPropagation() }
   }
 
   const windowed = rows.length > windowedAbove

@@ -27,20 +27,25 @@ export interface KeybindingServiceOptions {
   readonly rules?: readonly ResolvedRule[]
   /** What to do with conflicting rules: development builds throw, production logs and keeps the first rule. */
   readonly onConflict?: 'throw' | 'log'
+  /** The clock for the chord prefix's lifetime; defaults to `Date.now`, as Monaco's. */
+  readonly now?: () => number
 }
+/** Monaco leaves chord mode 5 s after the prefix (`_scheduleLeaveChordMode`); from then on the next key is a plain key again. */
+export const nativeChordTimeout = 5000
 
 /**
  * The workbench's only key dispatcher: a capture listener on window, so it runs before Monaco, the title bar, and React.
  * It consumes a key only when a rule's `when` matches, even if the command is then unavailable, and leaves every other
  * key alone. Native rules (Monaco's) are never dispatched; after a native chord prefix in editor text (Ctrl/⌘+K), the
- * next key goes to Monaco.
+ * next key goes to Monaco if it comes within Monaco's chord timeout.
  */
 export class KeybindingService implements Disposable {
   private readonly rules: readonly ResolvedRule[]
   private readonly table: ReadonlyMap<string, readonly ResolvedRule[]>
   private readonly prefixes: ReadonlySet<string>
   private readonly macKeyEquivalents: ReadonlySet<string>
-  private pendingNativePrefix = false
+  /** When a native chord prefix was pressed in editor text, while Monaco waits for the chord's second key. */
+  private pendingNativePrefix?: number
   private detach?: () => void
   constructor(private readonly options: KeybindingServiceOptions) {
     const { platform } = options
@@ -72,7 +77,7 @@ export class KeybindingService implements Disposable {
   attach(target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>): Disposable {
     this.detach?.()
     const keyDown = (event: Event) => this.handleKeyDown(event as KeyboardEvent)
-    const reset = () => { this.pendingNativePrefix = false }
+    const reset = () => { this.pendingNativePrefix = undefined }
     // Monaco moves focus to its IME text area while it waits for a chord's second key; that is not leaving the editor.
     const focusOut = (event: Event) => { if (!this.options.editorContains?.((event as FocusEvent).relatedTarget)) reset() }
     target.addEventListener('keydown', keyDown, true)
@@ -92,10 +97,15 @@ export class KeybindingService implements Disposable {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
       const { platform } = this.options
       const chord = chordFromEvent(event, platform)
-      if (!chord) return
-      // Monaco owns the key after its chord prefix.
-      if (this.pendingNativePrefix) { this.pendingNativePrefix = false; return }
-      if (this.prefixes.has(chord) && this.options.editorHasTextFocus()) { this.pendingNativePrefix = true; return }
+      // Monaco ends a chord on a dead key; modifier presses leave it waiting.
+      if (!chord) { if (event.key === 'Dead') this.pendingNativePrefix = undefined; return }
+      const now = this.options.now ?? Date.now, pending = this.pendingNativePrefix
+      if (pending !== undefined) {
+        this.pendingNativePrefix = undefined
+        // Monaco owns the key after its chord prefix, until it stops waiting.
+        if (now() - pending <= nativeChordTimeout) return
+      }
+      if (this.prefixes.has(chord) && this.options.editorHasTextFocus()) { this.pendingNativePrefix = now(); return }
       const rules = this.table.get(chord)
       if (!rules) return
       // Dialogs own their keys, so the key is not consumed.

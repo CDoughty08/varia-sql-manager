@@ -91,6 +91,14 @@ try {
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
   await expect(widget()).toHaveCount(0)
+  // F10 closes the palette for the menu bar; Escape there returns to the editor, since the palette's input is gone.
+  await page.keyboard.press('F1')
+  await expect(combobox('Command Palette')).toBeFocused()
+  await page.keyboard.press('F10')
+  await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
+  await expect(widget()).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(textbox()).toBeFocused()
 
   // 2. Filtering shows the key; Enter runs the command and returns focus to the editor.
   await page.keyboard.press('Control+Shift+P')
@@ -98,8 +106,9 @@ try {
   await page.keyboard.type('new query')
   await expect.poll(async () => (await activeOption())?.text).toContain('File: New Query')
   expect((await activeOption()).text).toContain('Ctrl+N')
-  // The key keeps a visible outline on the active row's fill.
+  // The key keeps a visible outline on the active row's fill, and an edge marks the row by more than its hue.
   expect(await widget().locator('.quick-input-row.active kbd').evaluate(kbd => { const style = getComputedStyle(kbd); return style.borderTopColor === style.color })).toBe(true)
+  expect(await widget().locator('.quick-input-row.active').evaluate(row => getComputedStyle(row).boxShadow)).toMatch(/inset/)
   await page.keyboard.press('Enter')
   await expect(tabs()).toHaveCount(2)
   await expect(widget()).toHaveCount(0)
@@ -150,8 +159,9 @@ try {
   await palette('execute', 'Query: Execute')
   // aria-disabled says it is unavailable; the name does not repeat it.
   expect(await activeOption()).toMatchObject({ disabled: 'true', name: 'Query: Execute, F5' })
-  // Matches on a dimmed row are dimmed too.
+  // Matches on a dimmed row are dimmed too, and so is the key of the active one.
   expect(await widget().locator('.quick-input-row.disabled:not(.active)').first().evaluate(row => getComputedStyle(row.querySelector('.quick-input-hl')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
+  expect(await widget().locator('.quick-input-row.active.disabled').evaluate(row => getComputedStyle(row.querySelector('kbd')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
   // The live region stays in the accessibility tree while empty, so the hint is announced when it arrives.
   const message = widget().locator('.quick-input-message[aria-live="polite"]')
   expect(await message.evaluate(element => getComputedStyle(element).display)).not.toBe('none')
@@ -300,11 +310,22 @@ try {
   await expect(textbox()).toBeFocused()
   console.log('Palette checks: database picker, chord pass-through, F5 by focus, F8 focus, double-click and held Enter guards, the current server kept, and Go to Query.')
 
-  // 13. Behind a modal dialog, workbench keys neither run nor are consumed.
+  // 13. Behind a modal dialog, workbench keys neither run nor are consumed, and Edit › Undo (how ⌘Z arrives on macOS)
+  // does not reach into the editor behind it.
+  await typeSql('SELECT 42;')
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await page.keyboard.press('F1')
   await page.keyboard.press('Control+N')
+  const cancel = page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true })
+  await cancel.focus()
+  // The workbench's command listener comes first, so once this one has seen the click, Undo has run.
+  await page.evaluate(() => { globalThis.variaSeenCommands = []; globalThis.variaStopSeeing = window.varia.onCommand(id => globalThis.variaSeenCommands.push(id)) })
+  await clickMenu('edit.undo')
+  await expect.poll(() => page.evaluate(() => globalThis.variaSeenCommands.length)).toBe(1)
+  await page.evaluate(() => globalThis.variaStopSeeing())
+  await expect(cancel).toBeFocused()
+  expect(await editorText()).toContain('SELECT\u00a042;')
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(widget()).toHaveCount(0)

@@ -38,6 +38,9 @@ describe('fuzzy matching', () => {
     // A category match is no better than the same words in a title, so an available command wins the tie.
     expect(palette('object explorer', ['Object Explorer: Refresh'])).toEqual(['View: Show Object Explorer', 'Object Explorer: Refresh'])
     expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
+    // The word in the title outranks the same word in the category, and in another command's title.
+    expect(palette('connect').slice(0, 2)).toEqual(['Connection: Connect to Server…', 'Query: Change Connection…'])
+    expect(palette('conn')[0]).toBe('Connection: Connect to Server…')
   })
   it('does not match letters scattered from the middle of words', () => {
     for (const [query, label] of [['refresh', 'Preferences: Reload Themes'], ['go to', 'View: Toggle Word Wrap'], ['go to', 'Edit: Toggle Line Comment'], ['next', 'Query: Cancel Executing Query'],
@@ -85,9 +88,19 @@ describe('fuzzy matching', () => {
     expect(scoreQuery('use', 'Edit: Uncomment Selection')!.score).toBeLessThan(60)
     expect(scoreQuery('use', 'Edit: Uncomment Selection', ['use'])).toEqual({ score: 175 * 0.8, ranges: [] })
   })
+  it('matches a keyword only from a word start, since nothing on the row shows why it matched', () => {
+    expect(scoreQuery('ss', 'View: Show Query Output', ['results', 'messages'])).toBeUndefined()
+    expect(scoreQuery('mess', 'View: Show Query Output', ['results', 'messages'])).toEqual({ score: 175 * 0.8, ranges: [] })
+    expect(scoreQuery('nw', 'Query: Execute', ['new window'])).toMatchObject({ ranges: [] })
+    for (const query of ['sa', 'ss', 'ages']) expect(palette(query), query).not.toContain('View: Show Query Output')
+    expect(palette('messages')).toEqual(['View: Show Query Output'])
+  })
   it('gives the start bonus at the start of the title, after a category', () => {
     expect(scoreQuery('file', 'File: Save', [], 6)).toEqual({ score: 150, ranges: [[0, 4]] })
     expect(scoreQuery('save', 'File: Save', [], 6)).toEqual({ score: 175, ranges: [[6, 10]] })
+    // When the category starts with the same word, the match and its highlight are in the title.
+    expect(scoreQuery('connect', 'Connection: Connect to Server…', [], 12)).toEqual({ score: 175, ranges: [[12, 19]] })
+    expect(scoreQuery('conn', 'Connection: Disconnect from Server…', [], 12)).toEqual({ score: 150, ranges: [[0, 4]] })
   })
   it('ignores case and keeps offsets for characters whose lowercase is longer', () => {
     expect(scoreQuery('SAVE', 'File: save')).toMatchObject({ ranges: [[6, 10]] })

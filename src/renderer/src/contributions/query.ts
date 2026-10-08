@@ -13,10 +13,14 @@ export function serverItems(connections: readonly ConnectionInfo[], running?: (i
     ...running?.(connection.id) ? { disabled: true, disabledHint: 'A query is running on this server.' } : {}
   }))
 }
-const databaseGroups = ['databases', 'system databases', 'database snapshots'] as const
-/** Database picker rows: user databases, then system databases, then snapshots, each in the server's order. */
+const databaseGroups = ['system databases', 'databases', 'database snapshots'] as const
+/**
+ * Database picker rows: system databases, then user databases, then snapshots, each in the server's order. The few
+ * system databases come first (Object Explorer also lists them first), so a server with more databases than the picker
+ * shows at once never hides master or tempdb.
+ */
 export function databaseItems(databases: readonly DatabaseInfo[]): QuickPickItem[] {
-  const rank = (database: DatabaseInfo) => database.isSnapshot ? 2 : database.isSystem ? 1 : 0
+  const rank = (database: DatabaseInfo) => database.isSnapshot ? 2 : database.isSystem ? 0 : 1
   return [...databases].sort((a, b) => rank(a) - rank(b)).map(database => ({ id: database.name, label: database.name, icon: 'database', group: databaseGroups[rank(database)] }))
 }
 

@@ -1,4 +1,5 @@
 import type { PaneId } from '../../../shared/layouts'
+import { modalOpen } from '../core/modal'
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { serverItems } from './query'
@@ -16,12 +17,18 @@ export interface ShellHost {
   refreshExplorer(): void
 }
 
-/** Undo and Redo act on the focused text field outside the editor (dialogs included), otherwise on the query editor. */
+/**
+ * Undo and Redo act on the focused text field outside the editor, otherwise on the query editor. While a dialog is open
+ * they act only on its text fields: the editor behind it must neither change nor take focus out of the dialog.
+ */
 function edit(documents: Workbench['documents'], command: 'undo' | 'redo'): void {
-  const focused = document.activeElement
+  const focused = document.activeElement, modal = modalOpen()
   const textInput = focused instanceof HTMLElement && (focused.matches('input, textarea') || focused.isContentEditable)
-  if (textInput && !focused.closest('.monaco-editor')) { document.execCommand(command); return }
-  if (!documents.getSnapshot().documents.length) return
+  if (textInput && !focused.closest('.monaco-editor')) {
+    if (!modal || focused.closest('[aria-modal="true"]')) document.execCommand(command)
+    return
+  }
+  if (modal || !documents.getSnapshot().documents.length) return
   documents.boundEditor?.focus()
   documents.boundEditor?.trigger('menu', command, null)
 }
