@@ -152,7 +152,8 @@ try {
   expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMenuBarVisible())).toBe(false)
   await page.locator('.query-tabs').getByRole('tab', { selected: true }).focus()
   await page.keyboard.press('Space')
-  expect(await page.locator('.query-tabs').getByRole('tab', { selected: true }).evaluate(element => getComputedStyle(element).outlineStyle)).toBe('none')
+  // The keyboard focus ring is a 1px inset outline: the strip would clip the default ring, and forced colors drop box shadows.
+  expect(await page.locator('.query-tabs').getByRole('tab', { selected: true }).evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineOffset, style.boxShadow] })).toEqual(['solid', '1px', '-1px', 'none'])
   await menu('file.save')
   await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
   const originalName = await page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label')

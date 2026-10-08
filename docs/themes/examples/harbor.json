@@ -1,0 +1,31 @@
+{
+  "$schema": "./varia-theme.schema.json",
+  "kind": "varia-color-theme",
+  "version": 1,
+  "name": "Harbor",
+  "description": "Blue-grey surfaces with a teal accent, in dark and light.",
+  "author": "Jane Doe",
+  "type": "dual",
+  "palette": {
+    "canvas":      { "dark": "#0f1419", "light": "#fbfcfd" },
+    "sideBar":     { "dark": "#131a20", "light": "#f1f4f6" },
+    "chrome":      { "dark": "#16202a", "light": "#e6edf0" },
+    "accent":      { "dark": "#4fd1c5", "light": "#0f766e" },
+    "accentHover": { "dark": "#7fe0d6", "light": "#0b5e58" },
+    "onAccent":    { "dark": "#04201d", "light": "#ffffff" },
+    "focus":       "$accent",
+    "deepSea":     "#0b3d4a"
+  },
+  "colors": {
+    "statusBar.background": { "dark": "$deepSea", "light": "#d7eef0" },
+    "statusBar.foreground": { "dark": "#cfeff2", "light": "#0b3d4a" },
+    "list.inactiveSelectionBackground": "$accent/20",
+    "resultsGrid.nullForeground": { "dark": "#c8a96b", "light": "#7a5a1e" },
+    "editorLineNumber.foreground": { "dark": "#7b8794" }
+  },
+  "tokenColors": [
+    { "name": "Keywords", "scope": ["keyword", "storage.type"], "settings": { "foreground": "$accent", "fontStyle": "bold" } },
+    { "scope": "string", "settings": { "foreground": { "dark": "#f2a7a7", "light": "#b42318" } } },
+    { "scope": "comment, comment.quote", "settings": { "foreground": { "dark": "#7f9f8e", "light": "#4d6b5c" }, "fontStyle": "italic" } }
+  ]
+}

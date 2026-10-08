@@ -12,3 +12,9 @@ export function useWorkbench(): Workbench {
   return workbench
 }
 export function useServiceSnapshot<T>(store: ExternalStore<T>): T { return useSyncExternalStore(store.subscribe, store.getSnapshot) }
+/** A stored connection color as CSS for the active theme; the component re-renders when the theme changes. */
+export function useConnectionAccent(color: string | undefined): string | undefined {
+  const { theme } = useWorkbench()
+  useServiceSnapshot(theme)
+  return theme.accent(color)
+}

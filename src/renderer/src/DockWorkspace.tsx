@@ -1,8 +1,10 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { DockviewDefaultTab, DockviewReact, themeDark, type DockviewApi, type DockviewReadyEvent, type GetTabContextMenuItemsParams, type IDockviewHeaderActionsProps, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
+import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type GetTabContextMenuItemsParams, type IDockviewHeaderActionsProps, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
 import { emptyLayoutState, paneIds, paneTitles, parseWorkspaceLayout, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
+import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
+import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
@@ -18,6 +20,11 @@ function Pane({ api }: IDockviewPanelProps) {
   return <div className="dock-slot" ref={slot} />
 }
 const components = { workbench: Pane }
+// Dockview splits className, so `varia-dock` lands on its shell next to the theme class (see styles.css).
+const dockThemes = {
+  dark: { ...themeDark, name: 'varia-dark', className: 'dockview-theme-dark varia-dock' },
+  light: { ...themeLight, name: 'varia-light', className: 'dockview-theme-light varia-dock' }
+} satisfies Record<ThemeType, typeof themeDark>
 function paneHost(id: PaneId) { const host = document.createElement('div'); host.className = 'dock-pane'; host.dataset.pane = id; return host }
 function EmptyWorkspace() {
   const commands = useContext(PaneCommandContext)!
@@ -61,6 +68,7 @@ export interface WorkspaceHandle {
 }
 
 const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(function DockWorkspace(panes, ref) {
+  const themeType = useServiceSnapshot(useWorkbench().theme).active.type
   const [state, setState] = useState<LayoutState>(emptyLayoutState)
   const stateRef = useRef(state)
   const apiRef = useRef<DockviewApi | null>(null)
@@ -247,7 +255,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     <PaneContext.Provider value={paneHosts}><PaneCommandContext.Provider value={paneCommands}>
       <div hidden ref={parking} />
       {paneIds.map(id => createPortal(panes[id], paneHosts.hosts[id], id))}
-      <div className="workbench" ref={root}><DockviewReact className="dock-workbench" theme={themeDark} components={components} defaultTabComponent={PaneTab} watermarkComponent={EmptyWorkspace}
+      <div className="workbench" ref={root}><DockviewReact className="dock-workbench" theme={dockThemes[themeType]} components={components} defaultTabComponent={PaneTab} watermarkComponent={EmptyWorkspace}
         rightHeaderActionsComponent={PaneActions} defaultRenderer="always" floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar"
         dndStrategy="pointer" proportionalLayout={false} getTabContextMenuItems={tabContextMenu} onReady={onReady} /></div>
     </PaneCommandContext.Provider></PaneContext.Provider>
