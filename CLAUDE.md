@@ -59,9 +59,9 @@ README.md documents user-facing behaviour, limits, and the protocol.
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR off `main`; squash merges; imperative commit subjects.
 - CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
-  every PR to main and every push to main. Windows and macOS run on push to main, manual runs, and non-draft PRs only,
-  because the repository is private and their minutes bill at 2x and 10x; macOS skips the smoke tests until they cover
-  its window chrome. Keep PRs in draft while iterating.
+  every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
+  manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS
+  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)
