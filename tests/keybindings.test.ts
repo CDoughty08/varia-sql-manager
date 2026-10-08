@@ -5,7 +5,7 @@ import {
   ariaLabel, chordFromEvent, defaultRules, formatLabel, keybindingLabel, KeySpecError, parseKeySpec, platforms, primaryRule, reservedChords, reservedReason,
   resolveKeybinding, specForPlatform, toAccelerator, toPlatform, workbenchRules, type KeyEventLike, type Platform
 } from '../src/shared/commands/keybindings'
-import { applicationMenus, menuCommandIds } from '../src/shared/commands/menus'
+import { applicationMenus, menuAccelerator, menuCommandIds } from '../src/shared/commands/menus'
 import { evaluateWhen } from '../src/shared/commands/when'
 
 const event = (key: string, code: string, modifiers: Partial<Pick<KeyEventLike, 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey' | 'isComposing' | 'keyCode'>> = {}, altGraph = false): KeyEventLike =>
@@ -146,14 +146,18 @@ describe('keybinding labels', () => {
     expect(toAccelerator(['ctrl+k', 'ctrl+c'], 'win32')).toBeUndefined()
     expect(toAccelerator([], 'win32')).toBeUndefined()
   })
-  it('give every menu command with a primary keybinding an accelerator', () => {
+  it('give every menu command with a primary keybinding an accelerator, only with ⌘ on macOS', () => {
     // Electron has no accelerator name for Pause, so Cancel's menu item shows no key.
     const unnamed = new Set(['win32 query.cancel', 'linux query.cancel'])
     for (const platform of platforms) for (const id of menuCommandIds) {
-      const rule = primaryRule(id, platform), accelerator = rule && toAccelerator(rule.chords, platform)
-      if (unnamed.has(`${platform} ${id}`)) expect(accelerator, `${platform} ${id}`).toBeUndefined()
-      else if (rule) expect(accelerator, `${platform} ${id}`).toMatch(/^((Cmd|Ctrl|Alt|Shift|Super)\+)*[^+]+$/)
+      const rule = primaryRule(id, platform), accelerator = menuAccelerator(id, platform)
+      // macOS menus would take keys without ⌘ before the page does.
+      const shown = rule && !unnamed.has(`${platform} ${id}`) && (platform !== 'darwin' || rule.chords[0].includes('meta+'))
+      if (shown) expect(accelerator, `${platform} ${id}`).toMatch(platform === 'darwin' ? /^Cmd(\+(Ctrl|Alt|Shift))*\+[^+]+$/ : /^((Ctrl|Alt|Shift|Super)\+)*[^+]+$/)
+      else expect(accelerator, `${platform} ${id}`).toBeUndefined()
     }
+    expect((['query.execute', 'window.explorer', 'document.next', 'document.previous'] as const).map(id => menuAccelerator(id, 'darwin'))).toEqual([undefined, undefined, undefined, undefined])
+    expect(menuAccelerator('query.execute', 'win32')).toBe('F5')
   })
 })
 

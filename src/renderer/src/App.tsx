@@ -65,7 +65,7 @@ export default function App() {
   // Stable for the app's lifetime; it reaches the dock workspace through its ref.
   const shellHost = useMemo<ShellHost>(() => ({
     disconnect: disconnectServer,
-    reveal: pane => workspaceRef.current?.reveal(pane),
+    reveal: (pane, options) => workspaceRef.current?.reveal(pane, options),
     manageLayouts: mode => workspaceRef.current?.manage(mode),
     resetLayout: () => workspaceRef.current?.reset(),
     flushLayout: async () => { await workspaceRef.current?.flush() },

@@ -7,7 +7,8 @@ import { serverItems } from './query'
 export interface ShellHost {
   /** Ends a server connection and moves its queries to Disconnected, as Object Explorer's Disconnect button does. */
   disconnect(connectionId: string): Promise<void>
-  reveal(pane: PaneId): void
+  /** Shows a pane; `focus` also moves keyboard focus into it, as SSMS's F8 does for Object Explorer. */
+  reveal(pane: PaneId, options?: { focus?: boolean }): void
   manageLayouts(mode: 'save' | 'load'): void
   resetLayout(): void
   flushLayout(): Promise<void>
@@ -33,7 +34,8 @@ export function shellContribution({ commands, documents, files, quickInput, conn
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }) }),
-    commands.register('window.explorer', { run: () => host.reveal('explorer') }),
+    // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query.
+    commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
     commands.register('window.editor', { run: () => host.reveal('editor') }),
     commands.register('window.output', { run: () => host.reveal('output') }),
     commands.register('layout.save', { run: () => host.manageLayouts('save') }),

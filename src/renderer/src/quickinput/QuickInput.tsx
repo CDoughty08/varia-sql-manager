@@ -3,9 +3,17 @@ import { createPortal } from 'react-dom'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Keybinding from '../Keybinding'
 import type { MatchRange } from './fuzzy'
-import type { QuickInputRow, QuickInputView } from './QuickInputService'
+import type { QuickInputMessage, QuickInputRow, QuickInputView } from './QuickInputService'
 
 const rowHeight = 24, visibleRows = 12, overscan = 6, windowedAbove = 100
+// Each message gets its own text node, so the live region announces a hint again when the same row is accepted again.
+const messageKeys = new WeakMap<QuickInputMessage, number>()
+let messageCount = 0
+function messageKey(message: QuickInputMessage): number {
+  let key = messageKeys.get(message)
+  if (key === undefined) messageKeys.set(message, key = ++messageCount)
+  return key
+}
 
 function Highlighted({ text, ranges }: { text: string; ranges: readonly MatchRange[] }) {
   if (!ranges.length) return <>{text}</>
@@ -20,10 +28,8 @@ function Highlighted({ text, ranges }: { text: string; ranges: readonly MatchRan
   return <>{parts}</>
 }
 
-function accessibleName({ item, group }: QuickInputRow): string {
-  const name = item.ariaLabel ?? [item.label, item.description, item.keybinding?.aria, group].filter(Boolean).join(', ')
-  return item.disabled ? `${name}, unavailable` : name
-}
+// A disabled row says so through aria-disabled; its hint is announced when it is accepted.
+const accessibleName = ({ item, group }: QuickInputRow): string => item.ariaLabel ?? [item.label, item.description, item.keybinding?.aria, group].filter(Boolean).join(', ')
 
 /** The quick input widget, rendered once at the root of the app; it shows whatever picker `QuickInputService` holds. */
 export default function QuickInput() {
@@ -36,6 +42,8 @@ function Widget({ view }: { view: QuickInputView }) {
   const { quickInput, platform } = useWorkbench()
   const root = useRef<HTMLDivElement>(null), input = useRef<HTMLInputElement>(null), list = useRef<HTMLDivElement>(null)
   const composing = useRef(false)
+  /** The session a row was pressed in: a click that began in an earlier picker accepts nothing. */
+  const pressed = useRef<number | undefined>(undefined)
   const [scrollTop, setScrollTop] = useState(0)
   const [status, setStatus] = useState('')
   const { rows, activeIndex } = view
@@ -80,7 +88,8 @@ function Widget({ view }: { view: QuickInputView }) {
       case 'PageUp': quickInput.move('pagePrevious', page); break
       case 'Home': if (!mac && event.ctrlKey) quickInput.move('first'); else handled = false; break
       case 'End': if (!mac && event.ctrlKey) quickInput.move('last'); else handled = false; break
-      case 'Enter': if (plain) quickInput.accept(); else handled = false; break
+      // A held Enter must not also accept a row in the picker the first press opened.
+      case 'Enter': if (!plain) handled = false; else if (!event.repeat) quickInput.accept(); break
       case 'Escape': quickInput.hide('cancel'); break
       // Focus stays in the input.
       case 'Tab': break
@@ -102,7 +111,14 @@ function Widget({ view }: { view: QuickInputView }) {
     return <div key={windowed ? index : `${index}:${item.id}`} id={`qi-${index}`} role="option" aria-selected={index === activeIndex} aria-disabled={item.disabled ? true : undefined}
       aria-posinset={index + 1} aria-setsize={rows.length} aria-label={accessibleName(row)} title={item.tooltip}
       className={`quick-input-row${index === activeIndex ? ' active' : ''}${item.disabled ? ' disabled' : ''}${index > 0 && row.group ? ' separated' : ''}`}
-      style={windowed ? { position: 'absolute', top: index * rowHeight, left: 0, right: 0 } : undefined} onClick={() => quickInput.accept(index)}>
+      style={windowed ? { position: 'absolute', top: index * rowHeight, left: 0, right: 0 } : undefined}
+      onPointerDown={() => { pressed.current = view.session }}
+      onClick={event => {
+        // The second click of a double-click lands in the picker the first one opened.
+        const session = pressed.current ?? view.session
+        pressed.current = undefined
+        if (event.detail <= 1) quickInput.accept(index, session)
+      }}>
       {icons && <span className={`quick-input-icon${item.icon ? ` codicon codicon-${item.icon}` : ''}`} aria-hidden="true" />}
       <span className="quick-input-label"><Highlighted text={item.label} ranges={row.ranges} /></span>
       {item.description && <span className="quick-input-description"><Highlighted text={item.description} ranges={row.descriptionRanges} /></span>}
@@ -133,11 +149,14 @@ function Widget({ view }: { view: QuickInputView }) {
         }} />
     </div>
     <div className={`quick-input-progress${view.busy ? ' busy' : ''}`} />
-    <div className={`quick-input-message${view.message?.severity === 'error' ? ' error' : ''}`} aria-live="polite">{view.message?.text}</div>
+    {/* Always rendered: a live region that enters the accessibility tree with its text is often not announced. */}
+    <div className={`quick-input-message${view.message?.severity === 'error' ? ' error' : ''}`} aria-live="polite">{view.message && <span key={messageKey(view.message)}>{view.message.text}</span>}</div>
     <div ref={list} id="quick-input-list" className="quick-input-list" role="listbox" aria-label={view.ariaLabel} aria-busy={view.loading || undefined}
       onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
       {windowed ? <div role="presentation" style={{ position: 'relative', height: rows.length * rowHeight }}>{rendered}</div> : rendered}
     </div>
+    {/* The status region announces this. */}
+    {!rows.length && !view.loading && !view.message && <div className="quick-input-empty" aria-hidden="true">No matching {view.noun}</div>}
     <div className="quick-input-status" role="status">{status}</div>
   </div>
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandId } from '../src/shared/commands/catalog'
+import { platforms } from '../src/shared/commands/keybindings'
 import type { DatabaseInfo } from '../src/shared/contracts'
 import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/history'
 import { QuickInputService, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
@@ -7,7 +8,7 @@ import { deferred } from './fixtures/documents'
 import { connectionInfo, fakeFocus, manualTimers, memoryStorage, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
-afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks() })
+afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
 function controller(focused: unknown = 'editor') {
@@ -90,6 +91,19 @@ describe('quick input sessions', () => {
     expect(accept).not.toHaveBeenCalled()
     service.accept(2)
     expect(accept).toHaveBeenCalledWith(expect.objectContaining({ id: 'z' }))
+  })
+  it('ignores an accept that began in an earlier picker', () => {
+    const { service, view } = controller(), picked = vi.fn()
+    service.show(options({ onDidAccept: () => service.show(options({ items: items('server-a'), onDidAccept: picked })) }))
+    const first = view().session
+    service.accept(0, first)
+    expect(view()).toMatchObject({ visible: true, rows: [{ item: { id: 'server-a' } }] })
+    // The second click of a double-click, or a press that began in the first picker.
+    service.accept(0, first)
+    expect(picked).not.toHaveBeenCalled()
+    expect(service.visible).toBe(true)
+    service.accept(0, view().session)
+    expect(picked).toHaveBeenCalledOnce()
   })
   it('reports failing callbacks without breaking the widget', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -217,6 +231,25 @@ describe('quick input loading', () => {
     expect(view().message?.text).toBe('Could not load servers: Boom.')
     service.accept()
     expect(accept).not.toHaveBeenCalled()
+  })
+  it('drops malformed provider rows, and reports a result it cannot read as a failed load', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { service, clock, view } = controller()
+    const malformed = [{ id: 'a', label: null }, { id: 'b', label: 'Sales', description: 7 }, { id: 3, label: 'x' }, null, { id: 'c', label: 'Ok', description: 'fine' }] as unknown as QuickPickItem[]
+    service.show(options({ noun: 'databases', items: async () => malformed }))
+    await settle()
+    expect(view().rows.map(row => [row.item.id, row.item.description])).toEqual([['b', undefined], ['c', 'fine']])
+    expect(view()).toMatchObject({ loading: false, message: undefined })
+    const unreadable = { id: 'x', get label(): string { throw new Error('Unreadable row.') } }
+    service.show(options({ noun: 'databases', items: async () => [unreadable] }))
+    await settle()
+    clock.advance(31_000)
+    expect(view()).toMatchObject({ visible: true, loading: false, busy: false, rows: [], message: { text: 'Could not load databases: Unreadable row.', severity: 'error' } })
+    service.show(options({ items: [unreadable] }))
+    expect(view()).toMatchObject({ visible: true, rows: [], message: { text: 'Could not load items: Unreadable row.', severity: 'error' } })
+    expect(error).toHaveBeenCalledTimes(2)
+    service.filter('x')
+    expect(view()).toMatchObject({ visible: true, rows: [] })
   })
   it('caps items, labels, and descriptions, and accepts the original item', () => {
     const { service, view } = controller(), accept = vi.fn()
@@ -421,6 +454,26 @@ describe('command palette', () => {
     await commands.execute('layout.reset', undefined, 'menu')
     expect(quickInput.visible).toBe(false)
   })
+  it.each(platforms)('stays open for Undo and Redo from the menu on %s, so they act on its input and not the editor', async platform => {
+    const { key, quickInput, focus, commands, documents } = palette({ platform })
+    // shell.ts reads the DOM focus: the quick input's <input>, or Monaco's text area once focus returns to the editor.
+    class FakeElement { isContentEditable = false; constructor(readonly inEditor: boolean) {} matches(selector: string) { return selector === 'input, textarea' } closest(selector: string) { return this.inEditor && selector === '.monaco-editor' ? this : null } }
+    const field = new FakeElement(false), editorText = new FakeElement(true), execCommand = vi.fn()
+    vi.stubGlobal('HTMLElement', FakeElement)
+    vi.stubGlobal('document', { get activeElement() { return focus.focused === 'quick input' ? field : editorText }, execCommand })
+    documents.create('a.sql', 'SELECT 7;', 'master')
+    await key('workbench.showCommands')
+    focus.focused = 'quick input'
+    quickInput.filter('>abc')
+    // ⌘Z in the input on macOS, or Edit › Undo clicked while the input keeps focus.
+    await expect(commands.execute('edit.undo', undefined, 'menu')).resolves.toBe(true)
+    await expect(commands.execute('edit.redo', undefined, 'menu')).resolves.toBe(true)
+    expect(quickInput.visible).toBe(true)
+    expect(focus.restored).toEqual([])
+    expect(execCommand.mock.calls).toEqual([['undo'], ['redo']])
+    await commands.execute('layout.reset', undefined, 'menu')
+    expect(quickInput.visible).toBe(false)
+  })
   it('does not open behind a modal dialog', async () => {
     let modal = true
     const { key, quickInput } = palette({ modal: () => modal })
@@ -495,6 +548,12 @@ describe('server and database pickers', () => {
     await commands.execute('query.changeConnection', undefined, 'palette')
     expect(view().rows.map(row => row.item.label)).toEqual(['Disconnected', 'server-a.example', 'server-b.example'])
     expect(view().rows[view().activeIndex].item.id).toBe('server-a')
+    // Enter on the current server keeps the query's session (and any open transaction).
+    quickInput.accept()
+    await settle()
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+    expect(documents.get(tab.id)).toMatchObject({ connectionId: 'server-a', database: 'AppData' })
+    await commands.execute('query.changeConnection', undefined, 'palette')
     quickInput.filter('server-b')
     quickInput.accept()
     await settle()

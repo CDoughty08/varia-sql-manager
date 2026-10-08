@@ -49,13 +49,25 @@ describe('query targets', () => {
     expect(documents.getSnapshot().busy).toBe(true)
     expect(documents.get(tab.id)?.connectionId).toBe('server-a')
     // A second change while the first is pending is ignored.
-    await targets.changeConnection(tab.id, 'server-a')
+    await targets.changeConnection(tab.id, 'server-b')
     expect(api.closeQuerySession).toHaveBeenCalledOnce()
     closing.resolve({ ok: true, value: { closed: true } })
     await change
     expect(documents.get(tab.id)).toMatchObject({ connectionId: 'server-b', database: 'master' })
     expect(documents.getSnapshot().busy).toBe(false)
     expect(queries.getSnapshot()[tab.id]).toBeUndefined()
+  })
+  it('keep the session, database, and results when the current server is chosen again', async () => {
+    const { targets, documents, api, queries, tab } = await fixture()
+    await targets.changeConnection(tab.id, 'server-a')
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+    expect(documents.get(tab.id)).toMatchObject({ connectionId: 'server-a', database: 'AppData' })
+    expect(queries.getSnapshot()[tab.id]?.result).toBeDefined()
+    await targets.changeConnection(tab.id, undefined)
+    api.closeQuerySession.mockClear()
+    await targets.changeConnection(tab.id, undefined)
+    await targets.changeConnection(tab.id, 'gone')
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
   })
   it('keep the database when a query is disconnected, and use the server\'s default when it moves', async () => {
     const { targets, documents, tab } = await fixture()

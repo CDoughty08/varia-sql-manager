@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { commandDescriptor, commandIds, type CommandId } from './catalog'
-import { primaryRule, toAccelerator, type Platform } from './keybindings'
+import { primaryRule, splitChord, toAccelerator, type Platform } from './keybindings'
 
 /** The menubar, in title-bar order. Alt plus the mnemonic opens a menu on Windows and Linux. */
 export const applicationMenus = [
@@ -56,6 +56,18 @@ export function nativeItemId(id: CommandId, menu: MenuId): string {
 
 const applies = (platforms: readonly Platform[] | undefined, platform: Platform) => !platforms || platforms.includes(platform)
 /**
+ * Whether a menu item may carry `chords` as its accelerator. On macOS every accelerator is also a key equivalent, and
+ * AppKit offers keys without ⌘ to the menu before the page (Chromium sends only ⌘ keys to the page first): F5 would run
+ * Execute from Object Explorer, and the workbench would never see the key. Those keys stay the dispatcher's alone.
+ */
+export const menuMayShowChords = (chords: readonly string[], platform: Platform): boolean =>
+  platform !== 'darwin' || (chords.length === 1 && splitChord(chords[0]).modifiers.has('meta'))
+/** The accelerator a command's menu items show: its primary key, where Electron can name it and the platform allows it. */
+export function menuAccelerator(id: CommandId, platform: Platform): string | undefined {
+  const rule = primaryRule(id, platform)
+  return rule && menuMayShowChords(rule.chords, platform) ? toAccelerator(rule.chords, platform) : undefined
+}
+/**
  * The entries of `menu` on `platform`: catalogue placements and `menuExtras`, sorted by group, order, and title, with
  * exactly one separator between non-empty groups.
  */
@@ -65,8 +77,7 @@ export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
     const command = commandDescriptor(id)
     for (const placement of command.menus ?? []) {
       if (placement.menu !== menu || !applies(placement.platforms, platform)) continue
-      const title = placement.title ?? command.title, rule = primaryRule(id, platform)
-      const accelerator = rule && toAccelerator(rule.chords, platform)
+      const title = placement.title ?? command.title, accelerator = menuAccelerator(id, platform)
       items.push({ group: placement.group, order: placement.order, title, entry: { kind: 'command', id, nativeId: nativeItemId(id, menu), title, toggle: command.toggled !== undefined, ...(accelerator ? { accelerator } : {}) } })
     }
   }

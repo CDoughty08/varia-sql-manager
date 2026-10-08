@@ -25,6 +25,7 @@ const dockThemes = {
   dark: { ...themeDark, name: 'varia-dark', className: 'dockview-theme-dark varia-dock' },
   light: { ...themeLight, name: 'varia-light', className: 'dockview-theme-light varia-dock' }
 } satisfies Record<ThemeType, typeof themeDark>
+const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 function paneHost(id: PaneId) { const host = document.createElement('div'); host.className = 'dock-pane'; host.dataset.pane = id; return host }
 function EmptyWorkspace() {
   const commands = useContext(PaneCommandContext)!
@@ -63,7 +64,8 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Th
 export interface WorkspaceHandle {
   manage(mode?: 'save' | 'load'): void
   reset(): void
-  reveal(id: PaneId): void
+  /** Shows a pane, and with `focus` moves keyboard focus into it. */
+  reveal(id: PaneId, options?: { focus?: boolean }): void
   flush(): Promise<void>
 }
 
@@ -130,7 +132,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     else panel.group.api.moveTo({ position: id === 'explorer' ? 'left' : id === 'output' ? 'bottom' : 'right' })
     if (previous && previous.position !== 'center') panel.api.setSize({ width: previous.width, height: previous.height })
   }
-  function reveal(id: PaneId) {
+  function reveal(id: PaneId, options?: { focus?: boolean }) {
     const api = apiRef.current
     if (!api || !ready.current) return
     let panel = api.getPanel(id)
@@ -149,6 +151,19 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     if (!panel.group.api.isVisible) panel.group.api.setVisible(true)
     if (api.hasMaximizedGroup()) api.exitMaximizedGroup()
     if (!panel.api.isActive) panel.api.setActive()
+    if (options?.focus) focusPane(id)
+  }
+  /** Moves focus into a pane unless it is already there: to its `data-pane-focus` element (the selected one first), else its first control. */
+  function focusPane(id: PaneId) {
+    const host = paneHosts.hosts[id]
+    const attempt = () => {
+      if (host.contains(document.activeElement)) return true
+      const target = host.querySelector<HTMLElement>('[data-pane-focus="selected"]') ?? host.querySelector<HTMLElement>('[data-pane-focus]') ?? host.querySelector<HTMLElement>(focusableSelector)
+      target?.focus()
+      return host.contains(document.activeElement)
+    }
+    // A panel that was closed mounts its content on a later frame.
+    if (!attempt()) requestAnimationFrame(() => { attempt() })
   }
 
   function cancelTimer() { if (timer.current) clearTimeout(timer.current); timer.current = null }

@@ -57,13 +57,13 @@ The shortcuts follow SSMS where SSMS has one:
 | New query, Open, Save, Save As | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | ⌘N, ⌘O, ⌘S, ⇧⌘S |
 | Close the query | Ctrl+W, Ctrl+F4 | ⌘W |
 | Next or previous query | Ctrl+Tab or Ctrl+Shift+Tab, Ctrl+PageDown or Ctrl+PageUp | ⌃⇥ or ⌃⇧⇥ |
-| Show Object Explorer | F8 | F8 |
+| Show Object Explorer and move focus to it | F8 | F8 |
 | Refresh Object Explorer (when it has focus) | F5 | F5 |
 | Toggle word wrap | Alt+Z | View menu |
 | Comment or uncomment the selection | Ctrl+K Ctrl+C or Ctrl+K Ctrl+U | ⌘K ⌘C or ⌘K ⌘U |
 | Toggle line comment | Ctrl+/ | ⌘/ |
 
-The [command reference](docs/commands.md) lists every command with its keys on each platform, the condition under which it can run, its menu items, and the keys Varia leaves to menus, the editor, and the operating system. It is generated from the command catalogue, so it always matches the app. Menus, the toolbar, the keyboard, and the palette run the same commands and agree on what is available. While a dialog is open, workbench shortcuts and menu commands do nothing and the dialog keeps its keys; Undo and Redo still act on its text fields. Holding a key down runs its command once, except Next and Previous Query. Custom keybindings are future work.
+The [command reference](docs/commands.md) lists every command with its keys on each platform, the condition under which it can run, its menu items, and the keys Varia leaves to menus, the editor, and the operating system. It is generated from the command catalogue, so it always matches the app. On macOS, menu items show only shortcuts with ⌘: the menu bar would take any other key (F5, F8, ⌃⇥) before the focused pane saw it. Menus, the toolbar, the keyboard, and the palette run the same commands and agree on what is available. While a dialog is open, workbench shortcuts and menu commands do nothing and the dialog keeps its keys; Undo and Redo still act on its text fields. Holding a key down runs its command once, except Next and Previous Query. Custom keybindings are future work.
 
 ## Connection dialog
 

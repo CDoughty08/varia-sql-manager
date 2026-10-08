@@ -9,6 +9,8 @@ import { compareRanked, prepareQuery, scoreQuery, type MatchRange } from './fuzz
 export interface QuickPickItem {
   readonly id: string
   readonly label: string
+  /** Where the item's own name starts in `label`, after a category such as "Query: ": a match there ranks as one at the start. */
+  readonly titleStart?: number
   readonly description?: string
   /** The row's tooltip, such as a file path. */
   readonly tooltip?: string
@@ -111,10 +113,13 @@ function invoke(callback: () => unknown): void {
     if (result instanceof Promise) result.catch(onUnexpectedError)
   } catch (error) { onUnexpectedError(error) }
 }
-function displayed(item: QuickPickItem): QuickPickItem {
-  const { label, description } = item
-  if (label.length <= quickInputLimits.label && (description === undefined || description.length <= quickInputLimits.description)) return item
-  return { ...item, label: label.slice(0, quickInputLimits.label), ...description === undefined ? {} : { description: description.slice(0, quickInputLimits.description) } }
+/** The row as shown, or undefined for an item without a string id and label: a malformed provider result must not break the picker. */
+function displayed(item: QuickPickItem): QuickPickItem | undefined {
+  if (typeof item?.id !== 'string' || typeof item.label !== 'string') return undefined
+  const { label, description, ...rest } = item
+  const text = typeof description === 'string' ? description.slice(0, quickInputLimits.description) : undefined
+  if (label.length <= quickInputLimits.label && text === description) return item
+  return { ...rest, label: label.slice(0, quickInputLimits.label), ...text === undefined ? {} : { description: text } }
 }
 
 /**
@@ -150,8 +155,9 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     this.current = session
     // A mode switch by typing keeps the input as it is; anything else writes the new value.
     if (previous?.value !== value) this.requestInput(value, 'end')
-    if (typeof options.items === 'function') this.load(session, options.items)
-    else this.setEntries(session, options.items)
+    const { items } = options
+    if (typeof items === 'function') this.load(session, items)
+    else this.receive(session, items)
     this.publishSession(session)
     this.visibility.set(true)
     if (previous) this.notifyHide(previous, 'replace')
@@ -206,20 +212,24 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     if (!session || !session.rows.length) return
     this.activate(session, Math.max(0, Math.min(session.rows.length - 1, Math.trunc(index))))
   }
-  /** Accepts a row (the active one by default). A disabled row shows its hint and the widget stays open. */
-  accept(index?: number): void {
-    const session = this.current
-    if (!session) return
-    const entry = session.rowEntries[index ?? session.activeIndex]
+  /**
+   * Accepts a row (the active one by default). A disabled row shows its hint and the widget stays open. With `session`
+   * (the view's session when the click began), an accept from an earlier picker is ignored, so the second click of a
+   * double-click on a row that opens a picker does not pick in that picker.
+   */
+  accept(index?: number, session = this.current?.id): void {
+    if (!this.current || session !== this.current.id) return
+    const current = this.current
+    const entry = current.rowEntries[index ?? current.activeIndex]
     if (!entry) return
     if (entry.view.disabled) {
-      session.hint = { text: unavailable(entry.view), severity: 'info' }
-      this.publishSession(session)
+      current.hint = { text: unavailable(entry.view), severity: 'info' }
+      this.publishSession(current)
       return
     }
     // Focus returns first, so the command acts on what the user was working in.
-    if (session.options.hideOnAccept !== false) this.hide('accept')
-    invoke(() => session.options.onDidAccept(entry.source))
+    if (current.options.hideOnAccept !== false) this.hide('accept')
+    invoke(() => current.options.onDidAccept(entry.source))
   }
   /** Closes the widget. Accept and cancel return focus to where it was; blur and replace leave it alone. */
   hide(reason: HideReason): void { this.close(reason, reason === 'accept' || reason === 'cancel') }
@@ -284,7 +294,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
       session.loading = false
       session.busy = false
       this.clearTimers(session)
-      this.setEntries(session, Array.isArray(items) ? items : [])
+      this.receive(session, items)
       this.publishSession(session)
       this.notifyActive(session)
     }, (error: unknown) => {
@@ -303,11 +313,19 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     this.publishSession(session)
     this.notifyActive(session)
   }
+  /** Takes a provider's items; one that cannot be read is reported and shown as a failed load. */
+  private receive(session: Session, items: unknown): void {
+    try { this.setEntries(session, Array.isArray(items) ? items : []) }
+    catch (error) { onUnexpectedError(error); this.failLoad(session, error) }
+  }
   private setEntries(session: Session, items: readonly QuickPickItem[]): void {
     const { noun, recentIds = [] } = session.options
     const recent = new Map<string, number>()
     recentIds.forEach((id, rank) => { if (!recent.has(id)) recent.set(id, rank) })
-    session.entries = items.slice(0, quickInputLimits.items).map(source => ({ source, view: displayed(source), recentRank: recent.get(source.id) }))
+    session.entries = items.slice(0, quickInputLimits.items).flatMap(source => {
+      const view = displayed(source)
+      return view ? [{ source, view, recentRank: recent.get(view.id) }] : []
+    })
     session.matched = undefined
     if (items.length > quickInputLimits.items) session.loadMessage = { text: `Showing the first ${formatCount(quickInputLimits.items)} ${noun}; type to narrow the list`, severity: 'info' }
     this.applyFilter(session, session.options.activeId)
@@ -329,7 +347,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
       const candidates = narrowing ? session.matched!.entries : session.entries
       const scored: { entry: Entry; score: number; ranges: readonly MatchRange[]; descriptionRanges: readonly MatchRange[]; group?: string }[] = []
       for (const entry of candidates) {
-        const label = scoreQuery(query, entry.view.label, entry.view.keywords)
+        const label = scoreQuery(query, entry.view.label, entry.view.keywords, entry.view.titleStart)
         if (label) { scored.push({ entry, score: label.score, ranges: label.ranges, descriptionRanges: [], group: entry.view.group }); continue }
         const description = matchOnDescription && entry.view.description ? scoreQuery(query, entry.view.description) : undefined
         if (description) scored.push({ entry, score: description.score * descriptionWeight, ranges: [], descriptionRanges: description.ranges, group: entry.view.group })

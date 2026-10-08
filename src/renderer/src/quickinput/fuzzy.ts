@@ -1,7 +1,8 @@
 /**
- * The quick input's matcher. Every query word must match the label (or, scoring less and highlighting nothing, a
- * keyword), in any order. Per word the first strategy that matches wins: a contiguous substring, then word-start
- * initials ("fsa" for "File: Save As…"), then a subsequence. Work is linear in the capped label length.
+ * The quick input's matcher. Every query word must match the label or a keyword, in any order; a keyword match scores
+ * less and highlights nothing, and counts only when it beats the label's. Per word the first strategy that matches wins:
+ * a contiguous substring, then word-start initials ("fsa" for "File: Save As…"), then a subsequence that starts a word.
+ * Work is linear in the capped label length.
  */
 export type MatchRange = readonly [start: number, end: number]
 export interface FuzzyMatch { readonly score: number; readonly ranges: readonly MatchRange[] }
@@ -9,6 +10,8 @@ export interface PreparedQuery { readonly words: readonly string[] }
 
 export const fuzzyLimits = { query: 256, words: 8, label: 512, keywords: 16, keyword: 64, occurrences: 32 } as const
 const keywordWeight = 0.8
+/** The best a word can score: a substring at a word start at the start of the title. */
+const bestWordScore = 175
 
 /** Lowercases one UTF-16 unit at a time, so offsets in the result are offsets in the original. */
 function lowerUnits(text: string): string {
@@ -24,11 +27,15 @@ const separators = new Set([...':._-/()[]'].map(character => character.charCodeA
 const isCased = (code: number, lower: boolean) => { const character = String.fromCharCode(code); return character !== (lower ? character.toUpperCase() : character.toLowerCase()) }
 const isLower = (code: number) => (code >= 97 && code <= 122) || (code > 127 && isCased(code, true))
 const isUpper = (code: number) => (code >= 65 && code <= 90) || (code > 127 && isCased(code, false))
-/** Words start at the first character, after a space or separator, and at a lower-to-upper case change. */
+/**
+ * Words start at the first character, after a space or separator, at a lower-to-upper case change, and at the last
+ * capital of an acronym that runs into a word ("Q" in "SQLQuery").
+ */
 function isWordStart(text: string, index: number): boolean {
   if (index === 0) return true
-  const previous = text.charCodeAt(index - 1)
-  return previous <= 32 || separators.has(previous) || (previous > 127 && /\s/.test(text[index - 1])) || (isLower(previous) && isUpper(text.charCodeAt(index)))
+  const previous = text.charCodeAt(index - 1), code = text.charCodeAt(index)
+  return previous <= 32 || separators.has(previous) || (previous > 127 && /\s/.test(text[index - 1]))
+    || (isUpper(code) && (isLower(previous) || (isUpper(previous) && index + 1 < text.length && isLower(text.charCodeAt(index + 1)))))
 }
 interface Subject { readonly original: string; readonly text: string }
 const subject = (value: string): Subject => ({ original: value, text: lowerUnits(value) })
@@ -38,7 +45,7 @@ export function prepareQuery(query: string): PreparedQuery {
   return { words: words.slice(0, fuzzyLimits.words) }
 }
 
-function substring(word: string, { original, text }: Subject): FuzzyMatch | undefined {
+function substring(word: string, { original, text }: Subject, titleStart: number): FuzzyMatch | undefined {
   let first = -1, best = -1
   for (let index = text.indexOf(word), seen = 0; index >= 0 && seen < fuzzyLimits.occurrences; index = text.indexOf(word, index + 1), seen++) {
     if (first < 0) first = index
@@ -46,7 +53,7 @@ function substring(word: string, { original, text }: Subject): FuzzyMatch | unde
   }
   if (first < 0) return undefined
   const at = best < 0 ? first : best
-  return { score: 100 + (best < 0 ? 0 : 50) + (at === 0 ? 25 : 0), ranges: [[at, at + word.length]] }
+  return { score: 100 + (best < 0 ? 0 : 50) + (at === titleStart ? 25 : 0), ranges: [[at, at + word.length]] }
 }
 
 function initials(word: string, { original, text }: Subject): FuzzyMatch | undefined {
@@ -62,8 +69,14 @@ function initials(word: string, { original, text }: Subject): FuzzyMatch | undef
 }
 
 function subsequence(word: string, { original, text }: Subject): FuzzyMatch | undefined {
-  const positions: number[] = []
-  for (let index = 0, position = 0; index < word.length; index++, position++) {
+  // The first character must start a word, as in VS Code: letters picked from the middle of words ("ref" in
+  // "Preferences" for "refresh") match nearly anything.
+  const startsWord = (position: number) => text[position] === word[0] && isWordStart(original, position)
+  let start = 0
+  while (start < text.length && !startsWord(start)) start++
+  if (start === text.length) return undefined
+  const positions = [start]
+  for (let index = 1, position = start + 1; index < word.length; index++, position++) {
     while (position < text.length && text[position] !== word[index]) position++
     if (position === text.length) return undefined
     positions.push(position)
@@ -71,7 +84,7 @@ function subsequence(word: string, { original, text }: Subject): FuzzyMatch | un
   // Pull earlier characters right, toward the next one, so "cdb" highlights "Change Database", not stray letters.
   for (let index = positions.length - 2; index >= 0; index--) {
     let position = positions[index + 1] - 1
-    while (position > positions[index] && text[position] !== word[index]) position--
+    while (position > positions[index] && !(index ? text[position] === word[index] : startsWord(position))) position--
     positions[index] = position
   }
   let score = 0, gaps = 0
@@ -85,8 +98,8 @@ function subsequence(word: string, { original, text }: Subject): FuzzyMatch | un
   return { score: Math.max(1, Math.min(59, score - Math.min(gaps, 20))), ranges }
 }
 
-function matchWord(word: string, target: Subject): FuzzyMatch | undefined {
-  return substring(word, target) ?? initials(word, target) ?? subsequence(word, target)
+function matchWord(word: string, target: Subject, titleStart = 0): FuzzyMatch | undefined {
+  return substring(word, target, titleStart) ?? initials(word, target) ?? subsequence(word, target)
 }
 
 /** Sorted, disjoint ranges within `[0, length]`, with touching ranges joined. */
@@ -105,20 +118,25 @@ export function mergeRanges(ranges: readonly MatchRange[], length: number): Matc
 /**
  * Scores `label` against `query` (a string or a `prepareQuery` result, for scoring many labels). Returns undefined
  * when some word matches neither the label nor a keyword; an empty query matches everything with score 0.
+ * `titleStart` is where the label's own name starts after a category ("Query: Execute" has 7): the bonus for a match at
+ * the start goes there, so a category match does not outrank the same words in another command's title.
  */
-export function scoreQuery(query: string | PreparedQuery, label: string, keywords: readonly string[] = []): FuzzyMatch | undefined {
+export function scoreQuery(query: string | PreparedQuery, label: string, keywords: readonly string[] = [], titleStart = 0): FuzzyMatch | undefined {
   const { words } = typeof query === 'string' ? prepareQuery(query) : query
   if (!words.length) return { score: 0, ranges: [] }
   const target = subject(label.slice(0, fuzzyLimits.label))
   let score = 0, ranges: MatchRange[] = [], keywordTargets: Subject[] | undefined
   for (const word of words) {
-    const match = matchWord(word, target)
-    if (match) { score += match.score; ranges = ranges.concat(match.ranges); continue }
-    keywordTargets ??= keywords.slice(0, fuzzyLimits.keywords).map(keyword => subject(keyword.slice(0, fuzzyLimits.keyword)))
-    let best = 0
-    for (const keyword of keywordTargets) best = Math.max(best, matchWord(word, keyword)?.score ?? 0)
-    if (!best) return undefined
-    score += best * keywordWeight
+    const match = matchWord(word, target, titleStart)
+    let keywordScore = 0
+    // A strong keyword match ("use" for Change Database…) beats a weak one in the label.
+    if (!match || match.score < bestWordScore * keywordWeight) {
+      keywordTargets ??= keywords.slice(0, fuzzyLimits.keywords).map(keyword => subject(keyword.slice(0, fuzzyLimits.keyword)))
+      for (const keyword of keywordTargets) keywordScore = Math.max(keywordScore, (matchWord(word, keyword)?.score ?? 0) * keywordWeight)
+    }
+    if (match && match.score >= keywordScore) { score += match.score; ranges = ranges.concat(match.ranges) }
+    else if (keywordScore) score += keywordScore
+    else return undefined
   }
   return { score, ranges: mergeRanges(ranges, target.original.length) }
 }

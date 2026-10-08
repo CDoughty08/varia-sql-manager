@@ -127,6 +127,7 @@ try {
   await expect(combobox('Command Palette')).toBeFocused()
   await page.keyboard.type('zzzz')
   await expect(widget().getByRole('status')).toHaveText('No matching commands')
+  await expect(widget().locator('.quick-input-empty')).toHaveText('No matching commands')
   await page.keyboard.press('Escape')
 
   // 5. Focus is back in the editor before the command runs, so Undo acts on the editor.
@@ -134,13 +135,34 @@ try {
   await palette('edit undo', 'Edit: Undo')
   await page.keyboard.press('Enter')
   await expect.poll(editorText).not.toContain('SELECT\u00a01;')
+  // Edit \u203a Undo from the menu (how \u2318Z in the input arrives on macOS) undoes the palette's text and leaves it open.
+  await typeSql('SELECT 7;')
+  await textbox().focus()
+  await page.keyboard.press('F1')
+  await page.keyboard.type('abc')
+  await clickMenu('edit.undo')
+  await expect(combobox('Command Palette')).not.toHaveValue('>abc')
+  await expect(combobox('Command Palette')).toBeFocused()
+  expect(await editorText()).toContain('SELECT\u00a07;')
+  await page.keyboard.press('Escape')
 
   // 6. A disabled command explains itself and keeps the palette open.
   await palette('execute', 'Query: Execute')
-  expect(await activeOption()).toMatchObject({ disabled: 'true' })
+  // aria-disabled says it is unavailable; the name does not repeat it.
+  expect(await activeOption()).toMatchObject({ disabled: 'true', name: 'Query: Execute, F5' })
+  // Matches on a dimmed row are dimmed too.
+  expect(await widget().locator('.quick-input-row.disabled:not(.active)').first().evaluate(row => getComputedStyle(row.querySelector('.quick-input-hl')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
+  // The live region stays in the accessibility tree while empty, so the hint is announced when it arrives.
+  const message = widget().locator('.quick-input-message[aria-live="polite"]')
+  expect(await message.evaluate(element => getComputedStyle(element).display)).not.toBe('none')
   await page.keyboard.press('Enter')
-  await expect(widget().locator('.quick-input-message')).toHaveText('Connect this query to a server and wait for its running query to finish.')
+  await expect(message).toHaveText('Connect this query to a server and wait for its running query to finish.')
   await expect(combobox('Command Palette')).toBeFocused()
+  // Enter again puts the hint in a new text node, so it is announced again.
+  await message.locator('span').evaluate(span => { span.dataset.announced = 'true' })
+  await page.keyboard.press('Enter')
+  await expect(message.locator('span')).not.toHaveAttribute('data-announced', 'true')
+  await expect(message).toHaveText('Connect this query to a server and wait for its running query to finish.')
   await page.screenshot({ path: resolve('artifacts', 'palette-dark.png') })
   await page.keyboard.press('Escape')
   console.log('Palette checks: keyboard navigation, focus restored before commands run, and disabled-command hints.')
@@ -233,8 +255,42 @@ try {
   await page.keyboard.press('F5')
   await expect.poll(() => calls('query.execute')).toBe(executed + 1)
   await expect(page.locator('.results-grid')).toContainText('AppData')
+  // F8 moves focus to Object Explorer, as in SSMS, so the F5 after it refreshes rather than executes.
+  await textbox().focus()
+  const refreshed = await calls('databases.list'), ran = await calls('query.execute')
+  await page.keyboard.press('F8')
+  await expect(explorer.locator('.server-toggle')).toBeFocused()
+  await page.keyboard.press('F5')
+  await expect.poll(() => calls('databases.list')).toBeGreaterThan(refreshed)
+  expect(await calls('query.execute')).toBe(ran)
 
-  // 11. Go to Query opens on the previous query, so Ctrl+P then Enter switches between the last two.
+  // 11. A double-click or a held Enter on a command that opens a picker picks nothing there, and choosing the query's
+  // own server again keeps its session.
+  const disconnects = await calls('connections.disconnect'), comboboxName = () => page.locator('.quick-input [role="combobox"]').getAttribute('aria-label')
+  await palette('disconnect from', 'Connection: Disconnect from Server…')
+  await widget().locator('.quick-input-row.active').dblclick()
+  expect(await comboboxName()).toBe('Disconnect from Server')
+  await expect(combobox('Disconnect from Server')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await palette('disconnect from', 'Connection: Disconnect from Server…')
+  await page.keyboard.down('Enter')
+  await page.keyboard.down('Enter')
+  await page.keyboard.up('Enter')
+  expect(await comboboxName()).toBe('Disconnect from Server')
+  await page.keyboard.press('Escape')
+  await expect(widget()).toHaveCount(0)
+  expect(await calls('connections.disconnect')).toBe(disconnects)
+  await expect(explorer).toBeVisible()
+  const closes = await calls('query.session.close')
+  await palette('change connection', 'Query: Change Connection…')
+  await page.keyboard.press('Enter')
+  await expect(combobox('Change Connection')).toBeFocused()
+  expect((await activeOption()).name).toMatch(/^server-a,/)
+  await page.keyboard.press('Enter')
+  await expect(widget()).toHaveCount(0)
+  expect(await calls('query.session.close')).toBe(closes)
+
+  // 12. Go to Query opens on the previous query, so Ctrl+P then Enter switches between the last two.
   const current = await selectedTab()
   await textbox().focus()
   await page.keyboard.press('Control+P')
@@ -242,9 +298,9 @@ try {
   await page.keyboard.press('Enter')
   await expect.poll(selectedTab).not.toBe(current)
   await expect(textbox()).toBeFocused()
-  console.log('Palette checks: database picker, chord pass-through, F5 by focus, and Go to Query.')
+  console.log('Palette checks: database picker, chord pass-through, F5 by focus, F8 focus, double-click and held Enter guards, the current server kept, and Go to Query.')
 
-  // 12. Behind a modal dialog, workbench keys neither run nor are consumed.
+  // 13. Behind a modal dialog, workbench keys neither run nor are consumed.
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await page.keyboard.press('F1')
@@ -254,7 +310,7 @@ try {
   await expect(widget()).toHaveCount(0)
   await expect(tabs()).toHaveCount(2)
 
-  // 13. The Color Theme picker previews without saving, Escape restores, and Enter chooses like the menu.
+  // 14. The Color Theme picker previews without saving, Escape restores, and Enter chooses like the menu.
   const saved = await appearance()
   await themePicker()
   await page.keyboard.type('varia light')
@@ -285,7 +341,7 @@ try {
   await expect.poll(windowBackground).toBe('#11151c')
   console.log('Palette checks: modal dialogs block workbench keys; the Color Theme picker previews, cancels, and chooses.')
 
-  // 14. An Enter that ends an IME composition never accepts a row.
+  // 15. An Enter that ends an IME composition never accepts a row.
   await palette('new query', 'File: New Query')
   await page.evaluate(() => document.querySelector('.quick-input [role="combobox"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })))
   // Keys are handled in order, so had that Enter accepted the row, this key would reach the new query instead.
@@ -295,7 +351,7 @@ try {
   await expect(tabs()).toHaveCount(2)
   await page.keyboard.press('Escape')
 
-  // 15. Rapid open and close, long input, and the codicon font.
+  // 16. Rapid open and close, long input, and the codicon font.
   await textbox().focus()
   for (let round = 0; round < 20; round++) { await page.keyboard.press('F1'); await page.keyboard.press('Escape') }
   await expect(widget()).toHaveCount(0)
@@ -311,7 +367,7 @@ try {
   await page.keyboard.press('Escape')
   expect(failures).toEqual([])
 
-  // 16. Recently used commands come first, and survive a restart.
+  // 17. Recently used commands come first, and survive a restart.
   await palette('reset layout', 'View: Reset Layout')
   await page.keyboard.press('Enter')
   await expect(widget()).toHaveCount(0)

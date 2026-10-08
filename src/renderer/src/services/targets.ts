@@ -25,11 +25,15 @@ export class TargetService {
     this.documents.update(tabId, patch)
     this.queries.clear(tabId)
   }
-  /** Moves a query to another server (or disconnects it), ending its session first so no transaction follows it. */
+  /**
+   * Moves a query to another server (or disconnects it), ending its session first so no transaction follows it.
+   * Choosing the server it already uses keeps the session, with its open transaction, temp tables, and SET options.
+   */
   async changeConnection(tabId: string, connectionId?: string): Promise<void> {
     const document = this.documents.get(tabId)
     if (!document) return
     const next = connectionId === undefined ? undefined : this.connections.get(connectionId)
+    if (document.connectionId === next?.id) return
     const database = next?.database ?? document.database
     await this.runDocumentTask(async () => {
       unwrap(await this.api.closeQuerySession(tabId))

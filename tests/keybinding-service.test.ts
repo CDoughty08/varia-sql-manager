@@ -86,13 +86,23 @@ describe('keybinding dispatch', () => {
       expect(press(key('F5', 'F5')).consumed).toBe(true)
       state.values = { activePanel: 'explorer' }
       expect(press(key('F5', 'F5')).consumed).toBe(true)
-      // On macOS the menu's F5 key equivalent would run Execute outside the editor, so the key is consumed there.
+      // macOS menus carry no F5 key equivalent (menus.ts), so the key is left alone there too.
       state.values = { activePanel: 'output' }
-      expect(press(key('F5', 'F5')).consumed, platform).toBe(platform === 'darwin')
+      expect(press(key('F5', 'F5')).consumed, platform).toBe(false)
       // A text field in the explorer does not refresh it.
       state.values = { activePanel: 'explorer', inputFocus: true, textInputFocus: true }
-      expect(press(key('F5', 'F5')).consumed, platform).toBe(platform === 'darwin')
+      expect(press(key('F5', 'F5')).consumed, platform).toBe(false)
       expect(ran(), platform).toEqual(['query.execute', 'explorer.refresh'])
+    }
+  })
+  it('consumes a macOS menu key equivalent where its rule does not apply, so the menu cannot run it there', () => {
+    const rules = (platform: Platform) => [resolveKeybinding('query.execute', { key: 'mod+j', when: 'editorFocus' }, platform)!, resolveKeybinding('window.output', { key: 'f6', when: 'editorFocus' }, platform)!]
+    for (const platform of platforms) {
+      const { press, ran } = service(platform, { values: { activePanel: 'output' }, rules: rules(platform) })
+      // ⌘J reaches the page before the menu, and the Execute item would show it; F6 has no ⌘, so no menu shows it.
+      expect(press(letter('j', platform)).consumed, platform).toBe(platform === 'darwin')
+      expect(press(key('F6', 'F6')).consumed, platform).toBe(false)
+      expect(ran(), platform).toEqual([])
     }
   })
   it('runs Execute from the editor\'s find widget, as Monaco\'s addAction did, and not from other inputs', () => {

@@ -1,4 +1,4 @@
-import { commandDescriptor, commandIds, isCommandId, paletteLabel } from '../../../shared/commands/catalog'
+import { commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../../../shared/commands/catalog'
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { CommandHistory } from '../quickinput/history'
@@ -8,6 +8,11 @@ import type { QuickPickItem, QuickPickOptions } from '../quickinput/QuickInputSe
 export type QuickAccessMode = '>' | '?' | ''
 export const quickAccessMode = (value: string): QuickAccessMode => value.startsWith('>') ? '>' : value.startsWith('?') ? '?' : ''
 const recentLimit = 10
+/**
+ * Commands that leave an open quick input alone: its own keys, and Undo and Redo, which act on the focused text field.
+ * On macOS ⌘Z in the input arrives as the Edit menu's Undo, and closing first would undo the editor instead.
+ */
+const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'edit.undo', 'edit.redo'])
 type Picker = Omit<QuickPickOptions<QuickPickItem>, 'value' | 'prefix' | 'onDidChangeValue' | 'onDidHide'>
 export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'>
 
@@ -27,7 +32,8 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
     items: commandIds.filter(id => commandDescriptor(id).palette !== false && commands.has(id)).map(id => {
       const command = commandDescriptor(id), label = paletteLabel(id)
       const unavailable = commands.isEnabled(id) ? {} : { disabled: true, disabledHint: command.unavailableHint ?? `“${label}” is not available right now.` }
-      return { id, label, icon: command.icon, keywords: command.keywords, keybinding: keybindings.lookup(id), ...unavailable }
+      // The category ("Query: ") does not count as the start of the name, so a match there ranks no higher than one in the title.
+      return { id, label, titleStart: label.length - command.title.length, icon: command.icon, keywords: command.keywords, keybinding: keybindings.lookup(id), ...unavailable }
     }).sort((a, b) => a.label.localeCompare(b.label, 'en')),
     onDidAccept: item => {
       if (!isCommandId(item.id)) return
@@ -74,7 +80,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
     commands.register('workbench.showCommands', { run: () => { if (quickInput.visible && mode === '>') quickInput.setValue(quickInput.value, 'afterPrefix'); else open('>') } }),
     commands.register('workbench.quickOpen', { run: () => { if (quickInput.visible && mode === '') quickInput.setValue(quickInput.value, 'all'); else open('') } }),
     commands.onWillExecute(({ id, source }) => {
-      if (quickInput.visible && source !== 'palette' && id !== 'workbench.showCommands' && id !== 'workbench.quickOpen') quickInput.hide('cancel')
+      if (quickInput.visible && source !== 'palette' && !keepsQuickInput.has(id)) quickInput.hide('cancel')
     }),
     events.subscribe(event => {
       if (event.type === 'documents.activated' && event.tabId) recentDocuments = [event.tabId, ...recentDocuments.filter(id => id !== event.tabId)]

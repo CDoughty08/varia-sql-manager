@@ -2,7 +2,7 @@ import type { CommandId } from '../../../shared/commands/catalog'
 import { findConflicts } from '../../../shared/commands/conflicts'
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import { chordFromEvent, defaultRules, keybindingLabel, workbenchRules, type KeybindingLabel, type KeyEventLike, type Platform, type ResolvedRule } from '../../../shared/commands/keybindings'
-import { menuCommandIds } from '../../../shared/commands/menus'
+import { menuCommandIds, menuMayShowChords } from '../../../shared/commands/menus'
 import { evaluateWhen } from '../../../shared/commands/when'
 import type { CommandService } from './commands'
 import { onUnexpectedError } from './errors'
@@ -53,11 +53,11 @@ export class KeybindingService implements Disposable {
     }
     this.table = workbenchRules(this.rules)
     this.prefixes = new Set(this.rules.filter(rule => rule.native && rule.chords.length > 1).map(rule => rule.chords[0]))
-    // A menu item's accelerator is also a macOS key equivalent, which would run the command where its key does not apply
-    // (F5 in Query Output); consuming the key stops that.
+    // A macOS menu item's ⌘ accelerator is also a key equivalent, which Chromium offers the page first and then the menu,
+    // where it would run the command where its key does not apply; consuming the key stops that.
     this.macKeyEquivalents = new Set(platform === 'darwin' ? menuCommandIds.flatMap(id => {
       const rule = this.primaryRule(id)
-      return rule && !rule.native ? [rule.chords[0]] : []
+      return rule && !rule.native && menuMayShowChords(rule.chords, platform) ? [rule.chords[0]] : []
     }) : [])
   }
   private primaryRule(id: CommandId): ResolvedRule | undefined { return this.rules.find(rule => rule.command === id && rule.chords.length === 1) }

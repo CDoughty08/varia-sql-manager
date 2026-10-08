@@ -270,9 +270,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .quick-input-header input:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .quick-input-progress { height: 2px; flex-shrink: 0; }
 .quick-input-progress.busy { background: var(--varia-focusBorder); }
-.quick-input-message { margin: 2px 6px 4px; padding: 5px 8px; border-radius: 3px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; user-select: text; }
+.quick-input-message { margin: 2px 6px 4px; padding: 5px 8px; border-radius: 3px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; }
 .quick-input-message.error { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
-.quick-input-message:empty { display: none; }
+/* An empty message keeps no box but stays in the accessibility tree, so its live region is announced when text arrives. */
+.quick-input-message:empty { margin: 0; padding: 0; }
 /* Twelve 24px rows. */
 .quick-input-list { max-height: 288px; overflow-y: auto; overflow-x: hidden; margin-bottom: 4px; }
 .quick-input-row { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; line-height: 16px; white-space: nowrap; cursor: pointer; }
@@ -284,11 +285,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The key outline (keybindingLabel.border) all but vanishes on the active row's fill. */
 .quick-input-row.active kbd { border-color: currentColor; }
 .quick-input-row.disabled .quick-input-label, .quick-input-row.disabled .quick-input-icon { color: var(--varia-disabledForeground); }
+/* Matches stay bold on a disabled row but take its dimmed color, so the row does not look partly available. */
+.quick-input-row.disabled .quick-input-hl { color: inherit; }
 .quick-input-icon { width: 16px; height: 16px; flex: 0 0 16px; }
 .quick-input-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .quick-input-hl { color: var(--varia-list-highlightForeground); font-weight: 600; }
 .quick-input-description { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-descriptionForeground); font-size: 11px; }
 .quick-input-end { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
 .quick-input-group { color: var(--varia-pickerGroup-foreground); font-size: 11px; }
+.quick-input-empty { height: 24px; padding: 4px 10px; margin-bottom: 4px; line-height: 16px; color: var(--varia-descriptionForeground); }
 .quick-input-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 1150px) { .toolbar { gap: 8px; padding: 7px 8px; } .toolbar-actions { gap: 2px; } .toolbar-actions button { padding: 0 6px; } .toolbar-context { grid-template-columns: auto 140px auto 130px; gap: 6px; } }

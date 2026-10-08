@@ -42,13 +42,18 @@ describe('menu model', () => {
     expect(find('edit', 'darwin', 'edit.redo')).toMatchObject({ accelerator: 'Cmd+Shift+Z' })
     expect(find('edit', 'darwin', 'edit.replace')).toMatchObject({ accelerator: 'Cmd+Alt+F' })
     expect(find('edit', 'win32', 'edit.commentLines')).toEqual({ kind: 'command', id: 'edit.commentLines', nativeId: 'edit.commentLines', title: 'Comment Selection', toggle: false })
-    expect(find('query', 'darwin', 'query.execute')).toMatchObject({ title: 'Execute', accelerator: 'F5' })
+    expect(find('query', 'linux', 'query.execute')).toMatchObject({ title: 'Execute', accelerator: 'F5' })
+    // On macOS a key equivalent without ⌘ would reach the menu before the page, running Execute from any pane.
+    for (const [menu, id] of [['query', 'query.execute'], ['window', 'window.explorer'], ['window', 'document.next'], ['window', 'document.previous']] as const) {
+      expect(find(menu, 'darwin', id), id).toMatchObject({ kind: 'command', id })
+      expect(find(menu, 'darwin', id), id).not.toHaveProperty('accelerator')
+    }
     expect(find('query', 'win32', 'query.cancel')).not.toHaveProperty('accelerator')
     expect(find('view', 'linux', 'editor.toggleWordWrap')).toEqual({ kind: 'command', id: 'editor.toggleWordWrap', nativeId: 'editor.toggleWordWrap', title: 'Word Wrap', toggle: true, accelerator: 'Alt+Z' })
     expect(find('view', 'darwin', 'editor.toggleWordWrap')).not.toHaveProperty('accelerator')
     expect(find('window', 'win32', 'layout.reset@window')).toMatchObject({ id: 'layout.reset', title: 'Reset Window Layout' })
     expect(find('window', 'win32', 'window.explorer')).toEqual({ kind: 'command', id: 'window.explorer', nativeId: 'window.explorer', title: 'Object Explorer', toggle: false, accelerator: 'F8' })
-    expect(find('window', 'darwin', 'document.next')).toMatchObject({ accelerator: 'Ctrl+Tab' })
+    expect(find('window', 'linux', 'document.next')).toMatchObject({ accelerator: 'Ctrl+Tab' })
     expect(find('view', 'win32', 'workbench.showCommands')).toEqual({ kind: 'command', id: 'workbench.showCommands', nativeId: 'workbench.showCommands', title: 'Command Palette…', toggle: false, accelerator: 'Ctrl+Shift+P' })
     expect(find('view', 'darwin', 'workbench.quickOpen')).toMatchObject({ title: 'Go to Query…', accelerator: 'Cmd+P' })
     expect(find('query', 'linux', 'query.changeDatabase')).toMatchObject({ title: 'Change Database…', accelerator: 'Ctrl+U' })

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { commandDescriptor, commandIds, paletteLabel } from '../src/shared/commands/catalog'
 import { compareRanked, fuzzyLimits, mergeRanges, prepareQuery, scoreQuery, type RankedItem } from '../src/renderer/src/quickinput/fuzzy'
 
 const labels = ['File: New Query', 'File: Open File…', 'File: Save', 'File: Save As…', 'File: Close Query', 'Edit: Undo', 'Edit: Redo', 'View: Show Object Explorer',
@@ -8,6 +9,12 @@ const rank = (query: string, items: readonly (string | Omit<RankedItem, 'score'>
   .map(item => typeof item === 'string' ? { label: item } : item)
   .flatMap(item => { const match = scoreQuery(query, item.label); return match ? [{ ...item, score: match.score }] : [] })
   .sort(compareRanked).map(item => item.label)
+/** The command palette's rows for `query`, best first, with its keywords and title offsets; `disabled` labels rank as unavailable. */
+const palette = (query: string, disabled: readonly string[] = []) => commandIds.filter(id => commandDescriptor(id).palette !== false)
+  .flatMap(id => {
+    const command = commandDescriptor(id), label = paletteLabel(id), match = scoreQuery(query, label, command.keywords, label.length - command.title.length)
+    return match ? [{ label, score: match.score, disabled: disabled.includes(label) }] : []
+  }).sort(compareRanked).map(item => item.label)
 const highlight = (query: string, label: string) => {
   const match = scoreQuery(query, label)!
   return match.ranges.map(([start, end]) => label.slice(start, end))
@@ -23,6 +30,27 @@ describe('fuzzy matching', () => {
     expect(rank('file save')).toEqual(rank('save file'))
     expect(rank('qcc')[0]).toBe('Query: Change Connection…')
     expect(rank('zzz')).toEqual([])
+  })
+  it('ranks the palette by title, keywords, and availability', () => {
+    // 'use' is Change Database's keyword; scattered letters in "Uncomment Selection" must not beat it.
+    expect(palette('use')[0]).toBe('Query: Change Database…')
+    expect(palette('run')[0]).toBe('Query: Execute')
+    // A category match is no better than the same words in a title, so an available command wins the tie.
+    expect(palette('object explorer', ['Object Explorer: Refresh'])).toEqual(['View: Show Object Explorer', 'Object Explorer: Refresh'])
+    expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
+  })
+  it('does not match letters scattered from the middle of words', () => {
+    for (const [query, label] of [['refresh', 'Preferences: Reload Themes'], ['go to', 'View: Toggle Word Wrap'], ['go to', 'Edit: Toggle Line Comment'], ['next', 'Query: Cancel Executing Query'],
+      ['disc', 'Edit: Comment Selection'], ['tree', 'Edit: Replace'], ['exe', 'View: Next Query']]) {
+      expect(palette(query), query).not.toContain(label)
+    }
+    expect(palette('refresh')).toEqual(['Object Explorer: Refresh'])
+    expect(palette('go to')[0]).toBe('Go to Query…')
+    // The last capital of an acronym starts the next word.
+    expect(highlight('q1', 'SQLQuery1.sql')).toEqual(['Q', '1'])
+    expect(highlight('hr', 'XMLHttpRequest')).toEqual(['H', 'R'])
+    expect(scoreQuery('xh', 'XMLHttp')).toEqual({ score: 70, ranges: [[0, 1], [3, 4]] })
+    expect(scoreQuery('mh', 'XMLHttp')).toBeUndefined()
   })
   it('scores substrings, then word starts, then subsequences', () => {
     expect(scoreQuery('file', 'File: Save')).toEqual({ score: 175, ranges: [[0, 4]] })
@@ -42,8 +70,9 @@ describe('fuzzy matching', () => {
     expect(scoreQuery('ex', 'a_ex')).toMatchObject({ score: 150 })
     expect(scoreQuery('ql', 'sql(ql)')).toMatchObject({ score: 150, ranges: [[4, 6]] })
   })
-  it('compacts subsequences toward the end of the match', () => {
-    expect(scoreQuery('xyz', 'xaaxbybz')!.ranges).toEqual([[3, 4], [5, 6], [7, 8]])
+  it('compacts subsequences toward the end of the match, keeping the first character at a word start', () => {
+    expect(scoreQuery('xyz', 'xaa xbybz')!.ranges).toEqual([[4, 5], [6, 7], [8, 9]])
+    expect(scoreQuery('xyz', 'xaaxbybz')!.ranges).toEqual([[0, 1], [5, 6], [7, 8]])
     expect(scoreQuery('xyz', 'x--x-y-z')).toEqual({ score: 75, ranges: [[0, 1], [5, 6], [7, 8]] })
   })
   it('requires every word and matches keywords without highlighting them', () => {
@@ -52,6 +81,13 @@ describe('fuzzy matching', () => {
     expect(scoreQuery('exec run', 'Query: Execute', ['run'])).toEqual({ score: 150 + 175 * 0.8, ranges: [[7, 11]] })
     expect(scoreQuery('exec walk', 'Query: Execute', ['run'])).toBeUndefined()
     expect(scoreQuery('execute', 'Query: Execute', ['execute'])).toEqual({ score: 150, ranges: [[7, 14]] })
+    // A keyword match counts when it beats a weak label match, and then highlights nothing.
+    expect(scoreQuery('use', 'Edit: Uncomment Selection')!.score).toBeLessThan(60)
+    expect(scoreQuery('use', 'Edit: Uncomment Selection', ['use'])).toEqual({ score: 175 * 0.8, ranges: [] })
+  })
+  it('gives the start bonus at the start of the title, after a category', () => {
+    expect(scoreQuery('file', 'File: Save', [], 6)).toEqual({ score: 150, ranges: [[0, 4]] })
+    expect(scoreQuery('save', 'File: Save', [], 6)).toEqual({ score: 175, ranges: [[6, 10]] })
   })
   it('ignores case and keeps offsets for characters whose lowercase is longer', () => {
     expect(scoreQuery('SAVE', 'File: save')).toMatchObject({ ranges: [[6, 10]] })
