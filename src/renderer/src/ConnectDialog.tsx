@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer } from '../../shared/contracts'
 import { advancedDefaults, connectionDefaults, connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../../shared/connections'
+import { connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
+import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
-const palette = [['Default', ''], ['Red', '#e66b73'], ['Orange', '#e6a15c'], ['Yellow', '#dec766'], ['Green', '#79bb8b'], ['Blue', '#71a7df'], ['Purple', '#ad8bd8']] as const
+// Profiles store the preset's value, which the theme maps to its own color for that preset.
+const palette: readonly (readonly [string, string])[] = [['Default', ''], ...connectionPresets.map(preset => [preset.label, preset.stored] as const)]
+const pickerDefault = connectionPresets.find(preset => preset.name === 'blue')!.stored
 interface Props { initial: ConnectionOptions; onConnected(info: ConnectionInfo, options: ConnectionOptions): void; onClose(): void }
 type Field = { key: keyof AdvancedConnectionOptions; label: string; choices?: readonly string[]; min?: number; max?: number; boolean?: boolean; maxLength?: number }
 const sections: { title: string; fields: Field[] }[] = [
@@ -49,6 +53,8 @@ function AdvancedProperties({ value, onSave, onClose }: { value: Partial<Advance
 }
 
 export default function ConnectDialog({ initial, onConnected, onClose }: Props) {
+  const { theme } = useWorkbench()
+  useServiceSnapshot(theme)
   const [options, setOptions] = useState<ConnectionOptions>({ ...initial, password: '' })
   const [library, setLibrary] = useState<ConnectionLibrary>({ version: 1, profiles: [] })
   const [identity, setIdentity] = useState('Current Windows user')
@@ -185,7 +191,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const favorite = filtered.filter(profile => profile.favorite)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: profile.options.color ?? '#8b9bb0' }} /><Icon name="server" /><span><strong>{profile.options.displayName || profile.options.server}</strong><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {profile.options.authentication === 'windows' ? identity : profile.options.username}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><strong>{profile.options.displayName || profile.options.server}</strong><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {profile.options.authentication === 'windows' ? identity : profile.options.username}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}>{profile.favorite ? '★' : '☆'}</button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>
@@ -232,7 +238,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
         </div>
         <fieldset className="property-section custom-properties"><legend>Custom Properties</legend><div className="property-grid">
           <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => { labelServer.current = null; update({ displayName: event.target.value }) }} /></div>
-          <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={options.color ?? '#71a7df'} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
+          <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={options.color ?? pickerDefault} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
         </div><div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}>{selected?.favorite ? '★ Remove favorite' : '☆ Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div></fieldset>
         {notice && <p className="field-note" role="status">{notice}</p>}{error && <p className="connect-error" role="alert">{error}</p>}
       </div>

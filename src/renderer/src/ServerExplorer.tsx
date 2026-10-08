@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ApiResult, ConnectionInfo, DatabaseInfo, ServerObjectInfo, ServerObjectKind, TableInfo } from '../../shared/contracts'
 import Icon from './Icon'
+import { useConnectionAccent } from './core/WorkbenchContext'
 
 interface Props {
   connection: ConnectionInfo
@@ -144,6 +145,7 @@ function SecurityFolder({ connectionId, kind, label, icon, visible, refresh }: t
 
 function ServerExplorer({ connection, selectedDatabase, refresh, canDisconnect, onDatabases, onSelect, onScript, onDisconnect }: Props) {
   const [expanded, setExpanded] = useState(true)
+  const accent = useConnectionAccent(connection.color)
   const load = useCallback(() => window.varia.databases(connection.id), [connection.id])
   const databases = useCatalogue(true, refresh, load)
   useEffect(() => {
@@ -156,7 +158,7 @@ function ServerExplorer({ connection, selectedDatabase, refresh, canDisconnect, 
   const selectedSnapshot = snapshots.find(value => value.name === selectedDatabase)?.name
   const nodes = (values: DatabaseInfo[], visible: boolean) => values.map(value => <DatabaseNode key={value.name} connectionId={connection.id} value={value} selected={selectedDatabase === value.name} visible={visible} refresh={refresh} onSelect={onSelect} onScript={onScript} />)
 
-  return <section className="server-section" aria-label={'Server ' + connection.server} style={{ borderLeft: connection.color ? `3px solid ${connection.color}` : undefined }}>
+  return <section className="server-section" aria-label={'Server ' + connection.server} style={{ borderLeft: accent ? `3px solid ${accent}` : undefined }}>
     <div className={'server-row' + (selectedDatabase ? ' selected' : '')}>
       <button className="server-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={connection.server + ' (SQL Server ' + connection.serverVersion + ')'}>
         <Icon name="chevron" className={expanded ? 'expanded' : ''} /><Icon name="server" /><span>{connection.displayName || connection.server}</span>

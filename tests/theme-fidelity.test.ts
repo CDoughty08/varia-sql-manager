@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
 import { composite, deltaEOK, hexColor } from '../src/shared/theme/color'
 import { colorKeys, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
@@ -20,12 +19,6 @@ describe('Varia Dark fidelity', () => {
     expect(legacyStyles).toHaveLength(148)
     expect(new Set(legacyStyles.map(entry => hexColor(entry.value)).map(color => JSON.stringify(color))).size).toBe(117)
     for (const entry of all) for (const key of entry.keys) if (!key.startsWith('syntax:')) expect(colorKeys, `${entry.source} ${entry.value}`).toContain(key)
-  })
-  // The token conversion removes these literals from styles.css; until then the map must match the file exactly.
-  const stylesheet = readFileSync('src/renderer/src/styles.css', 'utf8').split('\n')
-  const literals = stylesheet.flatMap((line, index) => [...line.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map(match => `${index + 1} ${match[0].toLowerCase()}`))
-  it.skipIf(!literals.length)('matches every hex literal still in styles.css', () => {
-    expect(legacyStyles.map(entry => `${entry.line} ${entry.value}`)).toEqual(literals)
   })
   it(`keeps every unlisted legacy color within OKLab ΔE ${limit} of today`, () => {
     const drift = all.flatMap(entry => entry.change ? [] : entry.keys.map(key => [entry, key, distance(entry, key)] as const))

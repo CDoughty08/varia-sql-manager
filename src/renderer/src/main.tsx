@@ -13,28 +13,29 @@ import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
 import App from './App'
 import { createWorkbench } from './core/workbench'
 import { WorkbenchProvider } from './core/WorkbenchContext'
+import { domThemeTarget, ThemeService } from './services/theme'
 import 'dockview-react/dist/styles/dockview.css'
 import './styles.css'
 
 // Bundle Monaco locally; the editor never downloads scripts from a CDN.
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
-monaco.editor.defineTheme('varia', {
-  base: 'vs-dark', inherit: true, rules: [],
-  colors: { 'editor.background': '#11151c', 'editorLineNumber.foreground': '#4c586b', 'editor.lineHighlightBackground': '#191f29' }
-})
-
-const workbench = createWorkbench(window.varia, monaco)
-const root = createRoot(document.getElementById('root')!)
-root.render(<React.StrictMode><WorkbenchProvider workbench={workbench}><App /></WorkbenchProvider></React.StrictMode>)
-// Workbench lifetime is outside React effects, including StrictMode's effect replay.
-// Reloading discards unsaved queries and ends every SQL session; main asks before allowing it.
-// A confirmed exit has already handled each document, so it is never blocked here.
-window.addEventListener('beforeunload', event => {
-  if (workbench.files.exiting) return
-  if (!workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.getSnapshot().length) return
-  event.preventDefault()
-  event.returnValue = true
-})
-const unload = () => workbench.dispose()
-window.addEventListener('unload', unload, { once: true })
-if (import.meta.hot) import.meta.hot.dispose(() => { window.removeEventListener('unload', unload); root.unmount(); workbench.dispose() })
+async function start() {
+  // React renders only after a theme is applied, so the first frame already has its colors.
+  const theme = await ThemeService.create(window.varia, domThemeTarget(monaco))
+  const workbench = createWorkbench(window.varia, monaco, theme)
+  const root = createRoot(document.getElementById('root')!)
+  root.render(<React.StrictMode><WorkbenchProvider workbench={workbench}><App /></WorkbenchProvider></React.StrictMode>)
+  // Workbench lifetime is outside React effects, including StrictMode's effect replay.
+  // Reloading discards unsaved queries and ends every SQL session; main asks before allowing it.
+  // A confirmed exit has already handled each document, so it is never blocked here.
+  window.addEventListener('beforeunload', event => {
+    if (workbench.files.exiting) return
+    if (!workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.getSnapshot().length) return
+    event.preventDefault()
+    event.returnValue = true
+  })
+  const unload = () => workbench.dispose()
+  window.addEventListener('unload', unload, { once: true })
+  if (import.meta.hot) import.meta.hot.dispose(() => { window.removeEventListener('unload', unload); root.unmount(); workbench.dispose() })
+}
+void start()
