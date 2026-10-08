@@ -1,0 +1,16 @@
+node_modules/
+out/
+dist/
+artifacts/
+**/bin/
+**/obj/
+**/TestResults/
+.env
+.env.*
+!.env.example
+*.user
+*.log
+test-results/
+playwright-report/
+.vs/
+.idea/

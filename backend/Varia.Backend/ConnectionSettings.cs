@@ -1,0 +1,74 @@
+using Microsoft.Data.SqlClient;
+
+namespace Varia.Backend;
+
+internal static class ConnectionSettings
+{
+    private static string Text(string? value, int length, string field)
+    {
+        if (value is null || value.Length > length) throw new RequestException("INVALID_PARAMS", field + " exceeds its supported length.");
+        return value;
+    }
+    internal static SqlConnectionStringBuilder Build(ConnectOptions options)
+    {
+        if (options.Authentication is not ("windows" or "sql")) throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
+        if (string.IsNullOrWhiteSpace(options.Server)) throw new RequestException("INVALID_PARAMS", "Server name is required.");
+        var advanced = options.Advanced ?? new();
+        if (advanced.CommandTimeout is < 0 or > 86400 || advanced.ConnectTimeout is < 0 or > 3600
+            || advanced.PacketSize is < 512 or > 32767 || advanced.ConnectRetryCount is < 0 or > 255 || advanced.ConnectRetryInterval is < 1 or > 60)
+            throw new RequestException("INVALID_PARAMS", "Connection timeout, packet size, or retry settings are outside their supported range.");
+        if (advanced.SecureEnclaves && !advanced.ColumnEncryption) throw new RequestException("INVALID_PARAMS", "Secure enclaves require Always Encrypted.");
+        if (advanced.SecureEnclaves && advanced.AttestationProtocol is "HGS" or "AAS" && string.IsNullOrWhiteSpace(advanced.EnclaveAttestationUrl))
+            throw new RequestException("INVALID_PARAMS", "An attestation URL is required for HGS or AAS.");
+        var server = Text(options.Server.Trim(), 256, "Server name");
+        if (advanced.NetworkProtocol != "default")
+        {
+            if (advanced.NetworkProtocol is not ("tcp" or "np" or "lpc")) throw new RequestException("INVALID_PARAMS", "Unsupported network protocol.");
+            if (server.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase) || server.StartsWith("np:", StringComparison.OrdinalIgnoreCase) || server.StartsWith("lpc:", StringComparison.OrdinalIgnoreCase)) server = server[(server.IndexOf(':') + 1)..];
+            server = advanced.NetworkProtocol + ":" + server;
+        }
+        try
+        {
+            var builder = new SqlConnectionStringBuilder
+            {
+                DataSource = server, InitialCatalog = Text(options.Database, 128, "Database"), IntegratedSecurity = options.Authentication == "windows",
+                Encrypt = options.Encrypt switch { "optional" => SqlConnectionEncryptOption.Optional, "mandatory" => SqlConnectionEncryptOption.Mandatory, "strict" => SqlConnectionEncryptOption.Strict, _ => throw new RequestException("INVALID_PARAMS", "Unsupported encryption mode.") },
+                TrustServerCertificate = options.Encrypt != "strict" && options.TrustServerCertificate,
+                HostNameInCertificate = Text(options.HostNameInCertificate ?? "", 256, "Host name in certificate"),
+                CommandTimeout = advanced.CommandTimeout, ConnectTimeout = advanced.ConnectTimeout, ConnectRetryCount = advanced.ConnectRetryCount, ConnectRetryInterval = advanced.ConnectRetryInterval,
+                ApplicationName = Text(advanced.ApplicationName, 128, "Application name"), WorkstationID = Text(advanced.WorkstationId, 128, "Workstation ID"),
+                MultipleActiveResultSets = advanced.MultipleActiveResultSets, PacketSize = advanced.PacketSize,
+                TransactionBinding = advanced.TransactionBinding, TypeSystemVersion = advanced.TypeSystemVersion,
+                ApplicationIntent = advanced.ApplicationIntent switch { "ReadWrite" => ApplicationIntent.ReadWrite, "ReadOnly" => ApplicationIntent.ReadOnly, _ => throw new RequestException("INVALID_PARAMS", "Unsupported application intent.") },
+                CurrentLanguage = Text(advanced.CurrentLanguage, 128, "Current language"), Replication = advanced.Replication,
+                IPAddressPreference = advanced.IpAddressPreference switch { "IPv4First" => SqlConnectionIPAddressPreference.IPv4First, "IPv6First" => SqlConnectionIPAddressPreference.IPv6First, "UsePlatformDefault" => SqlConnectionIPAddressPreference.UsePlatformDefault, _ => throw new RequestException("INVALID_PARAMS", "Unsupported IP address preference.") },
+                ServerCertificate = Text(advanced.ServerCertificate, 1024, "Server certificate"), AttachDBFilename = Text(advanced.AttachDbFilename, 1024, "Attach DB filename"),
+                FailoverPartner = Text(advanced.FailoverPartner, 256, "Failover partner"), FailoverPartnerSPN = Text(advanced.FailoverPartnerSpn, 512, "Failover partner SPN"),
+                MultiSubnetFailover = advanced.MultiSubnetFailover, ServerSPN = Text(advanced.ServerSpn, 512, "Server SPN"), UserInstance = advanced.UserInstance,
+                ColumnEncryptionSetting = advanced.ColumnEncryption ? SqlConnectionColumnEncryptionSetting.Enabled : SqlConnectionColumnEncryptionSetting.Disabled,
+                PersistSecurityInfo = false
+            };
+            if (advanced.SecureEnclaves)
+            {
+                builder.AttestationProtocol = advanced.AttestationProtocol switch { "None" => SqlConnectionAttestationProtocol.None, "HGS" => SqlConnectionAttestationProtocol.HGS, "AAS" => SqlConnectionAttestationProtocol.AAS, _ => throw new RequestException("INVALID_PARAMS", "Unsupported attestation protocol.") };
+                builder.EnclaveAttestationUrl = Text(advanced.EnclaveAttestationUrl, 2048, "Attestation URL");
+            }
+            if (!builder.IntegratedSecurity)
+            {
+                if (string.IsNullOrWhiteSpace(options.Username)) throw new RequestException("INVALID_PARAMS", "SQL authentication requires a username.");
+                builder.UserID = Text(options.Username, 128, "Username");
+                builder.Password = Text(options.Password ?? "", 1024, "Password");
+            }
+            // Force provider validation before opening a server connection.
+            using var validated = new SqlConnection(builder.ConnectionString);
+            return builder;
+        }
+        catch (ArgumentException error) { throw new RequestException("INVALID_PARAMS", "Invalid connection properties: " + error.Message); }
+    }
+    internal static object Preview(ConnectOptions options)
+    {
+        var builder = Build(options);
+        if (!builder.IntegratedSecurity) builder.Password = "<not included>";
+        return new { ConnectionString = builder.ConnectionString };
+    }
+}

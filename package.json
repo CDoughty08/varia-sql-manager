@@ -1,0 +1,44 @@
+{
+  "name": "varia-sql-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An Electron and Monaco SQL Server management workbench backed by .NET.",
+  "main": "out/main/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "npm run backend:build && electron-vite dev",
+    "backend:build": "dotnet build backend/Varia.Backend/Varia.Backend.csproj --configuration Debug",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && npm run backend:build && electron-vite build",
+    "start": "electron-vite preview",
+    "backend:test": "dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release",
+    "test": "npm run backend:test && vitest run",
+    "test:electron": "npm run check && node scripts/electron-smoke.mjs && node scripts/layout-smoke.mjs && node scripts/connections-smoke.mjs",
+    "check": "npm run typecheck && npm test && electron-vite build"
+  },
+  "dependencies": {
+    "dockview-react": "8.4.1",
+    "monaco-editor": "0.57.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "overrides": {
+    "dompurify": "3.4.16"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.6.0",
+    "electron-vite": "5.0.0",
+    "typescript": "7.0.2",
+    "vite": "7.3.7",
+    "vitest": "5.0.3"
+  }
+}
