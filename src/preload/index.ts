@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ApiResult, AppMenu, RpcMethod, RpcMethods, VariaApi, WorkbenchCommand } from '../shared/contracts'
+import type { ApiResult, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
+import type { CommandId } from '../shared/commands/catalog'
+import type { MenubarId } from '../shared/commands/menus'
 import type { ThemeState } from '../shared/theme/types'
 
 const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params)
@@ -8,10 +10,11 @@ const api: VariaApi = {
   platform: process.platform,
   showMenu: options => ipcRenderer.invoke('varia:menu-popup', options),
   onMenuFocus: callback => {
-    const listener = (_event: Electron.IpcRendererEvent, menu: AppMenu | null) => callback(menu)
+    const listener = (_event: Electron.IpcRendererEvent, menu: MenubarId | null) => callback(menu)
     ipcRenderer.on('varia:menu-focus', listener)
     return () => { ipcRenderer.removeListener('varia:menu-focus', listener) }
   },
+  setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
   health: () => request('system.health', {}),
   connect: options => request('connections.connect', options),
   discoverDatabases: options => request('connections.databases', options),
@@ -38,7 +41,7 @@ const api: VariaApi = {
   importLayout: () => ipcRenderer.invoke('varia:layout-import'),
   exportLayout: layout => ipcRenderer.invoke('varia:layout-export', layout),
   onCommand: callback => {
-    const listener = (_event: Electron.IpcRendererEvent, command: WorkbenchCommand) => callback(command)
+    const listener = (_event: Electron.IpcRendererEvent, command: CommandId) => callback(command)
     ipcRenderer.on('varia:command', listener)
     // Main runs the unsaved-query exit flow only while the workbench is subscribed to commands.
     ipcRenderer.send('varia:commands-ready', true)

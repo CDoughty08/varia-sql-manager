@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import type { AppMenu } from '../../shared/contracts'
-import { menuShortcut } from '../../shared/shortcuts'
+import { applicationMenus as menus, menuForMnemonic, type MenubarId } from '../../shared/commands/menus'
+import { modalOpen } from './core/modal'
+import { useWorkbench } from './core/WorkbenchContext'
 import Icon from './Icon'
 
-const menus: { id: AppMenu; label: string }[] = [
-  { id: 'file', label: 'File' }, { id: 'edit', label: 'Edit' }, { id: 'view', label: 'View' }, { id: 'window', label: 'Window' }
-]
 interface ControlsOverlay extends EventTarget { visible: boolean }
 
 export default function TitleBar({ title }: { title: string }) {
+  const { menuState } = useWorkbench()
   const root = useRef<HTMLElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const pending = useRef(false)
-  const [focusedMenu, setFocusedMenu] = useState<AppMenu>('file')
-  const [openMenu, setOpenMenu] = useState<AppMenu | null>(null)
+  const [focusedMenu, setFocusedMenu] = useState<MenubarId>('file')
+  const [openMenu, setOpenMenu] = useState<MenubarId | null>(null)
   const [error, setError] = useState('')
   const [overlayVisible, setOverlayVisible] = useState(false)
 
   const restoreFocus = useCallback(() => {
     if (previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true })
   }, [])
-  const open = useCallback(async (id: AppMenu) => {
+  const open = useCallback(async (id: MenubarId) => {
     if (pending.current) return
     const button = root.current?.querySelector<HTMLButtonElement>('[data-menu="' + id + '"]')
     if (!button) return
@@ -31,12 +30,14 @@ export default function TitleBar({ title }: { title: string }) {
     const box = button.getBoundingClientRect()
     // Native editing actions must retain the editor/input that was focused before the menu.
     restoreFocus()
+    // Main shows the last state it received; send pending enablement first (send and invoke share one ordered pipe).
+    menuState.flush()
     try {
       const result = await window.varia.showMenu({ menu: id, x: Math.max(0, Math.round(box.left)), y: Math.max(0, Math.round(box.bottom)) })
       if (!result.ok) setError(result.error)
     } catch { setError('Could not open the application menu.') }
     finally { pending.current = false; setOpenMenu(null) }
-  }, [restoreFocus])
+  }, [restoreFocus, menuState])
 
   useEffect(() => {
     const rememberFocus = (event: FocusEvent) => {
@@ -45,9 +46,9 @@ export default function TitleBar({ title }: { title: string }) {
     document.addEventListener('focusin', rememberFocus)
     return () => { document.removeEventListener('focusin', rememberFocus) }
   }, [])
-  const activateMenu = useCallback((menu: AppMenu | null) => {
+  const activateMenu = useCallback((menu: MenubarId | null) => {
     // Application menus act on the workbench, which is unavailable while a dialog is open.
-    if (document.querySelector('[aria-modal="true"]')) return
+    if (modalOpen()) return
     if (menu) void open(menu)
     else {
       setFocusedMenu('file')
@@ -60,7 +61,7 @@ export default function TitleBar({ title }: { title: string }) {
     const keyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.shiftKey) return
       const key = event.key.toLowerCase()
-      const menu = event.altKey ? menuShortcut(key) : undefined
+      const menu = event.altKey ? menuForMnemonic(key) : undefined
       if (menu || (key === 'f10' && !event.altKey)) {
         event.preventDefault()
         event.stopPropagation()

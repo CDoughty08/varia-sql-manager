@@ -7,7 +7,6 @@ import {
 } from '../src/shared/commands/keybindings'
 import { applicationMenus, menuCommandIds } from '../src/shared/commands/menus'
 import { evaluateWhen } from '../src/shared/commands/when'
-import { fileShortcut } from '../src/shared/shortcuts'
 
 const event = (key: string, code: string, modifiers: Partial<Pick<KeyEventLike, 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey' | 'isComposing' | 'keyCode'>> = {}, altGraph = false): KeyEventLike =>
   ({ key, code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...modifiers, getModifierState: (name: string) => name === 'AltGraph' && altGraph })
@@ -148,9 +147,12 @@ describe('keybinding labels', () => {
     expect(toAccelerator([], 'win32')).toBeUndefined()
   })
   it('give every menu command with a primary keybinding an accelerator', () => {
+    // Electron has no accelerator name for Pause, so Cancel's menu item shows no key.
+    const unnamed = new Set(['win32 query.cancel', 'linux query.cancel'])
     for (const platform of platforms) for (const id of menuCommandIds) {
-      const rule = primaryRule(id, platform)
-      if (rule) expect(toAccelerator(rule.chords, platform), `${platform} ${id}`).toMatch(/^((Cmd|Ctrl|Alt|Shift|Super)\+)*[^+]+$/)
+      const rule = primaryRule(id, platform), accelerator = rule && toAccelerator(rule.chords, platform)
+      if (unnamed.has(`${platform} ${id}`)) expect(accelerator, `${platform} ${id}`).toBeUndefined()
+      else if (rule) expect(accelerator, `${platform} ${id}`).toMatch(/^((Cmd|Ctrl|Alt|Shift|Super)\+)*[^+]+$/)
     }
   })
 })
@@ -159,15 +161,24 @@ describe('default keybindings', () => {
   it('resolve once per platform, in catalogue order', () => {
     expect(defaultRules('win32')).toBe(defaultRules('win32'))
     expect(Object.isFrozen(defaultRules('darwin'))).toBe(true)
-    expect(defaultRules('win32').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'edit.undo', 'edit.redo', 'edit.redo', 'query.execute', 'query.execute'])
-    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'edit.undo', 'edit.redo', 'query.execute', 'query.execute'])
+    const native = ['edit.find', 'edit.replace', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines']
+    expect(defaultRules('win32').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'file.close', 'edit.undo', 'edit.redo', 'edit.redo', 'window.explorer',
+      'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'explorer.refresh', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', ...native])
+    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'edit.undo', 'edit.redo', 'window.explorer',
+      'query.execute', 'query.execute', 'explorer.refresh', 'document.next', 'document.previous', ...native])
   })
   it('pick the first one-chord rule as the primary, native or not', () => {
     expect(primaryRule('edit.redo', 'win32')).toMatchObject({ chords: ['ctrl+y'], native: true })
     expect(primaryRule('edit.redo', 'darwin')).toMatchObject({ chords: ['shift+meta+z'], native: true })
     expect(primaryRule('query.execute', 'linux')).toMatchObject({ chords: ['f5'], whenSource: 'editorFocus', native: false })
     expect(primaryRule('file.saveAs', 'darwin')?.chords).toEqual(['shift+meta+s'])
-    expect(primaryRule('window.explorer', 'win32')).toBeUndefined()
+    expect(primaryRule('window.explorer', 'win32')?.chords).toEqual(['f8'])
+    expect(primaryRule('file.close', 'linux')?.chords).toEqual(['ctrl+w'])
+    expect(primaryRule('query.cancel', 'win32')?.chords).toEqual(['alt+pause'])
+    expect(primaryRule('query.cancel', 'darwin')).toBeUndefined()
+    // Two-part chords have no single-key label or accelerator.
+    expect(primaryRule('edit.commentLines', 'win32')).toBeUndefined()
+    expect(primaryRule('window.editor', 'win32')).toBeUndefined()
   })
   it('leave native keys out of the dispatch table', () => {
     for (const platform of platforms) {
@@ -176,14 +187,19 @@ describe('default keybindings', () => {
       expect(table.has(platform === 'darwin' ? 'meta+z' : 'ctrl+z'), platform).toBe(false)
     }
   })
-  // Before PR2, main's before-input-event and bindFileShortcuts mapped Ctrl/⌘ letters through fileShortcut, and
-  // Monaco's addAction bound F5 and Ctrl/⌘+Enter in the editor; the catalogue must give the same commands.
+  // Before PR2, main's before-input-event and bindFileShortcuts mapped Ctrl/⌘ letters through fileShortcut (this table),
+  // and Monaco's addAction bound F5 and Ctrl/⌘+Enter in the editor; the catalogue must give the same commands. Ctrl/⌘
+  // letters it left alone stay unbound, except the SSMS keys PR2 adds on Windows and Linux.
   it('match the legacy file shortcuts and editor actions', () => {
+    const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close', 'shift+s': 'file.saveAs' }
+    const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute' }, linux: { e: 'query.execute' }, darwin: {} }
     for (const platform of platforms) {
       const primary = platform === 'darwin' ? 'metaKey' : 'ctrlKey'
       for (const character of 'abcdefghijklmnopqrstuvwxyz') for (const shiftKey of [false, true]) {
         const input = event(shiftKey ? character.toUpperCase() : character, letter(character), { [primary]: true, shiftKey })
-        expect(commandFor(input, platform), `${platform} ${shiftKey ? 'shift+' : ''}${character}`).toBe(fileShortcut(input.key, shiftKey))
+        const name = `${shiftKey ? 'shift+' : ''}${character}`
+        expect(commandFor(input, platform), `${platform} ${name}`).toBe(legacy[name])
+        if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? added[platform][name])
         for (const extra of ['altKey', platform === 'darwin' ? 'ctrlKey' : 'metaKey']) {
           expect(commandFor(event(character, letter(character), { [primary]: true, shiftKey, [extra]: true }), platform), `${platform} ${extra} ${character}`).toBeUndefined()
         }

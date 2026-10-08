@@ -15,7 +15,7 @@ function model(preference: Partial<ThemePreference> = {}, themes: ThemeSummary[]
   return { theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light', ...preference }, themes } }
 }
 function actions() {
-  return { command: vi.fn<ApplicationMenuActions['command']>(), setTheme: vi.fn<ApplicationMenuActions['setTheme']>(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() } satisfies ApplicationMenuActions
+  return { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(() => false), setTheme: vi.fn<ApplicationMenuActions['setTheme']>(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() } satisfies ApplicationMenuActions
 }
 function find(items: MenuItemConstructorOptions[], id: string): MenuItemConstructorOptions {
   for (const item of items) {
@@ -31,11 +31,11 @@ const click = (item: MenuItemConstructorOptions) => (item.click as () => void)()
 const radios = (items: MenuItemConstructorOptions[]) => items.map(item => [item.id, item.label, item.checked, item.enabled])
 
 describe('application menu', () => {
-  it('keeps the existing menus and commands, with Theme after the layout items', () => {
+  it('keeps the existing menus and commands, with Theme after the layout and editor items', () => {
     const handlers = actions(), template = applicationMenuTemplate(model(), handlers, 'linux')
-    expect(template.map(item => item.id)).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.window'])
-    expect(submenu(template, 'menu.file').map(item => item.id ?? item.role ?? item.type)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'separator', 'file.close', 'separator', 'quit'])
-    expect(submenu(template, 'menu.view').map(item => item.id ?? item.role ?? item.type)).toEqual(['layout.save', 'layout.load', 'layout.reset', 'separator', 'view.theme', 'separator', 'reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen'])
+    expect(template.map(item => item.id)).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.window'])
+    expect(submenu(template, 'menu.file').map(item => item.id ?? item.role ?? item.type)).toEqual(['connection.connect', 'separator', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'separator', 'file.close', 'separator', 'quit'])
+    expect(submenu(template, 'menu.view').map(item => item.id ?? item.role ?? item.type)).toEqual(['layout.save', 'layout.load', 'layout.reset', 'separator', 'editor.toggleWordWrap', 'separator', 'view.theme', 'separator', 'reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen'])
     expect(submenu(template, 'view.theme').map(item => item.id ?? item.type)).toEqual(['theme.mode.dark', 'theme.mode.light', 'theme.mode.system', 'separator', 'theme.dark', 'theme.light', 'separator', 'theme.create', 'theme.openFolder', 'theme.reload'])
     click(find(template, 'file.saveAs'))
     click(find(template, 'window.output'))

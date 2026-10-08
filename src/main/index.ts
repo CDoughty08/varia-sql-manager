@@ -9,11 +9,13 @@ import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { AppearanceService } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
+import { NativeMenuBridge } from './native-menu'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
-import type { ApiResult, RpcMethod, RpcMethods, WorkbenchCommand } from '../shared/contracts'
-import { fileShortcut, menuShortcut } from '../shared/shortcuts'
+import type { ApiResult, RpcMethod, RpcMethods } from '../shared/contracts'
+import type { CommandId } from '../shared/commands/catalog'
+import { menuForMnemonic, menubarIds } from '../shared/commands/menus'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ThemeState } from '../shared/theme/types'
 
@@ -42,7 +44,8 @@ app.on('second-instance', () => {
   mainWindow.focus()
 })
 
-function command(value: WorkbenchCommand): void { mainWindow?.webContents.send('varia:command', value) }
+// Ids come from main's compiled catalogue; the renderer checks them again before executing.
+function command(id: CommandId): void { mainWindow?.webContents.send('varia:command', id) }
 
 function trusted(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false
@@ -68,6 +71,7 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
 function resetRendererState(): void {
   rendererReady = false
   openMenu = null
+  menuBridge.reset()
   backend?.restart()
   files.clear()
 }
@@ -78,6 +82,7 @@ function rendererCanConfirm(window: BrowserWindow): boolean {
 
 const menuActions: ApplicationMenuActions = {
   command,
+  isChecked: id => menuBridge.isChecked(id),
   // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
   setTheme: patch => { appearance.setPreference(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
   // The menu has no other way to report a failure, so it becomes the theme notice; the messages are fixed sentences.
@@ -88,9 +93,15 @@ const menuActions: ApplicationMenuActions = {
   reloadThemes: () => { void appearance.reload() }
 }
 
+// The renderer owns enablement and checkboxes; it sends them on varia:menu-state and every rebuild re-applies them.
+const menuBridge = new NativeMenuBridge({
+  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform)),
+  install: menu => Menu.setApplicationMenu(menu)
+})
+
 function buildMenu(): void {
   openMenu?.closePopup()
-  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform)))
+  menuBridge.rebuild()
 }
 
 /** Shared by the menu and the notice's button; the notice shows the IPC error itself, so only the menu notifies. */
@@ -131,15 +142,11 @@ function createWindow(): void {
   if (process.platform !== 'darwin') {
     mainWindow.setAutoHideMenuBar(false)
     mainWindow.setMenuBarVisibility(false)
+    // Only menu access is handled here: Chromium would otherwise act on bare Alt and F10. Command keys belong to the renderer.
     contents.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown') return
-      if (input.control && !input.alt && !input.meta) {
-        const action = fileShortcut(input.key, input.shift)
-        if (action) { event.preventDefault(); command(action); return }
-      }
-      if (input.control || input.meta || input.shift) return
+      if (input.type !== 'keyDown' || input.control || input.meta || input.shift) return
       const key = input.key.toLowerCase()
-      const menu = input.alt ? menuShortcut(key) : undefined
+      const menu = input.alt ? menuForMnemonic(key) : undefined
       if (menu || (key === 'f10' && !input.alt)) {
         event.preventDefault()
         mainWindow?.webContents.send('varia:menu-focus', menu ?? null)
@@ -212,6 +219,8 @@ app.whenReady().then(async () => {
   handle('varia:themes-reload', () => appearance.reload())
   handle('varia:themes-open-folder', () => openThemesFolder())
   ipcMain.on('varia:commands-ready', (event, ready: unknown) => { if (trusted(event)) rendererReady = ready === true })
+  // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
+  ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
   handle('varia:connections-save', value => connectionStore.save(connectionProfileInputSchema.parse(value)))
   handle('varia:connections-remove', value => connectionStore.remove(z.uuid().parse(value)))
@@ -229,7 +238,7 @@ app.whenReady().then(async () => {
     return true
   })
   handle('varia:menu-popup', async value => {
-    const options = z.object({ menu: z.enum(['file', 'edit', 'view', 'window']), x: z.number().int().min(0).max(32767), y: z.number().int().min(0).max(32767) }).strict().parse(value)
+    const options = z.object({ menu: z.enum(menubarIds), x: z.number().int().min(0).max(32767), y: z.number().int().min(0).max(32767) }).strict().parse(value)
     const menu = Menu.getApplicationMenu()?.getMenuItemById('menu.' + options.menu)?.submenu
     if (!menu || !mainWindow) throw new Error('The application menu is unavailable.')
     const window = mainWindow

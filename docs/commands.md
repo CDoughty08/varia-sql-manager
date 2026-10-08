@@ -7,7 +7,7 @@ limits where the key works; for example, `editorFocus` means the query editor ha
 editor or the browser engine: menus show them, but Varia does not dispatch them. "Available when" is the condition
 under which menus, the toolbar, and the keyboard can run the command; the context keys it uses are listed below.
 
-## Commands (16)
+## Commands (26)
 
 ### File
 
@@ -17,7 +17,7 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
 | Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save |
 | Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As… |
-| Close Query | `file.close` | Ctrl+W | Ctrl+W | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query |
+| Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query |
 
 ### Edit
 
@@ -25,24 +25,44 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | --- | --- | --- | --- | --- | --- | --- |
 | Undo | `edit.undo` | Ctrl+Z * | Ctrl+Z * | ⌘Z * | Always | Edit › Undo |
 | Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo |
+| Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find |
+| Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Replace |
+| Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Toggle Line Comment |
+| Comment Selection | `edit.commentLines` | Ctrl+K Ctrl+C * | Ctrl+K Ctrl+C * | ⌘K ⌘C * | `hasActiveDocument` | Edit › Comment Selection |
+| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `hasActiveDocument` | Edit › Uncomment Selection |
 
 ### View
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Show Object Explorer | `window.explorer` | — | — | — | Always | Window › Object Explorer |
+| Show Object Explorer | `window.explorer` | F8 | F8 | F8 | Always | Window › Object Explorer |
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
+| Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown | Ctrl+Tab, Ctrl+PageDown | ⌃⇥ | `multipleDocuments` | Window › Next Query |
+| Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
+| Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | View › Word Wrap |
 
 ### Query
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute |
-| Cancel Executing Query | `query.cancel` | — | — | — | `queryRunning` | Query › Cancel Executing Query |
+| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute |
+| Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query |
+
+### Connection
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server… |
+
+### Object Explorer
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | — |
 
 ### Other
 

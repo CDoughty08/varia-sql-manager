@@ -1,5 +1,7 @@
 import type { MenuItemConstructorOptions } from 'electron'
-import type { WorkbenchCommand } from '../shared/contracts'
+import type { CommandId } from '../shared/commands/catalog'
+import { toPlatform } from '../shared/commands/keybindings'
+import { applicationMenus, buildMenuModel, type MenuEntry, type MenuId } from '../shared/commands/menus'
 import { themeChoice } from '../shared/theme/choice'
 import { sanitizeLabel } from '../shared/theme/format'
 import { builtinThemes } from '../shared/theme/palette'
@@ -7,7 +9,9 @@ import type { ThemePreference, ThemePreferencePatch, ThemeState, ThemeType } fro
 
 export interface ApplicationMenuModel { theme: Pick<ThemeState, 'preference' | 'themes'> }
 export interface ApplicationMenuActions {
-  command(command: WorkbenchCommand): void
+  command(id: CommandId): void
+  /** Whether the renderer last reported the command as checked. */
+  isChecked(id: CommandId): boolean
   setTheme(patch: ThemePreferencePatch): void
   createTheme(): void
   openThemesFolder(): void
@@ -62,40 +66,33 @@ function themeMenu(model: ApplicationMenuModel, actions: ApplicationMenuActions,
   ]
 }
 
-/** The application menu. On Windows and Linux the title bar shows its submenus as popups; on macOS it is the menu bar. */
+function commandItem(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions): MenuItemConstructorOptions {
+  const { id, toggle } = entry
+  // Main never resolves keys (the renderer's dispatcher owns them), so the accelerator is only a label.
+  return {
+    id: entry.nativeId, label: entry.title, ...(entry.accelerator ? { accelerator: entry.accelerator } : {}), registerAccelerator: false, type: toggle ? 'checkbox' : 'normal',
+    // Electron flips a checkbox before calling click; the renderer owns the state, so the item keeps showing what it last sent.
+    click: item => { if (toggle) item.checked = actions.isChecked(id); actions.command(id) }
+  }
+}
+
+function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
+  return buildMenuModel(menu, toPlatform(platform)).map((entry): MenuItemConstructorOptions => {
+    if (entry.kind === 'separator') return { type: 'separator' }
+    if (entry.kind === 'role') return { role: entry.role }
+    if (entry.kind === 'command') return commandItem(entry, actions)
+    const commands = menuItems(entry.menu, model, actions, platform)
+    return { id: entry.id, label: entry.title, submenu: [...commands, ...(commands.length ? [{ type: 'separator' as const }] : []), ...themeMenu(model, actions, platform)] }
+  })
+}
+
+/**
+ * The application menu, generated from the command catalogue. On Windows and Linux the title bar shows its submenus as
+ * popups; on macOS it is the menu bar, after the app menu. Labels are catalogue constants or sanitized theme names.
+ */
 export function applicationMenuTemplate(model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
-  const { command } = actions
-  return [
-    { id: 'menu.file', label: 'File', submenu: [
-      { id: 'file.new', label: 'New Query', accelerator: 'CmdOrCtrl+N', click: () => command('file.new') },
-      { id: 'file.open', label: 'Open…', accelerator: 'CmdOrCtrl+O', click: () => command('file.open') },
-      { id: 'file.save', label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => command('file.save') },
-      { id: 'file.saveAs', label: 'Save As…', accelerator: 'CmdOrCtrl+Shift+S', click: () => command('file.saveAs') },
-      { type: 'separator' },
-      { id: 'file.close', label: 'Close Query', accelerator: 'CmdOrCtrl+W', click: () => command('file.close') },
-      { type: 'separator' }, { role: 'quit' }
-    ] },
-    { id: 'menu.edit', label: 'Edit', submenu: [
-      { id: 'edit.undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, click: () => command('edit.undo') },
-      { id: 'edit.redo', label: 'Redo', accelerator: platform === 'darwin' ? 'Cmd+Shift+Z' : 'Ctrl+Y', registerAccelerator: false, click: () => command('edit.redo') },
-      { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }
-    ] },
-    { id: 'menu.view', label: 'View', submenu: [
-      { id: 'layout.save', label: 'Save Layout…', click: () => command('layout.save') },
-      { id: 'layout.load', label: 'Load Layout…', click: () => command('layout.load') },
-      { id: 'layout.reset', label: 'Reset Layout', click: () => command('layout.reset') },
-      { type: 'separator' },
-      { id: 'view.theme', label: 'Theme', submenu: themeMenu(model, actions, platform) },
-      { type: 'separator' }, { role: 'reload' }, { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }
-    ] },
-    { id: 'menu.window', label: 'Window', submenu: [
-      { id: 'window.explorer', label: 'Object Explorer', click: () => command('window.explorer') },
-      { id: 'window.editor', label: 'Query Editor', click: () => command('window.editor') },
-      { id: 'window.output', label: 'Query Output', click: () => command('window.output') },
-      { type: 'separator' },
-      { label: 'Save Window Layout…', click: () => command('layout.save') },
-      { label: 'Load Window Layout…', click: () => command('layout.load') },
-      { label: 'Reset Window Layout', click: () => command('layout.reset') }
-    ] }
-  ]
+  const menus = applicationMenus.map((menu): MenuItemConstructorOptions => ({
+    id: 'menu.' + menu.id, label: menu.label, ...(platform === 'darwin' && menu.id === 'window' ? { role: 'window' as const } : {}), submenu: menuItems(menu.id, model, actions, platform)
+  }))
+  return platform === 'darwin' ? [{ role: 'appMenu' }, ...menus] : menus
 }

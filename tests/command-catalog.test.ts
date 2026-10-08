@@ -6,14 +6,20 @@ import { defaultRules, platforms, resolveKeybinding, specForPlatform, type Platf
 import { menubarIds } from '../src/shared/commands/menus'
 import type { KeybindingSpec } from '../src/shared/commands/catalog'
 import type { CommandId as RendererCommandId } from '../src/renderer/src/core/types'
+import { workbenchFixture } from './fixtures/workbench'
 
 const rule = (command: CommandId, spec: KeybindingSpec, platform: Platform = 'win32') => resolveKeybinding(command, spec, platform)!
 const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConflicts(rules, platform).map(conflict => [conflict.kind, conflict.chord, ...conflict.commands])
 
 describe('command catalogue', () => {
-  it('keeps the ids the renderer registers today', () => {
+  it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    expect(commandIds).toHaveLength(16)
+    expect(commandIds).toHaveLength(26)
+  })
+  it('has a handler for every command once all contributions have run', () => {
+    const fixture = workbenchFixture()
+    try { expect(commandIds.filter(id => !fixture.commands.has(id))).toEqual([]) }
+    finally { fixture.dispose() }
   })
   it('uses dotted camelCase ids outside the theme menu namespace', () => {
     for (const id of commandIds) {

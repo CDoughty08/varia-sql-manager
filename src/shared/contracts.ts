@@ -1,6 +1,8 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
 import type { ThemePreferencePatch, ThemeState } from './theme/types'
+import type { CommandId } from './commands/catalog'
+import type { MenubarId, MenuState } from './commands/menus'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -111,9 +113,7 @@ export type RpcResponse =
   | { id: string | null; error: { code: string; message: string }; result?: never }
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
-export type WorkbenchCommand = 'file.new' | 'file.open' | 'file.save' | 'file.saveAs' | 'file.close' | 'edit.undo' | 'edit.redo' | 'window.close' | 'window.explorer' | 'window.editor' | 'window.output' | 'layout.save' | 'layout.load' | 'layout.reset'
-export type AppMenu = 'file' | 'edit' | 'view' | 'window'
-export interface MenuPopup { menu: AppMenu; x: number; y: number }
+export interface MenuPopup { menu: MenubarId; x: number; y: number }
 export interface SqlFile { id: string; name: string; path: string }
 export interface OpenSqlFile extends SqlFile { content: string }
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean }
@@ -121,7 +121,9 @@ export interface SaveSqlFile { fileId?: string; name: string; content: string; s
 export interface VariaApi {
   readonly platform: string
   showMenu(options: MenuPopup): Promise<ApiResult<void>>
-  onMenuFocus(callback: (menu: AppMenu | null) => void): () => void
+  onMenuFocus(callback: (menu: MenubarId | null) => void): () => void
+  /** Which native menu items are disabled and checked; main validates the ids against its own catalogue. */
+  setMenuState(state: MenuState): void
   health(): Promise<ApiResult<BackendHealth>>
   connect(options: ConnectionOptions): Promise<ApiResult<ConnectionInfo>>
   discoverDatabases(options: ConnectionOptions): Promise<ApiResult<DatabaseInfo[]>>
@@ -147,7 +149,7 @@ export interface VariaApi {
   saveLayouts(state: LayoutState): Promise<ApiResult<void>>
   importLayout(): Promise<ApiResult<WorkspaceLayout | null>>
   exportLayout(layout: WorkspaceLayout): Promise<ApiResult<boolean>>
-  onCommand(callback: (command: WorkbenchCommand) => void): () => void
+  onCommand(callback: (command: CommandId) => void): () => void
   getThemeState(): Promise<ApiResult<ThemeState>>
   setThemePreference(patch: ThemePreferencePatch): Promise<ApiResult<ThemeState>>
   reloadThemes(): Promise<ApiResult<ThemeState>>

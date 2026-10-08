@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
-import { defaultRules, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
+import { defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
 
 /**
  * Keybinding drift against Monaco. The workbench dispatcher runs before Monaco (a capture listener on window), so a
@@ -23,7 +23,11 @@ const reviewedImports = [
 ]
 /** Workbench keys Monaco also binds, each with the reason the workbench may have it. Unused entries fail the test. */
 const monacoShadowAllowlist: Readonly<Record<string, string>> = {
-  'mod+enter': 'query.execute owns it in the editor, as addAction did (⌘↩ is replace-all in the macOS find widget)'
+  'mod+enter': 'query.execute owns it in the editor, as addAction did (⌘↩ is replace-all in the macOS find widget)',
+  'f8': 'Show Object Explorer, as in SSMS; Monaco\'s next-problem has nothing to visit, because the SQL language reports no markers',
+  'ctrl+e': 'Execute (Windows and Linux only, as in SSMS); Monaco binds ⌘E (find with selection) and ⌃E only on macOS',
+  'ctrl+pageup': 'Previous Query (Windows and Linux only); Monaco binds ⌘PageUp only on macOS and Alt+PageUp elsewhere',
+  'ctrl+pagedown': 'Next Query (Windows and Linux only); Monaco binds ⌘PageDown only on macOS and Alt+PageDown elsewhere'
 }
 
 const keyNames: Readonly<Record<string, string>> = {
@@ -118,6 +122,8 @@ describe('Monaco keybinding drift', () => {
     const prefixes = new Set([...chordsByPlatform.get(platform)!.keys()].filter(chord => chord.includes(' ')).map(chord => chord.split(' ')[0]))
     expect([...prefixes]).toEqual([platform === 'darwin' ? 'meta+k' : 'ctrl+k'])
     for (const prefix of prefixes) expect(reservedReason(prefix, platform), prefix).toBeDefined()
+    // The dispatcher passes the key after these through to Monaco, so Monaco's chords keep working in editor text.
+    expect([...nativeChordPrefixes(platform)]).toEqual([...prefixes])
   })
   it.each(platforms)('labels only keys Monaco really binds as native on %s', platform => {
     const monaco = chordsByPlatform.get(platform)!
