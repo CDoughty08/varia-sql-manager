@@ -34,12 +34,12 @@ function isThemeState(value: unknown): value is ThemeState {
   if (typeof value !== 'object' || value === null) return false
   const state = value as Partial<Record<keyof ThemeState, unknown>>
   const text = (entry: unknown, key: string) => typeof (entry as Record<string, unknown>)[key] === 'string'
-  return Number.isSafeInteger(state.revision) && typeof state.fallback === 'boolean' && Number.isSafeInteger(state.problemsOmitted)
+  return Number.isSafeInteger(state.revision) && Number.isSafeInteger(state.noticeId) && typeof state.fallback === 'boolean' && Number.isSafeInteger(state.problemsOmitted)
     && (state.notice === undefined || typeof state.notice === 'string') && isResolvedTheme(state.active)
     && Array.isArray(state.problems) && state.problems.every(problem => typeof problem === 'object' && problem !== null && text(problem, 'file') && text(problem, 'path') && text(problem, 'message'))
 }
 function fallbackState(type: ThemeType, notice?: string): ThemeState {
-  return { revision: -1, preference: defaultThemePreference, active: resolveBuiltin(type), fallback: false, themes: builtinSummaries, problems: [], problemsOmitted: 0, ...(notice ? { notice } : {}) }
+  return { revision: -1, preference: defaultThemePreference, active: resolveBuiltin(type), fallback: false, themes: builtinSummaries, problems: [], problemsOmitted: 0, ...(notice ? { notice } : {}), noticeId: -1 }
 }
 const withNotice = (state: ThemeState, notice: string): ThemeState => ({ ...state, notice: state.notice ? state.notice + ' ' + notice : notice })
 

@@ -10,7 +10,7 @@ delete env.ELECTRON_RUN_AS_NODE
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
 const themesFolder = join(profile, 'themes'), smokeTheme = join(themesFolder, 'smoke.json'), appearanceFile = join(profile, 'appearance.json')
 const canonical = /^#[0-9a-f]{6}([0-9a-f]{2})?$/
-const sql = "SELECT 42 AS answer, N'theme' AS label; -- survives a theme switch"
+const sql = "SELECT COUNT((42)) AS answer, N'theme' AS label; -- survives a theme switch"
 let application
 let page
 const failures = []
@@ -60,6 +60,11 @@ const contextMenuBorder = () => page.evaluate(() => {
 // expect.poll does not retry a callback that throws, and appearance.json appears only after the first choice.
 const appearance = () => readFile(appearanceFile, 'utf8').then(JSON.parse, () => null)
 const lightKeys = ['editor.background', 'foreground', 'button.background', 'titleBar.activeBackground', 'connection.red']
+// Monaco paints matched brackets by depth over the token colors; the outer and inner parentheses of COUNT((42)).
+const bracketColors = () => page.evaluate(() => [0, 1].map(level => {
+  const bracket = document.querySelector('.monaco-editor .view-lines .bracket-highlighting-' + level)
+  return bracket && getComputedStyle(bracket).color
+}))
 
 try {
   await launch()
@@ -86,13 +91,24 @@ try {
   await page.locator('.monaco-editor .view-lines').click({ button: 'right' })
   await expect.poll(contextMenuBorder).toBe('1px solid rgb(64, 81, 107)')
   await page.keyboard.press('Escape')
-  console.log('Theme checks: dock tab focus rings and the editor context menu border use the theme colors.')
+  // The find and hover widgets take their shadow from --vscode-shadow-lg, which standalone Monaco leaves undefined too.
+  await page.locator('.monaco-editor [role="textbox"]').focus()
+  await page.keyboard.press('Control+F')
+  const findWidget = page.locator('.monaco-editor .find-widget')
+  await expect(findWidget).toHaveClass(/\bvisible\b/)
+  expect(await findWidget.evaluate(element => getComputedStyle(element).boxShadow)).toBe('rgba(0, 0, 0, 0.6) 0px 0px 12px 0px')
+  await page.keyboard.press('Escape')
+  // Monaco keeps the closed widget in the layout, so its class says whether it is open.
+  await expect(findWidget).not.toHaveClass(/\bvisible\b/)
+  console.log('Theme checks: dock tab focus rings, the editor context menu border, and the find widget shadow use the theme colors.')
 
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
-  await expect.poll(editorText).toContain('SELECT 42')
+  // Monaco renders spaces as no-break spaces.
+  await expect.poll(editorText).toContain('SELECT\u00a0COUNT((42))')
   const typed = await editorText()
+  await expect.poll(bracketColors).toEqual(['rgb(255, 215, 0)', 'rgb(218, 112, 214)'])
   await page.screenshot({ path: resolve('artifacts', 'theme-dark.png') })
   await page.evaluate(() => { window.__themeSentinel = 1 })
   if (process.platform !== 'darwin') await application.evaluate(({ BrowserWindow }) => {
@@ -112,6 +128,7 @@ try {
   expect(await editorText()).toBe(typed)
   expect(await menuItem('theme.mode.light')).toMatchObject({ checked: true })
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(0, 95, 184)'])
+  await expect.poll(bracketColors).toEqual(['rgb(4, 49, 250)', 'rgb(40, 122, 40)'])
   await page.screenshot({ path: resolve('artifacts', 'theme-light.png') })
   console.log('Theme checks: switching to Light updates CSS, Monaco, Dockview, native chrome, and the preference without a reload.')
 
@@ -144,9 +161,20 @@ try {
   await expect(notice).toContainText('The themes folder could not be opened: No application is registered')
   expect((await notice.innerText()).split('could not be opened').length - 1).toBe(1)
   expect((await themeState()).notice).toBe('Reloaded 1 theme; 1 has problems.')
+  // A later notice, even one with the same text, starts without that failure.
+  const reported = (await themeState()).noticeId
+  await menu('theme.reload')
+  await expect.poll(async () => (await themeState()).noticeId).toBeGreaterThan(reported)
+  await expect(notice).toContainText('Reloaded 1 theme; 1 has problems.')
+  await expect(notice).not.toContainText('could not be opened')
   await application.evaluate(({ shell }) => { shell.openPath = async path => { globalThis.openedThemes = path; return '' } })
   await notice.getByRole('button', { name: 'Open Themes Folder', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.openedThemes)).toBe(themesFolder)
+  await notice.getByRole('button', { name: 'Dismiss', exact: true }).click()
+  await expect(page.locator('.theme-notice')).toHaveCount(0)
+  // Dismissing hides that notice, not its text: reloading again reports again.
+  await menu('theme.reload')
+  await expect(notice).toContainText('Reloaded 1 theme; 1 has problems.')
   await notice.getByRole('button', { name: 'Dismiss', exact: true }).click()
   await expect(page.locator('.theme-notice')).toHaveCount(0)
   await page.locator('.toolbar').getByRole('button', { name: 'New query', exact: true }).click()

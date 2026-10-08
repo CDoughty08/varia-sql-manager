@@ -46,7 +46,8 @@ locations are:
 
 - The file name is the theme's id: 1–48 letters, digits, `-` or `_`, ending in `.json`. Ids ignore case, so `Ocean.json`
   and `ocean.json` collide and neither loads. Names starting with `varia-` are reserved for the built-in themes.
-- Varia only reads theme files. It never rewrites, renames, or moves them, and it does not follow symbolic links.
+- Varia only reads theme files. It never rewrites, renames, or moves them, and it does not follow symbolic links: a link
+  (or a folder) with a theme's name is listed as an invalid theme, so copy the theme file itself into the folder.
 - **Open Themes Folder** and **Create Custom Theme…** also write `varia-theme.schema.json` into the folder, so a theme
   with `"$schema": "./varia-theme.schema.json"` gets completion offline. The examples use that path, which resolves once a
   file is copied into the folder.
@@ -110,7 +111,7 @@ characters.
 
 ### Palette
 
-The 58 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-58). Slots group
+The 61 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-61). Slots group
 the colors that belong together: surfaces (`canvas`, `panel`, `sideBar`, `chrome`, `raised`, `overlay`, `input`),
 interaction (`hover`, `active`, `selection`, `selectionStrong`), text tiers (`text` down to `textMuted`), borders,
 accents, status colors, glyphs, the six connection colors, and the SQL syntax colors (`syntaxKeyword` and so on).
@@ -121,7 +122,7 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 181 keys are listed in [`tokens.md`](tokens.md#color-keys-181) by area: title bar and menus, buttons and inputs,
+The 188 keys are listed in [`tokens.md`](tokens.md#color-keys-188) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
 dialogs, and connection colors. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
 are reserved for upcoming features (the command palette, themed menus, the new Object Explorer and results grid): they
@@ -149,6 +150,8 @@ block of VS Code keys gets one summary warning.
 - `settings.foreground` takes any value above. `settings.fontStyle` is empty or up to four of `italic`, `bold`,
   `underline`, and `strikethrough`, separated by single spaces. Other settings, including `background`, are ignored.
 - When several rules name the same scope, later rules win; `foreground` and `fontStyle` override independently.
+- Brackets are colored by nesting depth, like VS Code's bracket pair colorization, so their color comes from the
+  `editorBracketHighlight.*` keys in `colors` rather than from the `delimiter` scopes.
 
 ## Problems and fallback
 
@@ -157,9 +160,9 @@ the entry (such as `harbor.json /palette/accent`), and a message.
 
 - **Warnings** (a bad value, an unknown key or scope, a reference that does not resolve) drop only the affected entry,
   which keeps its default. The theme still loads. Warnings are shown when you choose or reload a theme, not at startup.
-- **Errors** make the theme unusable: the file cannot be read or is larger than 128 KiB, is not UTF-8 or JSON, is nested
-  too deeply, lacks a valid `kind`, `version`, `name`, or `type`, exceeds a count limit, or has a bad, reserved, or
-  duplicate file name.
+- **Errors** make the theme unusable: the file cannot be read, is a link or folder, is larger than 128 KiB, is not
+  UTF-8 or JSON, is nested too deeply, lacks a valid `kind`, `version`, `name`, or `type`, exceeds a count limit, or has
+  a bad, reserved, or duplicate file name.
   The menu shows such themes as "(invalid)" and disabled.
 - If the selected theme is missing, unusable, or has no variant for the current mode, Varia shows the built-in theme of
   that type and an alert. The choice is kept, so fixing the file and choosing **Reload Themes** brings it back.

@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import type { Dirent } from 'node:fs'
-import { lstat, readdir, writeFile } from 'node:fs/promises'
+import { lstat, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createProblem, isReservedThemeId, parseThemeFile, parseThemeSource, quote, themeIdFromFileName, themeLimits } from '../shared/theme/format'
 import { buildThemeJsonSchema } from '../shared/theme/schema'
 import type { ThemeParseResult, ThemeProblem, ThemeProblemCode } from '../shared/theme/types'
-import { readRegularFile, writeJsonAtomic } from './json-file'
+import { readRegularFile } from './json-file'
 
 export const themesFolderName = 'themes'
 export const schemaFileName = 'varia-theme.schema.json'
@@ -23,14 +24,15 @@ const errorCode = (error: unknown) => {
   return typeof code === 'string' && /^[A-Z0-9_]{1,32}$/.test(code) ? code : 'unknown error'
 }
 const failure = (fileName: string, code: ThemeProblemCode, message: string): ThemeParseResult => ({ theme: null, problems: [createProblem(code, fileName, '', message)], problemsOmitted: 0 })
-const notRegular = (fileName: string) => failure(fileName, 'E_READ', 'The theme is not a regular file; links and folders are not followed.')
+const notRegular = (fileName: string) => failure(fileName, 'E_READ', 'The theme is not a regular file. Varia does not follow links or read folders; copy the theme file itself into the themes folder.')
 const byName = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
-/** The entries the scan counts toward its file cap, valid names or not. */
-const isThemeEntry = (entry: Dirent) => entry.isFile() && entry.name.toLowerCase().endsWith('.json') && entry.name !== schemaFileName
+/** The entries the scan counts toward its file cap, valid names or not; links and folders too, so they can be reported. */
+const isThemeEntry = (entry: Dirent) => entry.name.toLowerCase().endsWith('.json') && entry.name !== schemaFileName
 
 /**
- * Lists `<dir>/*.json` and reads the files whose id passes `include` (all by default). Only regular files are read:
- * symbolic links and folders are skipped. At most 64 files, sorted by name, are considered.
+ * Lists `<dir>/*.json` and reads the files whose id passes `include` (all by default). Only regular files are read: a
+ * symbolic link or folder with a theme's name becomes an unusable theme that says so, never a silent omission (a
+ * linked theme from a dotfiles setup would otherwise read as missing). At most 64 entries, sorted by name, are considered.
  */
 export async function scanThemes(dir: string, include: (id: string) => boolean = () => true): Promise<ThemeScan> {
   let entries: Dirent[]
@@ -90,16 +92,20 @@ export async function writeStarterTheme(dir: string, theme: unknown): Promise<st
 }
 
 let schemaText: string | undefined
-/** Writes `varia-theme.schema.json` for offline autocompletion, only when its content differs. Returns whether it wrote. */
+/**
+ * Writes `varia-theme.schema.json` for offline autocompletion, only when its content differs. Returns whether it wrote.
+ * It renames once, without the retries preference saves get on Windows: the schema is optional, and a path Windows
+ * refuses to replace (a folder, a read-only file) must not hold up Open Themes Folder.
+ */
 export async function writeSchemaFile(dir: string): Promise<boolean> {
-  const schema = buildThemeJsonSchema()
-  schemaText ??= JSON.stringify(schema, null, 2) + '\n'
-  const path = join(dir, schemaFileName)
+  schemaText ??= JSON.stringify(buildThemeJsonSchema(), null, 2) + '\n'
+  const path = join(dir, schemaFileName), bytes = Buffer.from(schemaText)
   try {
     const current = await readRegularFile(path, schemaBytesLimit, { followLinks: false })
-    if (current?.equals(Buffer.from(schemaText))) return false
+    if (current?.equals(bytes)) return false
   } catch { /* Missing or unreadable: replaced below. */ }
-  // The atomic rename replaces a link at this path instead of writing through it.
-  await writeJsonAtomic(path, schema, schemaBytesLimit, 'The theme schema exceeds its size limit.')
+  // A new file renamed over the path replaces a link there instead of writing through it.
+  const temporary = join(dir, `.varia-${randomUUID()}.tmp`)
+  try { await writeFile(temporary, bytes, { flag: 'wx' }); await rename(temporary, path) } finally { await rm(temporary, { force: true }) }
   return true
 }

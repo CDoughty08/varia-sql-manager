@@ -9,9 +9,13 @@ export interface SyntaxStyle { foreground: string; fontStyle: string }
 /** The canonical theme that crosses IPC: every registry key and SQL scope, as lowercase #rrggbb or #rrggbbaa. */
 export interface ResolvedTheme { id: string; name: string; type: ThemeType; colors: Record<ColorKey, string>; syntax: Record<SqlScope, SyntaxStyle> }
 export interface ThemeSummary { id: string; name: string; source: 'builtin' | 'user'; types: ThemeType[]; usable: boolean; errors: number; warnings: number }
+/**
+ * `revision` grows whenever anything changes; `noticeId` only when an action reports something (even the same text
+ * again), so a dismissed notice stays hidden across theme-only updates and a repeated action shows its notice again.
+ */
 export interface ThemeState {
   revision: number; preference: ThemePreference; active: ResolvedTheme; fallback: boolean
-  themes: ThemeSummary[]; problems: ThemeProblem[]; problemsOmitted: number; notice?: string
+  themes: ThemeSummary[]; problems: ThemeProblem[]; problemsOmitted: number; notice?: string; noticeId: number
 }
 
 export const themeErrorCodes = ['E_READ', 'E_TOO_LARGE', 'E_ENCODING', 'E_JSON', 'E_COMPLEX', 'E_NOT_OBJECT', 'E_KIND', 'E_VERSION', 'E_FIELD', 'E_LIMIT', 'E_FILE_NAME', 'E_DUPLICATE_ID', 'E_RESERVED'] as const

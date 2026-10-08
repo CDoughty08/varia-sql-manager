@@ -97,8 +97,8 @@
         },
         "hover": {
           "$ref": "#/definitions/value",
-          "description": "Hover fill. Varia Dark #263041 · Varia Light #dce3ec",
-          "markdownDescription": "Hover fill. Varia Dark `#263041` · Varia Light `#dce3ec`"
+          "description": "Hover fill. Varia Dark #263041 · Varia Light #d0d8e3",
+          "markdownDescription": "Hover fill. Varia Dark `#263041` · Varia Light `#d0d8e3`"
         },
         "active": {
           "$ref": "#/definitions/value",
@@ -142,8 +142,8 @@
         },
         "textMuted": {
           "$ref": "#/definitions/value",
-          "description": "Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface. Varia Dark #8a9cb3 · Varia Light #566377",
-          "markdownDescription": "Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface. Varia Dark `#8a9cb3` · Varia Light `#566377`"
+          "description": "Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface, hover included. Varia Dark #8a9cb3 · Varia Light #525e72",
+          "markdownDescription": "Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface, hover included. Varia Dark `#8a9cb3` · Varia Light `#525e72`"
         },
         "textAccent": {
           "$ref": "#/definitions/value",
@@ -332,8 +332,23 @@
         },
         "syntaxDelimiter": {
           "$ref": "#/definitions/value",
-          "description": "SQL delimiters and brackets. Varia Dark #dcdcdc · Varia Light #1f2733",
-          "markdownDescription": "SQL delimiters and brackets. Varia Dark `#dcdcdc` · Varia Light `#1f2733`"
+          "description": "SQL commas, semicolons, and dots. Varia Dark #dcdcdc · Varia Light #1f2733",
+          "markdownDescription": "SQL commas, semicolons, and dots. Varia Dark `#dcdcdc` · Varia Light `#1f2733`"
+        },
+        "syntaxBracket1": {
+          "$ref": "#/definitions/value",
+          "description": "SQL brackets at the outermost level; the editor colors matched brackets by depth. Varia Dark #ffd700 · Varia Light #0431fa",
+          "markdownDescription": "SQL brackets at the outermost level; the editor colors matched brackets by depth. Varia Dark `#ffd700` · Varia Light `#0431fa`"
+        },
+        "syntaxBracket2": {
+          "$ref": "#/definitions/value",
+          "description": "SQL brackets one level in. Varia Dark #da70d6 · Varia Light #287a28",
+          "markdownDescription": "SQL brackets one level in. Varia Dark `#da70d6` · Varia Light `#287a28`"
+        },
+        "syntaxBracket3": {
+          "$ref": "#/definitions/value",
+          "description": "SQL brackets two levels in; deeper brackets repeat the three colors. Varia Dark #179fff · Varia Light #7b3814",
+          "markdownDescription": "SQL brackets two levels in; deeper brackets repeat the three colors. Varia Dark `#179fff` · Varia Light `#7b3814`"
         },
         "shadow": {
           "$ref": "#/definitions/value",
@@ -363,13 +378,13 @@
         },
         "descriptionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Secondary text: hints, captions, and explanations. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Secondary text: hints, captions, and explanations. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Secondary text: hints, captions, and explanations. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Secondary text: hints, captions, and explanations. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "disabledForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Text of disabled controls. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Text of disabled controls. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Text of disabled controls. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Text of disabled controls. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "errorForeground": {
           "$ref": "#/definitions/value",
@@ -423,18 +438,18 @@
         },
         "scrollbarSlider.background": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Scrollbar thumb. Default $textMuted/40 (Dark #8a9cb366, Light #56637766).",
-          "markdownDescription": "(VS Code) Scrollbar thumb. Default `$textMuted/40` (Dark `#8a9cb366`, Light `#56637766`)."
+          "description": "(VS Code) Scrollbar thumb. Default $textMuted/40 (Dark #8a9cb366, Light #525e7266).",
+          "markdownDescription": "(VS Code) Scrollbar thumb. Default `$textMuted/40` (Dark `#8a9cb366`, Light `#525e7266`)."
         },
         "scrollbarSlider.hoverBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Scrollbar thumb when hovered. Default $textMuted/55 (Dark #8a9cb38c, Light #5663778c).",
-          "markdownDescription": "(VS Code) Scrollbar thumb when hovered. Default `$textMuted/55` (Dark `#8a9cb38c`, Light `#5663778c`)."
+          "description": "(VS Code) Scrollbar thumb when hovered. Default $textMuted/55 (Dark #8a9cb38c, Light #525e728c).",
+          "markdownDescription": "(VS Code) Scrollbar thumb when hovered. Default `$textMuted/55` (Dark `#8a9cb38c`, Light `#525e728c`)."
         },
         "scrollbarSlider.activeBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Scrollbar thumb while it is dragged. Default $textMuted/70 (Dark #8a9cb3b3, Light #566377b3).",
-          "markdownDescription": "(VS Code) Scrollbar thumb while it is dragged. Default `$textMuted/70` (Dark `#8a9cb3b3`, Light `#566377b3`)."
+          "description": "(VS Code) Scrollbar thumb while it is dragged. Default $textMuted/70 (Dark #8a9cb3b3, Light #525e72b3).",
+          "markdownDescription": "(VS Code) Scrollbar thumb while it is dragged. Default `$textMuted/70` (Dark `#8a9cb3b3`, Light `#525e72b3`)."
         },
         "titleBar.activeBackground": {
           "$ref": "#/definitions/value",
@@ -493,13 +508,13 @@
         },
         "menu.selectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Highlighted context menu item. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
-          "markdownDescription": "(VS Code) Highlighted context menu item. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
+          "description": "(VS Code) Highlighted menu item. The editor context menu highlights with list.hoverBackground instead. Not used yet; reserved for custom menus and the title bar. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(VS Code) Highlighted menu item. The editor context menu highlights with list.hoverBackground instead. Not used yet; reserved for custom menus and the title bar. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
         },
         "menu.selectionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Text of the highlighted context menu item. Default $textStrong (Dark #ffffff, Light #0b1220).",
-          "markdownDescription": "(VS Code) Text of the highlighted context menu item. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
+          "description": "(VS Code) Text of the highlighted menu item. Not used yet; reserved for custom menus and the title bar. Default $textStrong (Dark #ffffff, Light #0b1220).",
+          "markdownDescription": "(VS Code) Text of the highlighted menu item. Not used yet; reserved for custom menus and the title bar. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
         },
         "menu.separatorBackground": {
           "$ref": "#/definitions/value",
@@ -538,8 +553,8 @@
         },
         "keybindingLabel.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Keyboard shortcut hints. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Keyboard shortcut hints. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Keyboard shortcut hints. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Keyboard shortcut hints. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "keybindingLabel.border": {
           "$ref": "#/definitions/value",
@@ -573,8 +588,8 @@
         },
         "button.secondaryHoverBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Secondary and toolbar buttons when hovered. Default $hover (Dark #263041, Light #dce3ec).",
-          "markdownDescription": "(VS Code) Secondary and toolbar buttons when hovered. Default `$hover` (Dark `#263041`, Light `#dce3ec`)."
+          "description": "(VS Code) Secondary and toolbar buttons when hovered. Default $hover (Dark #263041, Light #d0d8e3).",
+          "markdownDescription": "(VS Code) Secondary and toolbar buttons when hovered. Default `$hover` (Dark `#263041`, Light `#d0d8e3`)."
         },
         "button.secondaryHoverForeground": {
           "$ref": "#/definitions/value",
@@ -598,8 +613,8 @@
         },
         "input.placeholderForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Placeholder text. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Placeholder text. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Placeholder text. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Placeholder text. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "inputValidation.errorBackground": {
           "$ref": "#/definitions/value",
@@ -628,8 +643,8 @@
         },
         "list.hoverBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Hovered list or tree row. Not used yet; reserved for the Object Explorer tree. Default $hover (Dark #263041, Light #dce3ec).",
-          "markdownDescription": "(VS Code) Hovered list or tree row. Not used yet; reserved for the Object Explorer tree. Default `$hover` (Dark `#263041`, Light `#dce3ec`)."
+          "description": "(VS Code) Hovered list row, and the highlighted item of the editor context menu. Default $hover (Dark #263041, Light #d0d8e3).",
+          "markdownDescription": "(VS Code) Hovered list row, and the highlighted item of the editor context menu. Default `$hover` (Dark `#263041`, Light `#d0d8e3`)."
         },
         "list.activeSelectionBackground": {
           "$ref": "#/definitions/value",
@@ -683,8 +698,8 @@
         },
         "objectExplorer.countForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Item counts next to folder headings. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Item counts next to folder headings. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Item counts next to folder headings. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Item counts next to folder headings. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "objectExplorer.chevronForeground": {
           "$ref": "#/definitions/value",
@@ -703,8 +718,8 @@
         },
         "objectExplorer.actionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Row actions such as Disconnect. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Row actions such as Disconnect. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Row actions such as Disconnect. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Row actions such as Disconnect. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "editorGroupHeader.tabsBackground": {
           "$ref": "#/definitions/value",
@@ -738,8 +753,8 @@
         },
         "tab.inactiveForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Labels of hidden tabs of the focused dock group. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Labels of hidden tabs of the focused dock group. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Labels of hidden tabs of the focused dock group. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Labels of hidden tabs of the focused dock group. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "tab.unfocusedActiveForeground": {
           "$ref": "#/definitions/value",
@@ -748,8 +763,8 @@
         },
         "tab.unfocusedInactiveForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Labels of hidden tabs of an unfocused dock group. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Labels of hidden tabs of an unfocused dock group. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Labels of hidden tabs of an unfocused dock group. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Labels of hidden tabs of an unfocused dock group. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "tab.border": {
           "$ref": "#/definitions/value",
@@ -843,8 +858,8 @@
         },
         "documentTabs.inactiveForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Labels of inactive query tabs. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Labels of inactive query tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Labels of inactive query tabs. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Labels of inactive query tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "documentTabs.border": {
           "$ref": "#/definitions/value",
@@ -853,8 +868,8 @@
         },
         "documentTabs.closeForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Close buttons of query tabs. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Close buttons of query tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Close buttons of query tabs. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Close buttons of query tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "documentTabs.iconForeground": {
           "$ref": "#/definitions/value",
@@ -863,18 +878,18 @@
         },
         "documentTabs.modifiedIndicator": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Dot that marks a query with unsaved changes. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Dot that marks a query with unsaved changes. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Dot that marks a query with unsaved changes. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Dot that marks a query with unsaved changes. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "breadcrumb.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Query context line (server and database). Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Query context line (server and database). Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Query context line (server and database). Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Query context line (server and database). Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "breadcrumb.separatorForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Separator in the query context line. Default @breadcrumb.foreground (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Separator in the query context line. Default `@breadcrumb.foreground` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Separator in the query context line. Default @breadcrumb.foreground (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Separator in the query context line. Default `@breadcrumb.foreground` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "editor.background": {
           "$ref": "#/definitions/value",
@@ -898,13 +913,48 @@
         },
         "editorLineNumber.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Line numbers. Made opaque over editor.background. Default Dark $textMuted/80, Light $textMuted (Dark #728195, Light #566377).",
-          "markdownDescription": "(VS Code) Line numbers. Made opaque over `editor.background`. Default Dark `$textMuted/80`, Light `$textMuted` (Dark `#728195`, Light `#566377`)."
+          "description": "(VS Code) Line numbers. Made opaque over editor.background. Default Dark $textMuted/80, Light $textMuted (Dark #728195, Light #525e72).",
+          "markdownDescription": "(VS Code) Line numbers. Made opaque over `editor.background`. Default Dark `$textMuted/80`, Light `$textMuted` (Dark `#728195`, Light `#525e72`)."
         },
         "editorLineNumber.activeForeground": {
           "$ref": "#/definitions/value",
           "description": "(VS Code) Line number of the current line. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
           "markdownDescription": "(VS Code) Line number of the current line. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "editorBracketHighlight.foreground1": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six. Default $syntaxBracket1 (Dark #ffd700, Light #0431fa).",
+          "markdownDescription": "(VS Code) Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six. Default `$syntaxBracket1` (Dark `#ffd700`, Light `#0431fa`)."
+        },
+        "editorBracketHighlight.foreground2": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Brackets one level in. Default $syntaxBracket2 (Dark #da70d6, Light #287a28).",
+          "markdownDescription": "(VS Code) Brackets one level in. Default `$syntaxBracket2` (Dark `#da70d6`, Light `#287a28`)."
+        },
+        "editorBracketHighlight.foreground3": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Brackets two levels in. Default $syntaxBracket3 (Dark #179fff, Light #7b3814).",
+          "markdownDescription": "(VS Code) Brackets two levels in. Default `$syntaxBracket3` (Dark `#179fff`, Light `#7b3814`)."
+        },
+        "editorBracketHighlight.foreground4": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Brackets three levels in. The defaults repeat the first three colors; a transparent value leaves a level out of the cycle. Default @editorBracketHighlight.foreground1 (Dark #ffd700, Light #0431fa).",
+          "markdownDescription": "(VS Code) Brackets three levels in. The defaults repeat the first three colors; a transparent value leaves a level out of the cycle. Default `@editorBracketHighlight.foreground1` (Dark `#ffd700`, Light `#0431fa`)."
+        },
+        "editorBracketHighlight.foreground5": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Brackets four levels in. Default @editorBracketHighlight.foreground2 (Dark #da70d6, Light #287a28).",
+          "markdownDescription": "(VS Code) Brackets four levels in. Default `@editorBracketHighlight.foreground2` (Dark `#da70d6`, Light `#287a28`)."
+        },
+        "editorBracketHighlight.foreground6": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Brackets five levels in. Default @editorBracketHighlight.foreground3 (Dark #179fff, Light #7b3814).",
+          "markdownDescription": "(VS Code) Brackets five levels in. Default `@editorBracketHighlight.foreground3` (Dark `#179fff`, Light `#7b3814`)."
+        },
+        "editorBracketHighlight.unexpectedBracket.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) A closing bracket without a matching opening one. Default $error (Dark #f39c9f, Light #ae2117).",
+          "markdownDescription": "(VS Code) A closing bracket without a matching opening one. Default `$error` (Dark `#f39c9f`, Light `#ae2117`)."
         },
         "editorWidget.background": {
           "$ref": "#/definitions/value",
@@ -923,8 +973,8 @@
         },
         "emptyState.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Text of empty views (no query, no results, empty dock). Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Text of empty views (no query, no results, empty dock). Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Text of empty views (no query, no results, empty dock). Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Text of empty views (no query, no results, empty dock). Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "emptyState.titleForeground": {
           "$ref": "#/definitions/value",
@@ -958,8 +1008,8 @@
         },
         "panelTitle.inactiveForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Inactive output tabs. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(VS Code) Inactive output tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(VS Code) Inactive output tabs. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Inactive output tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "panelTitle.activeBorder": {
           "$ref": "#/definitions/value",
@@ -998,8 +1048,8 @@
         },
         "resultsGrid.headerDescriptionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Column data types below the names. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Column data types below the names. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Column data types below the names. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Column data types below the names. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "resultsGrid.gridlines": {
           "$ref": "#/definitions/value",
@@ -1013,8 +1063,8 @@
         },
         "resultsGrid.rowNumberForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Row numbers. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Row numbers. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Row numbers. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Row numbers. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "resultsGrid.nullForeground": {
           "$ref": "#/definitions/value",
@@ -1048,8 +1098,8 @@
         },
         "resultsGrid.hoverBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default @list.hoverBackground (Dark #263041, Light #dce3ec).",
-          "markdownDescription": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default `@list.hoverBackground` (Dark `#263041`, Light `#dce3ec`)."
+          "description": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default @list.hoverBackground (Dark #263041, Light #d0d8e3).",
+          "markdownDescription": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default `@list.hoverBackground` (Dark `#263041`, Light `#d0d8e3`)."
         },
         "resultsMessages.foreground": {
           "$ref": "#/definitions/value",
@@ -1068,8 +1118,8 @@
         },
         "statusBar.separatorForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Dividers between status bar items. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Dividers between status bar items. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Dividers between status bar items. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Dividers between status bar items. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "statusBar.onlineIndicator": {
           "$ref": "#/definitions/value",
@@ -1078,8 +1128,8 @@
         },
         "statusBar.idleIndicator": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Dot shown while not connected. Default $textMuted (Dark #8a9cb3, Light #566377).",
-          "markdownDescription": "(Varia) Dot shown while not connected. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+          "description": "(Varia) Dot shown while not connected. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Dot shown while not connected. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "statusBar.executingBackground": {
           "$ref": "#/definitions/value",

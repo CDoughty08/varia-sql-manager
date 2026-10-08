@@ -51,8 +51,8 @@ const groups = {
     'menubar.selectionForeground': ['V', '$textStrong', 'Label of the open title-bar menu.', 'css'],
     'menu.background': ['V', '$overlay', 'Editor and dock context menus.', 'css monaco'],
     'menu.foreground': ['V', '$text', 'Context menu text.', 'css monaco'],
-    'menu.selectionBackground': ['V', '$selectionStrong', 'Highlighted context menu item.', 'monaco'],
-    'menu.selectionForeground': ['V', '$textStrong', 'Text of the highlighted context menu item.', 'monaco'],
+    'menu.selectionBackground': ['V', '$selectionStrong', 'Highlighted menu item. The editor context menu highlights with list.hoverBackground instead.', '', { reserved: menus }],
+    'menu.selectionForeground': ['V', '$textStrong', 'Text of the highlighted menu item.', '', { reserved: menus }],
     'menu.separatorBackground': ['V', '$separator', 'Context menu separators.', 'monaco'],
     'menu.border': ['V', '@editorWidget.border', 'Context menu border.', 'monaco'],
     'toolbar.background': ['X', '@titleBar.activeBackground', 'Main toolbar.', 'css'],
@@ -82,7 +82,7 @@ const groups = {
     'sideBar.background': ['V', '$sideBar', 'Object Explorer.', 'css'],
     'sideBarTitle.foreground': ['V', '$textTertiary', 'Object Explorer heading.', 'css'],
     'sideBarSectionHeader.border': ['V', '$borderSubtle', 'Lines around the Object Explorer heading and footer.', 'css'],
-    'list.hoverBackground': ['V', '$hover', 'Hovered list or tree row.', 'monaco', { reserved: tree }],
+    'list.hoverBackground': ['V', '$hover', 'Hovered list row, and the highlighted item of the editor context menu.', 'monaco'],
     'list.activeSelectionBackground': ['V', '$selectionStrong', 'Selected row of a focused list.', 'css monaco'],
     'list.activeSelectionForeground': ['V', '$text', 'Text of the selected row of a focused list.', 'css monaco'],
     'list.inactiveSelectionBackground': ['V', '$selection', 'Selected row of an unfocused list, and the selected result set.', 'css monaco'],
@@ -144,6 +144,13 @@ const groups = {
     'editor.selectionBackground': ['V', '$textSelection', 'Selected text in the editor.', 'monaco'],
     'editorLineNumber.foreground': ['V', pair('$textMuted/80', '$textMuted'), 'Line numbers.', 'monaco', { opaqueOver: 'editor.background' }],
     'editorLineNumber.activeForeground': ['V', '$textSecondary', 'Line number of the current line.', 'monaco'],
+    'editorBracketHighlight.foreground1': ['V', '$syntaxBracket1', 'Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six.', 'monaco'],
+    'editorBracketHighlight.foreground2': ['V', '$syntaxBracket2', 'Brackets one level in.', 'monaco'],
+    'editorBracketHighlight.foreground3': ['V', '$syntaxBracket3', 'Brackets two levels in.', 'monaco'],
+    'editorBracketHighlight.foreground4': ['V', '@editorBracketHighlight.foreground1', 'Brackets three levels in. The defaults repeat the first three colors; a transparent value leaves a level out of the cycle.', 'monaco'],
+    'editorBracketHighlight.foreground5': ['V', '@editorBracketHighlight.foreground2', 'Brackets four levels in.', 'monaco'],
+    'editorBracketHighlight.foreground6': ['V', '@editorBracketHighlight.foreground3', 'Brackets five levels in.', 'monaco'],
+    'editorBracketHighlight.unexpectedBracket.foreground': ['V', '$error', 'A closing bracket without a matching opening one.', 'monaco'],
     'editorWidget.background': ['V', '$overlay', 'Dialogs and editor widgets such as find, suggest, and hover.', 'css monaco'],
     'editorWidget.foreground': ['V', '$text', 'Text of dialogs and editor widgets.', 'css monaco'],
     'editorWidget.border': ['V', pair('$controlBorder', '$borderStrong'), 'Border of dialogs and editor widgets.', 'css monaco'],
@@ -287,8 +294,9 @@ export const scopeDescriptions: Readonly<Record<SqlScope, string>> = {
   'keyword': 'Keywords.', 'keyword.block': 'BEGIN, END, and CASE.', 'keyword.try': 'BEGIN TRY and END TRY.', 'keyword.catch': 'BEGIN CATCH and END CATCH.',
   'keyword.choice': 'WHEN and THEN.', 'operator': 'Operators, including AND, OR, LIKE, and IN.', 'predefined': 'Built-in functions, @@ variables, and $ACTION-style pseudo columns.',
   'string': 'String literals.', 'number': 'Numeric and money literals.', 'comment': 'Comments.', 'comment.quote': 'The /* and */ of block comments.',
-  'identifier': 'Names of objects, columns, and variables.', 'identifier.quote': 'Brackets and double quotes around identifiers.',
-  'delimiter': 'Commas, semicolons, and dots.', 'delimiter.parenthesis': 'Parentheses.', 'delimiter.square': 'Square brackets that are not identifier quotes.'
+  'identifier': 'Names of objects, columns, and variables.', 'identifier.quote': 'Double quotes around identifiers; square brackets take the bracket colors (editorBracketHighlight.*).',
+  'delimiter': 'Commas, semicolons, and dots.', 'delimiter.parenthesis': 'Parentheses. The editor draws brackets in the bracket colors (editorBracketHighlight.*) instead.',
+  'delimiter.square': 'Square brackets. The editor draws brackets in the bracket colors (editorBracketHighlight.*) instead.'
 }
 /** Built-in syntax colors of the root scopes; sub-scopes inherit. */
 export const syntaxDefaults: Readonly<Partial<Record<SqlScope, string>>> = {

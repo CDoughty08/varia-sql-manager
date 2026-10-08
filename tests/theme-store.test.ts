@@ -94,24 +94,35 @@ describe('theme folder scan', () => {
     const scan = await scanThemes(themes)
     expect(scan.themes).toEqual([])
     expect(scan.problems).toMatchObject([{ severity: 'error', code: 'E_READ', file: 'themes', path: '' }])
+    const { appearance } = await service()
+    expect(await appearance.reload()).toMatchObject({ notice: 'Reloaded 0 themes; the themes folder could not be read.', problems: [{ code: 'E_READ', file: 'themes' }] })
   })
-  it('reads only regular .json files with valid, unreserved names', async () => {
+  it('reads regular .json files with valid, unreserved names, and reports a folder named like a theme', async () => {
     await themeFiles({
       'good.json': theme({ name: 'Good' }), 'Mixed_Case-1.json': theme(), 'notes.txt': 'x', '.varia-1.tmp': 'x', [schemaFileName]: '{}',
       'bad name.json': theme(), '.hidden.json': theme(), 'UPPER.JSON': theme(), [`${'a'.repeat(49)}.json`]: theme(), 'varia-dark.json': theme()
     })
     await mkdir(join(themes, 'folder.json'))
     const scan = await scanThemes(themes)
-    expect(scan.themes.map(item => [item.id, item.fileName, item.result.theme?.name]).sort()).toEqual([['good', 'good.json', 'Good'], ['mixed_case-1', 'Mixed_Case-1.json', 'Test']])
+    expect(scan.files).toBe(8)
+    expect(scan.themes.map(item => [item.id, item.fileName, item.result.theme?.name]).sort()).toEqual([['folder', 'folder.json', undefined], ['good', 'good.json', 'Good'], ['mixed_case-1', 'Mixed_Case-1.json', 'Test']])
+    expect(scan.themes.find(item => item.id === 'folder')?.result.problems).toMatchObject([{ severity: 'error', code: 'E_READ', file: 'folder.json', message: expect.stringContaining('does not follow links or read folders') }])
     expect(scan.problems.map(problem => [problem.file, problem.code]).sort()).toEqual([
       ['.hidden.json', 'E_FILE_NAME'], ['UPPER.JSON', 'E_FILE_NAME'], [`${'a'.repeat(49)}.json`, 'E_FILE_NAME'], ['bad name.json', 'E_FILE_NAME'], ['varia-dark.json', 'E_RESERVED']
     ])
   })
-  it.skipIf(!posix)('skips symbolic links, even to valid themes', async () => {
+  it.skipIf(!posix)('reports symbolic links as unusable themes instead of following them', async () => {
     await writeFile(join(directory, 'outside.json'), theme())
     await themeFiles({ 'real.json': theme() })
     await symlink(join(directory, 'outside.json'), join(themes, 'link.json'))
-    expect((await scanThemes(themes)).themes.map(item => item.id)).toEqual(['real'])
+    const scan = await scanThemes(themes)
+    expect(scan.themes.map(item => [item.id, item.result.theme?.name, item.result.problems.map(problem => problem.code)])).toEqual([['link', undefined, ['E_READ']], ['real', 'Test', []]])
+    // A selected linked theme, as a dotfiles setup makes, explains itself instead of reading as missing.
+    await preference({ darkTheme: 'link' })
+    const { appearance } = await service()
+    expect(appearance.state).toMatchObject({ fallback: true, notice: 'The theme `link` has errors and cannot be used; Varia Dark is used instead.' })
+    expect(appearance.state.problems).toMatchObject([{ file: 'link.json', code: 'E_READ', message: expect.stringContaining('copy the theme file itself into the themes folder') }])
+    expect((await appearance.reload()).notice).toBe('Reloaded 2 themes; 1 has problems. The theme `link` has errors and cannot be used; Varia Dark is used instead.')
   })
   it('reports oversized, non-UTF-8, invalid JSON, and invalid theme files without changing them', async () => {
     const files = {
@@ -132,6 +143,9 @@ describe('theme folder scan', () => {
     expect(scan.themes).toHaveLength(64)
     expect(scan.themes.map(item => item.id)).not.toContain('t64')
     expect(scan.problems).toMatchObject([{ severity: 'warning', code: 'W_TOO_MANY_FILES', file: 't64.json' }])
+    // The skipped file is listed, but it is not one of the reloaded themes with problems.
+    const { appearance } = await service()
+    expect(await appearance.reload()).toMatchObject({ notice: 'Reloaded 64 themes; 0 have problems.', problems: [{ code: 'W_TOO_MANY_FILES', file: 't64.json' }] })
   })
   it('rejects both files when ids differ only in case', async () => {
     await themeFiles({ 'Harbor.json': theme() })
@@ -378,6 +392,33 @@ describe('appearance service', () => {
       expect(await appearance.ensureFolder()).toBe(themes)
       await expect(appearance.createStarterTheme()).rejects.toThrow('The custom theme could not be created because the themes folder is not writable (EACCES).')
     } finally { await chmod(themes, 0o755) }
+  })
+  it('numbers each report, so a repeated action shows its notice again and a theme-only update does not', async () => {
+    await themeFiles({ 'warned.json': theme({ name: 'Warned', palette: { accent: 'red' } }) })
+    await preference({ mode: 'system' })
+    const { appearance, nativeTheme } = await service(true)
+    expect(appearance.state.noticeId).toBe(0)
+    for (const action of [() => appearance.reload(), () => appearance.reload(), () => appearance.notify('Same.'), () => appearance.notify('Same.'),
+      () => appearance.setPreference({ darkTheme: 'warned' }), () => appearance.setPreference({ darkTheme: 'warned' })]) {
+      const before = appearance.state
+      await action()
+      expect(appearance.state.revision).toBeGreaterThan(before.revision)
+      expect(appearance.state.noticeId).toBeGreaterThan(before.noticeId)
+    }
+    expect(appearance.state.notice).toBe('`Warned` has 1 problem; the affected entries use their defaults.')
+    await appearance.reload()
+    const reloaded = appearance.state
+    // The OS switches to light: a new revision with the same report, which stays dismissed.
+    nativeTheme.systemDark = false
+    appearance.systemChanged()
+    await vi.waitFor(() => expect(appearance.state.active.id).toBe('varia-light'))
+    expect(appearance.state).toMatchObject({ revision: reloaded.revision + 1, noticeId: reloaded.noticeId, notice: reloaded.notice })
+    // A choice with nothing to report changes nothing and numbers nothing.
+    await appearance.setPreference({ lightTheme: 'varia-light' })
+    const quiet = appearance.state
+    expect(quiet.notice).toBeUndefined()
+    await appearance.setPreference({ lightTheme: 'varia-light' })
+    expect(appearance.state).toBe(quiet)
   })
   it('shows the built-in after the startup timeout and applies the real choice when it arrives', async () => {
     await preference({ mode: 'light' })

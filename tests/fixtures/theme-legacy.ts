@@ -162,5 +162,9 @@ export const legacyOther: LegacyColor[] = [
   other('vs-dark comment', '#608b4e', 'syntax:comment', { change: aa('4.18', '4.97 on the current-line highlight') }),
   other('vs-dark identifier (default rule)', '#d4d4d4', 'syntax:identifier'),
   other('vs-dark delimiter', '#dcdcdc', 'syntax:delimiter'),
+  other('vs-dark editorBracketHighlight.foreground1', '#ffd700', 'editorBracketHighlight.foreground1'),
+  other('vs-dark editorBracketHighlight.foreground2', '#da70d6', 'editorBracketHighlight.foreground2'),
+  other('vs-dark editorBracketHighlight.foreground3', '#179fff', 'editorBracketHighlight.foreground3'),
+  other('vs-dark editorBracketHighlight.unexpectedBracket.foreground', '#ff1212cc', 'editorBracketHighlight.unexpectedBracket.foreground', { change: aa('3.27', '8.77') + ' It is the error color now.' }),
   other('styles.css:116 badge text (inherited from line 114)', '#869ab5', 'badge.foreground', { change: aa('3.93', '6.96') + ' Missed by all three designs.' })
 ]

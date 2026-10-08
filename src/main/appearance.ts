@@ -77,6 +77,7 @@ export class AppearanceService {
   /** The last choice was applied but not saved, so choosing it again retries the save. */
   private unsaved = false
   private message: string | undefined
+  private noticeId = 0
   private current: ThemeState
   private fingerprint: string
   private listeners = new Set<(state: ThemeState) => void>()
@@ -104,7 +105,7 @@ export class AppearanceService {
     clearTimeout(timer)
     if (finished || this.loaded) return
     this.applySource()
-    this.message = `Themes are taking longer than expected to load; ${builtinThemes[this.effectiveType()].name} is shown until they are ready.`
+    this.say(`Themes are taking longer than expected to load; ${builtinThemes[this.effectiveType()].name} is shown until they are ready.`)
     this.update()
   }
 
@@ -116,8 +117,11 @@ export class AppearanceService {
   reload(): Promise<ThemeState> {
     return this.enqueue(async () => {
       const scan = await this.scanAll()
-      const troubled = new Set(this.allProblems().map(problem => problem.file)).size
-      this.message = `Reloaded ${plural(scan.files, 'theme', 'themes')}; ${troubled} ${troubled === 1 ? 'has' : 'have'} problems.`
+      // Only files counted in scan.files: the folder's own problems and the files past the cap are listed, not counted.
+      const fileProblems = [...[...this.catalogue.values()].flatMap(entry => entry.problems), ...scan.problems.filter(problem => problem.code === 'E_FILE_NAME' || problem.code === 'E_RESERVED')]
+      const troubled = new Set(fileProblems.map(problem => problem.file)).size
+      this.say(scan.problems.some(problem => problem.file === themesFolderName) ? 'Reloaded 0 themes; the themes folder could not be read.'
+        : `Reloaded ${plural(scan.files, 'theme', 'themes')}; ${troubled} ${troubled === 1 ? 'has' : 'have'} problems.`)
       this.update()
       return this.current
     })
@@ -174,7 +178,7 @@ export class AppearanceService {
 
   /** Shows a message in the theme notice until the next choice. */
   notify(message: string): Promise<void> {
-    return this.enqueue(() => { this.message = message.slice(0, themeLimits.message); this.update() })
+    return this.enqueue(() => { this.say(message.slice(0, themeLimits.message)); this.update() })
   }
 
   onDidChange(listener: (state: ThemeState) => void): () => void {
@@ -202,7 +206,7 @@ export class AppearanceService {
     this.preference = preference
     this.writable = writable
     this.setCatalogue(scan)
-    this.message = warning
+    this.say(warning)
     this.loaded = true
     this.applySource()
     this.update()
@@ -228,10 +232,10 @@ export class AppearanceService {
     const previous = this.preference
     this.preference = { ...previous, ...patch }
     this.applySource()
-    this.message = this.warningNotice(patch)
+    this.say(this.warningNotice(patch))
     this.update()
     if (!this.unsaved && JSON.stringify(this.preference) === JSON.stringify(previous)) return this.current
-    const unsaved = (reason: string) => { this.unsaved = true; this.message = [this.message, `The theme was applied but could not be saved${reason}.`].filter(Boolean).join(' ') }
+    const unsaved = (reason: string) => { this.unsaved = true; this.say([this.message, `The theme was applied but could not be saved${reason}.`].filter(Boolean).join(' ')) }
     if (!this.writable) unsaved(' because the preferences file could not be read')
     else {
       try { await this.store.save(this.preference); this.unsaved = false } catch (error) { unsaved(detail(error)) }
@@ -250,6 +254,12 @@ export class AppearanceService {
     const notices = [...chosen].map(id => this.catalogue.get(id)?.summary).filter(summary => summary?.source === 'user' && summary.warnings > 0)
       .map(summary => `${quote(summary!.name)} has ${plural(summary!.warnings, 'problem', 'problems')}; the affected entries use their defaults.`)
     return notices.join(' ') || undefined
+  }
+
+  /** An action's report for the notice; any non-empty one is a new notice, even when its text repeats the last. */
+  private say(message: string | undefined): void {
+    this.message = message
+    if (message) this.noticeId++
   }
 
   private setCatalogue(scan: ThemeScan): void {
@@ -293,7 +303,7 @@ export class AppearanceService {
       .sort((a, b) => (a.source === b.source ? 0 : a.source === 'builtin' ? -1 : 1) || compareText(a.name.toLowerCase(), b.name.toLowerCase()) || compareText(a.id, b.id))
     return {
       preference: { ...this.preference }, active: (resolution ?? builtinResolutions[type]).theme, fallback, themes,
-      problems: shown, problemsOmitted: omitted, ...(notice && { notice })
+      problems: shown, problemsOmitted: omitted, ...(notice && { notice }), noticeId: this.noticeId
     }
   }
 

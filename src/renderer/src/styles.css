@@ -1,6 +1,7 @@
 :root { --varia-font-ui: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
-/* Monaco's context menu takes its border width from this VS Code variable, which standalone Monaco never defines. */
-:root { --vscode-strokeThickness: 1px; }
+/* VS Code variables standalone Monaco uses but never defines: the context menu's border width, and the shadow of the find
+   and hover widgets (the context menu falls back to this same shadow). */
+:root { --vscode-strokeThickness: 1px; --vscode-shadow-lg: 0 0 12px var(--varia-widget-shadow); }
 * { box-sizing: border-box; }
 body { margin: 0; user-select: none; }
 input, textarea, [contenteditable="true"], .monaco-editor, .messages, .plan-xml, .results-grid td, [role="alert"] { user-select: text; }

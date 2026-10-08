@@ -76,6 +76,15 @@ describe('application menu', () => {
     const posers = [user('joiner', 'Varia Dark⁠', ['dark']), user('tag', 'Varia Dark\u{e0041}', ['dark']), user('nbsp', 'Varia Dark', ['dark']), user('spaces', 'Varia  Dark', ['dark'])]
     const labels = submenu(applicationMenuTemplate(model({}, [...builtins, ...posers]), actions(), 'linux'), 'theme.dark').map(item => item.label)
     expect(labels).toEqual(['Varia Dark (varia-dark)', 'Varia Dark (joiner)', 'Varia Dark (tag)', 'Varia Dark (nbsp)', 'Varia  Dark (spaces)'])
+    // A braille blank renders as a space, and a Cyrillic а as a Latin a.
+    const blanks = [user('trailing', 'Varia Dark\u2800', ['dark']), user('inside', 'Varia\u2800Dark', ['dark']), user('cyrillic', 'V\u0430ria Dark', ['dark'])]
+    for (const poser of blanks) {
+      const [builtin, shown] = submenu(applicationMenuTemplate(model({}, [...builtins, poser]), actions(), 'linux'), 'theme.dark').map(item => item.label)
+      expect([builtin, shown], poser.id).toEqual(['Varia Dark (varia-dark)', `${poser.name} (${poser.id})`])
+    }
+    // Different names, in one script or another, keep their plain labels.
+    const distinct = [user('night', 'Ночь', ['dark']), user('day', 'День', ['dark']), user('harbor', 'Harbor', ['dark']), user('harbot', 'Harbot', ['dark']), user('upper', 'VARIA DARK', ['dark'])]
+    expect(submenu(applicationMenuTemplate(model({}, [...builtins, ...distinct]), actions(), 'linux'), 'theme.dark').map(item => item.label)).toEqual(['Varia Dark', 'Ночь', 'День', 'Harbor', 'Harbot', 'VARIA DARK'])
   })
   it('turns clicks into preference changes', () => {
     const handlers = actions()

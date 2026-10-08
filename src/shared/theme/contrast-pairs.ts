@@ -9,13 +9,16 @@ export interface ContrastPair { foreground: ColorKey | `syntax:${SqlScope}`; bac
 const editor: ColorKey[] = ['editor.background'], sideBar: ColorKey[] = ['sideBar.background'], panel: ColorKey[] = ['panel.background']
 const widget: ColorKey[] = ['editorWidget.background'], toolbar: ColorKey[] = ['toolbar.background'], input: ColorKey[] = ['input.background']
 const striped: ColorKey[] = ['panel.background', 'resultsGrid.alternateRowBackground']
-const hover: ColorKey[] = ['toolbar.background', 'button.secondaryHoverBackground']
+const hover: ColorKey[] = ['toolbar.background', 'button.secondaryHoverBackground'], sideBarHover: ColorKey[] = ['sideBar.background', 'button.secondaryHoverBackground']
 const activeSelection: ColorKey[] = ['editorWidget.background', 'list.activeSelectionBackground']
 const inactiveSelection: ColorKey[] = ['sideBar.background', 'list.inactiveSelectionBackground']
 const panelTitle: ColorKey[] = ['panelTitle.background'], titleBar: ColorKey[] = ['titleBar.activeBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
+/** Monaco paints every matched bracket in these by depth, over the delimiter and identifier.quote scopes. */
+const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
+  'editorBracketHighlight.foreground5', 'editorBracketHighlight.foreground6', 'editorBracketHighlight.unexpectedBracket.foreground']
 const pairs = (minimum: number, foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]): ContrastPair[] =>
   foregrounds.flatMap(foreground => backgrounds.map(background => ({ foreground, background, minimum })))
 const text = (foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]) => pairs(4.5, foregrounds, ...backgrounds)
@@ -30,7 +33,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['titleBar.activeForeground'], titleBar),
   ...text(['titleBar.inactiveForeground'], ['titleBar.inactiveBackground']),
   ...text(['menubar.selectionForeground'], ['titleBar.activeBackground', 'menubar.selectionBackground']),
-  ...text(['menu.foreground'], ['menu.background']),
+  // Monaco's context menu highlights with the list hover colors and keeps menu.foreground on them.
+  ...text(['menu.foreground'], ['menu.background'], ['menu.background', 'list.hoverBackground']),
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
   ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),
@@ -58,6 +62,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
   ...text(['sideBarTitle.foreground', 'objectExplorer.headingForeground', 'objectExplorer.countForeground', 'errorForeground'], sideBar),
+  ...text(['objectExplorer.countForeground'], sideBarHover),
   ...text(['documentTabs.activeForeground'], ['documentTabs.background', 'documentTabs.activeBackground']),
   ...text(['documentTabs.inactiveForeground'], strip),
   ...text(['documentTabs.iconForeground'], strip, ['documentTabs.background', 'documentTabs.activeBackground']),
@@ -69,10 +74,11 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground'], ['resultsGrid.headerBackground']),
   ...text(['resultsGrid.rowNumberForeground', 'resultsGrid.nullForeground'], panel, striped),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
-  ...text(sqlScopes.map(scope => `syntax:${scope}` as const), editor, ['editor.background', 'editor.lineHighlightBackground']),
+  ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
 
   ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, strip, input, ...dockTabBackgrounds.map(dockTabs)),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground', 'objectExplorer.actionForeground'], sideBar),
+  ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], sideBarHover),
   ...graphic(['titleBar.iconForeground'], titleBar),
   ...graphic(['connection.red', 'connection.orange', 'connection.yellow', 'connection.green', 'connection.blue', 'connection.purple'], sideBar, strip, editor, statusBar, widget),
   ...graphic(['connection.default'], widget, activeSelection),
@@ -87,9 +93,12 @@ export const contrastPairs: readonly ContrastPair[] = [
 
 /**
  * Hover fills carry no information (WCAG asks nothing of them) but must still be noticeable on every surface they
- * appear on; 1.2:1 is what the Dockview hover gave Varia Dark before themes.
+ * appear on; 1.2:1 is what the Dockview hover gave Varia Dark before themes. Text on a hovered button is gated above.
  */
-export const hoverPairs: readonly ContrastPair[] = pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs))
+export const hoverPairs: readonly ContrastPair[] = [
+  ...pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs)),
+  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar)
+]
 
 /** Reported, not enforced: the Dark control borders are below 3:1 until the owner decides on a heavier look. */
 export const advisoryPairs: readonly ContrastPair[] = graphic(['input.border', 'button.border'], input, widget)

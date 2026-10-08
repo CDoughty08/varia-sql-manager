@@ -14,7 +14,7 @@ vi.mock('../src/shared/theme/connection-colors', async importOriginal => {
 })
 
 const state = (revision: number, type: ThemeType = 'dark', patch: Partial<ThemeState> = {}): ThemeState =>
-  ({ revision, preference: defaultThemePreference, active: resolveBuiltin(type), fallback: false, themes: [], problems: [], problemsOmitted: 0, ...patch })
+  ({ revision, preference: defaultThemePreference, active: resolveBuiltin(type), fallback: false, themes: [], problems: [], problemsOmitted: 0, noticeId: 0, ...patch })
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const noHandler = () => new Error("Error invoking remote method 'varia:theme-state': Error: No handler registered for 'varia:theme-state'")
 function fakeApi(initial: () => Promise<ApiResult<ThemeState>> = async () => ok(state(1))) {
@@ -73,6 +73,7 @@ describe('ThemeService', () => {
       { ...state(4, 'light'), active: { ...light, syntax: { ...light.syntax, string: { foreground: '#ff000080', fontStyle: '' } } } },
       { ...state(5, 'light'), problems: [{ file: 'x.json', path: '', message: { toString: () => 'object' } }] },
       { ...state(6, 'light'), revision: '7' },
+      { ...state(7, 'light'), noticeId: undefined },
       null
     ]
     for (const payload of invalid) push(payload)
