@@ -3,6 +3,8 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 
 export type PaneVisibility = Readonly<Record<PaneId, boolean>>
+/** Where a panel is: docked in the grid, floating inside the window, or closed. */
+export type PaneLocation = 'grid' | 'floating' | 'closed'
 
 /** Which panels are showing, as the dock workspace reports it; context keys and the pane toggles read it. */
 export class PaneService extends SnapshotStore<PaneVisibility> implements Disposable {

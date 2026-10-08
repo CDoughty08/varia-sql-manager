@@ -1,10 +1,12 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type GetTabContextMenuItemsParams, type IDockviewHeaderActionsProps, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
+import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
 import { emptyLayoutState, paneIds, paneTitles, parseWorkspaceLayout, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
 import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
+import { useMenuTarget } from './menus/useMenuTarget'
+import type { PaneLocation } from './services/panes'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
@@ -33,8 +35,11 @@ function EmptyWorkspace() {
 }
 function PaneTab(props: IDockviewPanelHeaderProps) {
   const commands = useContext(PaneCommandContext)!, element = useRef<HTMLDivElement>(null)
+  // The tab's menu (Float or Dock, and Close) replaces Dockview's own, which shows only when it has items.
+  const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'dockTab', pane: props.api.id as PaneId, floating: props.api.location.type === 'floating' }))
+  const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; menuTarget(node) }, [menuTarget])
   useEffect(() => { element.current?.querySelector('button')?.setAttribute('aria-label', 'Close ' + paneTitles[props.api.id as PaneId]) }, [props.api.id])
-  return <div ref={element} className="pane-tab" data-pane-tab={props.api.id}><DockviewDefaultTab {...props}
+  return <div ref={ref} className="pane-tab" data-pane-tab={props.api.id}><DockviewDefaultTab {...props}
     closeActionOverride={() => commands.close(props.api.id as PaneId)} title="Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking"
     onDoubleClick={event => { if (event.ctrlKey && !(event.target as HTMLElement).closest('button')) commands.toggle(props.api.id as PaneId) }} /></div>
 }
@@ -68,6 +73,10 @@ export interface WorkspaceHandle {
   reveal(id: PaneId, options?: { focus?: boolean }): void
   /** Closes a panel as its × does, remembering where it was docked. */
   close(id: PaneId): void
+  location(id: PaneId): PaneLocation
+  float(id: PaneId): void
+  /** Returns a floating panel to where it was docked. */
+  dock(id: PaneId): void
   flush(): Promise<void>
 }
 
@@ -122,6 +131,11 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     returnLocations.current[id] = { reference: reference?.id as PaneId | undefined, position, edge, width: box.width, height: box.height }
   }
   function close(id: PaneId) { rememberDock(id); apiRef.current?.getPanel(id)?.api.close() }
+  function location(id: PaneId): PaneLocation {
+    const panel = apiRef.current?.getPanel(id)
+    return !panel ? 'closed' : panel.api.location.type === 'floating' ? 'floating' : 'grid'
+  }
+  function dock(id: PaneId) { if (location(id) === 'floating') toggle(id) }
   function float(id: PaneId) { rememberDock(id); const panel = apiRef.current?.getPanel(id); if (panel) apiRef.current!.addFloatingGroup(panel, { width: 520, height: 360, x: 60, y: 60 }) }
   function toggle(id: PaneId) {
     const panel = apiRef.current?.getPanel(id)
@@ -219,7 +233,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   useImperativeHandle(ref, () => ({ manage, flush, reset: () => {
     if (!defaultRef.current) return
     try { apply(defaultRef.current) } catch (error) { setError(message(error)) }
-  }, reveal, close }))
+  }, reveal, close, location, float, dock }))
   /** Showing: open, its tab selected in a visible group, and not behind another maximized group. */
   function publishVisibility(api: DockviewApi) {
     const showing = (id: PaneId) => {
@@ -274,10 +288,6 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
   // Pane commands only read refs, so stable identities keep dockview from re-applying options on every render.
   const paneCommands = useMemo<PaneCommands>(() => ({ close, float, toggle, reveal }), [])
-  const tabContextMenu = useCallback(({ panel }: GetTabContextMenuItemsParams) => [
-    { label: panel.api.location.type === 'grid' ? 'Float' : 'Dock', action: () => toggle(panel.id as PaneId) },
-    { label: 'Close panel', action: () => close(panel.id as PaneId) }
-  ], [])
   return <>
     {error && <div className="global-error layout-error" role="alert"><span>{error}</span><button aria-label="Dismiss layout error" onClick={() => setError('')}>×</button></div>}
     <PaneContext.Provider value={paneHosts}><PaneCommandContext.Provider value={paneCommands}>
@@ -285,7 +295,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       {paneIds.map(id => createPortal(panes[id], paneHosts.hosts[id], id))}
       <div className="workbench" ref={root}><DockviewReact className="dock-workbench" theme={dockThemes[themeType]} components={components} defaultTabComponent={PaneTab} watermarkComponent={EmptyWorkspace}
         rightHeaderActionsComponent={PaneActions} defaultRenderer="always" floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar"
-        dndStrategy="pointer" proportionalLayout={false} getTabContextMenuItems={tabContextMenu} onReady={onReady} /></div>
+        dndStrategy="pointer" proportionalLayout={false} onReady={onReady} /></div>
     </PaneCommandContext.Provider></PaneContext.Provider>
     {showManager && <div className="modal-backdrop" onKeyDown={event => {
       if (event.key === 'Escape' && !busy) { event.stopPropagation(); setShowManager(false) }

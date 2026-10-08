@@ -10,10 +10,11 @@ import type { FocusAdapter } from '../core/focus'
 import type { KeyDownEvent } from '../core/keybindings'
 import type { Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
-import type { Rect } from './geometry'
+import type { Anchor, Rect } from './geometry'
 import { MenuController, type CloseReason, type MenuKey } from './MenuController'
 import { MenubarAccess } from './menubar'
 import { resolveMenu, type DynamicMenuItem, type ResolvedCommandItem, type ResolvedMenuItem } from './resolve'
+import { argsFor, contextMenuLabels, menuForTarget, targetKeys, type MenuTarget, type MenuTargetService, type TargetHit } from './targets'
 
 /**
  * View › Theme's theme items as menu items: the mode and theme choices run `preferences.setTheme` with the choice as
@@ -45,10 +46,17 @@ export interface MenuServiceOptions {
   readonly findWidgetFocused?: () => boolean
   /** Where a menubar button is: its dropdown opens below it. */
   readonly menubarRect?: (id: MenubarId) => Rect | undefined
+  /** What context menus are for; without it, no context menu opens. */
+  readonly targets?: MenuTargetService
+  /** The query editor's caret line, scrolled into view: a keyboard-opened editor menu opens below it. */
+  readonly editorCaret?: () => Rect | undefined
+  /** Whether `element` is inside the topmost open dialog, where text fields keep their menu. */
+  readonly modalContains?: (element: Element) => boolean
   readonly timers?: Timers
 }
 
 const guard = (action: () => void) => { try { action() } catch (error) { onUnexpectedError(error) } }
+const hasItems = (items: readonly ResolvedMenuItem[]) => items.some(item => item.kind !== 'separator')
 const inside = (target: EventTarget | null, selector: string) => typeof (target as Partial<Element> | null)?.closest === 'function' && !!(target as Element).closest(selector)
 function menuKey(event: KeyDownEvent, platform: Platform): MenuKey {
   // AltGr types characters (Ctrl+Alt on Windows), so it is neither a shortcut nor an access key here.
@@ -57,10 +65,10 @@ function menuKey(event: KeyDownEvent, platform: Platform): MenuKey {
 }
 
 /**
- * The title-bar menus (Windows and Linux): resolves menus from the catalogue, owns the keyboard while a menu is open or
- * the menubar has focus (`KeybindingService` routes keys here first), and returns focus to where it was before the
- * menus took it. A chosen command runs only after the menus have closed and that focus is back, so Cut, Undo, and Find
- * act on the editor or field the menu was opened from.
+ * The title-bar menus (Windows and Linux) and context menus: resolves menus from the catalogue, owns the keyboard while
+ * a menu is open or the menubar has focus (`KeybindingService` routes keys here first), and returns focus to where it
+ * was before the menus took it. A chosen command runs only after the menus have closed and that focus is back, so Cut,
+ * Undo, and Find act on the editor or field the menu was opened from.
  */
 export class MenuService implements Disposable {
   readonly controller: MenuController
@@ -71,6 +79,8 @@ export class MenuService implements Disposable {
   private restoreTarget: unknown
   /** The latest focus outside the menus, the menubar, and the quick input. */
   private lastFocus: unknown
+  /** The element an open context menu is for, outlined while the menu shows. */
+  private marked?: Element
   private readonly subscriptions: Disposable[]
   private detach?: () => void
 
@@ -91,10 +101,13 @@ export class MenuService implements Disposable {
     ]
   }
 
-  /** A menu as it shows now. */
-  resolve(menu: MenuId): readonly ResolvedMenuItem[] {
+  /** A menu as it shows now; a context menu's items for `target`, whose commands run with it as their arguments. */
+  resolve(menu: MenuId, target?: MenuTarget): readonly ResolvedMenuItem[] {
     const { platform, commands, keybindings, theme } = this.options
-    return resolveMenu(menu, { platform, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state) } })
+    return resolveMenu(menu, {
+      platform, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state) },
+      ...(target ? { target: targetKeys(target), args: argsFor(target) } : {})
+    })
   }
   ownsKeyboard(): boolean { return this.controller.ownsKeyboard() }
   close(reason: CloseReason): void { this.controller.close(reason) }
@@ -136,6 +149,19 @@ export class MenuService implements Disposable {
     else this.controller.focusMenubar('file')
     return true
   }
+  /**
+   * The window's `contextmenu` event (right-click, Ctrl+click on macOS, or the context-menu key): the app owns every
+   * context menu, so the browser's never shows. The menu opens at the pointer for whatever was clicked, if it has one.
+   */
+  openFromEvent(event: Pick<MouseEvent, 'target' | 'clientX' | 'clientY' | 'preventDefault'>): void {
+    event.preventDefault()
+    // Windows sends the context-menu key's event on its release, to the menu its press has already opened.
+    if (inside(event.target, '.menu-layer')) return
+    this.openFor(event.target as Element | null, { kind: 'point', x: event.clientX, y: event.clientY }, false)
+  }
+  /** Shift+F10 and the context-menu key: the focused element's menu, below it, with its first item active. */
+  openForElement(element: Element | null, _how: { keyboard: true }): boolean { return this.openFor(element, undefined, true) }
+
   /** A menubar button activated without a pointer press (assistive technology): toggles its menu. */
   toggleMenubarMenu(id: MenubarId): void {
     const { source, menubar } = this.controller.view
@@ -165,11 +191,14 @@ export class MenuService implements Disposable {
     const blur = () => guard(() => { this.access.disarm(); this.close('blur') })
     const visibility = () => guard(() => { if (target.document.visibilityState === 'hidden') this.close('blur') })
     const focusIn = () => guard(() => { const focused = this.options.focus.capture(); if (focused !== undefined) this.lastFocus = focused })
+    // Bubble phase: Monaco has already focused the editor and moved the caret to the click.
+    const contextMenu = (event: Event) => guard(() => this.openFromEvent(event as MouseEvent))
     target.addEventListener('pointerdown', pointerDown, options)
     target.addEventListener('pointerup', pointerUp, options)
     target.addEventListener('wheel', scroll, options)
     target.addEventListener('scroll', scroll, options)
     target.addEventListener('focusin', focusIn, options)
+    target.addEventListener('contextmenu', contextMenu)
     target.addEventListener('resize', resize)
     target.addEventListener('blur', blur)
     target.document.addEventListener('visibilitychange', visibility)
@@ -179,6 +208,7 @@ export class MenuService implements Disposable {
       target.removeEventListener('wheel', scroll, options)
       target.removeEventListener('scroll', scroll, options)
       target.removeEventListener('focusin', focusIn, options)
+      target.removeEventListener('contextmenu', contextMenu)
       target.removeEventListener('resize', resize)
       target.removeEventListener('blur', blur)
       target.document.removeEventListener('visibilitychange', visibility)
@@ -189,6 +219,33 @@ export class MenuService implements Disposable {
   }
 
   private accessAllowed(): boolean { return !this.options.modalOpen() && !this.options.context.getState().quickInputVisible }
+  /**
+   * Opens the context menu for `element`: at `anchor` for the pointer, else below the element (the caret in the query
+   * editor) with its first item active. While a dialog is open only text fields in it have menus. Focus moves to what
+   * the menu is for first, so the menu returns it there and its commands act on it.
+   */
+  private openFor(element: Element | null, anchor: Anchor | undefined, keyboard: boolean): boolean {
+    const { targets } = this.options
+    if (!targets || !element) return false
+    const hit = targets.targetFor(element)
+    if (!hit) return false
+    if (this.options.modalOpen() && (hit.target.kind !== 'input' || !this.options.modalContains?.(hit.element))) return false
+    // Also undoes Monaco moving focus from its find widget's input to the editor on right-click.
+    hit.focus?.focus({ preventScroll: true })
+    const target = targets.refresh(hit.target), menu = menuForTarget[target.kind]
+    const items = this.resolve(menu, target)
+    if (!hasItems(items)) return false
+    this.controller.openContext(items, anchor ?? this.keyboardAnchor(hit), { keyboard, label: contextMenuLabels[menu] })
+    if (this.controller.view.source !== 'context') return false
+    if (hit.mark) { hit.mark.setAttribute('data-menu-target', ''); this.marked = hit.mark }
+    return true
+  }
+  private keyboardAnchor(hit: TargetHit): Anchor {
+    const caret = hit.target.kind === 'editor' ? this.options.editorCaret?.() : undefined
+    if (caret) return { kind: 'below', rect: caret }
+    const { left, top, right, bottom } = hit.element.getBoundingClientRect()
+    return { kind: 'below', rect: { left: left + 8, top, right, bottom } }
+  }
   /** The menus took the keyboard: remember where focus was, unless a menu replaced another one. */
   private ownershipChanged(): void {
     const owns = this.controller.ownsKeyboard()
@@ -208,6 +265,8 @@ export class MenuService implements Disposable {
     void this.options.commands.execute(item.id, item.args, 'menu')
   }
   private closed(reason: CloseReason): void {
+    this.marked?.removeAttribute('data-menu-target')
+    this.marked = undefined
     // Activation restores focus itself, just before its command; a menu replacing this one keeps the original target.
     if (reason === 'replace') { this.replacing = true; return }
     if (reason !== 'activate') this.options.focus.restore(this.restoreTarget)

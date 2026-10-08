@@ -513,8 +513,8 @@
         },
         "menu.selectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Highlighted item in title-bar and context menus. The editor context menu highlights with list.hoverBackground instead. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
-          "markdownDescription": "(VS Code) Highlighted item in title-bar and context menus. The editor context menu highlights with list.hoverBackground instead. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
+          "description": "(VS Code) Highlighted item in title-bar and context menus. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(VS Code) Highlighted item in title-bar and context menus. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
         },
         "menu.selectionForeground": {
           "$ref": "#/definitions/value",
@@ -653,8 +653,8 @@
         },
         "list.hoverBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Hovered list row (command palette rows included), and the highlighted item of the editor context menu. Default $hover (Dark #263041, Light #d0d8e3).",
-          "markdownDescription": "(VS Code) Hovered list row (command palette rows included), and the highlighted item of the editor context menu. Default `$hover` (Dark `#263041`, Light `#d0d8e3`)."
+          "description": "(VS Code) Hovered list row (command palette rows included). Default $hover (Dark #263041, Light #d0d8e3).",
+          "markdownDescription": "(VS Code) Hovered list row (command palette rows included). Default `$hover` (Dark `#263041`, Light `#d0d8e3`)."
         },
         "list.activeSelectionBackground": {
           "$ref": "#/definitions/value",

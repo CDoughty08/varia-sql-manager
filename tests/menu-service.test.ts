@@ -5,6 +5,8 @@ import type { FocusAdapter } from '../src/renderer/src/core/focus'
 import type { KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import { MenuService, themeMenuItems } from '../src/renderer/src/menus/MenuService'
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
+import { MenuTargetService } from '../src/renderer/src/menus/targets'
+import { fakeDocument, FakeElement } from './fixtures/elements'
 import { manualTimers, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -286,5 +288,138 @@ describe('View › Theme items', () => {
     expect(await fixture.commands.execute('preferences.setTheme', { theme: { mode: 'dark' } }, 'menu')).toBe(false)
     expect(fixture.commands.getSnapshot().error).toBe('Could not run “Preferences: Set Color Theme”: Not in this fixture.')
     vi.restoreAllMocks()
+  })
+})
+
+describe('context menus', () => {
+  /**
+   * Context menus over fake elements: two query tabs, the editor, a dialog with a field, a password field, and a
+   * button, and a field outside it. Focus is the fake document's; restores and commands are recorded in order.
+   */
+  function setup() {
+    const state = { modal: false }
+    const fixture = workbenchFixture({ modal: () => state.modal })
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const first = fixture.documents.create('one.sql', 'SELECT 1', 'master'), second = fixture.documents.create('two.sql', 'SELECT 2', 'master')
+    const tab = (id: string) => { const button = make('button', { className: 'tab-select' }); return { button, tab: make('div', { className: 'query-tab', attributes: { 'data-tab-id': id } }).append(button) } }
+    const one = tab(first.id), two = tab(second.id)
+    one.tab.rect = { left: 100, top: 40, right: 200, bottom: 68 }
+    const line = make('span'), editor = make('div', { className: 'editor-host' }).append(line)
+    const field = make('input', { value: 'localhost', selectionStart: 0, selectionEnd: 5 }), password = make('input', { type: 'password', value: 'secret', selectionStart: 0, selectionEnd: 6 })
+    const dialog = make('form', { attributes: { 'aria-modal': 'true' } }).append(field, password, make('button'))
+    const outside = make('input', { value: 'x' }), layer = make('div', { className: 'menu-layer' }).append(make('div', { className: 'menu-item' }))
+    make('body').append(one.tab, two.tab, editor, dialog, outside, layer)
+    const targets = new MenuTargetService({ editor: () => ({ container: editor.dom, tabId: fixture.documents.getSnapshot().activeId }), commandEnabled: () => true })
+    for (const element of [one.tab, two.tab]) targets.register(element.dom, registered => ({ kind: 'documentTab', tabId: (registered as unknown as FakeElement).dataset.tabId }))
+    const names = new Map<unknown, string>([[one.button, 'tab one'], [two.button, 'tab two'], [line, 'editor text'], [field, 'server field'], [password, 'password field'], [outside, 'outside field']])
+    const order: string[] = []
+    const focus: FocusAdapter = { capture: () => doc.activeElement ?? undefined, restore: target => { order.push(`restore ${names.get(target) ?? String(target)}`); (target as FakeElement | undefined)?.focus() } }
+    const caret = { left: 300, top: 120, right: 300, bottom: 139 }
+    const menus = new MenuService({ platform: 'win32', commands: fixture.commands, context: fixture.context, keybindings: fixture.keybindings, theme: fixture.theme, focus, modalOpen: () => state.modal,
+      targets, editorCaret: () => caret, modalContains: element => dialog.contains(element as unknown as FakeElement) })
+    fixture.commands.onWillExecute(event => order.push(`execute ${event.id} from ${event.source}`))
+    cleanups.push(() => { menus.dispose(); fixture.dispose() })
+    doc.activeElement = line
+    const event = (target: FakeElement, x = 10, y = 20) => ({ target: target as unknown as EventTarget, clientX: x, clientY: y, prevented: false, preventDefault() { this.prevented = true } })
+    return { fixture, menus, state, doc, order, one, two, line, editor, field, password, outside, layer, caret, event, first, second }
+  }
+  const level = (menus: MenuService) => menus.controller.view.levels[0]
+  const enablement = (items: readonly ResolvedMenuItem[]) => items.map(item => item.kind === 'command' ? `${item.title} ${item.enabled ? '+' : '-'}` : '-')
+
+  it('opens at the pointer for what was right-clicked, focusing it first and outlining it while open', () => {
+    const { menus, one, doc, order, event } = setup()
+    const click = event(one.button, 120, 50)
+    menus.openFromEvent(click)
+    expect(click.prevented).toBe(true)
+    expect(doc.activeElement).toBe(one.button)
+    expect(menus.controller.view).toMatchObject({ source: 'context', mnemonics: false })
+    expect(level(menus)).toMatchObject({ label: 'Query tab', active: -1, anchor: { kind: 'point', x: 120, y: 50 } })
+    expect(enablement(level(menus).items)).toEqual(['Save +', 'Save As… +', '-', 'Close +', 'Close All But This +', 'Close All +', '-', 'Copy Full Path -', 'Open Containing Folder -'])
+    expect(one.tab.hasAttribute('data-menu-target')).toBe(true)
+    menus.close('escape')
+    expect(one.tab.hasAttribute('data-menu-target')).toBe(false)
+    expect(order).toEqual(['restore tab one'])
+  })
+  it('runs a chosen command with the target as its arguments, after focus is back', async () => {
+    const { menus, fixture, one, order, event, first } = setup()
+    menus.openFromEvent(event(one.button))
+    const items = level(menus).items
+    expect(items[indexOf(items, 'file.closeOthers')]).toMatchObject({ args: { tabId: first.id, target: { kind: 'documentTab', tabId: first.id } } })
+    menus.controller.click(0, indexOf(items, 'file.closeOthers'))
+    expect(order).toEqual(['restore tab one', 'execute file.closeOthers from menu'])
+    expect(one.tab.hasAttribute('data-menu-target')).toBe(false)
+    await vi.waitFor(() => expect(fixture.documents.getSnapshot().documents.map(document => document.id)).toEqual([first.id]))
+  })
+  it('opens the focused element\'s menu from the keyboard, below it, first item active with access keys', () => {
+    const { menus, one, line, doc, caret } = setup()
+    doc.activeElement = one.button
+    expect(menus.openForElement(one.button.dom, { keyboard: true })).toBe(true)
+    expect(menus.controller.view.mnemonics).toBe(true)
+    expect(level(menus)).toMatchObject({ active: 0, anchor: { kind: 'below', rect: { left: 108, top: 40, right: 200, bottom: 68 } } })
+    menus.close('escape')
+    // The query editor's menu opens below the caret line.
+    doc.activeElement = line
+    expect(menus.openForElement(line.dom, { keyboard: true })).toBe(true)
+    expect(level(menus)).toMatchObject({ label: 'Query editor', active: 0, anchor: { kind: 'below', rect: caret } })
+    expect(titles(level(menus).items)).toEqual(['Connection', '-', 'Execute', 'Cancel Executing Query', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
+    expect(menus.openForElement(null, { keyboard: true })).toBe(false)
+  })
+  it('ignores events in the menus themselves, and shows nothing (not even the browser\'s menu) where nothing has one', () => {
+    const { menus, layer, event, doc } = setup()
+    for (const target of [layer.children[0], new FakeElement(doc, 'div')]) {
+      const click = event(target)
+      menus.openFromEvent(click)
+      expect(click.prevented).toBe(true)
+      expect(menus.ownsKeyboard()).toBe(false)
+    }
+  })
+  it('gives text fields Undo, the clipboard, Delete, and Select All, by what the field allows', () => {
+    const { menus, outside, password, state, doc, event } = setup()
+    menus.openFromEvent(event(outside))
+    expect(level(menus).label).toBe('Text field')
+    expect(enablement(level(menus).items)).toEqual(['Undo +', 'Redo +', '-', 'Cut -', 'Copy -', 'Paste +', 'Delete -', '-', 'Select All +'])
+    expect(level(menus).items.find(item => item.kind === 'command' && item.id === 'edit.copy')).toMatchObject({ args: { target: { kind: 'input', element: outside, hasSelection: false } } })
+    menus.close('escape')
+    state.modal = true
+    menus.openFromEvent(event(password))
+    expect(doc.activeElement).toBe(password)
+    // Nothing is copied out of a password field.
+    expect(enablement(level(menus).items)).toEqual(['Undo +', 'Redo +', '-', 'Cut -', 'Copy -', 'Paste +', 'Delete +', '-', 'Select All +'])
+  })
+  it('opens only for text fields of the open dialog while a dialog is open', () => {
+    const { menus, state, field, outside, one, line, event, order } = setup()
+    state.modal = true
+    for (const target of [outside, one.button, line]) {
+      menus.openFromEvent(event(target))
+      expect(menus.ownsKeyboard()).toBe(false)
+    }
+    expect(menus.openForElement(field.dom, { keyboard: true })).toBe(true)
+    const items = level(menus).items
+    expect(items[indexOf(items, 'edit.cut')]).toMatchObject({ enabled: true })
+    // Cut runs behind the dialog: it is a text-editing command, and focus is back in the field first.
+    menus.controller.click(0, indexOf(items, 'edit.cut'))
+    expect(order).toEqual(['restore server field', 'execute edit.cut from menu'])
+  })
+  it('opens nothing when everything in the menu is hidden', () => {
+    const { fixture, doc, event } = setup()
+    const background = new FakeElement(doc, 'div'), targets = new MenuTargetService()
+    targets.register(background.dom, () => ({ kind: 'explorer', node: { kind: 'background' } }))
+    const menus = new MenuService({ platform: 'win32', commands: fixture.commands, context: fixture.context, keybindings: fixture.keybindings, theme: fixture.theme,
+      focus: { capture: () => undefined, restore: () => {} }, modalOpen: () => false, targets })
+    cleanups.push(() => menus.dispose())
+    expect(menus.openForElement(background.dom, { keyboard: true })).toBe(false)
+    menus.openFromEvent(event(background))
+    expect([menus.ownsKeyboard(), background.hasAttribute('data-menu-target')]).toEqual([false, false])
+  })
+  it('opens from the window\'s contextmenu event, and stops listening when detached', () => {
+    const { menus, one, event } = setup()
+    const listeners = new Map<string, (event: unknown) => void>()
+    const document = { addEventListener: () => {}, removeEventListener: () => {} }
+    const window = { document, addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, listener) }, removeEventListener: (type: string) => { listeners.delete(type) } }
+    const attached = menus.attach(window as unknown as Window)
+    listeners.get('contextmenu')!(event(one.button))
+    expect(level(menus).label).toBe('Query tab')
+    attached.dispose()
+    expect(listeners.has('contextmenu')).toBe(false)
   })
 })

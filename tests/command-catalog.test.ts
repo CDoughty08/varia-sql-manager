@@ -16,7 +16,7 @@ const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConfl
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    expect(commandIds).toHaveLength(51)
+    expect(commandIds).toHaveLength(58)
   })
   it('has a handler for every command once all contributions have run', () => {
     const fixture = workbenchFixture()
@@ -57,9 +57,13 @@ describe('command catalogue', () => {
     const characters = getCodiconFontCharacters()
     for (const icon of codicons) expect(Object.hasOwn(characters, icon), icon).toBe(true)
   })
-  it('lets exactly window close and the text-editing commands run behind a modal', () => {
-    // Text fields in dialogs keep Undo, Redo, and the clipboard.
-    expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['window.close', 'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
+  it('lets exactly window close, the text-editing commands, and the context-menu key run behind a modal', () => {
+    // Text fields in dialogs keep Undo, Redo, the clipboard, and their context menu.
+    expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['window.close', 'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
+      'workbench.showContextMenu'])
+    for (const platform of platforms) for (const rule of defaultRules(platform).filter(rule => rule.modal)) expect(commandDescriptor(rule.command).allowInModal, rule.command).toBe(true)
+    expect(defaultRules('win32').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'contextmenu'])
+    expect(defaultRules('darwin').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10'])
   })
   it('gives role-backed commands only native keys, and platform titles without access keys', () => {
     for (const id of commandIds) if (commandDescriptor(id).role) for (const spec of commandDescriptor(id).keybindings ?? []) expect(spec.native, id).toBe(true)
@@ -119,7 +123,8 @@ describe('command catalogue', () => {
     }
     for (const platform of platforms) for (const menu of menuIds) expect(buildMenuModel(menu, platform).length, menu).toBeLessThanOrEqual(200)
   })
-  it.each(platforms)('gives every menu item a mnemonic, unique in its menu, with explicit ones in their titles on %s', platform => {
+  // macOS menus show no access keys, so "Reveal in Finder" may lack the letter of "&Open Containing Folder".
+  it.each(['win32', 'linux'] as const)('gives every menu item a mnemonic, unique in its menu, with explicit ones in their titles on %s', platform => {
     // View › Theme's fixed theme items share its level with the catalogue's.
     const themeItems = themeMenuModel({ preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes: [] })
     for (const menu of menuIds) {

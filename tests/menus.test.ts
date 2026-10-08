@@ -62,8 +62,11 @@ describe('menu model', () => {
       const command = commandDescriptor(entry.id)
       expect(entry.title, entry.nativeId).toBe(command.menus!.find(placement => placement.menu === menu)!.title ?? command.platformTitles?.[platform] ?? command.title)
       expect(entry.role, entry.nativeId).toBe(command.role)
-      expect(entry.when, entry.nativeId).toBeUndefined()
+      const when = command.menus!.find(placement => placement.menu === menu)!.when
+      expect(entry.when, entry.nativeId).toEqual(when === undefined ? undefined : compileWhen(when))
     }
+    const float = buildMenuModel('dockTab.context', 'linux').find(entry => entry.kind === 'command' && entry.id === 'pane.float')
+    expect(float?.kind === 'command' && float.when && [evaluateWhen(float.when, { paneFloating: false }), evaluateWhen(float.when, { paneFloating: true })]).toEqual([true, false])
   })
   it('prunes hidden entries, empty submenus, and stray separators', () => {
     const command = (id: CommandId, when?: string): MenuEntry => ({ kind: 'command', id, nativeId: id, title: id, toggle: false, ...(when ? { when: compileWhen(when) } : {}) })
@@ -159,10 +162,15 @@ describe('mnemonics', () => {
 
 describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
-    // The editor menu's Connection submenu is Query › Connection; PR3's later commits place the other context items.
-    expect(contextCommandIds('editor.context')).toEqual(['connection.connect', 'query.changeConnection', 'query.disconnect', 'query.disconnectAll'])
+    // The editor menu's Connection submenu is Query › Connection.
+    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'query.changeConnection',
+      'query.disconnect', 'query.disconnectAll'])
+    expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder'])
+    expect(contextCommandIds('dockTab.context')).toEqual(['pane.float', 'pane.dock', 'pane.close'])
+    expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
     for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => menuIds.some(inner => menuRoots(inner).includes(menu) && commandDescriptor(id).menus?.some(placement => placement.menu === inner))))
-    expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['query.execute'], disabled: [], checked: [] }).success).toBe(false)
+    expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['query.execute'], disabled: [], checked: [] }).success).toBe(true)
+    expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['file.save'], disabled: [], checked: [] }).success).toBe(false)
   })
   const trees: Partial<Record<ContextMenuId, CommandId[]>> = { 'editor.context': ['query.execute', 'query.cancel', 'editor.toggleWordWrap'], 'documentTab.context': ['file.save', 'file.close'] }
   const schema = createContextMenuRequestSchema(menu => trees[menu] ?? [])
@@ -278,7 +286,9 @@ describe('menu state', () => {
   it('covers every command in a native menu, except Electron roles, and every toggle', () => {
     // The other theme commands are in the palette only: the native Theme submenu keeps PR1's items for them.
     const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
-    const unplaced = ['explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder', 'preferences.reloadThemes', 'preferences.setTheme']
+    // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
+    const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
+      'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

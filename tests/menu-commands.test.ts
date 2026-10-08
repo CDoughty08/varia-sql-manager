@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { connectionInfo, workbenchFixture } from './fixtures/workbench'
 import { deferred, TestEditor } from './fixtures/documents'
+import type { CommandArgs } from '../src/renderer/src/core/types'
+import type { InputTarget } from '../src/renderer/src/menus/targets'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -141,5 +143,99 @@ describe('connection and document commands', () => {
     expect(commands.isEnabled('file.closeAll')).toBe(true)
     expect(await commands.execute('file.closeAll', undefined, 'menu')).toBe(true)
     expect(documents.getSnapshot().documents).toEqual([])
+  })
+})
+
+describe('context menu commands', () => {
+  const field = (facts: Partial<Omit<InputTarget, 'kind' | 'element'>> = {}): CommandArgs => ({
+    target: { kind: 'input', element: {} as HTMLElement, readOnly: false, secret: false, hasSelection: true, empty: false, canUndo: true, canRedo: true, ...facts }
+  })
+  it('enable a text field\'s editing commands by what the field allows', () => {
+    const { commands } = setup()
+    const enabled = (args?: CommandArgs) => (['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'] as const).filter(id => commands.isEnabled(id, args))
+    expect(enabled()).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
+    expect(enabled(field())).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
+    expect(enabled(field({ hasSelection: false }))).toEqual(['edit.undo', 'edit.redo', 'edit.paste', 'edit.selectAll'])
+    expect(enabled(field({ secret: true }))).toEqual(['edit.undo', 'edit.redo', 'edit.paste', 'edit.delete', 'edit.selectAll'])
+    expect(enabled(field({ readOnly: true }))).toEqual(['edit.undo', 'edit.redo', 'edit.copy', 'edit.selectAll'])
+    expect(enabled(field({ empty: true, hasSelection: false, canUndo: false, canRedo: false }))).toEqual(['edit.paste'])
+    // Other targets (the editor's menu) leave them enabled.
+    expect(enabled({ target: { kind: 'editor', tabId: 'x' }, tabId: 'x' })).toHaveLength(7)
+  })
+  it('undo and redo in the field the menu was opened for, the editor\'s find inputs included', async () => {
+    const { commands, documents } = setup()
+    const editor = new FocusableEditor()
+    documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
+    const binding = documents.bindEditor(editor.asEditor())
+    cleanups.push(() => binding.dispose())
+    const execCommand = vi.fn()
+    vi.stubGlobal('document', { execCommand, activeElement: null })
+    cleanups.push(() => vi.unstubAllGlobals())
+    expect(await commands.execute('edit.undo', field(), 'menu')).toBe(true)
+    expect(await commands.execute('edit.redo', field(), 'menu')).toBe(true)
+    expect(execCommand.mock.calls).toEqual([['undo'], ['redo']])
+    expect(editor.trigger).not.toHaveBeenCalled()
+    expect(await commands.execute('edit.undo', field({ canUndo: false }), 'menu')).toBe(false)
+  })
+  it('close every query but the one whose tab the menu is for', async () => {
+    const { commands, documents, startQuery, files, connections } = setup()
+    const one = documents.create('one.sql', '', 'master'), two = documents.create('two.sql', '', 'master')
+    expect(commands.isEnabled('file.closeOthers', { tabId: one.id })).toBe(true)
+    expect(commands.isEnabled('file.closeOthers', { tabId: 'gone' })).toBe(false)
+    connections.add(connectionInfo('server-a'))
+    const three = documents.create('three.sql', 'SELECT 3', 'master', 'server-a')
+    const running = startQuery()
+    expect(await commands.execute('file.closeOthers', { tabId: one.id }, 'menu')).toBe(true)
+    // The running query stays open and is reported; without a tab, the active query is kept.
+    expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([one.id, three.id])
+    expect(files.getSnapshot().error).toBe('1 query is still running and stayed open.')
+    await running.finish()
+    expect(await commands.execute('file.closeOthers', undefined, 'palette')).toBe(true)
+    expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([three.id])
+    expect(commands.isEnabled('file.closeOthers')).toBe(false)
+    expect(documents.get(two.id)).toBeUndefined()
+  })
+  it('copy a saved query\'s path and show it in its folder through main, and stay disabled for an unsaved one', async () => {
+    const { commands, documents, api } = setup()
+    const saved = documents.create('saved.sql', '', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql' })
+    const unsaved = documents.create('SQLQuery2.sql', '', 'master')
+    for (const id of ['file.copyPath', 'file.revealInFolder'] as const) {
+      expect(commands.isEnabled(id), id).toBe(false)
+      expect(commands.isEnabled(id, { tabId: saved.id }), id).toBe(true)
+    }
+    expect(await commands.execute('file.copyPath', { tabId: saved.id }, 'menu')).toBe(true)
+    expect(await commands.execute('file.revealInFolder', { tabId: saved.id }, 'menu')).toBe(true)
+    expect(await commands.execute('file.copyPath', { tabId: unsaved.id }, 'menu')).toBe(false)
+    expect(api.writeClipboardText.mock.calls).toEqual([['/queries/saved.sql']])
+    expect(api.revealSqlFile.mock.calls).toEqual([['6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1']])
+    api.revealSqlFile.mockResolvedValueOnce({ ok: false, error: 'This SQL file is no longer open. Use Save As to select a file.' })
+    expect(await commands.execute('file.revealInFolder', { tabId: saved.id }, 'menu')).toBe(false)
+    expect(commands.getSnapshot().error).toBe('Could not run “File: Open Containing Folder”: This SQL file is no longer open. Use Save As to select a file.')
+  })
+  it('float, dock, and close the panel whose tab the menu is for', async () => {
+    const { commands, host } = setup()
+    const tab = (pane: 'explorer' | 'output'): CommandArgs => ({ target: { kind: 'dockTab', pane, floating: false } })
+    vi.mocked(host.paneLocation).mockImplementation(pane => pane === 'output' ? 'floating' : 'grid')
+    const enabled = (args?: CommandArgs) => (['pane.float', 'pane.dock', 'pane.close'] as const).filter(id => commands.isEnabled(id, args))
+    expect(enabled(tab('explorer'))).toEqual(['pane.float', 'pane.close'])
+    expect(enabled(tab('output'))).toEqual(['pane.dock', 'pane.close'])
+    expect(enabled()).toEqual([])
+    await commands.execute('pane.float', tab('explorer'), 'menu')
+    await commands.execute('pane.dock', tab('output'), 'menu')
+    await commands.execute('pane.close', tab('output'), 'menu')
+    expect([vi.mocked(host.floatPane).mock.calls, vi.mocked(host.dockPane).mock.calls, vi.mocked(host.closePane).mock.calls]).toEqual([[['explorer']], [['output']], [['output']]])
+    vi.mocked(host.paneLocation).mockReturnValue('closed')
+    expect(enabled(tab('output'))).toEqual([])
+  })
+  it('open the focused element\'s menu for Shift+F10, except over the quick input', async () => {
+    const { commands, menus, quickInput } = setup()
+    const open = vi.spyOn(menus, 'openForElement').mockReturnValue(true)
+    const focused = {}
+    vi.stubGlobal('document', { activeElement: focused })
+    cleanups.push(() => vi.unstubAllGlobals())
+    expect(await commands.execute('workbench.showContextMenu', undefined, 'keybinding')).toBe(true)
+    expect(open.mock.calls).toEqual([[focused, { keyboard: true }]])
+    quickInput.show({ ariaLabel: 'Command Palette', placeholder: '', noun: 'commands', items: [], onDidAccept: () => {} })
+    expect(commands.isEnabled('workbench.showContextMenu')).toBe(false)
   })
 })

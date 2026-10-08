@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
-/* VS Code variables standalone Monaco uses but never defines: the context menu's border width, and the shadow of the find
-   and hover widgets (the context menu falls back to this same shadow). */
+/* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
+   shadow of the find and hover widgets. */
 :root { --vscode-strokeThickness: 1px; --vscode-shadow-lg: 0 0 12px var(--varia-widget-shadow); }
 * { box-sizing: border-box; }
 body { margin: 0; user-select: none; }
@@ -48,6 +48,8 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .menu-item[data-active] .menu-keybinding { color: inherit; }
 .menu-chevron { display: grid; place-items: center; }
 .menu-separator { height: 1px; margin: 4px 8px 4px 28px; background: var(--varia-menu-separatorBackground); }
+/* What an open context menu is for: a query tab, a panel tab, or an Object Explorer node. */
+[data-menu-target] { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 @media (forced-colors: active) {
   .menu { border-color: CanvasText; }
   .menu-item[data-active] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
@@ -69,7 +71,7 @@ select, input { background: var(--varia-input-background); border: 1px solid var
 input::placeholder, textarea::placeholder { color: var(--varia-input-placeholderForeground); }
 .toolbar-context select { width: 100%; height: 28px; padding: 0 8px; }
 .workbench { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
-/* Dockview puts its theme class on the shell, which also hosts floating groups and the tab context menu; two classes outrank its theme rules. */
+/* Dockview puts its theme class on the shell, which also hosts floating groups; two classes outrank its theme rules. */
 .varia-dock.dockview-theme-dark, .varia-dock.dockview-theme-light {
   --dv-group-view-background-color: var(--varia-dock-background);
   --dv-tabs-and-actions-container-background-color: var(--varia-editorGroupHeader-tabsBackground);
@@ -95,8 +97,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   --dv-scrollbar-background-color: var(--varia-scrollbarSlider-background);
   --dv-floating-border: 1px solid var(--varia-widget-border);
   --dv-floating-box-shadow: 0 8px 32px var(--varia-widget-shadow);
-  --dv-context-menu-background-color: var(--varia-menu-background);
-  --dv-context-menu-color: var(--varia-menu-foreground);
 }
 /* Dockview draws the dock tab focus ring in the tab divider color, which is invisible on the tab. */
 .varia-dock .dv-tab:focus-visible::after, .varia-dock .dv-tab:has(:focus-visible)::after { outline-color: var(--varia-focusBorder) !important; }

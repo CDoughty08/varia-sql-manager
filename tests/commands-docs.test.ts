@@ -17,7 +17,9 @@ describe('generated command documentation', () => {
   })
   it('shows each platform\'s keys and marks native ones', () => {
     expect(docs).toContain('| New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |')
-    expect(docs).toContain('| Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo |')
+    expect(docs).toContain('| Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo; Text field context menu › Redo |')
+    expect(docs).toContain('| Show Context Menu (not in the palette) | `workbench.showContextMenu` | Shift+F10, Menu | Shift+F10, Menu | ⇧F10 | `!quickInputVisible` | — |')
+    expect(docs).toContain('Query tab context menu › Open Containing Folder (Windows, Linux only); Query tab context menu › Reveal in Finder (macOS only) |')
     expect(docs).toContain('| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) |')
     expect(docs).toContain('| Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | View › Word Wrap |')
     expect(docs).toContain('| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `hasActiveDocument` | Edit › Uncomment Selection |')

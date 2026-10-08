@@ -142,6 +142,10 @@ export interface VariaApi {
   openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>
+  /** Shows an open query's saved file in the file manager; main looks its path up by id. */
+  revealSqlFile(fileId: string): Promise<ApiResult<void>>
+  /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
+  writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
   closeWindow(): Promise<void>
   loadLayouts(): Promise<ApiResult<LayoutLoad>>

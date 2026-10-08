@@ -1,0 +1,85 @@
+# Context menus on darwin; enablement per state: disconnected, connected, running, busy
+editor.context, for the query editor
+  C&onnection >
+    &Connect…  ++++
+    &Disconnect  -+--
+    Disconnect &All Queries  -++-
+    ---
+    C&hange Connection…  ++--
+  ---
+  E&xecute  F5  -+--
+  Ca&ncel Executing Query  --+-
+  ---
+  Cu&t  ⌘X  ++++
+  &Copy  ⌘C  ++++
+  &Paste  ⌘V  ++++
+  ---
+  Comm&and Palette…  ⇧⌘P  ++++
+documentTab.context, for a saved query's tab
+  &Save  ⌘S  +++-
+  Save &As…  ⇧⌘S  +++-
+  ---
+  &Close  ⌘W  ++--
+  Close All &But This  +++-
+  C&lose All  +++-
+  ---
+  Copy Full &Path  ++++
+  Reveal in Finder  ++++
+documentTab.context, for an unsaved query's tab
+  &Save  ⌘S  +++-
+  Save &As…  ⇧⌘S  +++-
+  ---
+  &Close  ⌘W  +++-
+  Close All &But This  +++-
+  C&lose All  +++-
+  ---
+  Copy Full &Path  ----
+  Reveal in Finder  ----
+dockTab.context, for a docked panel's tab
+  &Float  ++++
+  ---
+  &Close  ++++
+dockTab.context, for a floating panel's tab
+  &Dock  ++++
+  ---
+  &Close  ++++
+input.context, for a text field with selected text
+  &Undo  ⌘Z  ++++
+  &Redo  ⇧⌘Z  ----
+  ---
+  Cu&t  ⌘X  ++++
+  &Copy  ⌘C  ++++
+  &Paste  ⌘V  ++++
+  &Delete  ⌦  ++++
+  ---
+  Select &All  ⌘A  ++++
+input.context, for a read-only text field
+  &Undo  ⌘Z  ++++
+  &Redo  ⇧⌘Z  ----
+  ---
+  Cu&t  ⌘X  ----
+  &Copy  ⌘C  ++++
+  &Paste  ⌘V  ----
+  &Delete  ⌦  ----
+  ---
+  Select &All  ⌘A  ++++
+input.context, for a password field
+  &Undo  ⌘Z  ++++
+  &Redo  ⇧⌘Z  ----
+  ---
+  Cu&t  ⌘X  ----
+  &Copy  ⌘C  ----
+  &Paste  ⌘V  ++++
+  &Delete  ⌦  ++++
+  ---
+  Select &All  ⌘A  ++++
+input.context, for an empty text field
+  &Undo  ⌘Z  ----
+  &Redo  ⇧⌘Z  ----
+  ---
+  Cu&t  ⌘X  ----
+  &Copy  ⌘C  ----
+  &Paste  ⌘V  ++++
+  &Delete  ⌦  ----
+  ---
+  Select &All  ⌘A  ----

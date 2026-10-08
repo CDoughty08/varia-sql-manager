@@ -16,8 +16,10 @@ import { paletteContribution } from '../contributions/palette'
 import { themeContribution } from '../contributions/theme'
 import { editContribution } from '../contributions/edit'
 import { windowContribution } from '../contributions/window'
+import { menusContribution } from '../contributions/menus'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
+import { MenuTargetService } from '../menus/targets'
 import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
 import { ContextKeyService } from './contextkeys'
@@ -37,6 +39,8 @@ export interface Workbench extends Disposable {
   readonly keybindings: KeybindingService
   readonly menuState: MenuStatePublisher
   readonly menus: MenuService
+  /** What context menus are for: components register their elements with `useMenuTarget`. */
+  readonly menuTargets: MenuTargetService
   readonly quickInput: QuickInputService
   readonly documents: DocumentService
   readonly queries: QueryService
@@ -46,6 +50,17 @@ export interface Workbench extends Disposable {
   readonly editorOptions: EditorOptionsService
   readonly panes: PaneService
   readonly theme: ThemeService
+}
+/** The query editor's caret line in window coordinates, scrolled into view first: keyboard-opened editor menus open below it. */
+function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
+  const editor = documents.boundEditor, position = editor?.getPosition()
+  if (!editor || !position) return undefined
+  editor.revealPosition(position, monaco.editor.ScrollType.Immediate)
+  editor.render()
+  const caret = editor.getScrolledVisiblePosition(position), box = editor.getContainerDomNode().getBoundingClientRect()
+  if (!caret) return undefined
+  const left = box.left + caret.left, top = box.top + caret.top
+  return { left, top, right: left, bottom: top + caret.height }
 }
 export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService): Workbench {
   const platform = toPlatform(api.platform)
@@ -58,16 +73,21 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const quickInput = new QuickInputService(focus)
   const context = new ContextKeyService({ platform, documents, queries, connections, editorOptions, panes, quickInput: quickInput.visibility, editor: () => documents.boundEditor })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
+  const menuTargets = new MenuTargetService({ editor: () => {
+    const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
+    return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
+  } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
   const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, focus, modalOpen,
     findWidgetFocused: () => !!document.activeElement?.closest('.monaco-editor .find-widget'),
-    menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect() })
+    menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
+    modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, quickInput, documents, queries, connections, files, targets, editorOptions, panes, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, files, targets, editorOptions, panes, theme, dispose: () => {
     if (disposed) return
     disposed = true
     // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
@@ -75,8 +95,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     contributions.forEach(contribution => contribution.dispose())
     cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); theme.dispose(); events.dispose()
   } }
-  const contributions = [queryContribution(workbench, api), filesContribution(workbench), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    paletteContribution(workbench), themeContribution(workbench, api)]
+  const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
+    menusContribution(workbench), paletteContribution(workbench), themeContribution(workbench, api)]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')

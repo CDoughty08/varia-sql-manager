@@ -15,6 +15,8 @@ import { editorContribution } from '../../src/renderer/src/contributions/editor'
 import { editContribution } from '../../src/renderer/src/contributions/edit'
 import { windowContribution } from '../../src/renderer/src/contributions/window'
 import { MenuService } from '../../src/renderer/src/menus/MenuService'
+import { MenuTargetService } from '../../src/renderer/src/menus/targets'
+import { menusContribution } from '../../src/renderer/src/contributions/menus'
 import { filesContribution } from '../../src/renderer/src/contributions/files'
 import { paletteContribution } from '../../src/renderer/src/contributions/palette'
 import { queryContribution } from '../../src/renderer/src/contributions/query'
@@ -77,7 +79,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     previewTheme: vi.fn<VariaApi['previewTheme']>(async () => ({ ok: true, value: null })),
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     createCustomTheme: vi.fn<VariaApi['createCustomTheme']>(async () => ({ ok: true, value: undefined })),
-    runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined }))
+    runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
+    writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
+    revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined }))
   }
   const { documents, events } = doc
   const connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService()
@@ -90,7 +94,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
-    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), refreshExplorer: vi.fn(), closePane: vi.fn()
+    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), refreshExplorer: vi.fn(), closePane: vi.fn(),
+    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn()
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())
   // tests/theme-picker.test.ts drives a real ThemeService; here the theme commands only need somewhere to go.
@@ -98,11 +103,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     state: { revision: 0, preference: defaultThemePreference, active: resolveBuiltin('dark'), fallback: false, themes: [], problems: [], problemsOmitted: 0, noticeId: 0 },
     preview: vi.fn(), endPreview: vi.fn(), receive: vi.fn(), reload: vi.fn(async () => {}), openFolder: vi.fn(async () => {})
   }
-  const workbench = { commands, documents, queries, files, editorOptions, connections, targets, quickInput, keybindings, events, theme, panes }
-  const contributions = [queryContribution(workbench, api), filesContribution(workbench), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    shellContribution(workbench, host), paletteContribution(workbench, history), themeContribution(workbench, api, options.timers)]
-  // The title-bar menus over these services: resolution, enablement, and activation, without the DOM.
-  const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers })
+  // The menus over these services: resolution, enablement, and activation, without the DOM.
+  const menuTargets = new MenuTargetService({ commandEnabled: () => true })
+  const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const workbench = { commands, documents, queries, files, editorOptions, connections, targets, quickInput, keybindings, events, theme, panes, menus }
+  const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
+    menusContribution(workbench), shellContribution(workbench, host), paletteContribution(workbench, history), themeContribution(workbench, api, options.timers)]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
     const pending = deferred<Awaited<ReturnType<VariaApi['execute']>>>()
@@ -111,5 +117,5 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     return { finish: async () => { pending.resolve({ ok: true, value: queryOutput }); await running } }
   }
   const dispose = () => { menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose() }
-  return { ...doc, api, connections, editorOptions, panes, queries, files, targets, context, commands, keybindings, menus, quickInput, focus: focus.state, history, host, theme, startQuery, dispose }
+  return { ...doc, api, connections, editorOptions, panes, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, history, host, theme, startQuery, dispose }
 }

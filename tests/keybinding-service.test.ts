@@ -85,6 +85,18 @@ describe('keybinding dispatch', () => {
     press(key('F6', 'F6'))
     expect(ran()).toEqual(['edit.undo', 'edit.redo', 'file.new'])
   })
+  it('opens context menus with Shift+F10 and the context-menu key, in dialogs too (text fields have menus there)', () => {
+    for (const platform of platforms) {
+      const { press, ran, state } = service(platform)
+      expect(press(key('F10', 'F10', { shift: true })).consumed, platform).toBe(true)
+      state.modal = true
+      expect(press(key('F10', 'F10', { shift: true })).consumed, platform).toBe(true)
+      // The context-menu key is a Windows and Linux key; macOS opens menus with Ctrl+click or Shift+F10.
+      expect(press(key('ContextMenu', 'ContextMenu')).consumed, platform).toBe(platform !== 'darwin')
+      expect(press(letter('n', platform)).consumed, platform).toBe(false)
+      expect(ran(), platform).toEqual(['workbench.showContextMenu', 'workbench.showContextMenu', ...platform === 'darwin' ? [] : ['workbench.showContextMenu']])
+    }
+  })
   it('ignores IME composition, handled events, and modifier-only presses', () => {
     const { press, execute } = service('win32')
     for (const event of [letter('n', 'win32', { isComposing: true }), letter('n', 'win32', { keyCode: 229 }), letter('n', 'win32', { defaultPrevented: true }), key('ControlLeft', 'Control', { ctrl: true }), key('Quote', 'Dead', { ctrl: true })]) {

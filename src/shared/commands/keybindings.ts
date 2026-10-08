@@ -228,7 +228,7 @@ const mnemonics = ['alt+f', 'alt+e', 'alt+v', 'alt+q', 'alt+w']
 const reserve = (reason: string, chords: string[]) => chords.map(chord => [chord, reason] as const)
 const windowsAndLinux = [
   ...reserve('opens a menu', [...mnemonics, 'f10']),
-  ...reserve('an Electron role or system key', ['ctrl+shift+i', 'ctrl+0', 'ctrl+=', 'ctrl+shift+=', 'ctrl+-', 'f11', 'alt+f4', 'shift+f10', 'contextmenu']),
+  ...reserve('an Electron role or system key', ['ctrl+shift+i', 'ctrl+0', 'ctrl+=', 'ctrl+shift+=', 'ctrl+-', 'f11', 'alt+f4']),
   ...reserve('clipboard or text editing', ['ctrl+c', 'ctrl+x', 'ctrl+v', 'ctrl+a', 'ctrl+insert', 'shift+insert', 'shift+delete', 'ctrl+z', 'ctrl+y', 'ctrl+shift+z',
     ...['left', 'right', 'backspace', 'delete'].flatMap(key => [`ctrl+${key}`, `ctrl+shift+${key}`])]),
   ...reserve('find or comment in the editor', ['ctrl+f', 'ctrl+h', 'f3', 'shift+f3', 'ctrl+f3', 'ctrl+shift+f3', 'alt+enter', 'ctrl+alt+enter', 'ctrl+shift+1',

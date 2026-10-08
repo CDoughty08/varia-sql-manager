@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, dialog, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -22,6 +22,7 @@ import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererFile = join(here, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
+const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendClient
 const files = new SqlFileStore()
@@ -171,9 +172,9 @@ function createWindow(): void {
   }
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   contents.on('will-navigate', event => event.preventDefault())
-  // Monaco's context-menu Paste reads the clipboard; every other permission stays denied.
+  // The page never reads the clipboard (Paste is Electron's role, and copies the renderer makes go through main); every other permission stays denied.
   contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
-    callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && (permission === 'clipboard-read' || permission === 'clipboard-sanitized-write'))
+    callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
   })
   contents.session.webRequest.onHeadersReceived((details, callback) => {
     const connect = developmentUrl ? `${new URL(developmentUrl).origin} ws://127.0.0.1:* ws://localhost:*` : "'self'"
@@ -296,6 +297,9 @@ app.whenReady().then(async () => {
     return files.save(options.content, options.fileId, selectedPath)
   })
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
+  handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
+  // Write only: there is no clipboard read, and the length is bounded like a full results grid copy.
+  handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
     const response = await dialog.showMessageBox(mainWindow!, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true })

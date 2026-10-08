@@ -19,7 +19,7 @@ function fixture() {
   }
   const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false) }
   const files = new FileService(doc.documents, queries, api), commands = new CommandService()
-  const contribution = filesContribution({ files, commands, documents: doc.documents })
+  const contribution = filesContribution({ files, commands, documents: doc.documents }, { writeClipboardText: async () => ({ ok: true, value: undefined }), revealSqlFile: async () => ({ ok: true, value: undefined }) })
   doc.documents.create('SQLQuery1.sql', '', 'master', 'server-a')
   cleanups.push(() => { contribution.dispose(); commands.dispose(); files.dispose(); doc.documents.dispose() })
   return { ...doc, api, queries, files, commands, contribution }

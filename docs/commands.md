@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (51)
+## Commands (58)
 
 ### File
 
@@ -16,22 +16,25 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
-| Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save |
-| Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As… |
-| Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query |
-| Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents |
+| Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
+| Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
+| Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
+| Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
+| Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents; Query tab context menu › Close All |
+| Copy Full Path | `file.copyPath` | — | — | — | `hasActiveDocument` | Query tab context menu › Copy Full Path |
+| Open Containing Folder | `file.revealInFolder` | — | — | — | `hasActiveDocument` | Query tab context menu › Open Containing Folder (Windows, Linux only); Query tab context menu › Reveal in Finder (macOS only) |
 
 ### Edit
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Undo | `edit.undo` | Ctrl+Z * | Ctrl+Z * | ⌘Z * | Always | Edit › Undo |
-| Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo |
-| Cut (not in the palette) | `edit.cut` | Ctrl+X * | Ctrl+X * | ⌘X * | Always | Edit › Cut |
-| Copy (not in the palette) | `edit.copy` | Ctrl+C * | Ctrl+C * | ⌘C * | Always | Edit › Copy |
-| Paste (not in the palette) | `edit.paste` | Ctrl+V * | Ctrl+V * | ⌘V * | Always | Edit › Paste |
-| Delete (not in the palette) | `edit.delete` | Delete * | Delete * | ⌦ * | Always | Edit › Delete |
-| Select All (not in the palette) | `edit.selectAll` | Ctrl+A * | Ctrl+A * | ⌘A * | Always | Edit › Select All |
+| Undo | `edit.undo` | Ctrl+Z * | Ctrl+Z * | ⌘Z * | Always | Edit › Undo; Text field context menu › Undo |
+| Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo; Text field context menu › Redo |
+| Cut (not in the palette) | `edit.cut` | Ctrl+X * | Ctrl+X * | ⌘X * | Always | Edit › Cut; Editor context menu › Cut; Text field context menu › Cut |
+| Copy (not in the palette) | `edit.copy` | Ctrl+C * | Ctrl+C * | ⌘C * | Always | Edit › Copy; Editor context menu › Copy; Text field context menu › Copy |
+| Paste (not in the palette) | `edit.paste` | Ctrl+V * | Ctrl+V * | ⌘V * | Always | Edit › Paste; Editor context menu › Paste; Text field context menu › Paste |
+| Delete (not in the palette) | `edit.delete` | Delete * | Delete * | ⌦ * | Always | Edit › Delete; Text field context menu › Delete |
+| Select All (not in the palette) | `edit.selectAll` | Ctrl+A * | Ctrl+A * | ⌘A * | Always | Edit › Select All; Text field context menu › Select All |
 | Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find |
 | Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Replace |
 | Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Toggle Line Comment |
@@ -56,13 +59,16 @@ keys it uses are listed below.
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
 | Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
+| Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
+| Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
+| Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
 
 ### Query
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute |
-| Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query |
+| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute; Editor context menu › Execute |
+| Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
@@ -103,7 +109,8 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Close Window (not in the palette) | `window.close` | Alt+F4 * | Ctrl+Q * | — | Always | File › Exit (Windows only); File › Quit (Linux only) |
-| Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette… |
+| Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette…; Editor context menu › Command Palette… |
+| Show Context Menu (not in the palette) | `workbench.showContextMenu` | Shift+F10, Menu | Shift+F10, Menu | ⇧F10 | `!quickInputVisible` | — |
 | Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
 
 ## Context keys (22)
@@ -145,7 +152,7 @@ Workbench keybindings never use these keys, because menus, Electron, the operati
 | Reason | Windows | Linux | macOS |
 | --- | --- | --- | --- |
 | opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | — |
-| an Electron role or system key | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu, Ctrl+Q | — |
+| an Electron role or system key | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4 | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Ctrl+Q | — |
 | clipboard or text editing | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | — |
 | find or comment in the editor | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\ | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\, Ctrl+Shift+A | ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, ⌘E, ⌘/, ⌥⌘C, ⌥⌘W, ⌥⌘R, ⌥⌘P, ⌥⌘L |
 | the editor's chord prefix | Ctrl+K | Ctrl+K | ⌘K |

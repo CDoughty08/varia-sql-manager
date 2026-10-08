@@ -18,6 +18,15 @@ describe('keyboard lint', () => {
     expect(readFileSync(join('src', 'main', 'index.ts'), 'utf8')).not.toMatch(/before-input-event/)
     for (const file of [join('src', 'main', 'index.ts'), join('src', 'preload', 'index.ts')]) expect(readFileSync(file, 'utf8'), file).not.toMatch(/varia:menu-(popup|focus)/)
   })
+  it('opens context menus only through the menu service, and never lets the page read the clipboard', () => {
+    // Right-clicks, Ctrl+clicks, and the context-menu key all arrive as one window contextmenu event.
+    const listeners = files(renderer).filter(file => /addEventListener\(\s*['"`]contextmenu['"`]/.test(readFileSync(file, 'utf8'))).map(file => relative(renderer, file).replaceAll('\\', '/'))
+    expect(listeners).toEqual(['src/menus/MenuService.ts'])
+    // Monaco's own menu and Dockview's tab menu are replaced; the clipboard is written through main and never read.
+    expect(readFileSync(join(renderer, 'src', 'DockWorkspace.tsx'), 'utf8')).not.toMatch(/getTabContextMenuItems/)
+    expect(readFileSync(join('src', 'main', 'index.ts'), 'utf8')).not.toMatch(/clipboard-read/)
+    for (const file of files(join('src'))) expect(readFileSync(file, 'utf8'), file).not.toMatch(/navigator\.clipboard\.\w+\(/)
+  })
   it('keeps the legacy shortcut paths deleted', () => {
     for (const file of files(join('src'))) {
       const source = readFileSync(file, 'utf8')

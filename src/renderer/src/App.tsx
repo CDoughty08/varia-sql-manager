@@ -16,6 +16,7 @@ import ConnectDialog from './ConnectDialog'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import MenuLayer from './menus/MenuLayer'
+import { useMenuTarget } from './menus/useMenuTarget'
 import { connectionDefaults } from '../../shared/connections'
 
 const emptyTab: QueryTab = { id: '', name: '', dirty: false, savedVersionId: null, database: 'master' }
@@ -72,8 +73,16 @@ export default function App() {
     flushLayout: async () => { await workspaceRef.current?.flush() },
     showConnect: () => setShowConnect(true),
     refreshExplorer: () => setRefresh(value => value + 1),
-    closePane: pane => workspaceRef.current?.close(pane)
+    closePane: pane => workspaceRef.current?.close(pane),
+    paneLocation: pane => workspaceRef.current?.location(pane) ?? 'closed',
+    floatPane: pane => workspaceRef.current?.float(pane),
+    dockPane: pane => workspaceRef.current?.dock(pane)
   }), [disconnectServer])
+  // One callback for every query tab: the tab names its query.
+  const tabTarget = useMenuTarget<HTMLDivElement>(element => {
+    const tabId = element.dataset.tabId
+    return tabId && documents.get(tabId) ? { kind: 'documentTab', tabId } : null
+  })
 
   useEffect(() => {
     let disposed = false
@@ -186,7 +195,7 @@ export default function App() {
         </div>
         <div className="explorer-footer">{connections.length ? `${connections.length} connected server${connections.length === 1 ? '' : 's'}` : 'Windows & SQL authentication'}</div>
       </aside>} editor={<main className="workspace">
-        <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id}>
+        <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
           <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><span className="sql-icon">SQL</span><span className="tab-name">{tab.name}</span>{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? 'Cancel the running query before closing' : `Close ${tab.name}`} disabled={!!queryState[tab.id]?.running || documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div>)}</div>

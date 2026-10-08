@@ -112,7 +112,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `menubar.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the open, hovered, or focused title-bar menu; none by default. |
 | `menu.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Title-bar and context menus. |
 | `menu.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Title-bar and context menus. |
-| `menu.selectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Highlighted item in title-bar and context menus. The editor context menu highlights with list.hoverBackground instead. |
+| `menu.selectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Highlighted item in title-bar and context menus. |
 | `menu.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Highlighted item in title-bar and context menus. |
 | `menu.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the highlighted menu item; none by default. |
 | `menu.separatorBackground` | VS Code | `$separator` | `#354359` | `#cdd4de` | Menu separators. |
@@ -150,7 +150,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `sideBar.background` | VS Code | `$sideBar` | `#151b24` | `#f3f5f8` | Object Explorer. |
 | `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Object Explorer heading. |
 | `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Lines around the Object Explorer heading and footer. |
-| `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row (command palette rows included), and the highlighted item of the editor context menu. |
+| `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row (command palette rows included). |
 | `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Selected row of a focused list. |
 | `list.activeSelectionForeground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Text of the selected row of a focused list. |
 | `list.inactiveSelectionBackground` | VS Code | `$selection` | `#24324a` | `#d6e3f3` | Selected row of an unfocused list, and the selected result set. |

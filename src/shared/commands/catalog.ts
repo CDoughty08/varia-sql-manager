@@ -5,7 +5,7 @@ export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Obje
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'refresh',
   'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
-  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right'] as const
+  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows'] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
@@ -75,6 +75,7 @@ export interface CommandDescriptor {
 const openFirst = 'Open a query first.'
 const noServer = 'No server is connected.'
 const secondQuery = 'Open a second query first.'
+const noFile = 'Save this query to a file first.'
 
 /**
  * Every command, with its keys, menu placements, and enablement. Main builds native menus from its own compiled copy,
@@ -91,19 +92,35 @@ export const commandCatalog = {
   },
   'file.save': {
     title: 'Save', category: 'File', icon: 'save', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+s' }], menus: [{ menu: 'file', group: '1_file', order: 3, mnemonic: 's' }]
+    keybindings: [{ key: 'mod+s' }], menus: [{ menu: 'file', group: '1_file', order: 3, mnemonic: 's' }, { menu: 'documentTab.context', group: '1_save', order: 1, mnemonic: 's' }]
   },
   'file.saveAs': {
     title: 'Save As…', category: 'File', icon: 'save-as', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+shift+s' }], menus: [{ menu: 'file', group: '1_file', order: 4, mnemonic: 'a' }]
+    keybindings: [{ key: 'mod+shift+s' }],
+    menus: [{ menu: 'file', group: '1_file', order: 4, mnemonic: 'a' }, { menu: 'documentTab.context', group: '1_save', order: 2, mnemonic: 'a' }]
   },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }], menus: [{ menu: 'file', group: '2_close', order: 1, mnemonic: 'c' }]
+    keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }],
+    menus: [{ menu: 'file', group: '2_close', order: 1, mnemonic: 'c' }, { menu: 'documentTab.context', group: '2_close', order: 1, title: 'Close', mnemonic: 'c' }]
+  },
+  // The query tab menu's commands act on the tab it was opened for (`tabId`), otherwise on the active query.
+  'file.closeOthers': {
+    title: 'Close All But This', category: 'File', precondition: 'multipleDocuments && !documentBusy', unavailableHint: secondQuery,
+    menus: [{ menu: 'documentTab.context', group: '2_close', order: 2, mnemonic: 'b' }]
   },
   'file.closeAll': {
     title: 'Close All', category: 'File', icon: 'close-all', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    menus: [{ menu: 'window', group: '2_documents', order: 3, title: 'Close All Documents', mnemonic: 'l' }]
+    menus: [{ menu: 'window', group: '2_documents', order: 3, title: 'Close All Documents', mnemonic: 'l' }, { menu: 'documentTab.context', group: '2_close', order: 3, mnemonic: 'l' }]
+  },
+  // Disabled, with the hint, for a query that has never been saved.
+  'file.copyPath': {
+    title: 'Copy Full Path', category: 'File', precondition: 'hasActiveDocument', unavailableHint: noFile,
+    menus: [{ menu: 'documentTab.context', group: '3_file', order: 1, mnemonic: 'p' }]
+  },
+  'file.revealInFolder': {
+    title: 'Open Containing Folder', category: 'File', icon: 'folder-opened', precondition: 'hasActiveDocument', unavailableHint: noFile, platformTitles: { darwin: 'Reveal in Finder' },
+    menus: [{ menu: 'documentTab.context', group: '3_file', order: 2, mnemonic: 'o' }]
   },
   // Custom menus run the renderer's close flow; native menus show Electron's quit role. Exit and Quit pick their own mnemonic.
   'window.close': {
@@ -112,33 +129,36 @@ export const commandCatalog = {
   },
   'edit.undo': {
     title: 'Undo', category: 'Edit', icon: 'discard', allowInModal: true,
-    keybindings: [{ key: 'mod+z', native: true }], menus: [{ menu: 'edit', group: '1_undo', order: 1, mnemonic: 'u' }]
+    keybindings: [{ key: 'mod+z', native: true }], menus: [{ menu: 'edit', group: '1_undo', order: 1, mnemonic: 'u' }, { menu: 'input.context', group: '1_undo', order: 1, mnemonic: 'u' }]
   },
   'edit.redo': {
     title: 'Redo', category: 'Edit', icon: 'redo', allowInModal: true,
     keybindings: [{ win: 'ctrl+y', linux: 'ctrl+y', mac: 'mod+shift+z', native: true }, { win: 'ctrl+shift+z', linux: 'ctrl+shift+z', native: true }],
-    menus: [{ menu: 'edit', group: '1_undo', order: 2, mnemonic: 'r' }]
+    menus: [{ menu: 'edit', group: '1_undo', order: 2, mnemonic: 'r' }, { menu: 'input.context', group: '1_undo', order: 2, mnemonic: 'r' }]
   },
   // Electron's roles: Chromium edits text fields and the editor's EditContext itself, so these keys are only labels here.
   'edit.cut': {
     title: 'Cut', category: 'Edit', palette: false, allowInModal: true, role: 'cut',
-    keybindings: [{ key: 'mod+x', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 1, mnemonic: 't' }]
+    keybindings: [{ key: 'mod+x', native: true }],
+    menus: [{ menu: 'edit', group: '2_clipboard', order: 1, mnemonic: 't' }, { menu: 'editor.context', group: '3_clipboard', order: 1, mnemonic: 't' }, { menu: 'input.context', group: '2_clipboard', order: 1, mnemonic: 't' }]
   },
   'edit.copy': {
     title: 'Copy', category: 'Edit', icon: 'copy', palette: false, allowInModal: true, role: 'copy',
-    keybindings: [{ key: 'mod+c', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 2, mnemonic: 'c' }]
+    keybindings: [{ key: 'mod+c', native: true }],
+    menus: [{ menu: 'edit', group: '2_clipboard', order: 2, mnemonic: 'c' }, { menu: 'editor.context', group: '3_clipboard', order: 2, mnemonic: 'c' }, { menu: 'input.context', group: '2_clipboard', order: 2, mnemonic: 'c' }]
   },
   'edit.paste': {
     title: 'Paste', category: 'Edit', icon: 'clippy', palette: false, allowInModal: true, role: 'paste',
-    keybindings: [{ key: 'mod+v', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 3, mnemonic: 'p' }]
+    keybindings: [{ key: 'mod+v', native: true }],
+    menus: [{ menu: 'edit', group: '2_clipboard', order: 3, mnemonic: 'p' }, { menu: 'editor.context', group: '3_clipboard', order: 3, mnemonic: 'p' }, { menu: 'input.context', group: '2_clipboard', order: 3, mnemonic: 'p' }]
   },
   'edit.delete': {
     title: 'Delete', category: 'Edit', palette: false, allowInModal: true, role: 'delete',
-    keybindings: [{ key: 'delete', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 4, mnemonic: 'd' }]
+    keybindings: [{ key: 'delete', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 4, mnemonic: 'd' }, { menu: 'input.context', group: '2_clipboard', order: 4, mnemonic: 'd' }]
   },
   'edit.selectAll': {
     title: 'Select All', category: 'Edit', palette: false, allowInModal: true, role: 'selectAll',
-    keybindings: [{ key: 'mod+a', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 5, mnemonic: 'a' }]
+    keybindings: [{ key: 'mod+a', native: true }], menus: [{ menu: 'edit', group: '2_clipboard', order: 5, mnemonic: 'a' }, { menu: 'input.context', group: '3_select', order: 1, mnemonic: 'a' }]
   },
   'window.explorer': {
     title: 'Show Object Explorer', category: 'View', icon: 'list-tree', keywords: ['servers', 'tree'], keybindings: [{ key: 'f8' }],
@@ -174,15 +194,22 @@ export const commandCatalog = {
     precondition: 'activeDocumentConnected && !queryRunning && !documentBusy',
     unavailableHint: 'Connect this query to a server and wait for its running query to finish.',
     keybindings: [{ key: 'f5', when: 'editorFocus' }, { key: 'mod+enter', when: 'editorFocus' }, { win: 'ctrl+e', linux: 'ctrl+e', when: 'editorFocus' }],
-    menus: [{ menu: 'query', group: '1_execute', order: 1, mnemonic: 'x' }]
+    menus: [{ menu: 'query', group: '1_execute', order: 1, mnemonic: 'x' }, { menu: 'editor.context', group: '2_execute', order: 1, mnemonic: 'x' }]
   },
   'query.cancel': {
     title: 'Cancel Executing Query', category: 'Query', icon: 'debug-stop', precondition: 'queryRunning', unavailableHint: 'No query is running in this tab.',
-    keybindings: [{ win: 'alt+pause', linux: 'alt+pause' }], menus: [{ menu: 'query', group: '1_execute', order: 2, mnemonic: 'c' }]
+    keybindings: [{ win: 'alt+pause', linux: 'alt+pause' }],
+    menus: [{ menu: 'query', group: '1_execute', order: 2, mnemonic: 'c' }, { menu: 'editor.context', group: '2_execute', order: 2, mnemonic: 'n' }]
   },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,
-    keybindings: [{ key: 'mod+shift+p' }, { key: 'f1' }], menus: [{ menu: 'view', group: '0_palette', order: 1, title: 'Command Palette…', mnemonic: 'c' }]
+    keybindings: [{ key: 'mod+shift+p' }, { key: 'f1' }],
+    menus: [{ menu: 'view', group: '0_palette', order: 1, title: 'Command Palette…', mnemonic: 'c' }, { menu: 'editor.context', group: '9_palette', order: 1, title: 'Command Palette…', mnemonic: 'a' }]
+  },
+  // Shift+F10 and the context-menu key open the focused element's context menu, in dialogs too (text fields).
+  'workbench.showContextMenu': {
+    title: 'Show Context Menu', palette: false, allowInModal: true, precondition: '!quickInputVisible',
+    keybindings: [{ key: 'shift+f10', modal: true }, { win: 'contextmenu', linux: 'contextmenu', modal: true }]
   },
   'workbench.quickOpen': {
     title: 'Go to Query…', icon: 'go-to-file', precondition: 'hasActiveDocument', unavailableHint: 'No queries are open.',
@@ -282,7 +309,11 @@ export const commandCatalog = {
   'developer.toggleDevTools': {
     title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
-  }
+  },
+  // A panel tab's menu: the panel comes from the menu's target, so these have no keys and are not in the palette.
+  'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },
+  'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }] },
+  'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }] }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

@@ -35,10 +35,9 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['titleBar.activeForeground'], titleBar),
   ...text(['titleBar.inactiveForeground'], ['titleBar.inactiveBackground']),
   ...text(['menubar.selectionForeground'], ['titleBar.activeBackground', 'menubar.selectionBackground']),
-  // Monaco's context menu highlights with the list hover colors and keeps menu.foreground on them.
-  ...text(['menu.foreground'], ['menu.background'], ['menu.background', 'list.hoverBackground']),
+  ...text(['menu.foreground'], ['menu.background']),
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
-  // Keybinding labels in title-bar menus; the highlighted item shows them in menu.selectionForeground.
+  // Keybinding labels in menus; the highlighted item shows them in menu.selectionForeground.
   ...text(['descriptionForeground'], ['menu.background']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
   ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),

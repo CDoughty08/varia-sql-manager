@@ -50,13 +50,15 @@ const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
 // Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
 const dockTabFocusRing = () => page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] })
-const contextMenuBorder = () => page.evaluate(() => {
-  for (const host of document.querySelectorAll('.shadow-root-host')) {
-    const menu = host.shadowRoot?.querySelector('.monaco-menu')
-    if (menu) { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` }
-  }
-  return null
-})
+const contextMenuBorder = () => page.locator('.menu').evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
+// A theme color as the browser resolves it, to compare with computed styles.
+const colorOf = key => page.evaluate(name => {
+  const probe = document.body.appendChild(document.createElement('div'))
+  probe.style.background = `var(${name})`
+  const color = getComputedStyle(probe).backgroundColor
+  probe.remove()
+  return color
+}, '--varia-' + key.replaceAll('.', '-'))
 // expect.poll does not retry a callback that throws, and appearance.json appears only after the first choice.
 const appearance = () => readFile(appearanceFile, 'utf8').then(JSON.parse, () => null)
 const lightKeys = ['editor.background', 'foreground', 'button.background', 'titleBar.activeBackground', 'connection.red']
@@ -87,10 +89,15 @@ try {
   console.log('Theme checks: floating groups use the theme colors.')
 
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(118, 172, 255)'])
-  // Monaco's context menu border needs --vscode-strokeThickness, which standalone Monaco leaves undefined.
+  // The editor's context menu is the workbench's: its border and highlighted item use the menu colors.
   await page.locator('.monaco-editor .view-lines').click({ button: 'right' })
-  await expect.poll(contextMenuBorder).toBe('1px solid rgb(64, 81, 107)')
+  await expect(page.locator('.menu')).toBeVisible()
+  expect(await contextMenuBorder()).toBe('1px solid rgb(64, 81, 107)')
+  await page.keyboard.press('ArrowDown')
+  await expect(page.locator('.menu-item[data-active]')).toBeFocused()
+  expect(await page.locator('.menu-item[data-active]').evaluate(item => getComputedStyle(item).backgroundColor)).toBe(await colorOf('menu.selectionBackground'))
   await page.keyboard.press('Escape')
+  await expect(page.locator('.menu')).toHaveCount(0)
   // The find and hover widgets take their shadow from --vscode-shadow-lg, which standalone Monaco leaves undefined too.
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+F')
