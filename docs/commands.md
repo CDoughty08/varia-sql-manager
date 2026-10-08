@@ -7,7 +7,7 @@ limits where the key works; for example, `editorFocus` means the query editor ha
 editor or the browser engine: menus show them, but Varia does not dispatch them. "Available when" is the condition
 under which menus, the toolbar, and the keyboard can run the command; the context keys it uses are listed below.
 
-## Commands (35)
+## Commands (37)
 
 ### File
 
@@ -60,6 +60,8 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server… |
+| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect… |
+| Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
 ### Object Explorer
 
@@ -84,7 +86,7 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette… |
 | Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
 
-## Context keys (17)
+## Context keys (20)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, and `focus` keys follow
 keyboard focus. "Available when" conditions use only static and state keys, so a command is enabled the same way in
@@ -101,12 +103,15 @@ every menu wherever focus is; key conditions may also use focus keys.
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
-| `backendReady` | boolean | state | The backend has answered its health check. |
+| `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
+| `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
-| `hasConnection` | boolean | state | At least one server is connected. |
-| `activeDocumentConnected` | boolean | state | The active query's server is connected. |
+| `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |
+| `activeDocumentConnected` | boolean | state | The active query's server is connected and its connection was not lost. |
+| `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
+| `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
 

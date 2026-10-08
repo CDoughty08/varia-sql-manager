@@ -7,7 +7,7 @@ import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/histo
 import { QuickInputService, quickInputLimits, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
 import { quickInputKeyAction, resultStatus, type QuickInputKeyEvent } from '../src/renderer/src/quickinput/view-model'
 import { deferred, TestEditor } from './fixtures/documents'
-import { connectionInfo, fakeFocus, manualTimers, memoryStorage, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, fakeFocus, manualTimers, memoryStorage, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -608,7 +608,7 @@ describe('command palette', () => {
 describe('Go to Query', () => {
   it('lists open queries most recent first with the previous one active, so Enter switches back', async () => {
     const { key, quickInput, view, documents, connections } = palette()
-    connections.add({ ...connectionInfo('server-a'), displayName: 'Production' })
+    connections.add({ ...connectionInfo('server-a'), displayName: 'Production' }, connectionOptions)
     const a = documents.create('a.sql', 'SELECT 1', 'AppData', 'server-a', true), b = documents.create('b.sql', '', 'master', undefined, false, { id: 'f', name: 'b.sql', path: '/tmp/b.sql' })
     const c = documents.create('c.sql', '', 'master')
     documents.activate(a.id)
@@ -633,7 +633,7 @@ describe('Go to Query', () => {
 describe('server and database pickers', () => {
   it('disconnects the picked server, leaving busy servers unavailable', async () => {
     const { commands, quickInput, view, connections, documents, startQuery, host } = palette()
-    connections.add({ ...connectionInfo('server-a'), displayName: 'Production' }); connections.add(connectionInfo('server-b'))
+    connections.add({ ...connectionInfo('server-a'), displayName: 'Production' }, connectionOptions); connections.add(connectionInfo('server-b'), connectionOptions)
     documents.create('a.sql', 'SELECT 1', 'master', 'server-a')
     const running = startQuery()
     await commands.execute('connection.disconnect', undefined, 'menu')
@@ -649,7 +649,7 @@ describe('server and database pickers', () => {
   })
   it('moves the active query to another server or to Disconnected', async () => {
     const { commands, quickInput, view, connections, documents, api } = palette()
-    connections.add(connectionInfo('server-a')); connections.add({ ...connectionInfo('server-b'), database: 'Sales' })
+    connections.add(connectionInfo('server-a'), connectionOptions); connections.add({ ...connectionInfo('server-b'), database: 'Sales' }, connectionOptions)
     const tab = documents.create('a.sql', '', 'AppData', 'server-a')
     await commands.execute('query.changeConnection', undefined, 'palette')
     expect(view().rows.map(row => row.item.label)).toEqual(['Disconnected', 'server-a.example', 'server-b.example'])
@@ -676,7 +676,7 @@ describe('server and database pickers', () => {
     const databases: DatabaseInfo[] = [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false },
       { name: 'AppData_snap', isSystem: false, isSnapshot: true }, { name: 'Sales', isSystem: false, isSnapshot: false }]
     api.databases.mockResolvedValue({ ok: true, value: databases })
-    connections.add(connectionInfo('server-a'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
     const tab = documents.create('a.sql', '', 'master', 'server-a')
     const done = commands.execute('query.changeDatabase', undefined, 'keybinding')
     expect(view()).toMatchObject({ ariaLabel: 'Change Database', loading: true })
@@ -693,7 +693,7 @@ describe('server and database pickers', () => {
   it('ignores a database picked after the query moved, and reports a failed load', async () => {
     const { commands, quickInput, view, connections, documents, api, targets } = palette()
     api.databases.mockResolvedValue({ ok: true, value: [{ name: 'Sales', isSystem: false, isSnapshot: false }] })
-    connections.add(connectionInfo('server-a')); connections.add(connectionInfo('server-b'))
+    connections.add(connectionInfo('server-a'), connectionOptions); connections.add(connectionInfo('server-b'), connectionOptions)
     const tab = documents.create('a.sql', '', 'master', 'server-a')
     await commands.execute('query.changeDatabase', undefined, 'keybinding')
     await settle()

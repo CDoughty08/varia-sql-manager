@@ -32,7 +32,7 @@ async function start() {
   // A confirmed exit has already handled each document, so it is never blocked here.
   window.addEventListener('beforeunload', event => {
     if (workbench.files.exiting) return
-    if (!workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.getSnapshot().length) return
+    if (!workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.live().length) return
     event.preventDefault()
     event.returnValue = true
   })

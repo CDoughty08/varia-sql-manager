@@ -1,15 +1,39 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolve } from 'node:path'
-import { BackendSupervisor } from '../src/main/backend/supervisor'
+import { EventEmitter } from 'node:events'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import type { BackendState } from '../src/shared/contracts'
+import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
 import { BackendError, sentences } from '../src/main/backend/errors'
+import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
+import { fakeSpawn, manualClock, settle, type FakeBackend } from './fixtures/fake-process'
 
 const supervisors: BackendSupervisor[] = []
+const directories: string[] = []
+afterEach(async () => {
+  await Promise.all(supervisors.splice(0).map(value => value.stop()))
+  await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })))
+})
+const fakeNode = { command: process.execPath, args: ['--disable-warning=ExperimentalWarning', resolve('tests/fixtures/backend.mjs')], cwd: process.cwd() }
+
+/** A supervisor over the real fake backend process (tests/fixtures/backend.mjs). */
 function supervisor(mode: string, packaged = false): BackendSupervisor {
-  const value = new BackendSupervisor({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', resolve('tests/fixtures/backend.mjs'), mode], cwd: process.cwd(), packaged })
+  const value = new BackendSupervisor({ ...fakeNode, args: [...fakeNode.args, mode], packaged })
   supervisors.push(value)
   return value
 }
-afterEach(async () => { await Promise.all(supervisors.splice(0).map(value => value.stop())) })
+/** A supervisor over in-process FakeBackends on a manual clock, with every state it publishes. */
+function simulated(o: { configure?: (backend: FakeBackend, index: number) => void; deps?: SupervisorDeps } = {}) {
+  const { clock, advance, jump, now } = manualClock()
+  const processes = fakeSpawn(o.configure)
+  const value = new BackendSupervisor({ command: 'fake', args: [], cwd: process.cwd(), packaged: false }, { clock, spawn: processes.spawn, ...o.deps })
+  supervisors.push(value)
+  const states: BackendState[] = []
+  value.onState(state => states.push(state))
+  const statuses = () => states.map(state => state.status === 'failed' ? `failed:${state.reason}` : state.status === 'stopped' ? 'stopped' : `${state.status}:${state.generation}`)
+  return { value, clock, advance, jump, now, states, statuses, backends: processes.backends, last: processes.last }
+}
 
 const pidOf = async (value: BackendSupervisor) => (await value.request('system.health', {}) as unknown as { pid: number }).pid
 const exited = (pid: number) => { try { process.kill(pid, 0); return false } catch { return true } }
@@ -17,17 +41,18 @@ async function failure(promise: Promise<unknown>): Promise<BackendError> {
   try { await promise } catch (error) { if (error instanceof BackendError) return error; throw error }
   throw new Error('The request succeeded.')
 }
+const options = { server: 'sql.example', database: '', authentication: 'sql' as const, username: 'reader', password: 'secret', trustServerCertificate: true }
+const query = (sessionId: string) => ({ connectionId: 'c', sessionId, database: 'master', sql: 'SELECT 1', queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 0 })
 
-describe('BackendSupervisor', () => {
+describe('BackendSupervisor over the fake backend process', () => {
   it('starts once and queues requests made while the backend starts', async () => {
     const value = supervisor('echo')
     value.start()
     value.start()
-    expect(value.status).toBe('starting')
+    expect(value.state).toEqual({ status: 'starting', generation: 1 })
     const pids = await Promise.all([pidOf(value), pidOf(value)])
-    expect(value.status).toBe('ready')
+    expect(value.state).toMatchObject({ status: 'ready', generation: 1, pid: value.current!.pid })
     expect(pids).toEqual([value.current!.pid, value.current!.pid])
-    expect(value.current!.generation).toBe(1)
   })
   it('a reload ends the old process and starts the next generation at once', async () => {
     const value = supervisor('echo')
@@ -47,33 +72,23 @@ describe('BackendSupervisor', () => {
     await value.current!.ready
     expect(value.current!.pendingCount).toBe(0)
   })
-  it('stays failed after the backend stops and answers disconnect and session close locally', async () => {
-    const value = supervisor('exit')
-    value.start()
-    await value.current!.ready
-    expect(await failure(value.request('databases.list', { connectionId: crypto.randomUUID() }))).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lost })
-    await expect.poll(() => value.status).toBe('failed')
-    expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: sentences.stopped })
-    await expect(value.request('connections.disconnect', { connectionId: crypto.randomUUID() })).resolves.toEqual({ disconnected: false })
-    await expect(value.request('query.session.close', { sessionId: crypto.randomUUID() })).resolves.toEqual({ closed: false })
-    await value.restart('reload')
-    await value.current!.ready
-    expect(value.status).toBe('ready')
-  })
-  it('explains a backend that cannot be started, in development and packaged wording', async () => {
+  it('explains a backend that cannot be started, in development and packaged wording, without retrying', async () => {
     for (const packaged of [false, true]) {
       const value = new BackendSupervisor({ command: 'varia-command-that-does-not-exist', args: [], cwd: process.cwd(), packaged })
       supervisors.push(value)
-      value.start()
-      await expect.poll(() => value.status).toBe('failed')
-      expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: packaged ? sentences.spawnPackaged : sentences.spawnDevelopment })
+      const message = packaged ? sentences.spawnPackaged : sentences.spawnDevelopment
+      expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message })
+      expect(value.state).toMatchObject({ status: 'failed', reason: 'spawn', message })
+      expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message })
+      expect(value.current).toBeUndefined()
     }
   })
-  it('explains a backend from a different build', async () => {
+  it('explains a backend from a different build without retrying', async () => {
     const value = supervisor('v1')
-    expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_LOST' })
-    await expect.poll(() => value.status).toBe('failed')
-    expect((await failure(value.request('system.health', {}))).message).toBe('The SQL backend is from a different build (protocol 1, expected 2). Run npm run backend:build, then restart.')
+    const message = 'The SQL backend is from a different build (protocol 1, expected 2). Run npm run backend:build, then restart.'
+    expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message })
+    expect(value.state).toMatchObject({ status: 'failed', reason: 'incompatible', message })
+    expect((value.state as { details: string }).details).toContain('Last loss: generation 1, incompatible (protocol 1, expected 2)')
   })
   it('stop fails pending and later requests with the closing sentence', async () => {
     const value = supervisor('silent')
@@ -84,6 +99,226 @@ describe('BackendSupervisor', () => {
     expect(await pending).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: sentences.closing })
     expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: sentences.closing })
     expect(exited(pid)).toBe(true)
-    expect(value.status).toBe('stopped')
+    expect(value.state).toEqual({ status: 'stopped' })
+  })
+})
+
+describe('BackendSupervisor restarts', () => {
+  it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running scripts', async () => {
+    const { value, advance, statuses, states, backends } = simulated({ deps: { policy: { breakerLosses: 10 } } })
+    const connection = await value.request('connections.connect', options)
+    expect(connection).toMatchObject({ id: 'connection-1-1', generation: 1 })
+    expect(value.connectionCount()).toBe(1)
+    backends[0].answer = false
+    const script = failure(value.request('query.execute', { ...query('tab-1'), connectionId: connection.id }))
+    await settle()
+    backends[0].exit(1)
+    expect(await script).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
+    expect(states.at(-1)).toEqual({ status: 'restarting', generation: 1, retryInMs: 0, lost: { generation: 1, reason: 'exit', connections: 1, queries: 1 } })
+    expect(value.connectionCount()).toBe(0)
+    expect(value.isLostConnection(connection.id)).toBe(true)
+    await advance(0)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
+    // The lost id is refused before anything is written; cleanup for it is answered locally.
+    expect(await failure(value.request('databases.list', { connectionId: connection.id }))).toMatchObject({ code: 'CONNECTION_LOST', message: sentences.connectionLost })
+    await expect(value.request('connections.disconnect', { connectionId: connection.id })).resolves.toEqual({ disconnected: false })
+    await expect(value.request('query.session.close', { sessionId: 'tab-1' })).resolves.toEqual({ closed: false })
+    expect(backends[1].requests).toEqual([])
+    for (const [index, delay] of [[1, 1000], [2, 2000], [3, 2000]] as const) {
+      backends[index].exit(null, 'SIGKILL')
+      await settle()
+      expect(value.state).toMatchObject({ status: 'restarting', generation: index + 1, retryInMs: delay })
+      await advance(delay - 1)
+      expect(value.state.status).toBe('restarting')
+      await advance(1)
+      expect(value.state).toMatchObject({ status: 'ready', generation: index + 2 })
+    }
+    expect(statuses().slice(0, 6)).toEqual(['starting:1', 'ready:1', 'restarting:1', 'starting:2', 'ready:2', 'restarting:2'])
+  })
+  it('trips the breaker on the third unexpected loss within 120 s; a manual restart resets it', async () => {
+    const { value, advance, backends, last } = simulated()
+    await value.request('system.health', {})
+    for (const delay of [0, 1000]) { last().exit(1); await advance(delay) }
+    expect(value.state).toMatchObject({ status: 'ready', generation: 3 })
+    last().stderr.write(Array.from({ length: 40 }, (_, index) => `varia-backend: line ${index}`).join('\n') + '\n' + 'x'.repeat(600) + '\n')
+    await settle()
+    last().exit(70)
+    await settle()
+    expect(value.state).toMatchObject({ status: 'failed', reason: 'crashLoop', message: sentences.crashLoop, lost: { generation: 3, reason: 'exit', connections: 0, queries: 0 } })
+    const details = (value.state as { details: string }).details
+    expect(details).toContain('Status: failed (crashLoop)')
+    expect(details).toContain('Exit code: 70; signal: none')
+    expect(details).toContain('Losses in the last 120 s: 3')
+    expect(details).toContain('Runtime: .NET fake')
+    // The stderr ring keeps the last 32 lines of at most 512 characters.
+    expect(details).not.toContain('line 8\n')
+    expect(details).toContain('varia-backend: line 9\n')
+    expect(details.endsWith('  ' + 'x'.repeat(512))).toBe(true)
+    expect(details).not.toContain('x'.repeat(513))
+    await advance(60_000)
+    expect(backends).toHaveLength(3)
+    expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: sentences.unavailable })
+    await expect(value.request('connections.disconnect', { connectionId: 'any' })).resolves.toEqual({ disconnected: false })
+    await expect(value.request('query.session.close', { sessionId: 'any' })).resolves.toEqual({ closed: false })
+    await value.restart('reload')
+    expect(value.state.status).toBe('failed')
+    await value.restart('manual')
+    await advance(0)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 4 })
+    last().exit(1)
+    await settle()
+    expect(value.state).toMatchObject({ status: 'restarting', retryInMs: 0 })
+  })
+  it('counts only unexpected losses inside the window, and forgets them after 300 s ready', async () => {
+    const { value, advance, last } = simulated()
+    await value.request('system.health', {})
+    for (let reload = 0; reload < 4; reload++) await value.restart('reload')
+    await advance(0)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 5 })
+    last().exit(1)
+    await advance(130_000)
+    last().exit(1)
+    await settle()
+    // The first loss left the window, so this is the second inside it, with the second delay.
+    expect(value.state).toMatchObject({ status: 'restarting', retryInMs: 1000 })
+    await advance(1000)
+    await advance(300_000)
+    last().exit(1)
+    await settle()
+    expect(value.state).toMatchObject({ status: 'restarting', retryInMs: 0 })
+  })
+  it('never writes a request to a generation other than the one it was bound to', async () => {
+    const { value, advance, backends } = simulated({ configure: (backend, index) => { backend.hello = index !== 0 } })
+    // Generation 1 never says HELLO, so these wait in its queue and must die with it.
+    const queued = [failure(value.request('databases.list', { connectionId: 'x' })), failure(value.request('system.health', {}))]
+    await settle()
+    backends[0].exit(1)
+    expect((await Promise.all(queued)).map(error => error.code)).toEqual(['BACKEND_LOST', 'BACKEND_LOST'])
+    await advance(0)
+    await value.request('system.health', {})
+    // Generation 2 ends; requests made while the restart is pending are bound to generation 3.
+    backends[1].exit(1)
+    await settle()
+    expect(value.state).toMatchObject({ status: 'restarting', retryInMs: 1000 })
+    const later = value.request('tables.list', { connectionId: 'y', database: 'master' })
+    await advance(1000)
+    await expect(later).resolves.toEqual({ method: 'tables.list' })
+    expect(backends[0].requests).toEqual([])
+    expect(backends[1].requests.map(request => request.method)).toEqual(['system.health'])
+    expect(backends[2].requests.map(request => [request.generation, request.method])).toEqual([[3, 'tables.list']])
+  })
+  it('restarts on request: the old generation closes and its sessions are answered locally', async () => {
+    const { value, advance, backends, states } = simulated()
+    const connection = await value.request('connections.connect', options)
+    await value.request('query.execute', { ...query('tab-1'), connectionId: connection.id })
+    await value.restart('manual')
+    expect(backends[0].alive).toBe(false)
+    expect(states.find(state => state.status === 'restarting')).toEqual({ status: 'restarting', generation: 1, retryInMs: 0, lost: { generation: 1, reason: 'manual', connections: 1, queries: 0 } })
+    await advance(0)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
+    await expect(value.request('query.session.close', { sessionId: 'tab-1' })).resolves.toEqual({ closed: false })
+    await value.request('query.execute', { ...query('tab-1'), connectionId: 'new' })
+    await value.request('query.session.close', { sessionId: 'tab-1' })
+    expect(backends[1].requests.map(request => request.method)).toEqual(['query.execute', 'query.session.close'])
+  })
+  it('stop closes stdin, then kills a backend that does not exit within the grace period', async () => {
+    const { value, advance, last } = simulated({ configure: backend => { backend.exitOnEnd = false } })
+    await value.request('system.health', {})
+    const stopping = value.stop()
+    await advance(1999)
+    expect(last().alive).toBe(true)
+    await advance(1)
+    await stopping
+    expect(last().signals).toEqual(['SIGKILL'])
+    expect(value.state).toEqual({ status: 'stopped' })
+  })
+})
+
+describe('BackendSupervisor liveness', () => {
+  it('reports a live but silent backend as unresponsive and never kills it', async () => {
+    const { value, advance, backends, statuses } = simulated()
+    await value.request('system.health', {})
+    backends[0].pong = false
+    await advance(14_000)
+    expect(value.state.status).toBe('ready')
+    await advance(2000)
+    expect(value.state).toMatchObject({ status: 'unresponsive', generation: 1 })
+    expect((value.state as { silentMs: number }).silentMs).toBeGreaterThanOrEqual(15_000)
+    await advance(10 * 60_000)
+    expect(value.state.status).toBe('unresponsive')
+    expect(backends).toHaveLength(1)
+    expect(backends[0].alive).toBe(true)
+    expect(backends[0].signals).toEqual([])
+    // Any frame shows it is alive again.
+    backends[0].pong = true
+    await advance(6000)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 1 })
+    expect(statuses()).toEqual(['starting:1', 'ready:1', 'unresponsive:1', 'ready:1'])
+  })
+  it('lets the user replace an unresponsive backend', async () => {
+    const { value, advance, backends } = simulated()
+    await value.request('system.health', {})
+    backends[0].pong = false
+    await advance(16_000)
+    expect(value.state.status).toBe('unresponsive')
+    await value.restart('manual')
+    await advance(0)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
+    expect(backends[0].alive).toBe(false)
+  })
+  it('does not count time when main itself stalled', async () => {
+    const { value, advance, jump, backends } = simulated()
+    await value.request('system.health', {})
+    backends[0].pong = false
+    await advance(10_000)
+    // A synchronous dialog blocks main for 30 s: no timer runs, then every overdue one runs late.
+    jump(30_000)
+    await advance(1)
+    expect(value.state.status).toBe('ready')
+    await advance(14_000)
+    expect(value.state.status).toBe('ready')
+    await advance(2000)
+    expect(value.state.status).toBe('unresponsive')
+  })
+  it('pauses while the computer sleeps', async () => {
+    const power = new EventEmitter()
+    const { value, advance, backends } = simulated({ deps: { power } })
+    await value.request('system.health', {})
+    backends[0].pong = false
+    power.emit('suspend')
+    await advance(60_000)
+    expect(value.state.status).toBe('ready')
+    power.emit('resume')
+    await advance(14_000)
+    expect(value.state.status).toBe('ready')
+    await advance(2000)
+    expect(value.state.status).toBe('unresponsive')
+  })
+})
+
+describe('smoke-test backends', () => {
+  it('run only for unpackaged smoke tests, under an absolute node', () => {
+    const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform }
+    const env = { VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath }
+    expect(backendSpawnSpec({ ...base, smokeTest: true, env })).toEqual({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', join(base.root, 'tests/fixtures/backend.mjs'), 'workbench'], cwd: base.root, packaged: false })
+    expect(backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_BACKEND: 'crash-after:2' } }).args.slice(-2)).toEqual(['crash-after', '2'])
+    expect(backendSpawnSpec({ ...base, smokeTest: false, env }).command).toBe('dotnet')
+    expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], packaged: true })
+    expect(() => backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_NODE: 'node' } })).toThrow('absolute VARIA_TEST_NODE')
+  })
+  it('the workbench fake records calls by generation and crashes on request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'varia-fake-backend-'))
+    directories.push(directory)
+    const value = new BackendSupervisor({ ...fakeNode, args: [...fakeNode.args, 'workbench'], env: { ...process.env, VARIA_TEST_BACKEND_DIR: directory }, packaged: false })
+    supervisors.push(value)
+    const connection = await value.request('connections.connect', options)
+    expect(connection).toMatchObject({ server: 'sql.example', generation: 1 })
+    await writeFile(join(directory, 'crash-next'), '')
+    expect(await failure(value.request('query.execute', { ...query('tab-1'), connectionId: connection.id }))).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
+    expect(value.state).toMatchObject({ status: 'restarting', lost: { generation: 1, reason: 'crash', connections: 1, queries: 1 } })
+    await expect.poll(() => value.state).toMatchObject({ status: 'ready', generation: 2 })
+    const calls = (await readFile(join(directory, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { generation: number; method: string; params: { password?: string } })
+    expect(calls.map(call => [call.generation, call.method])).toEqual([[1, 'connections.connect'], [1, 'query.execute']])
+    expect(calls[0].params.password).toBe('<redacted>')
   })
 })

@@ -1,0 +1,290 @@
+import { _electron as electron, expect } from '@playwright/test'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+
+// Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
+// that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
+// and reconnected. Main honours VARIA_TEST_BACKEND, VARIA_BACKEND_LIVENESS_MS, and __variaTest only in smoke runs.
+const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
+if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
+const lostQuery = 'The SQL backend stopped while this script was running. It was not re-run.'
+const lostHint = "This query's connection was lost when the SQL backend restarted. Reconnect to run queries."
+const newSession = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted'
+await mkdir('artifacts', { recursive: true })
+const temporary = []
+let app
+let page
+const failures = []
+let step = 'start'
+const watchdog = setTimeout(() => { console.error(`Backend suite timed out during: ${step}.`); app?.process()?.kill(); process.exit(1) }, 300000)
+
+async function launch(extra = {}) {
+  const profile = await mkdtemp(resolve('artifacts', 'backend-profile-'))
+  temporary.push(profile)
+  const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, ...extra }
+  delete env.ELECTRON_RUN_AS_NODE
+  // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
+  app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+  page = await app.firstWindow()
+  page.setDefaultTimeout(15000)
+  page.on('pageerror', error => failures.push(error.message))
+  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+}
+/** Quits without the unsaved-query prompts (they would wait for a hidden dialog), killing the app if it hangs. */
+async function close() {
+  const current = app
+  app = undefined
+  if (!current) return
+  await current.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
+  const closed = await Promise.race([current.close().then(() => true, () => false), new Promise(resolve => setTimeout(() => resolve(false), 15000))])
+  if (!closed) current.process()?.kill('SIGKILL')
+}
+const hooks = () => app.evaluate(() => ({ state: globalThis.__variaTest.state(), pid: globalThis.__variaTest.pid() }))
+const states = () => app.evaluate(() => globalThis.__variaTest.states.map(state => state.status + (state.generation ? ':' + state.generation : '')))
+async function ready(generation) {
+  await expect.poll(async () => { const { state } = await hooks(); return state.status === 'ready' && (generation === undefined || state.generation === generation) }, { timeout: 30000 }).toBe(true)
+  return hooks()
+}
+const banner = () => page.locator('.backend-banner')
+const statusBar = () => page.locator('.status-bar')
+async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
+async function typeSql(sql) {
+  await page.locator('.monaco-editor [role="textbox"]').focus()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.insertText(sql)
+}
+const execute = () => page.locator('.toolbar').getByRole('button', { name: /Execute/ })
+async function messages() {
+  await page.getByRole('button', { name: /^Messages/ }).click()
+  return page.locator('.messages')
+}
+async function connectDialog() {
+  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  return dialog
+}
+async function fillLogin(dialog, server, user, password) {
+  await dialog.getByLabel('Server Name', { exact: true }).fill(server)
+  if (user) {
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+    await dialog.getByLabel('User Name', { exact: true }).fill(user)
+    await dialog.getByLabel('Password', { exact: true }).fill(password)
+  } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+}
+/** Every button of the banner lies inside the window's content area. */
+async function bannerInViewport() {
+  await expect(banner().getByRole('button').first()).toBeVisible()
+  await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.backend-banner button')].filter(button => {
+    const rect = button.getBoundingClientRect()
+    return rect.left < 0 || rect.top < 0 || rect.right > innerWidth || rect.bottom > innerHeight || rect.width === 0
+  }).map(button => button.textContent))).toEqual([])
+}
+
+try {
+  // 1. The real backend: protocol 2, its versions, and Ready from main's state.
+  step = 'real backend'
+  await launch()
+  await expect(statusBar()).toContainText(/\.NET 10\..* · Ready/, { timeout: 30000 })
+  const health = await page.evaluate(() => window.varia.health())
+  expect(health.ok && health.value.protocolVersion).toBe(2)
+  expect(health.ok && health.value.smoVersion).toMatch(/^\d+\./)
+  const first = await ready(1)
+  const pushed = await page.evaluate(() => window.varia.getBackendState())
+  expect(pushed).toEqual({ ok: true, value: first.state })
+  expect(first.state.pid).toBe(first.pid)
+  expect(await page.evaluate(() => typeof window.varia.restartBackend)).toBe('function')
+  await expect(banner()).toHaveCount(0)
+
+  step = 'reload'
+  // 6. A workbench reload ends the generation with the page that owned it; the new page shows no banner.
+  await page.reload()
+  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  const reloaded = await ready(2)
+  expect(reloaded.pid).not.toBe(first.pid)
+  await expect(statusBar()).toContainText('Ready')
+  await expect(banner()).toHaveCount(0)
+
+  // 8. Live: a real session is lost with its backend, nothing is re-run, and Reconnect opens a new session.
+  if (process.env.VARIA_TEST_SQL_SERVER) {
+    step = 'live session loss'
+    let dialog = await connectDialog()
+    await fillLogin(dialog, process.env.VARIA_TEST_SQL_SERVER, liveUser, process.env.VARIA_TEST_SQL_PASSWORD)
+    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    await typeSql("CREATE TABLE #varia_session_marker (id int); SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
+    await execute().click()
+    await expect(page.locator('.results-grid tbody td').nth(1)).not.toHaveText('NULL', { timeout: 30000 })
+    await typeSql("WAITFOR DELAY '00:00:30';")
+    await execute().click()
+    await expect(page.getByText('Your query is running…')).toBeVisible()
+    const before = await hooks()
+    await app.evaluate(() => globalThis.__variaTest.kill())
+    await expect(page.locator('.query-error')).toContainText(lostQuery, { timeout: 30000 })
+    const after = await ready(before.state.generation + 1)
+    expect(after.pid).not.toBe(before.pid)
+    await expect(banner()).toContainText('1 connection was lost and 1 running script was stopped; nothing was re-run.')
+    await expect(page.locator('.lost-server')).toContainText('— connection lost')
+    await page.locator('.lost-server').getByRole('button', { name: /^Reconnect/ }).click()
+    dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+    await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
+    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+    if (liveUser) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    await expect(page.locator('.lost-server')).toHaveCount(0)
+    // SPIDs can be reused, so the old session's temporary table shows whether the session is new.
+    await typeSql("SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
+    await execute().click()
+    await expect(page.locator('.results-grid tbody td').nth(1)).toHaveText('NULL', { timeout: 30000 })
+    await expect(await messages()).toContainText(newSession)
+    console.log('Live session loss passed: the killed backend did not re-run the script, and Reconnect opened a new session.')
+  }
+  await close()
+
+  // 2, 3 and 5: a fake backend that crashes, crash-loops, and hangs on cue.
+  step = 'crash during execute'
+  const control = await mkdtemp(resolve('artifacts', 'backend-control-'))
+  temporary.push(control)
+  await mkdir(join(control, 'hold'))
+  const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+  await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, VARIA_BACKEND_LIVENESS_MS: '2000' })
+  await expect(statusBar()).toContainText('fake · Ready')
+  let dialog = await connectDialog()
+  await fillLogin(dialog, 'crash-server', 'reader', 'smoke-password-marker')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('region', { name: 'Server crash-server', exact: true })).toBeVisible()
+  await typeSql('SELECT 1;')
+  // The script is running when the backend crashes.
+  await writeFile(join(control, 'hold', 'query.execute'), '')
+  await execute().click()
+  await expect(page.getByText('Your query is running…')).toBeVisible()
+  await expect.poll(async () => (await calls()).some(call => call.method === 'query.execute')).toBe(true)
+  const crashed = await hooks()
+  await writeFile(join(control, 'crash-next'), '')
+  await rm(join(control, 'hold', 'query.execute'))
+  await expect(page.locator('.query-error')).toContainText(lostQuery)
+  const restarted = await ready(2)
+  expect(restarted.pid).not.toBe(crashed.pid)
+  const history = await states()
+  expect(history.slice(history.indexOf('restarting:1'))).toEqual(expect.arrayContaining(['restarting:1', 'starting:2', 'ready:2']))
+  expect(history.indexOf('restarting:1')).toBeLessThan(history.indexOf('starting:2'))
+  expect(await app.evaluate(() => globalThis.__variaTest.states.find(state => state.status === 'restarting')?.lost)).toEqual({ generation: 1, reason: 'crash', connections: 1, queries: 1 })
+  await expect(statusBar()).toContainText('fake · Ready')
+  await expect(page.getByRole('region', { name: 'Server crash-server', exact: true })).toContainText('crash-server — connection lost')
+  await expect(execute()).toBeDisabled()
+  await expect(execute()).toHaveAttribute('title', lostHint)
+  await expect(page.locator('.query-context')).toContainText('crash-server (connection lost)')
+  await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 1 running script was stopped; nothing was re-run.')
+  // Nothing written to generation 1 reached generation 2, and the password never reached the call log.
+  let recorded = await calls()
+  expect(recorded.filter(call => call.generation === 2).map(call => call.method)).not.toContain('query.execute')
+  expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1])
+  expect(JSON.stringify(recorded)).not.toContain('smoke-password-marker')
+  await size(1024, 700)
+  await bannerInViewport()
+  await page.screenshot({ path: resolve('artifacts', 'backend-restart.png') })
+  await banner().getByRole('button', { name: 'Reconnect…', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
+  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
+  await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+  await dialog.getByLabel('Password', { exact: true }).fill('smoke-password-marker')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('.lost-server')).toHaveCount(0)
+  await expect(page.getByRole('region', { name: 'Server crash-server', exact: true })).toBeVisible()
+  await expect(page.locator('.query-context')).not.toContainText('connection lost')
+  await expect(execute()).toBeEnabled()
+  await execute().click()
+  await expect(page.locator('.results-grid tbody tr')).toHaveCount(1)
+  await expect(page.locator('.results-grid tbody td').nth(2)).toHaveText('2')
+  await expect(await messages()).toContainText(newSession)
+  recorded = await calls()
+  expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])
+  await banner().getByRole('button', { name: 'Dismiss', exact: true }).click()
+  await expect(banner()).toHaveCount(0)
+  console.log('Crash during execute passed: BACKEND_LOST, lost Explorer row, Execute hint, restart with a new pid, nothing re-run, and Reconnect with the new-session line.')
+
+  // A manual restart asks first while servers are connected, and resets the breaker.
+  step = 'manual restart'
+  await app.evaluate(({ dialog }) => {
+    globalThis.variaPrompts = []
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.variaPrompts.push(options.message + ' ' + options.detail)
+      return { response: options.message === 'Restart the SQL backend?' ? globalThis.variaPromptResponse ?? 1 : 1, checkboxChecked: false }
+    }
+  })
+  expect(await page.evaluate(() => window.varia.restartBackend())).toEqual({ ok: true, value: false })
+  expect(await app.evaluate(() => globalThis.variaPrompts)).toEqual(['Restart the SQL backend? The connection closes and uncommitted transactions are rolled back.'])
+  expect((await hooks()).state.generation).toBe(2)
+  await app.evaluate(() => { globalThis.variaPromptResponse = 0 })
+  expect(await page.evaluate(() => window.varia.restartBackend())).toEqual({ ok: true, value: true })
+  await ready(3)
+  await expect(banner()).toContainText('The SQL backend was restarted. 1 connection was closed.')
+  await banner().getByRole('button', { name: 'Dismiss', exact: true }).click()
+
+  step = 'crash loop'
+  // 3. Three unexpected losses within 120 s leave the backend failed until the user restarts it.
+  for (const generation of [3, 4]) {
+    await ready(generation)
+    await app.evaluate(() => globalThis.__variaTest.kill())
+  }
+  await ready(5)
+  await app.evaluate(() => globalThis.__variaTest.kill())
+  await expect(banner()).toContainText('The SQL backend stopped repeatedly and was not restarted again.')
+  await expect(statusBar()).toContainText('SQL backend unavailable')
+  await expect(statusBar()).toHaveAttribute('data-state', 'error')
+  expect((await hooks()).state).toMatchObject({ status: 'failed', reason: 'crashLoop' })
+  await bannerInViewport()
+  await page.screenshot({ path: resolve('artifacts', 'backend-failed.png') })
+  await banner().getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(banner().getByRole('button', { name: 'Copied', exact: true })).toBeVisible()
+  expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toContain('Status: failed (crashLoop)')
+  await banner().getByRole('button', { name: 'Restart SQL Backend', exact: true }).click()
+  await ready(6)
+  // The losses stay reported until dismissed.
+  await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 0 connections were lost and 0 running scripts were stopped; nothing was re-run.')
+  await banner().getByRole('button', { name: 'Dismiss', exact: true }).click()
+  await expect(banner()).toHaveCount(0)
+  console.log('Crash loop passed: the breaker tripped on the third loss in 120 s, Copy details, and Restart SQL Backend.')
+
+  step = 'unresponsive backend'
+  // 5. A backend that is alive but silent is reported, never killed; the user decides.
+  const silent = await hooks()
+  await writeFile(join(control, 'silent-6'), '')
+  await expect(banner()).toContainText('The SQL backend is not responding.', { timeout: 20000 })
+  await expect(statusBar()).toContainText('SQL backend not responding…')
+  await page.waitForTimeout(3000)
+  expect(await hooks()).toMatchObject({ pid: silent.pid, state: { status: 'unresponsive', generation: 6 } })
+  await rm(join(control, 'silent-6'))
+  await expect(banner()).toHaveCount(0, { timeout: 20000 })
+  expect((await hooks()).state).toMatchObject({ status: 'ready', generation: 6 })
+  await writeFile(join(control, 'silent-6'), '')
+  await expect(banner()).toContainText('The SQL backend is not responding.', { timeout: 20000 })
+  await bannerInViewport()
+  await banner().getByRole('button', { name: 'Restart now', exact: true }).click()
+  const replaced = await ready(7)
+  expect(replaced.pid).not.toBe(silent.pid)
+  await expect(banner()).toHaveCount(0)
+  console.log('Unresponsive backend passed: warned, never killed, recovered on its own, and replaced on Restart now.')
+  expect(failures).toEqual([])
+  await close()
+
+  step = 'incompatible backend'
+  // 4. A protocol 1 backend is detected from its JSON answer to the handshake, at once.
+  const started = Date.now()
+  await launch({ VARIA_TEST_BACKEND: 'v1', VARIA_TEST_NODE: process.execPath })
+  await expect(banner()).toContainText('The SQL backend is from a different build (protocol 1, expected 2). Run npm run backend:build, then restart.', { timeout: 5000 })
+  console.log(`Incompatible backend reported ${Date.now() - started} ms after launch.`)
+  expect((await hooks()).state).toMatchObject({ status: 'failed', reason: 'incompatible' })
+  await expect(page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true })).toBeDisabled()
+  expect(failures).toEqual([])
+  console.log('Backend restart checks passed: real readiness and reload, crash during execute with Reconnect, manual restart prompt, crash loop, unresponsive warning, and incompatible build.')
+} finally {
+  await close()
+  clearTimeout(watchdog)
+  for (const path of temporary) await rm(path, { recursive: true, force: true })
+}

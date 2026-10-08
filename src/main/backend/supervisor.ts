@@ -1,90 +1,331 @@
-import type { RpcMethod, RpcMethods } from '../../shared/contracts'
+import { z } from 'zod'
+import type { BackendState, LossReason, LostSummary, RpcMethod, RpcMethods } from '../../shared/contracts'
 import { deadlineFor } from '../../shared/ipc/methods'
-import { BackendConnection, type BackendHello, type ConnectionDeps, type Loss, type SpawnSpec } from './connection'
-import { BackendError, sentences } from './errors'
+import { PROTOCOL_VERSION, limits as wire } from '../../shared/ipc/wire/protocol'
+import { BackendConnection, systemClock, type BackendHello, type Clock, type ConnectionDeps, type Loss, type SendOptions, type SpawnSpec } from './connection'
+import { BackendError, failureMessage, sentences } from './errors'
 
-export type SupervisorStatus = 'stopped' | 'starting' | 'ready' | 'failed'
+export interface RestartPolicy {
+  /** Delay before the next generation after the 1st, 2nd, … unexpected loss (the last value repeats). */
+  readonly delaysMs: readonly number[]
+  /** This many unexpected losses within `breakerWindowMs` leave the backend failed until the user restarts it. */
+  readonly breakerLosses: number
+  readonly breakerWindowMs: number
+  /** A generation that stays up this long resets the delays and the breaker. */
+  readonly resetAfterMs: number
+}
+export const restartPolicy: RestartPolicy = wire.restart
+
+/** Electron's powerMonitor: a sleeping laptop is not a silent backend. */
+export interface PowerMonitorLike { on(event: 'suspend' | 'resume', listener: () => void): unknown }
+
+export interface SupervisorDeps extends ConnectionDeps {
+  policy?: Partial<RestartPolicy>
+  /** Silence before the backend counts as unresponsive; smoke tests shorten it (VARIA_BACKEND_LIVENESS_MS). */
+  unresponsiveMs?: number
+  power?: PowerMonitorLike
+}
+export type RequestOptions = Pick<SendOptions, 'stream' | 'credit' | 'onEvent'>
+
+const connectResultSchema = z.object({ id: z.string().min(1).max(128) }).loose()
+const idOf = (params: unknown, key: 'connectionId' | 'sessionId'): string | undefined => {
+  const value = params !== null && typeof params === 'object' ? (params as Record<string, unknown>)[key] : undefined
+  return typeof value === 'string' ? value : undefined
+}
+const maxSessions = 4096
+
+interface Retired { readonly generation: number; readonly reason: string; readonly loss?: Loss; readonly uptimeMs: number; readonly hello?: BackendHello; readonly stderr: readonly string[] }
+interface Waiter { resolve(connection: BackendConnection): void; reject(error: BackendError): void }
 
 /**
  * Owns the backend process across generations. A request is bound to the generation that is current when it is made
- * and is written to that generation only: nothing is ever re-sent to a later one. In this version a loss is sticky
- * (the backend stays failed) until a workbench reload restarts it; automatic restarts come with the full supervisor.
+ * (or to the next one while a restart is pending) and is written to that generation only: nothing is ever re-sent.
+ * A generation that exits or breaks the protocol is replaced after a short delay, until losses repeat too quickly; its
+ * connections become lost and only an explicit Reconnect replaces them. A generation that is alive but silent is only
+ * reported as unresponsive: restarting it would roll back every open transaction, so that is the user's decision.
  */
 export class BackendSupervisor {
+  private readonly spec: SpawnSpec
+  private readonly deps: SupervisorDeps
+  private readonly clock: Clock
+  private readonly policy: RestartPolicy
+  private readonly unresponsiveMs: number
+  private readonly tickMs: number
+  private readonly yieldTurn: (callback: () => void) => void
+  private readonly listeners = new Set<(state: BackendState) => void>()
+  private readonly waiting: Waiter[] = []
+  /** Connection ids by generation; a loss moves them to `lost`, which is bounded and oldest-first. */
+  private readonly live = new Map<string, number>()
+  private readonly lost = new Set<string>()
+  /** Query session ids by the generation their last script ran on. */
+  private readonly sessions = new Map<string, number>()
   private connection: BackendConnection | undefined
   private generation = 0
-  private failure: BackendError | undefined
-  private stopped = false
-  private hello: BackendHello | undefined
-  private readonly spec: SpawnSpec
-  private readonly deps: ConnectionDeps
+  private snapshot: BackendState = { status: 'stopped' }
+  private started = false
+  private closing = false
+  private restartTimer: unknown
+  /** Unexpected losses since the counters were last reset, and when each happened (for the breaker). */
+  private attempts = 0
+  private losses: number[] = []
+  private readySince: number | undefined
+  private retired: Retired | undefined
+  private watchdogTimer: unknown
+  private expectedTick = 0
+  private windowStart = 0
+  private suspended = false
 
-  constructor(spec: SpawnSpec, deps: ConnectionDeps = {}) {
+  constructor(spec: SpawnSpec, deps: SupervisorDeps = {}) {
     this.spec = spec
     this.deps = deps
+    this.clock = deps.clock ?? systemClock
+    this.policy = { ...restartPolicy, ...deps.policy }
+    this.unresponsiveMs = deps.unresponsiveMs ?? wire.timers.unresponsiveMs
+    this.tickMs = Math.max(25, Math.min(1000, Math.floor(this.unresponsiveMs / 4)))
+    this.yieldTurn = deps.yieldTurn ?? (callback => { setImmediate(callback) })
+    deps.power?.on('suspend', () => { this.suspended = true })
+    deps.power?.on('resume', () => { this.suspended = false; this.windowStart = this.clock.now() })
   }
 
-  get status(): SupervisorStatus {
-    if (this.stopped || (!this.connection && !this.failure)) return 'stopped'
-    if (this.failure) return 'failed'
-    return this.connection?.isReady ? 'ready' : 'starting'
-  }
-
+  get state(): BackendState { return this.snapshot }
   /** The current generation's connection, for tests and diagnostics. */
   get current(): BackendConnection | undefined { return this.connection }
-  get lastHello(): BackendHello | undefined { return this.hello }
+  /** Connections that a restart would close. */
+  connectionCount(): number { return this.live.size }
+  isLostConnection(id: string): boolean { return this.lost.has(id) }
+
+  onState(listener: (state: BackendState) => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
 
   start(): void {
-    if (this.stopped || this.connection || this.failure) return
+    if (this.started || this.closing) return
+    this.started = true
     this.launch()
   }
 
-  async request<M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<RpcMethods[M]['result']> {
+  async request<M extends RpcMethod>(method: M, params: RpcMethods[M]['params'], o: RequestOptions = {}): Promise<RpcMethods[M]['result']> {
     this.start()
-    const connection = this.connection
-    if (!connection) {
-      // Nothing to disconnect or close on a backend that is not running: its connections and sessions are gone.
-      if (method === 'connections.disconnect') return { disconnected: false } as RpcMethods[M]['result']
-      if (method === 'query.session.close') return { closed: false } as RpcMethods[M]['result']
-      throw this.failure ?? new BackendError('BACKEND_UNAVAILABLE', sentences.closing)
+    const local = this.answerLocally(method, params)
+    if (local) return local.value as RpcMethods[M]['result']
+    const connection = this.connection ?? await this.upcoming()
+    const sessionId = method === 'query.execute' ? idOf(params, 'sessionId') : undefined
+    if (sessionId !== undefined) {
+      this.sessions.delete(sessionId)
+      this.sessions.set(sessionId, connection.generation)
+      if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
     }
-    const { deadlineMs, backstopMs } = deadlineFor(method, params)
-    return await connection.send(method, params, { deadlineMs, backstopMs }).done as RpcMethods[M]['result']
+    const result = await connection.send(method, params, { ...deadlineFor(method, params), ...o }).done
+    return this.registered(method, params, result, connection) as RpcMethods[M]['result']
   }
 
-  /** Ends the current generation (its sessions end with it) and starts the next one at once. A reload also recovers
-   *  a failed backend. Requests still pending on the old generation fail; none is re-sent. */
-  async restart(reason: 'reload'): Promise<void> {
-    if (this.stopped) return
+  /** Ends the current generation (its sessions end with it) and starts the next one at once. A manual restart also
+   *  resets the breaker and recovers a failed backend; a reload leaves a failed backend to the user. */
+  async restart(reason: 'reload' | 'manual'): Promise<void> {
+    if (this.closing) return
+    if (!this.started) return this.start()
+    if (reason === 'reload' && this.snapshot.status === 'failed') return
+    if (reason === 'manual') { this.attempts = 0; this.losses = [] }
+    this.clock.clearTimeout(this.restartTimer)
     const previous = this.connection
     this.connection = undefined
-    this.failure = undefined
+    this.stopWatchdog()
+    if (previous) this.setState({ status: 'restarting', generation: previous.generation, lost: this.retire(previous, reason), retryInMs: 0 })
     this.launch()
-    await previous?.close(undefined, new BackendError('BACKEND_LOST', reason === 'reload' ? sentences.reloaded : sentences.lost))
+    await previous?.close(undefined, reason === 'reload' ? new BackendError('BACKEND_LOST', sentences.reloaded) : undefined)
   }
 
   async stop(): Promise<void> {
-    this.stopped = true
     const previous = this.connection
+    this.closing = true
     this.connection = undefined
-    this.failure = new BackendError('BACKEND_UNAVAILABLE', sentences.closing)
-    await previous?.close()
+    this.clock.clearTimeout(this.restartTimer)
+    this.stopWatchdog()
+    const error = new BackendError('BACKEND_UNAVAILABLE', sentences.closing)
+    for (const waiter of this.waiting.splice(0)) waiter.reject(error)
+    if (this.snapshot.status !== 'stopped') this.setState({ status: 'stopped' })
+    await previous?.close(undefined, error)
+  }
+
+  /** Requests that need no backend: cleanup of what a lost generation held, and refusals. */
+  private answerLocally(method: RpcMethod, params: unknown): { value: unknown } | undefined {
+    const unavailable = this.closing || this.snapshot.status === 'failed'
+    const connectionId = idOf(params, 'connectionId')
+    if (method === 'connections.disconnect' && (unavailable || (connectionId !== undefined && this.lost.has(connectionId)))) return { value: { disconnected: false } }
+    if (method === 'query.session.close') {
+      const sessionId = idOf(params, 'sessionId')
+      const generation = sessionId === undefined ? undefined : this.sessions.get(sessionId)
+      if (unavailable || (generation !== undefined && generation !== (this.connection?.generation ?? this.generation + 1))) {
+        if (sessionId !== undefined) this.sessions.delete(sessionId)
+        return { value: { closed: false } }
+      }
+    }
+    if (unavailable) throw this.unavailable()
+    if (connectionId !== undefined && this.lost.has(connectionId)) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+    return undefined
+  }
+
+  /** While a restart is pending, a request waits for (and is bound to) the next generation. */
+  private upcoming(): Promise<BackendConnection> {
+    if (this.waiting.length >= wire.pending.requests) return Promise.reject(new BackendError('TOO_MANY_REQUESTS', sentences.tooMany))
+    return new Promise((resolve, reject) => { this.waiting.push({ resolve, reject }) })
+  }
+
+  private registered(method: RpcMethod, params: unknown, result: unknown, connection: BackendConnection): unknown {
+    if (method === 'connections.connect') {
+      const parsed = connectResultSchema.safeParse(result)
+      if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
+      // The generation may have ended between the answer and this continuation.
+      if (this.connection === connection && !connection.lost) this.live.set(parsed.data.id, connection.generation)
+      else this.markLost(parsed.data.id)
+      return { ...parsed.data, generation: connection.generation }
+    }
+    if (method === 'connections.disconnect') { const id = idOf(params, 'connectionId'); if (id !== undefined) this.live.delete(id) }
+    if (method === 'query.session.close') { const id = idOf(params, 'sessionId'); if (id !== undefined) this.sessions.delete(id) }
+    return result
+  }
+
+  private unavailable(): BackendError {
+    if (this.closing) return new BackendError('BACKEND_UNAVAILABLE', sentences.closing)
+    const state = this.snapshot
+    return new BackendError('BACKEND_UNAVAILABLE', state.status === 'failed' && state.reason !== 'crashLoop' ? state.message : sentences.unavailable)
   }
 
   private launch(): void {
-    const connection = new BackendConnection(this.spec, ++this.generation, this.deps)
+    this.clock.clearTimeout(this.restartTimer)
+    const generation = ++this.generation
+    const connection = new BackendConnection(this.spec, generation, this.deps)
     this.connection = connection
-    connection.ready.then(hello => { if (this.connection === connection) this.hello = hello }, () => {})
-    connection.onLoss(loss => {
-      if (this.connection !== connection) return
-      this.connection = undefined
-      this.failure = this.failureFor(loss)
-    })
+    this.readySince = undefined
+    this.setState({ status: 'starting', generation })
+    connection.ready.then(() => {
+      if (this.connection !== connection || connection.lost) return
+      this.readySince = this.clock.now()
+      this.setState(this.readyState(connection))
+      this.startWatchdog()
+    }, () => {})
+    connection.onLoss(loss => this.onLoss(connection, loss))
+    for (const waiter of this.waiting.splice(0)) waiter.resolve(connection)
   }
 
-  private failureFor(loss: Loss): BackendError {
-    if (loss.reason === 'spawn') return new BackendError('BACKEND_UNAVAILABLE', this.spec.packaged ? sentences.spawnPackaged : sentences.spawnDevelopment)
-    if (loss.reason === 'incompatible') return new BackendError('BACKEND_UNAVAILABLE', sentences.incompatible(loss.detail, this.spec.packaged))
-    return new BackendError('BACKEND_UNAVAILABLE', sentences.stopped)
+  private onLoss(connection: BackendConnection, loss: Loss): void {
+    // A generation main replaced itself (restart, stop) was reported there.
+    if (this.connection !== connection) return
+    this.connection = undefined
+    this.stopWatchdog()
+    const failure = failureMessage(loss, this.spec.packaged)
+    if (failure) {
+      // It failed before HELLO, so it held no connections and ran nothing; retrying would fail the same way.
+      this.remember(connection, loss.reason, loss)
+      return this.fail(loss.reason === 'spawn' ? 'spawn' : 'incompatible', failure)
+    }
+    const now = this.clock.now()
+    if (this.readySince !== undefined && now - this.readySince >= this.policy.resetAfterMs) { this.attempts = 0; this.losses = [] }
+    const reason: LossReason = loss.reason === 'protocol' || loss.reason === 'helloTimeout' || loss.reason === 'crash' ? loss.reason : 'exit'
+    const lost = this.retire(connection, reason, loss)
+    this.losses = [...this.losses.filter(at => now - at < this.policy.breakerWindowMs), now]
+    this.attempts++
+    if (this.losses.length >= this.policy.breakerLosses) return this.fail('crashLoop', sentences.crashLoop, lost)
+    const retryInMs = this.policy.delaysMs[Math.min(this.attempts, this.policy.delaysMs.length) - 1] ?? 0
+    this.setState({ status: 'restarting', generation: connection.generation, lost, retryInMs })
+    this.restartTimer = this.clock.setTimeout(() => {
+      if (!this.closing && !this.connection && this.snapshot.status === 'restarting') this.launch()
+    }, retryInMs)
+  }
+
+  /** Moves a generation's connections to the lost set and remembers how it ended, for Copy details. */
+  private retire(connection: BackendConnection, reason: LossReason, loss?: Loss): LostSummary {
+    let connections = 0
+    for (const [id, generation] of this.live) {
+      if (generation !== connection.generation) continue
+      this.live.delete(id)
+      this.markLost(id)
+      connections++
+    }
+    this.remember(connection, reason, loss)
+    return { generation: connection.generation, reason, connections, queries: loss?.queries ?? connection.runningQueries }
+  }
+
+  private remember(connection: BackendConnection, reason: string, loss: Loss | undefined): void {
+    this.retired = { generation: connection.generation, reason, loss, uptimeMs: this.clock.now() - connection.startedAt, hello: connection.info, stderr: connection.stderr }
+  }
+
+  private markLost(id: string): void {
+    this.lost.add(id)
+    if (this.lost.size > wire.registries.lostConnections) this.lost.delete(this.lost.values().next().value!)
+  }
+
+  private fail(reason: 'crashLoop' | 'spawn' | 'incompatible', message: string, lost?: LostSummary): void {
+    this.setState({ status: 'failed', reason, message, ...(lost ? { lost } : {}), details: this.details(`failed (${reason})`) })
+    const error = this.unavailable()
+    for (const waiter of this.waiting.splice(0)) waiter.reject(error)
+  }
+
+  private readyState(connection: BackendConnection): BackendState {
+    const hello = connection.info!
+    return { status: 'ready', generation: connection.generation, pid: hello.pid, runtime: hello.runtime, platform: hello.platform }
+  }
+
+  /** Fixed-format facts for a bug report: no SQL, server names, or connection strings (stderr carries none either). */
+  private details(status: string): string {
+    const retired = this.retired, now = this.clock.now()
+    const loss = retired?.loss
+    return [
+      `Status: ${status}`,
+      `Generation: ${this.generation}`,
+      retired ? `Last loss: generation ${retired.generation}, ${retired.reason}${loss ? ` (${loss.detail})` : ''}` : 'Last loss: none',
+      `Exit code: ${loss?.exitCode ?? 'none'}; signal: ${loss?.signal ?? 'none'}`,
+      `Uptime: ${retired ? (retired.uptimeMs / 1000).toFixed(1) + ' s' : 'unknown'}`,
+      `Losses in the last ${Math.round(this.policy.breakerWindowMs / 1000)} s: ${this.losses.filter(at => now - at < this.policy.breakerWindowMs).length}`,
+      `Protocol: ${PROTOCOL_VERSION}`,
+      `Runtime: ${retired?.hello?.runtime ?? 'unknown'}`,
+      `OS: ${retired?.hello?.platform ?? `${process.platform} ${process.arch}`}`,
+      'Backend diagnostics (stderr):',
+      ...(retired?.stderr.length ? retired.stderr.map(line => '  ' + line) : ['  none'])
+    ].join('\n')
+  }
+
+  private setState(state: BackendState): void {
+    this.snapshot = state
+    for (const listener of [...this.listeners]) {
+      try { listener(state) } catch { /* A listener's failure must not stop the others or the supervisor. */ }
+    }
+  }
+
+  private startWatchdog(): void {
+    this.stopWatchdog()
+    this.windowStart = this.clock.now()
+    this.scheduleTick()
+  }
+
+  private stopWatchdog(): void { this.clock.clearTimeout(this.watchdogTimer) }
+
+  private scheduleTick(): void {
+    this.expectedTick = this.clock.now() + this.tickMs
+    this.watchdogTimer = this.clock.setTimeout(() => this.tick(), this.tickMs)
+  }
+
+  private tick(): void {
+    const connection = this.connection
+    if (!connection?.isReady) return
+    const now = this.clock.now()
+    // A late tick means main itself stalled (a synchronous dialog, a long GC): frames may be waiting in the pipe, so
+    // the silence window starts again rather than counting time main could not read.
+    if (this.suspended || now - this.expectedTick > 2 * this.tickMs) this.windowStart = now
+    this.scheduleTick()
+    if (this.suspended) return
+    const silentMs = () => Math.min(connection.silentMs, this.clock.now() - this.windowStart)
+    if (this.snapshot.status === 'unresponsive') {
+      if (silentMs() < this.unresponsiveMs) this.setState(this.readyState(connection))
+      return
+    }
+    if (this.snapshot.status !== 'ready' || silentMs() < this.unresponsiveMs) return
+    // Timers run before I/O is polled, so a PONG already in the pipe gets one turn to arrive.
+    this.yieldTurn(() => {
+      if (this.connection !== connection || this.snapshot.status !== 'ready' || this.suspended) return
+      const silent = silentMs()
+      if (silent >= this.unresponsiveMs) this.setState({ status: 'unresponsive', generation: connection.generation, silentMs: Math.round(silent) })
+    })
   }
 }

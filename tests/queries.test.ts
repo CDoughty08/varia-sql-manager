@@ -9,7 +9,7 @@ import { deferred, documentFixture } from './fixtures/documents'
 const output = (patch: Partial<QueryResult> = {}): QueryResult => ({ status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false, ...patch })
 function fixture(commandTimeout?: number) {
   const docs = documentFixture()
-  const connection: ConnectionInfo = { id: 'server-a', server: 'localhost', database: 'master', serverVersion: '17', commandTimeout }
+  const connection: ConnectionInfo = { id: 'server-a', server: 'localhost', database: 'master', serverVersion: '17', commandTimeout, generation: 1 }
   const api = {
     execute: vi.fn<VariaApi['execute']>(async () => ({ ok: true, value: output() })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } }))

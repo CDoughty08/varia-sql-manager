@@ -15,7 +15,7 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/backend-restart tests (after check)
 npm run test:electron   # Both of the above
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
@@ -121,7 +121,7 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 
 - `src/shared/contracts.ts`: typed operations, parameters, and results.
 - `src/main/validation.ts`: allowlist and runtime validation before requests leave Electron.
-- `src/main/backend/`: the backend process: `connection.ts` (one process: handshake, framing, request correlation, deadlines, limits, and failure handling) and `supervisor.ts` (its lifetime across reloads); `src/shared/ipc/` holds the wire format and the per-method policies.
+- `src/main/backend/`: the backend process: `connection.ts` (one process: handshake, framing, request correlation, deadlines, limits, and failure handling) and `supervisor.ts` (generations, restarts and the crash-loop breaker, lost connections, and the silence watchdog); `src/shared/ipc/` holds the wire format and the per-method policies.
 - `src/main/layout-store.ts` / `src/shared/layouts.ts`: atomic preferences, layout files, and bounded layout validation.
 - `src/preload/index.ts`: explicit public methods; no generic IPC or shell API exposed.
 - `backend/Varia.Backend`: independent C# console host and SQL services.
@@ -144,7 +144,7 @@ Protocol v2: every frame is a 16-byte little-endian header (magic `56 0A`, kind,
 REQUEST, 30-byte body, id 1, deadline 10,000 ms
 ```
 
-Errors are `{ error: { code, message } }` bodies. At the preload boundary they become a typed `{ ok: false, error, code }` result, so the UI can display failures without losing the Electron process. Each method has a deadline after which the backend answers `TIMEOUT`, and main gives up 5 seconds later. A backend that stops or breaks the protocol fails its pending requests (nothing is retried) and stays failed until the workbench is reloaded or the application restarts. Reloading the workbench (View → Reload) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
+Errors are `{ error: { code, message } }` bodies. At the preload boundary they become a typed `{ ok: false, error, code }` result, so the UI can display failures without losing the Electron process. Each method has a deadline after which the backend answers `TIMEOUT`, and main gives up 5 seconds later. A backend that exits or breaks the protocol fails its pending requests and is replaced by a new process after 0, 1, then 2 seconds. Nothing is ever re-sent or re-run: its connections show as **connection lost** in Object Explorer, and only **Reconnect…** (File menu, the banner, or the lost row) replaces one, moving its queries to a new session whose first execution says so. After three unexpected stops within two minutes the backend stays down until **Restart SQL Backend…** (command palette or banner; **Copy details** gives fixed-format diagnostics). A backend that is running but silent for 15 seconds is reported as not responding and is never restarted automatically, because a restart closes every connection and rolls back open transactions; **Restart now** leaves that choice to you. Reloading the workbench (View → Reload) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
 
 `query.execute` takes the query tab's UUID as `sessionId`, a separate execution UUID as `queryId`, and an optional selected-text `startLine`. Its result contains `status` (`completed`, `failed`, `cancelled`, or `timedOut`), any SQL error, completed/total batch counts, the resulting database context, and retained output. SQL execution failures return this result so earlier rows and messages survive. Validation errors and missing, busy, or invalid sessions/connections still use the protocol error envelope. `query.session.close` releases a tab's session; server retargeting closes that session before changing the target.
 

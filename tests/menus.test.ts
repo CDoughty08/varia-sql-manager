@@ -13,10 +13,10 @@ const displayRoles = ['role:reload', 'role:toggleDevTools', 'role:resetZoom', 'r
 describe('menu model', () => {
   it('builds the menubar from the catalogue and the extras', () => {
     for (const platform of ['win32', 'linux'] as const) {
-      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'role:quit'])
+      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'role:quit'])
       expect(outline('window', platform)).toEqual(['window.explorer', 'window.editor', 'window.output', '-', 'document.next', 'document.previous', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window'])
     }
-    expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close'])
+    expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close'])
     expect(outline('window', 'darwin')).toEqual(['window.explorer', 'window.editor', 'window.output', '-', 'document.next', 'document.previous', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window', '-', 'role:minimize', 'role:zoom'])
     for (const platform of platforms) {
       expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'role:cut', 'role:copy', 'role:paste', 'role:selectAll', '-', 'edit.find', 'edit.replace', '-', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
@@ -134,7 +134,7 @@ describe('application menu template', () => {
 describe('menu state', () => {
   it('covers every command with a menubar placement and every toggle', () => {
     // The other theme commands are in the palette only: the Theme submenu keeps PR1's main-owned items for them.
-    expect(menuCommandIds).toEqual(commandIds.filter(id => !['window.close', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder', 'preferences.reloadThemes'].includes(id)))
+    expect(menuCommandIds).toEqual(commandIds.filter(id => !['window.close', 'explorer.refresh', 'backend.restart', 'preferences.createTheme', 'preferences.openThemesFolder', 'preferences.reloadThemes'].includes(id)))
     expect(toggleCommandIds).toEqual(['editor.toggleWordWrap'])
   })
   it('accepts unique catalogue ids only', () => {

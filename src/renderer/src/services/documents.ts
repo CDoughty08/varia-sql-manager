@@ -9,7 +9,7 @@ export const documentUri = (id: string): string => `varia-sql://query/${id}`
 export type ModelFactory = (sql: string, uri: string) => editor.ITextModel
 interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 
 export class DocumentService extends SnapshotStore<DocumentSnapshot> implements Disposable {

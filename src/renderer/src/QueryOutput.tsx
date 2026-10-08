@@ -1,11 +1,12 @@
 import { memo, useState } from 'react'
 import type { QueryResult } from '../../shared/contracts'
 
-interface Props { tabId: string; result?: QueryResult; error?: string; running: boolean; connected: boolean }
+/** `hint` replaces the empty state's advice, for example when the query's connection was lost. */
+interface Props { tabId: string; result?: QueryResult; error?: string; running: boolean; connected: boolean; hint?: string }
 type View = 'results' | 'messages'
 const initialView = (result?: QueryResult, error?: string): View => error || result?.error || result?.resultSets.length === 0 ? 'messages' : 'results'
 
-function QueryOutput({ tabId, result, error, running, connected }: Props) {
+function QueryOutput({ tabId, result, error, running, connected, hint }: Props) {
   const [view, setView] = useState<View>(() => initialView(result, error))
   const [index, setIndex] = useState(0)
   // Reset while rendering (not in an effect) so a new result never paints with the previous selection first.
@@ -44,7 +45,7 @@ function QueryOutput({ tabId, result, error, running, connected }: Props) {
         {set.truncated && <div className="truncation">Output truncated by display limits. See Messages.</div>}
         {set.incomplete && <div className="truncation">This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.</div>}
       </> : <div className="output-empty">{statusText}.{result.recordsAffected >= 0 ? ' ' + result.recordsAffected + ' rows affected.' : ''}</div>}
-    </> : <div className="output-empty"><strong>{running ? 'Your query is running…' : 'Query results'}</strong><p>{connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.'}</p></div>}
+    </> : <div className="output-empty"><strong>{running ? 'Your query is running…' : 'Query results'}</strong><p>{hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>}
   </section>
 }
 

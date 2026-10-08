@@ -41,6 +41,11 @@ export class TargetService {
     })
   }
   changeDatabase(tabId: string, database: string): void { this.update(tabId, { database }) }
+  /** After an explicit Reconnect, the lost connection's queries move to the new one (keeping their results), and the
+   *  next execution of each says that it runs in a new session. Nothing else ever retargets a query this way. */
+  retarget(oldId: string, newId: string): void {
+    for (const document of this.documents.getSnapshot().documents) if (document.connectionId === oldId) this.documents.update(document.id, { connectionId: newId, sessionNotice: true })
+  }
   /** Runs a task under the document lock, reporting failures in the file error banner. */
   async runDocumentTask(action: () => Promise<void>): Promise<void> {
     if (this.documents.getSnapshot().busy) return

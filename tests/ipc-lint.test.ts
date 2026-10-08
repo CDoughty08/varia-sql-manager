@@ -33,6 +33,17 @@ describe('IPC wire lint', () => {
     expect(() => stripTypeScriptTypes(source, { mode: 'strip' })).not.toThrow()
     for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type /)
   })
+  it('honours the backend test seams only in unpackaged smoke runs', () => {
+    const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
+    expect(main).toContain("const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged")
+    expect(main.match(/installTestHooks\(|VARIA_BACKEND_LIVENESS_MS/g)).toHaveLength(2)
+    expect(main).toContain('if (testSeams) installTestHooks(backend)')
+    expect(main).toContain('const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN')
+    // The fake backend is chosen in the spawn spec, after the packaged branch and only for smoke tests.
+    const spec = readFileSync(join('src', 'main', 'backend', 'spawn-spec.ts'), 'utf8')
+    expect(spec.indexOf('if (o.packaged) return')).toBeLessThan(spec.indexOf('VARIA_TEST_BACKEND :'))
+    expect(spec).toContain('const fake = o.smokeTest ? o.env?.VARIA_TEST_BACKEND : undefined')
+  })
   it('never imports the differential-test MessagePack library from application code', () => {
     for (const file of files('src')) expect(readFileSync(file, 'utf8').includes('@msgpack/msgpack'), file).toBe(false)
   })

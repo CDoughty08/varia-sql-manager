@@ -21,12 +21,15 @@ export const contextKeys = {
   textInputFocus: { type: 'boolean', scope: 'focus', description: '`editorTextFocus || inputFocus`.' },
   activePanel: { type: 'enum', scope: 'focus', values: ['explorer', 'editor', 'output', ''], description: "The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none." },
   quickInputVisible: { type: 'boolean', scope: 'state', description: 'The command palette or a picker is open.' },
-  backendReady: { type: 'boolean', scope: 'state', description: 'The backend has answered its health check.' },
+  backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
+  backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },
   hasActiveDocument: { type: 'boolean', scope: 'state', description: 'A query is open.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
-  hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected.' },
-  activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected." },
+  hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected (lost connections do not count).' },
+  activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected and its connection was not lost." },
+  hasLostConnection: { type: 'boolean', scope: 'state', description: 'A connection was lost when the SQL backend restarted and has not been reconnected or removed.' },
+  activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's connection was lost when the SQL backend restarted." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' }
 } as const satisfies Record<string, ContextKeyDeclaration>

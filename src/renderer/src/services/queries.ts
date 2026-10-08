@@ -8,15 +8,18 @@ export interface RunningQuery { readonly queryId: string; readonly connectionId:
 export interface QueryState { readonly running?: RunningQuery; readonly result?: QueryResult; readonly error?: string }
 export type QuerySnapshot = Readonly<Record<string, QueryState>>
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'The operation failed.'
+export const newSessionMessage = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted, so its SET options, temporary tables, and open transaction no longer exist.'
+type QueryConnection = ConnectionInfo & { readonly lost?: true }
 
 export class QueryService extends SnapshotStore<QuerySnapshot> implements Disposable {
   private disposed = false
-  constructor(private documents: DocumentService, private api: Pick<VariaApi, 'execute' | 'cancel'>, private getConnection: (id: string) => ConnectionInfo | undefined, private events: EventBus) { super({}) }
+  constructor(private documents: DocumentService, private api: Pick<VariaApi, 'execute' | 'cancel'>, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus) { super({}) }
   isRunning(id: string): boolean { return !!this.getSnapshot()[id]?.running }
   isConnectionRunning(id: string): boolean { return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id) }
   canExecute(): boolean {
     const document = this.documents.active
-    return !this.disposed && !this.documents.getSnapshot().busy && !!document?.connectionId && !!this.getConnection(document.connectionId) && !this.isRunning(document.id)
+    const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
+    return !this.disposed && !this.documents.getSnapshot().busy && !!connection && !connection.lost && !this.isRunning(document!.id)
   }
   private update(id: string, state: QueryState): void { this.publish({ ...this.getSnapshot(), [id]: state }) }
   clear(id: string): void {
@@ -44,6 +47,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     } catch (failure) { error = errorText(failure) }
     if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
     if (result?.database) this.documents.update(tabId, { database: result.database })
+    // A result means the backend ran the script in a session; the first one after a reconnect is a new session.
+    if (result && this.documents.get(tabId)?.sessionNotice) {
+      result = { ...result, messages: [newSessionMessage, ...result.messages] }
+      this.documents.update(tabId, { sessionNotice: false })
+    }
     this.update(tabId, { result, error })
     this.events.emit({ type: 'query.finished', tabId, queryId, result, error })
   }

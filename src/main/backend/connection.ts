@@ -5,7 +5,7 @@ import { decodeControl, encodeControl, encodeSensitiveControl } from '../../shar
 import { PROTOCOL_VERSION, cancelReasons, errorCodes, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import { backendMethods, methodPolicies } from '../../shared/ipc/methods'
 import type { RpcMethod } from '../../shared/contracts'
-import { BackendError, sentences } from './errors'
+import { BackendError, failureMessage, sentences } from './errors'
 
 export interface SpawnSpec {
   readonly command: string
@@ -58,8 +58,9 @@ export interface ConnectionDeps {
 
 /** Why a generation ended. `closed` means main closed it; every other reason is unexpected. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'incompatible' | 'spawn' | 'closed'
-/** `detail` is fixed-format (codes, offsets, versions, method names), never anything else the backend sent. */
-export interface Loss { readonly reason: LossReason; readonly detail: string; readonly exitCode?: number | null; readonly signal?: string | null }
+/** `detail` is fixed-format (codes, offsets, versions, method names), never anything else the backend sent.
+ *  `queries` counts the scripts that were running when the generation ended. */
+export interface Loss { readonly reason: LossReason; readonly detail: string; readonly exitCode?: number | null; readonly signal?: string | null; readonly queries?: number }
 
 /** Each DATA body of a stream, an exact-size ArrayBuffer, in sequence order; the stream's RESPONSE settles `done`. */
 export interface StreamSink { data(seq: number, body: ArrayBuffer): void }
@@ -96,6 +97,14 @@ interface Pending {
   seq: number
 }
 
+const stderrRing = { lines: wire.registries.stderrLines, characters: wire.registries.stderrCharacters }
+/** One stderr line for the ring, cut without leaving half a surrogate pair. */
+function clip(line: string): string {
+  if (line.length <= stderrRing.characters) return line
+  const cut = line.slice(0, stderrRing.characters)
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut
+}
+
 const frameNames = Object.fromEntries(Object.entries(FrameKind).map(([name, kind]) => [kind, name])) as Record<number, string>
 const maxRequestId = wire.ids.maxRequestId
 
@@ -109,6 +118,8 @@ function decoded(body: Uint8Array): { value: unknown } | undefined {
  */
 export class BackendConnection {
   readonly generation: number
+  /** When the process was spawned, on the connection's clock. */
+  readonly startedAt: number
   /** Resolves with the backend's validated HELLO; rejects with the Loss if the generation ends first. */
   readonly ready: Promise<BackendHello>
   /** Frames for requests main already gave up on (backstop or violation), dropped on arrival. */
@@ -125,6 +136,9 @@ export class BackendConnection {
   /** Frames written before HELLO completes wait here: nothing but HELLO is written until then. */
   private readonly queue: { frame: Uint8Array; sensitive: boolean }[] = []
   private readonly exited: Promise<void>
+  private readonly packaged: boolean
+  private readonly stderrLines: string[] = []
+  private stderrPartial = ''
   private queuedBytes = 0
   private hello: BackendHello | undefined
   private loss: Loss | undefined
@@ -144,7 +158,8 @@ export class BackendConnection {
     this.trace = deps.trace
     this.yieldTurn = deps.yieldTurn ?? (callback => { setImmediate(callback) })
     this.parser = new FrameParser({ maxBody: this.limits.responseBody, direction: 'toMain' })
-    this.lastFrameAt = this.clock.now()
+    this.packaged = spec.packaged
+    this.startedAt = this.lastFrameAt = this.clock.now()
     this.ready = new Promise((resolve, reject) => { this.resolveReady = resolve; this.rejectReady = reject })
     // Losses also reach onLoss listeners; an unobserved rejection here must not crash main.
     this.ready.catch(() => {})
@@ -166,8 +181,9 @@ export class BackendConnection {
     child.stdout.on('end', () => {
       try { this.parser.end() } catch (error) { this.violation(error) }
     })
-    // Drained so a chatty backend never blocks; diagnostics are fixed-format and are not logged here.
-    child.stderr.resume()
+    // Drained so a chatty backend never blocks. Only the last lines are kept, for Copy details; nothing is logged.
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (text: string) => this.collect(text))
     // A failed spawn also fails the pending HELLO write; the 'error' event reports that case.
     child.stdin.on('error', () => { if (started) this.lose({ reason: 'exit', detail: 'stdin closed' }) })
     this.helloTimer = this.clock.setTimeout(() => this.lose({ reason: 'helloTimeout', detail: 'no HELLO within ' + this.limits.helloMs + ' ms' }), this.limits.helloMs)
@@ -178,6 +194,11 @@ export class BackendConnection {
   get isReady(): boolean { return !!this.hello && !this.loss }
   get lost(): Loss | undefined { return this.loss }
   get pendingCount(): number { return this.pending.size }
+  /** Scripts written to (or queued for) this generation that have not finished. */
+  get runningQueries(): number { let count = 0; for (const request of this.pending.values()) if (request.method === 'query.execute') count++; return count }
+  get info(): BackendHello | undefined { return this.hello }
+  /** The backend's last stderr lines, at most 32 of 512 characters, oldest first. */
+  get stderr(): readonly string[] { return (this.stderrPartial ? [...this.stderrLines, this.stderrPartial] : this.stderrLines).slice(-stderrRing.lines) }
   /** Milliseconds since the backend last sent anything (any frame, including PONG, counts). */
   get silentMs(): number { return this.clock.now() - this.lastFrameAt }
 
@@ -244,9 +265,10 @@ export class BackendConnection {
     this.write(encodeFrame(FrameKind.CREDIT, id, grant), false)
   }
 
-  /** Ends this generation on purpose: pending requests fail with `error`, stdin closes so the backend can end its
-   *  sessions, and the process is killed if it has not exited within the grace period. */
-  async close(graceMs: number = wire.timers.stopGraceMs, error = new BackendError('BACKEND_UNAVAILABLE', sentences.closing)): Promise<void> {
+  /** Ends this generation on purpose: pending requests fail with `error` (by default BACKEND_LOST, as for any loss),
+   *  stdin closes so the backend can end its sessions, and the process is killed if it has not exited within the grace
+   *  period. */
+  async close(graceMs: number = wire.timers.stopGraceMs, error?: BackendError): Promise<void> {
     this.lose({ reason: 'closed', detail: 'closed by main' }, error)
     if (!this.child.stdin.destroyed) this.child.stdin.end()
     const timeout = () => new Promise<'timeout'>(resolve => this.clock.setTimeout(() => resolve('timeout'), graceMs))
@@ -401,20 +423,30 @@ export class BackendConnection {
     this.child.stdin.write(frame, sensitive ? () => frame.fill(0) : undefined)
   }
 
+  private collect(text: string): void {
+    const lines = (this.stderrPartial + text).split(/\r?\n/)
+    this.stderrPartial = clip(lines.pop() ?? '')
+    for (const line of lines.slice(-stderrRing.lines)) this.stderrLines.push(clip(line))
+    if (this.stderrLines.length > stderrRing.lines) this.stderrLines.splice(0, this.stderrLines.length - stderrRing.lines)
+  }
+
   private kill(): void {
     if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill('SIGKILL')
   }
 
-  private lose(loss: Loss, error?: BackendError): void {
+  private lose(cause: Loss, error?: BackendError): void {
     if (this.loss) return
+    const loss: Loss = { ...cause, queries: this.runningQueries }
     this.loss = loss
     this.clock.clearTimeout(this.helloTimer)
     this.clock.clearTimeout(this.pingTimer)
     const pending = [...this.pending.values()]
     this.pending.clear()
+    // A backend that cannot start or is from another build never ran anything, so say why rather than "stopped".
+    const unavailable = failureMessage(loss, this.packaged)
     for (const request of pending) {
       this.clock.clearTimeout(request.timer)
-      request.reject(error ?? new BackendError('BACKEND_LOST', request.method === 'query.execute' ? sentences.lostQuery : sentences.lost))
+      request.reject(error ?? (unavailable ? new BackendError('BACKEND_UNAVAILABLE', unavailable) : new BackendError('BACKEND_LOST', request.method === 'query.execute' ? sentences.lostQuery : sentences.lost)))
     }
     for (const queued of this.queue.splice(0)) if (queued.sensitive) queued.frame.fill(0)
     this.queuedBytes = 0

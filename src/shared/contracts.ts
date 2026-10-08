@@ -48,7 +48,8 @@ export interface ConnectionOptions {
   advanced?: Partial<AdvancedConnectionOptions>
 }
 
-export interface ConnectionInfo { id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string }
+/** `generation` is the backend generation that holds the connection (stamped by main); a later generation cannot use it. */
+export interface ConnectionInfo { id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
 export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
 export const serverObjectKinds = ['logins', 'serverRoles', 'credentials', 'cryptographicProviders', 'audits', 'serverAuditSpecifications'] as const
@@ -112,6 +113,23 @@ export type RpcMethod = keyof RpcMethods
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode }
 
+/** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
+export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'
+/** What ended with a generation: its connections and the scripts that were running on it. */
+export interface LostSummary { generation: number; reason: LossReason; connections: number; queries: number }
+/**
+ * The backend as main sees it. `restarting` names the generation that ended; the next one starts after `retryInMs`.
+ * A backend that is alive but silent is `unresponsive` and is never restarted automatically.
+ */
+export type BackendState =
+  | { status: 'starting'; generation: number }
+  | { status: 'ready'; generation: number; pid: number; runtime: string; platform: string }
+  | { status: 'unresponsive'; generation: number; silentMs: number }
+  | { status: 'restarting'; generation: number; lost?: LostSummary; retryInMs: number }
+  | { status: 'failed'; reason: 'crashLoop' | 'spawn' | 'incompatible'; message: string; lost?: LostSummary; details: string }
+  | { status: 'stopped' }
+export type BackendStatus = BackendState['status']
+
 export interface MenuPopup { menu: MenubarId; x: number; y: number }
 export interface SqlFile { id: string; name: string; path: string }
 export interface OpenSqlFile extends SqlFile { content: string }
@@ -139,6 +157,11 @@ export interface VariaApi {
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>
+  getBackendState(): Promise<ApiResult<BackendState>>
+  onBackendState(callback: (state: BackendState) => void): () => void
+  /** Ends the current backend generation and starts the next one; main asks first when servers are connected.
+   *  Resolves to false when the user cancels. */
+  restartBackend(): Promise<ApiResult<boolean>>
   openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>

@@ -3,7 +3,7 @@ import type { MenuId } from './menus'
 
 export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
-export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'refresh',
+export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'debug-restart', 'refresh',
   'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color'] as const
 export type Codicon = typeof codicons[number]
 
@@ -142,6 +142,12 @@ export const commandCatalog = {
     title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
     menus: [{ menu: 'file', group: '0_connect', order: 2 }]
   },
+  'connection.reconnect': {
+    title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && backendReady',
+    unavailableHint: 'No connection was lost.', menus: [{ menu: 'file', group: '0_connect', order: 3 }]
+  },
+  // Always available: it is also the way out of an unresponsive or failed backend.
+  'backend.restart': { title: 'Restart SQL Backend…', category: 'Connection', icon: 'debug-restart', keywords: ['backend', 'restart', 'sidecar'] },
   'explorer.refresh': {
     title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer,
     keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }]

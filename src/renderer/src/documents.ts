@@ -8,6 +8,8 @@ export interface QueryDocument {
   readonly connectionId?: string
   readonly database: string
   readonly file?: SqlFile
+  /** Reconnect moved this query to a new session; its next execution says so before its own messages. */
+  readonly sessionNotice?: boolean
 }
 
 // Presentation projection; results are owned by QueryService.

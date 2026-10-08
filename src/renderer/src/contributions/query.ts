@@ -35,7 +35,7 @@ export function queryContribution({ commands, queries, documents, connections, t
       const tabId = tab.id
       quickInput.show({
         ariaLabel: 'Change Connection', placeholder: 'Select a server for this query', noun: 'servers', activeId: tab.connectionId ?? '',
-        items: [{ id: '', label: 'Disconnected', icon: 'debug-disconnect' }, ...serverItems(connections.getSnapshot())],
+        items: [{ id: '', label: 'Disconnected', icon: 'debug-disconnect' }, ...serverItems(connections.live())],
         // The query may have started running while the picker was open.
         onDidAccept: item => queries.isRunning(tabId) ? undefined : targets.changeConnection(tabId, item.id || undefined)
       })

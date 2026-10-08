@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ApiResult, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
+import type { ApiResult, BackendState, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
 import type { MenubarId } from '../shared/commands/menus'
 import type { ThemeState } from '../shared/theme/types'
@@ -31,6 +31,13 @@ const api: VariaApi = {
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
   closeQuerySession: sessionId => request('query.session.close', { sessionId }),
+  getBackendState: () => ipcRenderer.invoke('varia:backend-state-get'),
+  onBackendState: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: BackendState) => callback(state)
+    ipcRenderer.on('varia:backend-state', listener)
+    return () => { ipcRenderer.removeListener('varia:backend-state', listener) }
+  },
+  restartBackend: () => ipcRenderer.invoke('varia:backend-restart'),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),

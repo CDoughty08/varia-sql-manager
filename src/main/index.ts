@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec } from './backend/spawn-spec'
+import { installTestHooks } from './backend/test-hooks'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
@@ -80,6 +81,18 @@ function resetRendererState(): void {
   endPreview()
   void backend?.restart('reload')
   files.clear()
+}
+
+/** Restarting closes every connection and rolls back open transactions, so main asks first when there are any. */
+async function restartBackend(): Promise<boolean> {
+  const count = backend.connectionCount()
+  const window = mainWindow
+  if (count > 0 && window && !window.isDestroyed()) {
+    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true })
+    if (response !== 0) return false
+  }
+  await backend.restart('manual')
+  return true
 }
 
 function rendererCanConfirm(window: BrowserWindow): boolean {
@@ -227,11 +240,19 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   if (!primaryInstance) return
   const root = app.getAppPath()
-  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1' }), {
+  const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
+  // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
+  const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN
+  const liveness = Number.isInteger(livenessMs) && livenessMs >= 200 ? { unresponsiveMs: livenessMs, limits: { pingMs: Math.floor(livenessMs / 4) } } : {}
+  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env }), {
     appVersion: app.getVersion(),
     // Frame kinds, ids and lengths only; never bodies.
-    trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined
+    trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined,
+    power: powerMonitor,
+    ...liveness
   })
+  backend.onState(state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state) })
+  if (testSeams) installTestHooks(backend)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
@@ -240,6 +261,8 @@ app.whenReady().then(async () => {
   await appearance.initialize()
   appearance.onDidChange(applyAppearance)
   nativeTheme.on('updated', () => appearance.systemChanged())
+  handle('varia:backend-state-get', () => backend.state)
+  handle('varia:backend-restart', () => restartBackend())
   handle('varia:theme-state', () => appearance.state)
   handle('varia:theme-set', value => chooseTheme(value))
   // Results that arrive after a later preview, a choice, or a renderer reset are dropped.

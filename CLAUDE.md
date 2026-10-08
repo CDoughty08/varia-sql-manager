@@ -10,7 +10,7 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the five Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the six Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
@@ -28,7 +28,9 @@ README.md documents user-facing behaviour, limits, and the protocol.
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
   Every `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
-  `--no-sandbox`); only root, as in cloud sessions, runs without it.
+  `--no-sandbox`); only root, as in cloud sessions, runs without it. Only in unpackaged smoke runs, main also honours
+  `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
+  takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, and `globalThis.__variaTest` (kill, states).
 
 ## Architecture invariants
 

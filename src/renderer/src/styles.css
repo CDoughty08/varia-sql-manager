@@ -108,6 +108,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .server-toggle { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; height: 32px; text-align: left; padding: 0 6px; }
 .server-toggle > span { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .server-toggle > .icon { color: var(--varia-icon-foreground); }
+.lost-server-label { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; padding: 0 6px; font-size: 12px; line-height: 16px; color: var(--varia-descriptionForeground); }
+.lost-server-label > .node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.lost-server-actions { display: flex; gap: 4px; padding: 0 12px 4px 30px; }
+.lost-server-actions button { border: 1px solid var(--varia-button-border); }
 .server-row > .icon-button { margin-right: 4px; color: var(--varia-objectExplorer-actionForeground); }
 .tree-children { padding-left: 12px; }
 .tree-children[hidden] { display: none; }
@@ -198,6 +202,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .global-error { display: flex; align-items: center; justify-content: space-between; background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); padding: 6px 12px; font-size: 12px; }
 .global-error.warning { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .theme-notice { gap: 12px; }
+.backend-banner { gap: 12px; flex-wrap: wrap; }
+.backend-banner-text { flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; }
+.backend-banner-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.backend-banner-actions button { color: inherit; }
 .theme-notice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .theme-notice-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .theme-notice-actions button { color: inherit; }

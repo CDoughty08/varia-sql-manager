@@ -41,7 +41,8 @@ describe('BackendConnection handshake', () => {
     const pending = health(connection)
     expect(await lossOf(connection)).toMatchObject({ reason: 'incompatible', detail: 'protocol 1, expected 2' })
     await expect(connection.ready).rejects.toMatchObject({ reason: 'incompatible' })
-    expect(await failure(pending)).toMatchObject({ code: 'BACKEND_LOST' })
+    // It never ran anything, so the request says why rather than that the backend stopped.
+    expect(await failure(pending)).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: sentences.incompatible('protocol 1, expected 2', false) })
   })
   it('refuses a backend speaking another protocol version', async () => {
     expect(await lossOf(fake('wrong-version'))).toMatchObject({ reason: 'incompatible', detail: 'protocol 3, expected 2' })
