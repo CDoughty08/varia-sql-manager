@@ -21,7 +21,7 @@ npm run build
 npm start               # Launch the built workbench using the local .NET runtime
 ```
 
-Without a desktop session on Linux, run the Electron tests under a virtual display: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`. Screenshots and test profiles go to `artifacts/`.
+Without a desktop session on Linux, run the Electron tests under a virtual display: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`. Screenshots and test profiles go to `artifacts/`. The tests keep Chromium's sandbox on unless they run as root, so the AppArmor note above applies to them too.
 
 The .NET SDK is selected through `global.json`. npm and NuGet lockfiles pin resolved dependencies. This bootstrap runs locally; installers, code signing, and bundled .NET distribution are future work.
 
@@ -156,6 +156,13 @@ docker run -d --name varia-sql -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=Varia_Dev_
 VARIA_TEST_SQL_SERVER=localhost VARIA_TEST_SQL_USER=sa VARIA_TEST_SQL_PASSWORD='Varia_Dev_Pw1!' npm run backend:test
 ```
 
+The `docker run` line works unchanged in PowerShell; set the variables there for one run like this:
+
+```powershell
+$env:VARIA_TEST_SQL_SERVER = 'localhost'; $env:VARIA_TEST_SQL_USER = 'sa'; $env:VARIA_TEST_SQL_PASSWORD = 'Varia_Dev_Pw1!'
+try { npm run backend:test } finally { Remove-Item Env:VARIA_TEST_SQL_* }
+```
+
 On Windows, a development SQL Server with Windows authentication needs only the server variable:
 
 ```powershell
@@ -167,7 +174,7 @@ These checks create only session-local temporary objects. The test harness expli
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pull requests to `main`, pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb. Windows and macOS run `npm run check` (without a database) and the Electron tests for pushes, manual runs, and non-draft pull requests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests currently assume Windows/Linux window chrome, so macOS results are informational until the macOS menu bar work lands. Failed runs upload `artifacts/` (screenshots and test profiles).
+`.github/workflows/ci.yml` runs on pull requests to `main`, pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests currently assume Windows/Linux window chrome, so macOS skips them until the macOS menu bar work lands. A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`.
 
 ## Direction
 

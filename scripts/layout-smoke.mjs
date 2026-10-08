@@ -6,7 +6,9 @@ await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'layout-profile-'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
 delete env.ELECTRON_RUN_AS_NODE
-let application = await electron.launch({ args: ['.'], env })
+// Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
+const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
+let application = await electron.launch(launchOptions)
 let page
 const watchdog = setTimeout(() => { console.error('Layout test exceeded its time limit.'); application.process().kill(); process.exitCode = 1 }, 360000)
 const preferencesPath = resolve(profile, 'workspace-layouts.json')
@@ -188,7 +190,7 @@ try {
   expect(JSON.stringify(remembered)).not.toContain('SELECT 42')
   console.log('Layout checks: normal exit flushed current and named layouts.')
 
-  application = await electron.launch({ args: ['.'], env })
+  application = await electron.launch(launchOptions)
   await ready()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   expect((await pane('explorer').boundingBox()).x).toBeGreaterThan((await pane('editor').boundingBox()).x)
@@ -210,7 +212,7 @@ try {
   await expect(page.getByRole('dialog').getByRole('status')).toContainText('Layout saved.')
   await done(); await application.close()
   expect((await preferences()).current.panels).toEqual({})
-  application = await electron.launch({ args: ['.'], env })
+  application = await electron.launch(launchOptions)
   await ready(false)
   await expect(page.getByText('All panels are closed.', { exact: true })).toBeVisible()
   for (const id of ['explorer', 'editor', 'output']) { await windowPane(id); await expect(pane(id)).toBeVisible() }

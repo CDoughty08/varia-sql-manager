@@ -9,7 +9,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A new push supersedes a pull request's earlier run; every main commit and manual run gets its own complete run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -61,13 +62,15 @@ jobs:
         run: npm run check
       - name: Prepare the Electron sandbox and display
         # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chromium's sandbox needs them because
-        # npm's chrome-sandbox helper is not setuid root. Re-enabling them keeps the app's sandbox on.
+        # npm's chrome-sandbox helper is not setuid root. The smoke tests launch with chromiumSandbox (scripts/*-smoke.mjs),
+        # so the runner user gets the real sandbox instead of Playwright's Linux default of --no-sandbox.
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
       - name: Electron smoke tests
+        timeout-minutes: 20
         run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
-      - name: Upload smoke-test profiles and screenshots
+      - name: Upload smoke-test screenshots
         if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -103,13 +106,13 @@ jobs:
       - name: Type check, offline .NET checks, vitest, production build
         run: npm run check
       - name: Electron smoke tests
-        id: smoke
-        # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts).
-        # macOS results stay informational until its native menu bar and Cmd shortcuts are covered.
-        continue-on-error: ${{ runner.os == 'macOS' }}
+        # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on
+        # macOS they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
+        if: runner.os != 'macOS'
+        timeout-minutes: 20
         run: npm run test:smoke
-      - name: Upload smoke-test profiles and screenshots
-        if: failure() || steps.smoke.outcome == 'failure'
+      - name: Upload smoke-test screenshots
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: smoke-artifacts-${{ matrix.os }}

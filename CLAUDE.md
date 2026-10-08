@@ -18,13 +18,16 @@ README.md documents user-facing behaviour, limits, and the protocol.
 ## Environment
 
 - Node.js 24+ and the .NET 10 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
-  installs both, runs `npm install`, builds the backend (Debug and Release), and puts `/opt/node24/bin` on PATH.
+  installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
+  puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
   `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 80 checks instead of 40, and
   `connections-smoke.mjs` connects for real. Never print the password.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
+  Every `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
+  `--no-sandbox`); only root, as in cloud sessions, runs without it.
 
 ## Architecture invariants
 
@@ -55,9 +58,10 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - TypeScript: no semicolons, single quotes, 2-space indent, long lines. C#: 4-space indent, nullable enabled, warnings
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR off `main`; squash merges; imperative commit subjects.
-- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, smoke tests under xvfb) runs on every PR and
-  push. Windows and macOS run on push to main, manual runs, and non-draft PRs only, because the repository is private
-  and their minutes bill at 2x and 10x. Keep PRs in draft while iterating.
+- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
+  every PR to main and every push to main. Windows and macOS run on push to main, manual runs, and non-draft PRs only,
+  because the repository is private and their minutes bill at 2x and 10x; macOS skips the smoke tests until they cover
+  its window chrome. Keep PRs in draft while iterating.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)
