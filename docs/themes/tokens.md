@@ -81,7 +81,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | --- | --- | --- | --- | --- | --- |
 | `foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Default text color of the workbench. |
 | `descriptionForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Secondary text: hints, captions, and explanations. |
-| `disabledForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Text of disabled controls. |
+| `disabledForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Text of disabled controls, such as unavailable commands in the command palette. |
 | `errorForeground` | VS Code | `$error` | `#f39c9f` | `#ae2117` | Error text. |
 | `warningForeground` | Varia | `$warning` | `#dfbd82` | `#8a5300` | Warning text. |
 | `successForeground` | Varia | `$success` | `#8addac` | `#146c38` | Success text, such as the Execute button and confirmations. |
@@ -148,13 +148,13 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `sideBar.background` | VS Code | `$sideBar` | `#151b24` | `#f3f5f8` | Object Explorer. |
 | `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Object Explorer heading. |
 | `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Lines around the Object Explorer heading and footer. |
-| `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row, and the highlighted item of the editor context menu. |
+| `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row (command palette rows included), and the highlighted item of the editor context menu. |
 | `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Selected row of a focused list. |
 | `list.activeSelectionForeground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Text of the selected row of a focused list. |
 | `list.inactiveSelectionBackground` | VS Code | `$selection` | `#24324a` | `#d6e3f3` | Selected row of an unfocused list, and the selected result set. |
 | `list.inactiveSelectionForeground` | VS Code | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the selected row of an unfocused list. |
 | `list.focusOutline` | VS Code | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the focused list row. Not used yet; reserved for the Object Explorer tree. |
-| `list.highlightForeground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Characters that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
+| `list.highlightForeground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Characters that match a filter, such as in the command palette. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8fb7ff33` | `#005fb833` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
 | `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
 | `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#1d2b40` | `#e3ebf5` | Row of the selected server. |
@@ -297,13 +297,13 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39c9f` | `#ae2117` | Error notification icon. Not used yet; reserved for notifications. |
 | `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#dfbd82` | `#8a5300` | Warning notification icon. Not used yet; reserved for notifications. |
 | `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8fb7ff` | `#005fb8` | Information notification icon. Not used yet; reserved for notifications. |
-| `quickInput.background` | VS Code | `@editorWidget.background` | `#1a2230` | `#ffffff` | Command palette. Not used yet; reserved for the command palette. |
-| `quickInput.foreground` | VS Code | `@editorWidget.foreground` | `#d9e1ec` | `#1f2733` | Command palette text. Not used yet; reserved for the command palette. |
-| `quickInputTitle.background` | VS Code | `$raised` | `#202a39` | `#e1e7ee` | Command palette title. Not used yet; reserved for the command palette. |
-| `quickInputList.focusBackground` | VS Code | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Focused command palette item. Not used yet; reserved for the command palette. |
-| `quickInputList.focusForeground` | VS Code | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of the focused command palette item. Not used yet; reserved for the command palette. |
-| `pickerGroup.foreground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Command palette group labels. Not used yet; reserved for the command palette. |
-| `pickerGroup.border` | VS Code | `$separator` | `#354359` | `#cdd4de` | Command palette group separators. Not used yet; reserved for the command palette. |
+| `quickInput.background` | VS Code | `@editorWidget.background` | `#1a2230` | `#ffffff` | Command palette and pickers (quick input). |
+| `quickInput.foreground` | VS Code | `@editorWidget.foreground` | `#d9e1ec` | `#1f2733` | Command palette text. |
+| `quickInputTitle.background` | VS Code | `$raised` | `#202a39` | `#e1e7ee` | Title row of pickers that have one. |
+| `quickInputList.focusBackground` | VS Code | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Active command palette row. |
+| `quickInputList.focusForeground` | VS Code | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of the active command palette row. |
+| `pickerGroup.foreground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Command palette group labels, such as "recently used". |
+| `pickerGroup.border` | VS Code | `$separator` | `#354359` | `#cdd4de` | Line above each command palette group. |
 
 ### Connection colors
 

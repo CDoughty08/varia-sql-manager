@@ -1,8 +1,10 @@
-import type { QueryResult, WorkbenchCommand } from '../../../shared/contracts'
+import type { QueryResult } from '../../../shared/contracts'
 
+export type { CommandId } from '../../../shared/commands/catalog'
 export interface Disposable { dispose(): void }
-export type CommandId = WorkbenchCommand | 'query.execute' | 'query.cancel'
 export interface CommandContext { readonly tabId?: string }
+/** The only command argument: the tab a tab-strip button acts on. Keys, menus, and the palette never pass arguments. */
+export type CommandArgs = CommandContext
 export type WorkbenchEvent =
   | { type: 'documents.changed' }
   | { type: 'documents.activated'; tabId: string }

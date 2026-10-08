@@ -1,10 +1,11 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { themePreviewSchema } from '../shared/theme/choice'
 import { hexColor, nativeOverlay, opaqueHex } from '../shared/theme/color'
 import { createProblem, defaultThemePreference, limitProblems, quote, starterTheme, themeIdFromFileName, themeLimits, themePreferencePatchSchema } from '../shared/theme/format'
 import { builtinThemes } from '../shared/theme/palette'
 import { resolveTheme } from '../shared/theme/resolve'
-import type { ParsedTheme, ThemeMode, ThemePreference, ThemePreferencePatch, ThemeProblem, ThemeResolution, ThemeState, ThemeSummary, ThemeType } from '../shared/theme/types'
+import type { ParsedTheme, ResolvedTheme, ThemeMode, ThemePreference, ThemePreferencePatch, ThemeProblem, ThemeResolution, ThemeState, ThemeSummary, ThemeType } from '../shared/theme/types'
 import { AppearanceStore } from './appearance-store'
 import { scanThemes, ThemeActionError, themesFolderName, writeSchemaFile, writeStarterTheme, type ThemeFile, type ThemeScan } from './theme-files'
 
@@ -29,6 +30,10 @@ const readOnly = new Set(['EROFS', 'EACCES', 'EPERM'])
 /** A folder action's failure as a fixed sentence: its own message when it has one, otherwise `failed` and the code. */
 const actionError = (error: unknown, failed: string) => error instanceof ThemeActionError ? error
   : new ThemeActionError(`${failed}${readOnly.has((error as NodeJS.ErrnoException | undefined)?.code ?? '') ? ' because the themes folder is not writable' : ''}${detail(error)}.`)
+/** The native window colors for a theme: the shown theme, which is the active one unless the palette previews another. */
+export function windowChromeFor(theme: ResolvedTheme): WindowChrome {
+  return { backgroundColor: opaqueHex(hexColor(theme.colors['editor.background'])), overlay: nativeOverlay(theme) }
+}
 const builtinResolutions: Record<ThemeType, ThemeResolution> = { dark: resolveTheme([], 'dark'), light: resolveTheme([], 'light') }
 const builtinEntries = themeTypes.map((type): CatalogEntry => ({
   summary: { ...builtinThemes[type], source: 'builtin', types: [type], usable: true, errors: 0, warnings: 0 }, resolutions: { [type]: builtinResolutions[type] }, problems: [], problemsOmitted: 0
@@ -141,9 +146,22 @@ export class AppearanceService {
     void this.enqueue(() => { if (this.preference.mode === 'system' && this.current.active.type !== this.effectiveType()) this.update() })
   }
 
-  windowChrome(): WindowChrome {
-    const active = this.current.active
-    return { backgroundColor: opaqueHex(hexColor(active.colors['editor.background'])), overlay: nativeOverlay(active) }
+  windowChrome(): WindowChrome { return windowChromeFor(this.current.active) }
+
+  /**
+   * The resolved theme for a validated `{ id, type }` from the catalogue, or null for null. A preview is only shown:
+   * it never changes the preference, `appearance.json`, `themeSource`, the revision, or the menu.
+   */
+  async preview(value: unknown): Promise<ResolvedTheme | null> {
+    const selection = themePreviewSchema.parse(value)
+    return this.enqueue(async () => {
+      if (!selection) return null
+      // A preview publishes nothing, so a scan's new themes reach the menu with the next update.
+      if (!this.complete) await this.scanAll()
+      const theme = this.catalogue.get(selection.id)?.resolutions[selection.type]?.theme
+      if (!theme) throw new Error('Unknown or unusable theme.')
+      return theme
+    })
   }
 
   /** Creates the themes folder and refreshes its schema file. Failures are `ThemeActionError`s with fixed messages. */

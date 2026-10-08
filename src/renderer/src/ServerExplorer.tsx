@@ -160,7 +160,7 @@ function ServerExplorer({ connection, selectedDatabase, refresh, canDisconnect, 
 
   return <section className="server-section" aria-label={'Server ' + connection.server} style={{ borderLeft: accent ? `3px solid ${accent}` : undefined }}>
     <div className={'server-row' + (selectedDatabase ? ' selected' : '')}>
-      <button className="server-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={connection.server + ' (SQL Server ' + connection.serverVersion + ')'}>
+      <button className="server-toggle" data-pane-focus={selectedDatabase ? 'selected' : 'server'} aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={connection.server + ' (SQL Server ' + connection.serverVersion + ')'}>
         <Icon name="chevron" className={expanded ? 'expanded' : ''} /><Icon name="server" /><span>{connection.displayName || connection.server}</span>
       </button>
       <button className="icon-button" aria-label={'Disconnect ' + connection.server} title="Disconnect server" disabled={!canDisconnect} onClick={() => onDisconnect(connection.id)}><Icon name="disconnect" /></button>

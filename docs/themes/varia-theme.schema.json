@@ -383,8 +383,8 @@
         },
         "disabledForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Text of disabled controls. Default $textMuted (Dark #8a9cb3, Light #525e72).",
-          "markdownDescription": "(VS Code) Text of disabled controls. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
+          "description": "(VS Code) Text of disabled controls, such as unavailable commands in the command palette. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Text of disabled controls, such as unavailable commands in the command palette. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "errorForeground": {
           "$ref": "#/definitions/value",
@@ -643,8 +643,8 @@
         },
         "list.hoverBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Hovered list row, and the highlighted item of the editor context menu. Default $hover (Dark #263041, Light #d0d8e3).",
-          "markdownDescription": "(VS Code) Hovered list row, and the highlighted item of the editor context menu. Default `$hover` (Dark `#263041`, Light `#d0d8e3`)."
+          "description": "(VS Code) Hovered list row (command palette rows included), and the highlighted item of the editor context menu. Default $hover (Dark #263041, Light #d0d8e3).",
+          "markdownDescription": "(VS Code) Hovered list row (command palette rows included), and the highlighted item of the editor context menu. Default `$hover` (Dark `#263041`, Light `#d0d8e3`)."
         },
         "list.activeSelectionBackground": {
           "$ref": "#/definitions/value",
@@ -673,8 +673,8 @@
         },
         "list.highlightForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Characters that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. Default $accent (Dark #8fb7ff, Light #005fb8).",
-          "markdownDescription": "(VS Code) Characters that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+          "description": "(VS Code) Characters that match a filter, such as in the command palette. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Characters that match a filter, such as in the command palette. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
         },
         "list.filterMatchBackground": {
           "$ref": "#/definitions/value",
@@ -1238,38 +1238,38 @@
         },
         "quickInput.background": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Command palette. Not used yet; reserved for the command palette. Default @editorWidget.background (Dark #1a2230, Light #ffffff).",
-          "markdownDescription": "(VS Code) Command palette. Not used yet; reserved for the command palette. Default `@editorWidget.background` (Dark `#1a2230`, Light `#ffffff`)."
+          "description": "(VS Code) Command palette and pickers (quick input). Default @editorWidget.background (Dark #1a2230, Light #ffffff).",
+          "markdownDescription": "(VS Code) Command palette and pickers (quick input). Default `@editorWidget.background` (Dark `#1a2230`, Light `#ffffff`)."
         },
         "quickInput.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Command palette text. Not used yet; reserved for the command palette. Default @editorWidget.foreground (Dark #d9e1ec, Light #1f2733).",
-          "markdownDescription": "(VS Code) Command palette text. Not used yet; reserved for the command palette. Default `@editorWidget.foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+          "description": "(VS Code) Command palette text. Default @editorWidget.foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Command palette text. Default `@editorWidget.foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
         },
         "quickInputTitle.background": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Command palette title. Not used yet; reserved for the command palette. Default $raised (Dark #202a39, Light #e1e7ee).",
-          "markdownDescription": "(VS Code) Command palette title. Not used yet; reserved for the command palette. Default `$raised` (Dark `#202a39`, Light `#e1e7ee`)."
+          "description": "(VS Code) Title row of pickers that have one. Default $raised (Dark #202a39, Light #e1e7ee).",
+          "markdownDescription": "(VS Code) Title row of pickers that have one. Default `$raised` (Dark `#202a39`, Light `#e1e7ee`)."
         },
         "quickInputList.focusBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Focused command palette item. Not used yet; reserved for the command palette. Default @list.activeSelectionBackground (Dark #2e4058, Light #c4daf4).",
-          "markdownDescription": "(VS Code) Focused command palette item. Not used yet; reserved for the command palette. Default `@list.activeSelectionBackground` (Dark `#2e4058`, Light `#c4daf4`)."
+          "description": "(VS Code) Active command palette row. Default @list.activeSelectionBackground (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(VS Code) Active command palette row. Default `@list.activeSelectionBackground` (Dark `#2e4058`, Light `#c4daf4`)."
         },
         "quickInputList.focusForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Text of the focused command palette item. Not used yet; reserved for the command palette. Default @list.activeSelectionForeground (Dark #d9e1ec, Light #1f2733).",
-          "markdownDescription": "(VS Code) Text of the focused command palette item. Not used yet; reserved for the command palette. Default `@list.activeSelectionForeground` (Dark `#d9e1ec`, Light `#1f2733`)."
+          "description": "(VS Code) Text of the active command palette row. Default @list.activeSelectionForeground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Text of the active command palette row. Default `@list.activeSelectionForeground` (Dark `#d9e1ec`, Light `#1f2733`)."
         },
         "pickerGroup.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Command palette group labels. Not used yet; reserved for the command palette. Default $accent (Dark #8fb7ff, Light #005fb8).",
-          "markdownDescription": "(VS Code) Command palette group labels. Not used yet; reserved for the command palette. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+          "description": "(VS Code) Command palette group labels, such as \"recently used\". Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Command palette group labels, such as \"recently used\". Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
         },
         "pickerGroup.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Command palette group separators. Not used yet; reserved for the command palette. Default $separator (Dark #354359, Light #cdd4de).",
-          "markdownDescription": "(VS Code) Command palette group separators. Not used yet; reserved for the command palette. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
+          "description": "(VS Code) Line above each command palette group. Default $separator (Dark #354359, Light #cdd4de).",
+          "markdownDescription": "(VS Code) Line above each command palette group. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
         },
         "connection.red": {
           "$ref": "#/definitions/value",

@@ -17,14 +17,14 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const palette = 'the command palette', menus = 'custom menus and the title bar', tree = 'the Object Explorer tree', grid = 'the results grid', toasts = 'notifications'
+const menus = 'custom menus and the title bar', tree = 'the Object Explorer tree', grid = 'the results grid', toasts = 'notifications'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
   'Base': {
     'foreground': ['V', '$text', 'Default text color of the workbench.', 'css'],
     'descriptionForeground': ['V', '$textMuted', 'Secondary text: hints, captions, and explanations.', 'css'],
-    'disabledForeground': ['V', '$textMuted', 'Text of disabled controls.', 'monaco'],
+    'disabledForeground': ['V', '$textMuted', 'Text of disabled controls, such as unavailable commands in the command palette.', 'css monaco'],
     'errorForeground': ['V', '$error', 'Error text.', 'css monaco'],
     'warningForeground': ['X', '$warning', 'Warning text.', ''],
     'successForeground': ['X', '$success', 'Success text, such as the Execute button and confirmations.', 'css'],
@@ -82,13 +82,13 @@ const groups = {
     'sideBar.background': ['V', '$sideBar', 'Object Explorer.', 'css'],
     'sideBarTitle.foreground': ['V', '$textTertiary', 'Object Explorer heading.', 'css'],
     'sideBarSectionHeader.border': ['V', '$borderSubtle', 'Lines around the Object Explorer heading and footer.', 'css'],
-    'list.hoverBackground': ['V', '$hover', 'Hovered list row, and the highlighted item of the editor context menu.', 'monaco'],
+    'list.hoverBackground': ['V', '$hover', 'Hovered list row (command palette rows included), and the highlighted item of the editor context menu.', 'css monaco'],
     'list.activeSelectionBackground': ['V', '$selectionStrong', 'Selected row of a focused list.', 'css monaco'],
     'list.activeSelectionForeground': ['V', '$text', 'Text of the selected row of a focused list.', 'css monaco'],
     'list.inactiveSelectionBackground': ['V', '$selection', 'Selected row of an unfocused list, and the selected result set.', 'css monaco'],
     'list.inactiveSelectionForeground': ['V', '$textAccent', 'Text of the selected row of an unfocused list.', 'css monaco'],
     'list.focusOutline': ['V', '@focusBorder', 'Outline of the focused list row.', '', { reserved: tree }],
-    'list.highlightForeground': ['V', '$accent', 'Characters that match a filter.', 'monaco', { reserved: searchable }],
+    'list.highlightForeground': ['V', '$accent', 'Characters that match a filter, such as in the command palette.', 'css monaco'],
     'list.filterMatchBackground': ['V', '$accent/20', 'Rows that match a filter.', '', { reserved: searchable }],
     'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides.', '', { reserved: tree }],
     'objectExplorer.activeConnectionBackground': ['X', '$accentSurface', 'Row of the selected server.', 'css'],
@@ -213,13 +213,13 @@ const groups = {
     'notificationsErrorIcon.foreground': ['V', '@errorForeground', 'Error notification icon.', '', { reserved: toasts }],
     'notificationsWarningIcon.foreground': ['V', '@warningForeground', 'Warning notification icon.', '', { reserved: toasts }],
     'notificationsInfoIcon.foreground': ['V', '@infoForeground', 'Information notification icon.', '', { reserved: toasts }],
-    'quickInput.background': ['V', '@editorWidget.background', 'Command palette.', '', { reserved: palette }],
-    'quickInput.foreground': ['V', '@editorWidget.foreground', 'Command palette text.', '', { reserved: palette }],
-    'quickInputTitle.background': ['V', '$raised', 'Command palette title.', '', { reserved: palette }],
-    'quickInputList.focusBackground': ['V', '@list.activeSelectionBackground', 'Focused command palette item.', '', { reserved: palette }],
-    'quickInputList.focusForeground': ['V', '@list.activeSelectionForeground', 'Text of the focused command palette item.', '', { reserved: palette }],
-    'pickerGroup.foreground': ['V', '$accent', 'Command palette group labels.', '', { reserved: palette }],
-    'pickerGroup.border': ['V', '$separator', 'Command palette group separators.', '', { reserved: palette }]
+    'quickInput.background': ['V', '@editorWidget.background', 'Command palette and pickers (quick input).', 'css'],
+    'quickInput.foreground': ['V', '@editorWidget.foreground', 'Command palette text.', 'css'],
+    'quickInputTitle.background': ['V', '$raised', 'Title row of pickers that have one.', 'css'],
+    'quickInputList.focusBackground': ['V', '@list.activeSelectionBackground', 'Active command palette row.', 'css'],
+    'quickInputList.focusForeground': ['V', '@list.activeSelectionForeground', 'Text of the active command palette row.', 'css'],
+    'pickerGroup.foreground': ['V', '$accent', 'Command palette group labels, such as "recently used".', 'css'],
+    'pickerGroup.border': ['V', '$separator', 'Line above each command palette group.', 'css']
   },
   'Connection colors': {
     'connection.red': ['X', '$red', 'Red connection color.', 'script'],

@@ -15,7 +15,7 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette tests (after check)
 npm run test:electron   # Both of the above
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
@@ -30,16 +30,40 @@ The .NET SDK is selected through `global.json`. npm and NuGet lockfiles pin reso
 1. Click **Connect**, enter a SQL Server and starting database, and choose Windows or SQL authentication.
 2. For a trusted local server with a self-signed certificate, explicitly enable **Trust server certificate**. Encryption stays enabled. Certificate validation is enabled by default.
 3. Connect additional servers with **Connect**. Each query retains its own server/database target; the toolbar selectors change the active query's target. Object Explorer keeps all connected servers visible.
-4. Execute SQL with **F5**, **Ctrl+Enter**, or the Execute button. Selected text takes priority over the full document; a whitespace-only selection executes nothing.
+4. Execute SQL with the Execute button or its keys (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)). Selected text takes priority over the full document; a whitespace-only selection executes nothing.
 5. Inspect result sets and Messages. Cancel stops the running script and skips its remaining batches. Earlier output remains available.
 6. Click a table to generate its CREATE script through SMO in a new query tab.
-7. Use **Open** / **Ctrl+O**, **Save** / **Ctrl+S**, and **File → Save As** / **Ctrl+Shift+S** for SQL files. Close a query with its × button or **Ctrl+W**. Modified queries show a dot and offer Save / Don't Save / Cancel on close or application exit. Arrow keys navigate the tab strip; Space/Enter activates a focused tab.
+7. Use **Open**, **Save**, and **File → Save As** for SQL files, and close a query with its × button. Modified queries show a dot and offer Save / Don't Save / Cancel on close or application exit. Arrow keys navigate the tab strip; Space/Enter activates a focused tab.
 
 File operations use native dialogs and opaque file IDs, with atomic saves. UTF-8 and UTF-16 LE (with BOM) SQL files are supported, with a 5 MB file limit. Existing encoding is preserved when saving. Native Undo/Redo menu actions use Monaco's document history; Ctrl+Z/Ctrl+Y continue to work in the editor.
 
-The window uses a single compact title bar with **File / Edit / View / Window** menus and the current query name. Windows retains native minimize/maximize/close controls, while the empty title area can be dragged to move the window. The query action toolbar sits immediately below. Menus use native dropdowns and existing accelerators; **F10** focuses the menu bar, arrow keys move between menus, and **Alt+F / Alt+E / Alt+V / Alt+W** open them on Windows/Linux. **Escape** returns focus to the editor or input. This uses Electron's [custom title bar and native controls overlay](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar).
+The window uses a single compact title bar with **File / Edit / View / Query / Window** menus and the current query name. Windows retains native minimize/maximize/close controls, while the empty title area can be dragged to move the window. The query action toolbar sits immediately below. Menus use native dropdowns that show command keys and grey out commands that cannot run; **F10** focuses the menu bar, arrow keys move between menus, and **Alt+F / Alt+E / Alt+V / Alt+Q / Alt+W** open them on Windows/Linux. **Escape** returns focus to the editor or input. This uses Electron's [custom title bar and native controls overlay](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar).
 
 Passwords are kept in memory only; application exit or disconnecting releases the backend connection profile and clears its connection pool. Closing a query tab ends its SQL session; tab sessions are not pooled, so an open transaction rolls back and releases its locks immediately. The UI clears the password after connecting, selecting another saved connection, or dismissing the dialog. Saved profiles contain server/login names and connection settings, with passwords omitted.
+
+## Commands and keyboard shortcuts
+
+**F1** or **Ctrl+Shift+P** (**⇧⌘P** on macOS) opens the command palette. Type any part of a command's name, or the first letters of its words (`fsa` finds **File: Save As…**). The arrow keys move through the list, **Enter** runs the command, and **Escape** closes the palette. Either way focus first returns to where it was, so a command such as Undo acts on the editor you came from. Recently used commands are listed first. Commands that cannot run right now are dimmed, and choosing one says why, for example that the query needs a connection. **Ctrl+P** (**⌘P**) opens **Go to Query**, which lists the open queries with the most recently used first, so **Ctrl+P** then **Enter** switches between the last two. In either list, type `>` to search commands or `?` for help.
+
+The shortcuts follow SSMS where SSMS has one:
+
+| Action | Windows and Linux | macOS |
+| --- | --- | --- |
+| Command palette | F1, Ctrl+Shift+P | F1, ⇧⌘P |
+| Go to Query | Ctrl+P | ⌘P |
+| Execute the selection, or the whole query (in the editor) | F5, Ctrl+Enter, Ctrl+E | F5, ⌘↩ |
+| Cancel the executing query | Alt+Pause | Query menu |
+| Change database | Ctrl+U | ⌘U |
+| New query, Open, Save, Save As | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | ⌘N, ⌘O, ⌘S, ⇧⌘S |
+| Close the query | Ctrl+W, Ctrl+F4 | ⌘W |
+| Next or previous query | Ctrl+Tab or Ctrl+Shift+Tab, Ctrl+PageDown or Ctrl+PageUp | ⌃⇥ or ⌃⇧⇥ |
+| Show Object Explorer and move focus to it | F8 | F8 |
+| Refresh Object Explorer (when it has focus) | F5 | F5 |
+| Toggle word wrap | Alt+Z | View menu |
+| Comment or uncomment the selection | Ctrl+K Ctrl+C or Ctrl+K Ctrl+U | ⌘K ⌘C or ⌘K ⌘U |
+| Toggle line comment | Ctrl+/ | ⌘/ |
+
+The [command reference](docs/commands.md) lists every command with its keys on each platform, the condition under which it can run, its menu items, and the keys Varia leaves to menus, the editor, and the operating system. It is generated from the command catalogue, so it always matches the app. On macOS, menu items show only shortcuts with ⌘: the menu bar would take any other key (F5, F8, ⌃⇥) before the focused pane saw it. Menus, the toolbar, the keyboard, and the palette run the same commands and agree on what is available. While a dialog is open, workbench shortcuts and menu commands do nothing and the dialog keeps its keys; Undo and Redo still act on its text fields. Holding a key down runs its command once, except Next and Previous Query. Custom keybindings are future work.
 
 ## Connection dialog
 
@@ -75,7 +99,7 @@ Interface labels, menus, tabs, and status text disable browser text selection. T
 
 ## Themes
 
-**View → Theme** switches between **Dark** (the default), **Light**, and **Follow System**, and chooses the theme used in each mode. Switching is live: queries, undo history, connections, and the layout are untouched, and the native title bar and menus follow the mode (system dialogs such as file pickers follow it on macOS only). The choice is saved in `appearance.json` in Electron's user-data directory.
+**View → Theme** switches between **Dark** (the default), **Light**, and **Follow System**, and chooses the theme used in each mode. Switching is live: queries, undo history, connections, and the layout are untouched, and the native title bar and menus follow the mode (system dialogs such as file pickers follow it on macOS only). The choice is saved in `appearance.json` in Electron's user-data directory. **Color Theme…** (in that menu, or **Preferences: Color Theme…** in the command palette) lists the modes and every theme: each row previews as you move to it, Enter chooses it, and Escape puts the current theme back without saving anything.
 
 Custom themes are JSON files in the `themes` folder there (**View → Theme → Open Themes Folder**). A theme overrides any of 61 named palette slots, 188 color keys (VS Code names where the meaning matches), and the SQL token colors, on top of Varia Dark or Varia Light; one file can provide both variants. **Create Custom Theme…** writes a starter seeded with the current accent colors; edit it, then choose **Reload Themes**. Theme files are validated strictly and never modified. Problems are listed in a banner with their JSON path, a bad entry keeps its default, and a theme that cannot be used falls back to the built-in theme of its type while keeping your choice. See the [theme guide](docs/themes/README.md), the [token reference](docs/themes/tokens.md), and the [JSON Schema](docs/themes/varia-theme.schema.json).
 
@@ -102,10 +126,12 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 - `src/preload/index.ts`: explicit public methods; no generic IPC or shell API exposed.
 - `backend/Varia.Backend`: independent C# console host and SQL services.
 - `src/renderer/src`: workbench and locally bundled Monaco editor/worker.
-- `src/renderer/src/core`: renderer command routing, typed events, stable service snapshots, and workbench lifetime outside React effects.
-- `src/renderer/src/contributions/files.ts` / `src/renderer/src/services/files.ts`: file command registration, shortcuts, open/save/close workflows, dirty confirmations, and file errors. Tab-close commands carry the document ID, so a pending confirmation stays attached to its original query. Application exit confirms documents, flushes the shell's layout, and rechecks document revisions before closing.
+- `src/shared/commands`: the command catalogue (ids, titles, keys, preconditions, and menu placements), the when-clause language, keybinding parsing and labels, the menu model main builds native menus from, and the generator for `docs/commands.md`.
+- `src/renderer/src/core`: renderer command routing, context keys, the keybinding dispatcher, native menu state, typed events, stable service snapshots, and workbench lifetime outside React effects.
+- `src/renderer/src/quickinput` / `src/renderer/src/contributions`: the DOM-free quick input controller and its view, and the commands that use it: the palette, Go to Query, and the server, database, and color theme pickers.
+- `src/renderer/src/contributions/files.ts` / `src/renderer/src/services/files.ts`: file command registration, open/save/close workflows, dirty confirmations, and file errors. Tab-close commands carry the document ID, so a pending confirmation stays attached to its original query. Application exit confirms documents, flushes the shell's layout, and rechecks document revisions before closing.
 - `src/renderer/src/services`: document-owned Monaco models/view state and query orchestration. Documents use `varia-sql://query/<tab-id>` URIs; tab changes and editor remounts retain undo history. SQL stays in models, while React subscribes to metadata and execution snapshots. Save records the revision actually written, so typing during a save remains dirty. Query commands share guards for running scripts and document transitions; the backend session ID remains the tab ID.
-- `tests`: real sidecar health/error integration tests, bridge failure tests, and file/layout persistence checks. Electron scripts exercise docking gestures, layout file round trips, live editor preservation, and a full app restart with isolated test profiles.
+- `tests`: real sidecar health/error integration tests, bridge failure tests, and file/layout persistence checks. Electron scripts exercise docking gestures, layout file round trips, live editor preservation, the command palette, pickers, and keyboard paths, and a full app restart with isolated test profiles.
 
 The renderer uses context isolation, sandboxing, no Node integration, a Content Security Policy, and blocked navigation/popups. Only local app assets are loaded. SQL credentials travel through the private pipe, never process arguments. Backend stdout is exclusively protocol messages; diagnostics and query text are not logged.
 
