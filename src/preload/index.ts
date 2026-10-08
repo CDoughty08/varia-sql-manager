@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ApiResult, AppMenu, RpcMethod, RpcMethods, VariaApi, WorkbenchCommand } from '../shared/contracts'
+import type { ThemeState } from '../shared/theme/types'
 
 const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params)
 
@@ -45,6 +46,15 @@ const api: VariaApi = {
       ipcRenderer.removeListener('varia:command', listener)
       if (!ipcRenderer.listenerCount('varia:command')) ipcRenderer.send('varia:commands-ready', false)
     }
+  },
+  getThemeState: () => ipcRenderer.invoke('varia:theme-state'),
+  setThemePreference: patch => ipcRenderer.invoke('varia:theme-set', patch),
+  reloadThemes: () => ipcRenderer.invoke('varia:themes-reload'),
+  openThemesFolder: () => ipcRenderer.invoke('varia:themes-open-folder'),
+  onThemeChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: ThemeState) => callback(state)
+    ipcRenderer.on('varia:theme-changed', listener)
+    return () => { ipcRenderer.removeListener('varia:theme-changed', listener) }
   }
 }
 contextBridge.exposeInMainWorld('varia', api)

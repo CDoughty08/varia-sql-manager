@@ -1,0 +1,2 @@
+{ "$schema": "./varia-theme.schema.json", "kind": "varia-color-theme", "version": 1, "name": "Varia Dark (Amber)", "type": "dark",
+  "palette": { "accent": "#ffb000", "accentHover": "#ffc54d", "focus": "$accent" } }

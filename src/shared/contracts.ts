@@ -1,5 +1,6 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
+import type { ThemePreferencePatch, ThemeState } from './theme/types'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -147,4 +148,9 @@ export interface VariaApi {
   importLayout(): Promise<ApiResult<WorkspaceLayout | null>>
   exportLayout(layout: WorkspaceLayout): Promise<ApiResult<boolean>>
   onCommand(callback: (command: WorkbenchCommand) => void): () => void
+  getThemeState(): Promise<ApiResult<ThemeState>>
+  setThemePreference(patch: ThemePreferencePatch): Promise<ApiResult<ThemeState>>
+  reloadThemes(): Promise<ApiResult<ThemeState>>
+  openThemesFolder(): Promise<ApiResult<void>>
+  onThemeChanged(callback: (state: ThemeState) => void): () => void
 }

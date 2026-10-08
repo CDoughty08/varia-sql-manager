@@ -1,0 +1,1400 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "varia-theme.schema.json",
+  "title": "Varia SQL Manager color theme (format 1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "version",
+    "name",
+    "type"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "kind": {
+      "const": "varia-color-theme"
+    },
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Shown in View > Theme."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "author": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "type": {
+      "enum": [
+        "dark",
+        "light",
+        "dual"
+      ],
+      "markdownEnumDescriptions": [
+        "Overrides Varia Dark.",
+        "Overrides Varia Light.",
+        "Overrides both; values may be `{\"dark\": …, \"light\": …}` objects."
+      ]
+    },
+    "palette": {
+      "type": "object",
+      "maxProperties": 128,
+      "description": "Palette slots. Every color key defaults to a slot, so overriding a slot changes every key that uses it. You may add your own slots.",
+      "propertyNames": {
+        "pattern": "^[a-z][A-Za-z0-9]{0,31}$"
+      },
+      "properties": {
+        "canvas": {
+          "$ref": "#/definitions/value",
+          "description": "Editor, active document tab, dock group, app root, and window background. Varia Dark #11151c · Varia Light #ffffff",
+          "markdownDescription": "Editor, active document tab, dock group, app root, and window background. Varia Dark `#11151c` · Varia Light `#ffffff`"
+        },
+        "panel": {
+          "$ref": "#/definitions/value",
+          "description": "Output panel and results grid. Varia Dark #141a23 · Varia Light #fafbfc",
+          "markdownDescription": "Output panel and results grid. Varia Dark `#141a23` · Varia Light `#fafbfc`"
+        },
+        "sideBar": {
+          "$ref": "#/definitions/value",
+          "description": "Object Explorer. Varia Dark #151b24 · Varia Light #f3f5f8",
+          "markdownDescription": "Object Explorer. Varia Dark `#151b24` · Varia Light `#f3f5f8`"
+        },
+        "chrome": {
+          "$ref": "#/definitions/value",
+          "description": "Title bar, toolbar, tab strips, and panel title bar. Varia Dark #181f2a · Varia Light #e9edf2",
+          "markdownDescription": "Title bar, toolbar, tab strips, and panel title bar. Varia Dark `#181f2a` · Varia Light `#e9edf2`"
+        },
+        "raised": {
+          "$ref": "#/definitions/value",
+          "description": "Grid header, the visible tab of an unfocused group, and the quick-input title. Varia Dark #202a39 · Varia Light #e1e7ee",
+          "markdownDescription": "Grid header, the visible tab of an unfocused group, and the quick-input title. Varia Dark `#202a39` · Varia Light `#e1e7ee`"
+        },
+        "overlay": {
+          "$ref": "#/definitions/value",
+          "description": "Dialogs, menus, editor widgets, and toasts. Varia Dark #1a2230 · Varia Light #ffffff",
+          "markdownDescription": "Dialogs, menus, editor widgets, and toasts. Varia Dark `#1a2230` · Varia Light `#ffffff`"
+        },
+        "input": {
+          "$ref": "#/definitions/value",
+          "description": "Inputs and selects. Varia Dark #111721 · Varia Light #ffffff",
+          "markdownDescription": "Inputs and selects. Varia Dark `#111721` · Varia Light `#ffffff`"
+        },
+        "accentSurface": {
+          "$ref": "#/definitions/value",
+          "description": "Tinted chrome: the status bar and the active connection row. Varia Dark #1d2b40 · Varia Light #e3ebf5",
+          "markdownDescription": "Tinted chrome: the status bar and the active connection row. Varia Dark `#1d2b40` · Varia Light `#e3ebf5`"
+        },
+        "hover": {
+          "$ref": "#/definitions/value",
+          "description": "Hover fill. Varia Dark #263041 · Varia Light #dce3ec",
+          "markdownDescription": "Hover fill. Varia Dark `#263041` · Varia Light `#dce3ec`"
+        },
+        "active": {
+          "$ref": "#/definitions/value",
+          "description": "Pressed button, open menu, and badge fill. Varia Dark #2e3c51 · Varia Light #ccd6e3",
+          "markdownDescription": "Pressed button, open menu, and badge fill. Varia Dark `#2e3c51` · Varia Light `#ccd6e3`"
+        },
+        "selection": {
+          "$ref": "#/definitions/value",
+          "description": "Unfocused selection and the active dock tab. Varia Dark #24324a · Varia Light #d6e3f3",
+          "markdownDescription": "Unfocused selection and the active dock tab. Varia Dark `#24324a` · Varia Light `#d6e3f3`"
+        },
+        "selectionStrong": {
+          "$ref": "#/definitions/value",
+          "description": "Focused selection and menu highlight. Varia Dark #2e4058 · Varia Light #c4daf4",
+          "markdownDescription": "Focused selection and menu highlight. Varia Dark `#2e4058` · Varia Light `#c4daf4`"
+        },
+        "textSelection": {
+          "$ref": "#/definitions/value",
+          "description": "Editor text selection. Varia Dark #264f78 · Varia Light #add6ff",
+          "markdownDescription": "Editor text selection. Varia Dark `#264f78` · Varia Light `#add6ff`"
+        },
+        "text": {
+          "$ref": "#/definitions/value",
+          "description": "Body text. Varia Dark #d9e1ec · Varia Light #1f2733",
+          "markdownDescription": "Body text. Varia Dark `#d9e1ec` · Varia Light `#1f2733`"
+        },
+        "textStrong": {
+          "$ref": "#/definitions/value",
+          "description": "Hover and emphasis text. Varia Dark #ffffff · Varia Light #0b1220",
+          "markdownDescription": "Hover and emphasis text. Varia Dark `#ffffff` · Varia Light `#0b1220`"
+        },
+        "textSecondary": {
+          "$ref": "#/definitions/value",
+          "description": "Buttons, labels, and headings. Varia Dark #c3cddd · Varia Light #2f3a49",
+          "markdownDescription": "Buttons, labels, and headings. Varia Dark `#c3cddd` · Varia Light `#2f3a49`"
+        },
+        "textTertiary": {
+          "$ref": "#/definitions/value",
+          "description": "Captions and section titles. Varia Dark #9eafc5 · Varia Light #465366",
+          "markdownDescription": "Captions and section titles. Varia Dark `#9eafc5` · Varia Light `#465366`"
+        },
+        "textMuted": {
+          "$ref": "#/definitions/value",
+          "description": "Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface. Varia Dark #8a9cb3 · Varia Light #566377",
+          "markdownDescription": "Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface. Varia Dark `#8a9cb3` · Varia Light `#566377`"
+        },
+        "textAccent": {
+          "$ref": "#/definitions/value",
+          "description": "Selected or active labels. Varia Dark #bcd4fa · Varia Light #0b4f99",
+          "markdownDescription": "Selected or active labels. Varia Dark `#bcd4fa` · Varia Light `#0b4f99`"
+        },
+        "accentMuted": {
+          "$ref": "#/definitions/value",
+          "description": "Text and glyphs on tinted chrome (status bar, brand icon, object icons, section headers). Varia Dark #a3bbdc · Varia Light #2a4f7f",
+          "markdownDescription": "Text and glyphs on tinted chrome (status bar, brand icon, object icons, section headers). Varia Dark `#a3bbdc` · Varia Light `#2a4f7f`"
+        },
+        "border": {
+          "$ref": "#/definitions/value",
+          "description": "Chrome borders and tab dividers. Varia Dark #2b3443 · Varia Light #d3d9e2",
+          "markdownDescription": "Chrome borders and tab dividers. Varia Dark `#2b3443` · Varia Light `#d3d9e2`"
+        },
+        "borderSubtle": {
+          "$ref": "#/definitions/value",
+          "description": "Section headers and grid lines. Varia Dark #252f3d · Varia Light #e3e7ed",
+          "markdownDescription": "Section headers and grid lines. Varia Dark `#252f3d` · Varia Light `#e3e7ed`"
+        },
+        "borderStrong": {
+          "$ref": "#/definitions/value",
+          "description": "Dock splitters. Varia Dark #303b4c · Varia Light #c3ccd8",
+          "markdownDescription": "Dock splitters. Varia Dark `#303b4c` · Varia Light `#c3ccd8`"
+        },
+        "separator": {
+          "$ref": "#/definitions/value",
+          "description": "Toolbar, menu, and dialog separators; the keyboard shortcut outline. Varia Dark #354359 · Varia Light #cdd4de",
+          "markdownDescription": "Toolbar, menu, and dialog separators; the keyboard shortcut outline. Varia Dark `#354359` · Varia Light `#cdd4de`"
+        },
+        "controlBorder": {
+          "$ref": "#/definitions/value",
+          "description": "Outlined buttons and the Dark dialog border. Varia Dark #40516b · Varia Light #8792a2",
+          "markdownDescription": "Outlined buttons and the Dark dialog border. Varia Dark `#40516b` · Varia Light `#8792a2`"
+        },
+        "inputBorder": {
+          "$ref": "#/definitions/value",
+          "description": "Input borders. Varia Dark #364357 · Varia Light #8792a2",
+          "markdownDescription": "Input borders. Varia Dark `#364357` · Varia Light `#8792a2`"
+        },
+        "accent": {
+          "$ref": "#/definitions/value",
+          "description": "Primary button and active indicators. Varia Dark #8fb7ff · Varia Light #005fb8",
+          "markdownDescription": "Primary button and active indicators. Varia Dark `#8fb7ff` · Varia Light `#005fb8`"
+        },
+        "accentHover": {
+          "$ref": "#/definitions/value",
+          "description": "Primary button hover. Varia Dark #accaff · Varia Light #004c94",
+          "markdownDescription": "Primary button hover. Varia Dark `#accaff` · Varia Light `#004c94`"
+        },
+        "onAccent": {
+          "$ref": "#/definitions/value",
+          "description": "Text on the accent color. Varia Dark #101b2d · Varia Light #ffffff",
+          "markdownDescription": "Text on the accent color. Varia Dark `#101b2d` · Varia Light `#ffffff`"
+        },
+        "focus": {
+          "$ref": "#/definitions/value",
+          "description": "Focus rings and the active sash. Varia Dark #76acff · Varia Light #005fb8",
+          "markdownDescription": "Focus rings and the active sash. Varia Dark `#76acff` · Varia Light `#005fb8`"
+        },
+        "error": {
+          "$ref": "#/definitions/value",
+          "description": "Error text. Varia Dark #f39c9f · Varia Light #b42318",
+          "markdownDescription": "Error text. Varia Dark `#f39c9f` · Varia Light `#b42318`"
+        },
+        "warning": {
+          "$ref": "#/definitions/value",
+          "description": "Warning text. Varia Dark #dfbd82 · Varia Light #8a5300",
+          "markdownDescription": "Warning text. Varia Dark `#dfbd82` · Varia Light `#8a5300`"
+        },
+        "success": {
+          "$ref": "#/definitions/value",
+          "description": "Success text. Varia Dark #8addac · Varia Light #146c38",
+          "markdownDescription": "Success text. Varia Dark `#8addac` · Varia Light `#146c38`"
+        },
+        "info": {
+          "$ref": "#/definitions/value",
+          "description": "Information text. Follows $accent. Varia Dark #8fb7ff · Varia Light #005fb8",
+          "markdownDescription": "Information text. Follows `$accent`. Varia Dark `#8fb7ff` · Varia Light `#005fb8`"
+        },
+        "errorSurface": {
+          "$ref": "#/definitions/value",
+          "description": "Error banner and the status bar error state. Varia Dark #48242d · Varia Light #fbe4e6",
+          "markdownDescription": "Error banner and the status bar error state. Varia Dark `#48242d` · Varia Light `#fbe4e6`"
+        },
+        "errorSurfaceText": {
+          "$ref": "#/definitions/value",
+          "description": "Text on the error surface. Varia Dark #f3bac0 · Varia Light #8a1c25",
+          "markdownDescription": "Text on the error surface. Varia Dark `#f3bac0` · Varia Light `#8a1c25`"
+        },
+        "warningSurface": {
+          "$ref": "#/definitions/value",
+          "description": "Warning banner. Varia Dark #3d3322 · Varia Light #fff3d6",
+          "markdownDescription": "Warning banner. Varia Dark `#3d3322` · Varia Light `#fff3d6`"
+        },
+        "warningSurfaceText": {
+          "$ref": "#/definitions/value",
+          "description": "Text on the warning surface. Varia Dark #f0d49b · Varia Light #6b4400",
+          "markdownDescription": "Text on the warning surface. Varia Dark `#f0d49b` · Varia Light `#6b4400`"
+        },
+        "icon": {
+          "$ref": "#/definitions/value",
+          "description": "Glyphs. Varia Dark #8aa9d4 · Varia Light #3e6696",
+          "markdownDescription": "Glyphs. Varia Dark `#8aa9d4` · Varia Light `#3e6696`"
+        },
+        "iconMuted": {
+          "$ref": "#/definitions/value",
+          "description": "Secondary glyphs such as tree chevrons. Varia Dark #7e93b1 · Varia Light #637189",
+          "markdownDescription": "Secondary glyphs such as tree chevrons. Varia Dark `#7e93b1` · Varia Light `#637189`"
+        },
+        "iconFolder": {
+          "$ref": "#/definitions/value",
+          "description": "Folder glyphs. Varia Dark #d9b370 · Varia Light #9a6700",
+          "markdownDescription": "Folder glyphs. Varia Dark `#d9b370` · Varia Light `#9a6700`"
+        },
+        "red": {
+          "$ref": "#/definitions/value",
+          "description": "Red connection preset; categorical color. Varia Dark #e66b73 · Varia Light #c42b3c",
+          "markdownDescription": "Red connection preset; categorical color. Varia Dark `#e66b73` · Varia Light `#c42b3c`"
+        },
+        "orange": {
+          "$ref": "#/definitions/value",
+          "description": "Orange connection preset; categorical color. Varia Dark #e6a15c · Varia Light #b45309",
+          "markdownDescription": "Orange connection preset; categorical color. Varia Dark `#e6a15c` · Varia Light `#b45309`"
+        },
+        "yellow": {
+          "$ref": "#/definitions/value",
+          "description": "Yellow connection preset; categorical color. Varia Dark #dec766 · Varia Light #8f6b00",
+          "markdownDescription": "Yellow connection preset; categorical color. Varia Dark `#dec766` · Varia Light `#8f6b00`"
+        },
+        "green": {
+          "$ref": "#/definitions/value",
+          "description": "Green connection preset; categorical color. Varia Dark #79bb8b · Varia Light #2e7d4f",
+          "markdownDescription": "Green connection preset; categorical color. Varia Dark `#79bb8b` · Varia Light `#2e7d4f`"
+        },
+        "blue": {
+          "$ref": "#/definitions/value",
+          "description": "Blue connection preset; categorical color. Varia Dark #71a7df · Varia Light #2563a8",
+          "markdownDescription": "Blue connection preset; categorical color. Varia Dark `#71a7df` · Varia Light `#2563a8`"
+        },
+        "purple": {
+          "$ref": "#/definitions/value",
+          "description": "Purple connection preset; categorical color. Varia Dark #ad8bd8 · Varia Light #7a4bbf",
+          "markdownDescription": "Purple connection preset; categorical color. Varia Dark `#ad8bd8` · Varia Light `#7a4bbf`"
+        },
+        "neutral": {
+          "$ref": "#/definitions/value",
+          "description": "The \"no color\" connection swatch. Varia Dark #8b9bb0 · Varia Light #6b7789",
+          "markdownDescription": "The \"no color\" connection swatch. Varia Dark `#8b9bb0` · Varia Light `#6b7789`"
+        },
+        "syntaxKeyword": {
+          "$ref": "#/definitions/value",
+          "description": "SQL keywords. Varia Dark #569cd6 · Varia Light #0000ff",
+          "markdownDescription": "SQL keywords. Varia Dark `#569cd6` · Varia Light `#0000ff`"
+        },
+        "syntaxString": {
+          "$ref": "#/definitions/value",
+          "description": "SQL strings. Varia Dark #ff4040 · Varia Light #c41a16",
+          "markdownDescription": "SQL strings. Varia Dark `#ff4040` · Varia Light `#c41a16`"
+        },
+        "syntaxComment": {
+          "$ref": "#/definitions/value",
+          "description": "SQL comments. Varia Dark #6a9955 · Varia Light #008000",
+          "markdownDescription": "SQL comments. Varia Dark `#6a9955` · Varia Light `#008000`"
+        },
+        "syntaxNumber": {
+          "$ref": "#/definitions/value",
+          "description": "SQL numbers. Varia Dark #b5cea8 · Varia Light #097a50",
+          "markdownDescription": "SQL numbers. Varia Dark `#b5cea8` · Varia Light `#097a50`"
+        },
+        "syntaxOperator": {
+          "$ref": "#/definitions/value",
+          "description": "SQL operators. Varia Dark #778899 · Varia Light #5e6875",
+          "markdownDescription": "SQL operators. Varia Dark `#778899` · Varia Light `#5e6875`"
+        },
+        "syntaxFunction": {
+          "$ref": "#/definitions/value",
+          "description": "SQL built-in functions and variables. Varia Dark #ff00ff · Varia Light #b000b0",
+          "markdownDescription": "SQL built-in functions and variables. Varia Dark `#ff00ff` · Varia Light `#b000b0`"
+        },
+        "syntaxIdentifier": {
+          "$ref": "#/definitions/value",
+          "description": "SQL identifiers and default editor text. Varia Dark #d4d4d4 · Varia Light #1f2733",
+          "markdownDescription": "SQL identifiers and default editor text. Varia Dark `#d4d4d4` · Varia Light `#1f2733`"
+        },
+        "syntaxDelimiter": {
+          "$ref": "#/definitions/value",
+          "description": "SQL delimiters and brackets. Varia Dark #dcdcdc · Varia Light #1f2733",
+          "markdownDescription": "SQL delimiters and brackets. Varia Dark `#dcdcdc` · Varia Light `#1f2733`"
+        },
+        "shadow": {
+          "$ref": "#/definitions/value",
+          "description": "Shadows. Varia Dark #00000099 · Varia Light #0000002e",
+          "markdownDescription": "Shadows. Varia Dark `#00000099` · Varia Light `#0000002e`"
+        },
+        "backdrop": {
+          "$ref": "#/definitions/value",
+          "description": "Modal scrim. Varia Dark #080c14bf · Varia Light #1f273366",
+          "markdownDescription": "Modal scrim. Varia Dark `#080c14bf` · Varia Light `#1f273366`"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/value"
+      }
+    },
+    "colors": {
+      "type": "object",
+      "maxProperties": 1024,
+      "additionalProperties": false,
+      "description": "Color keys. Values are colors or $slot references.",
+      "properties": {
+        "foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Default text color of the workbench. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Default text color of the workbench. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "descriptionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Secondary text: hints, captions, and explanations. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Secondary text: hints, captions, and explanations. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "disabledForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Text of disabled controls. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Text of disabled controls. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "errorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Error text. Default $error (Dark #f39c9f, Light #b42318).",
+          "markdownDescription": "(VS Code) Error text. Default `$error` (Dark `#f39c9f`, Light `#b42318`)."
+        },
+        "warningForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Warning text. Default $warning (Dark #dfbd82, Light #8a5300).",
+          "markdownDescription": "(Varia) Warning text. Default `$warning` (Dark `#dfbd82`, Light `#8a5300`)."
+        },
+        "successForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Success text, such as the Execute button and confirmations. Default $success (Dark #8addac, Light #146c38).",
+          "markdownDescription": "(Varia) Success text, such as the Execute button and confirmations. Default `$success` (Dark `#8addac`, Light `#146c38`)."
+        },
+        "infoForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Information text. Not used yet; reserved for notifications. Default $info (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(Varia) Information text. Not used yet; reserved for notifications. Default `$info` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "focusBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Focus ring around the focused control. Default $focus (Dark #76acff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Focus ring around the focused control. Default `$focus` (Dark `#76acff`, Light `#005fb8`)."
+        },
+        "icon.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Default glyph color. Default $icon (Dark #8aa9d4, Light #3e6696).",
+          "markdownDescription": "(VS Code) Default glyph color. Default `$icon` (Dark `#8aa9d4`, Light `#3e6696`)."
+        },
+        "widget.shadow": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Shadow of dialogs, floating dock groups, and editor widgets. Default $shadow (Dark #00000099, Light #0000002e).",
+          "markdownDescription": "(VS Code) Shadow of dialogs, floating dock groups, and editor widgets. Default `$shadow` (Dark `#00000099`, Light `#0000002e`)."
+        },
+        "widget.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Border of floating dock groups and widgets. Default @editorWidget.border (Dark #40516b, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Border of floating dock groups and widgets. Default `@editorWidget.border` (Dark `#40516b`, Light `#c3ccd8`)."
+        },
+        "textPreformat.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Preformatted text such as execution plan XML. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(VS Code) Preformatted text such as execution plan XML. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "sash.hoverBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Dock splitter while it is hovered or dragged. Default $focus (Dark #76acff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Dock splitter while it is hovered or dragged. Default `$focus` (Dark `#76acff`, Light `#005fb8`)."
+        },
+        "scrollbarSlider.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Scrollbar thumb. Default $textMuted/40 (Dark #8a9cb366, Light #56637766).",
+          "markdownDescription": "(VS Code) Scrollbar thumb. Default `$textMuted/40` (Dark `#8a9cb366`, Light `#56637766`)."
+        },
+        "scrollbarSlider.hoverBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Scrollbar thumb when hovered. Default $textMuted/55 (Dark #8a9cb38c, Light #5663778c).",
+          "markdownDescription": "(VS Code) Scrollbar thumb when hovered. Default `$textMuted/55` (Dark `#8a9cb38c`, Light `#5663778c`)."
+        },
+        "scrollbarSlider.activeBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Scrollbar thumb while it is dragged. Default $textMuted/70 (Dark #8a9cb3b3, Light #566377b3).",
+          "markdownDescription": "(VS Code) Scrollbar thumb while it is dragged. Default `$textMuted/70` (Dark `#8a9cb3b3`, Light `#566377b3`)."
+        },
+        "titleBar.activeBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Title bar, and the native window-controls overlay on Windows and Linux. Made opaque over editor.background. Default $chrome (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(VS Code) Title bar, and the native window-controls overlay on Windows and Linux. Made opaque over `editor.background`. Default `$chrome` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "titleBar.activeForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Window caption in the title bar. Default $textTertiary (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(VS Code) Window caption in the title bar. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
+        },
+        "titleBar.inactiveBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Title bar while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default @titleBar.activeBackground (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(VS Code) Title bar while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default `@titleBar.activeBackground` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "titleBar.inactiveForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Window caption while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default @titleBar.activeForeground (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(VS Code) Window caption while the window is inactive. Not used yet; reserved for custom menus and the title bar. Default `@titleBar.activeForeground` (Dark `#9eafc5`, Light `#465366`)."
+        },
+        "titleBar.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Line below the title bar. Default $border (Dark #2b3443, Light #d3d9e2).",
+          "markdownDescription": "(VS Code) Line below the title bar. Default `$border` (Dark `#2b3443`, Light `#d3d9e2`)."
+        },
+        "titleBar.iconForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Application icon in the title bar. Default $accentMuted (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(Varia) Application icon in the title bar. Default `$accentMuted` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "titleBar.controlsForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over titleBar.activeBackground. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "menubar.selectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Open title-bar menu. Default $active (Dark #2e3c51, Light #ccd6e3).",
+          "markdownDescription": "(VS Code) Open title-bar menu. Default `$active` (Dark `#2e3c51`, Light `#ccd6e3`)."
+        },
+        "menubar.selectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Label of the open title-bar menu. Default $textStrong (Dark #ffffff, Light #0b1220).",
+          "markdownDescription": "(VS Code) Label of the open title-bar menu. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
+        },
+        "menu.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Editor and dock context menus. Default $overlay (Dark #1a2230, Light #ffffff).",
+          "markdownDescription": "(VS Code) Editor and dock context menus. Default `$overlay` (Dark `#1a2230`, Light `#ffffff`)."
+        },
+        "menu.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Context menu text. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Context menu text. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "menu.selectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Highlighted context menu item. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(VS Code) Highlighted context menu item. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
+        },
+        "menu.selectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Text of the highlighted context menu item. Default $textStrong (Dark #ffffff, Light #0b1220).",
+          "markdownDescription": "(VS Code) Text of the highlighted context menu item. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
+        },
+        "menu.separatorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Context menu separators. Default $separator (Dark #354359, Light #cdd4de).",
+          "markdownDescription": "(VS Code) Context menu separators. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
+        },
+        "menu.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Context menu border. Default @editorWidget.border (Dark #40516b, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Context menu border. Default `@editorWidget.border` (Dark `#40516b`, Light `#c3ccd8`)."
+        },
+        "toolbar.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Main toolbar. Default @titleBar.activeBackground (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(Varia) Main toolbar. Default `@titleBar.activeBackground` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "toolbar.border": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Line below the main toolbar. Default @titleBar.border (Dark #2b3443, Light #d3d9e2).",
+          "markdownDescription": "(Varia) Line below the main toolbar. Default `@titleBar.border` (Dark `#2b3443`, Light `#d3d9e2`)."
+        },
+        "toolbar.separatorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dividers between toolbar groups. Default $separator (Dark #354359, Light #cdd4de).",
+          "markdownDescription": "(Varia) Dividers between toolbar groups. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
+        },
+        "toolbar.labelForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Labels of the toolbar server and database fields. Default $textTertiary (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(Varia) Labels of the toolbar server and database fields. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
+        },
+        "keybindingLabel.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Keyboard shortcut hints. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Keyboard shortcut hints. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "keybindingLabel.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Outline of keyboard shortcut hints. Default $separator (Dark #354359, Light #cdd4de).",
+          "markdownDescription": "(VS Code) Outline of keyboard shortcut hints. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
+        },
+        "button.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Primary button; also the checkbox accent. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Primary button; also the checkbox accent. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "button.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Primary button text. Default $onAccent (Dark #101b2d, Light #ffffff).",
+          "markdownDescription": "(VS Code) Primary button text. Default `$onAccent` (Dark `#101b2d`, Light `#ffffff`)."
+        },
+        "button.hoverBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Primary button when hovered. Default $accentHover (Dark #accaff, Light #004c94).",
+          "markdownDescription": "(VS Code) Primary button when hovered. Default `$accentHover` (Dark `#accaff`, Light `#004c94`)."
+        },
+        "button.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Outline of secondary buttons. Default $controlBorder (Dark #40516b, Light #8792a2).",
+          "markdownDescription": "(VS Code) Outline of secondary buttons. Default `$controlBorder` (Dark `#40516b`, Light `#8792a2`)."
+        },
+        "button.secondaryForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Text of secondary and toolbar buttons. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(VS Code) Text of secondary and toolbar buttons. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "button.secondaryHoverBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Secondary and toolbar buttons when hovered. Default $hover (Dark #263041, Light #dce3ec).",
+          "markdownDescription": "(VS Code) Secondary and toolbar buttons when hovered. Default `$hover` (Dark `#263041`, Light `#dce3ec`)."
+        },
+        "button.secondaryHoverForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Secondary button text when hovered. Default $textStrong (Dark #ffffff, Light #0b1220).",
+          "markdownDescription": "(Varia) Secondary button text when hovered. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
+        },
+        "input.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Inputs and selects. Default $input (Dark #111721, Light #ffffff).",
+          "markdownDescription": "(VS Code) Inputs and selects. Default `$input` (Dark `#111721`, Light `#ffffff`)."
+        },
+        "input.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Input and select text. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Input and select text. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "input.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Input and select border. Default $inputBorder (Dark #364357, Light #8792a2).",
+          "markdownDescription": "(VS Code) Input and select border. Default `$inputBorder` (Dark `#364357`, Light `#8792a2`)."
+        },
+        "input.placeholderForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Placeholder text. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Placeholder text. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "inputValidation.errorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Connection error message. Default $errorSurface (Dark #48242d, Light #fbe4e6).",
+          "markdownDescription": "(VS Code) Connection error message. Default `$errorSurface` (Dark `#48242d`, Light `#fbe4e6`)."
+        },
+        "inputValidation.errorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Connection error message text. Default $errorSurfaceText (Dark #f3bac0, Light #8a1c25).",
+          "markdownDescription": "(VS Code) Connection error message text. Default `$errorSurfaceText` (Dark `#f3bac0`, Light `#8a1c25`)."
+        },
+        "sideBar.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Object Explorer. Default $sideBar (Dark #151b24, Light #f3f5f8).",
+          "markdownDescription": "(VS Code) Object Explorer. Default `$sideBar` (Dark `#151b24`, Light `#f3f5f8`)."
+        },
+        "sideBarTitle.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Object Explorer heading. Default $textTertiary (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(VS Code) Object Explorer heading. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
+        },
+        "sideBarSectionHeader.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Lines around the Object Explorer heading and footer. Default $borderSubtle (Dark #252f3d, Light #e3e7ed).",
+          "markdownDescription": "(VS Code) Lines around the Object Explorer heading and footer. Default `$borderSubtle` (Dark `#252f3d`, Light `#e3e7ed`)."
+        },
+        "list.hoverBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Hovered list or tree row. Not used yet; reserved for the Object Explorer tree. Default $hover (Dark #263041, Light #dce3ec).",
+          "markdownDescription": "(VS Code) Hovered list or tree row. Not used yet; reserved for the Object Explorer tree. Default `$hover` (Dark `#263041`, Light `#dce3ec`)."
+        },
+        "list.activeSelectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Selected row of a focused list. Default $selectionStrong (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(VS Code) Selected row of a focused list. Default `$selectionStrong` (Dark `#2e4058`, Light `#c4daf4`)."
+        },
+        "list.activeSelectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Text of the selected row of a focused list. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Text of the selected row of a focused list. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "list.inactiveSelectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Selected row of an unfocused list, and the selected result set. Default $selection (Dark #24324a, Light #d6e3f3).",
+          "markdownDescription": "(VS Code) Selected row of an unfocused list, and the selected result set. Default `$selection` (Dark `#24324a`, Light `#d6e3f3`)."
+        },
+        "list.inactiveSelectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Text of the selected row of an unfocused list. Default $textAccent (Dark #bcd4fa, Light #0b4f99).",
+          "markdownDescription": "(VS Code) Text of the selected row of an unfocused list. Default `$textAccent` (Dark `#bcd4fa`, Light `#0b4f99`)."
+        },
+        "list.focusOutline": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Outline of the focused list row. Not used yet; reserved for the Object Explorer tree. Default @focusBorder (Dark #76acff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Outline of the focused list row. Not used yet; reserved for the Object Explorer tree. Default `@focusBorder` (Dark `#76acff`, Light `#005fb8`)."
+        },
+        "list.highlightForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Characters that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Characters that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "list.filterMatchBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. Default $accent/20 (Dark #8fb7ff33, Light #005fb833).",
+          "markdownDescription": "(VS Code) Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. Default `$accent/20` (Dark `#8fb7ff33`, Light `#005fb833`)."
+        },
+        "tree.indentGuidesStroke": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Tree indent guides. Not used yet; reserved for the Object Explorer tree. Default $borderSubtle (Dark #252f3d, Light #e3e7ed).",
+          "markdownDescription": "(VS Code) Tree indent guides. Not used yet; reserved for the Object Explorer tree. Default `$borderSubtle` (Dark `#252f3d`, Light `#e3e7ed`)."
+        },
+        "objectExplorer.activeConnectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Row of the selected server. Default $accentSurface (Dark #1d2b40, Light #e3ebf5).",
+          "markdownDescription": "(Varia) Row of the selected server. Default `$accentSurface` (Dark `#1d2b40`, Light `#e3ebf5`)."
+        },
+        "objectExplorer.headingForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Folder headings. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(Varia) Folder headings. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "objectExplorer.countForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Item counts next to folder headings. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Item counts next to folder headings. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "objectExplorer.chevronForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Expand and collapse chevrons. Default $iconMuted (Dark #7e93b1, Light #637189).",
+          "markdownDescription": "(Varia) Expand and collapse chevrons. Default `$iconMuted` (Dark `#7e93b1`, Light `#637189`)."
+        },
+        "objectExplorer.folderIconForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Folder glyphs. Default $iconFolder (Dark #d9b370, Light #9a6700).",
+          "markdownDescription": "(Varia) Folder glyphs. Default `$iconFolder` (Dark `#d9b370`, Light `#9a6700`)."
+        },
+        "objectExplorer.objectIconForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Glyphs of tables and other objects. Default $accentMuted (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(Varia) Glyphs of tables and other objects. Default `$accentMuted` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "objectExplorer.actionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Row actions such as Disconnect. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Row actions such as Disconnect. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "editorGroupHeader.tabsBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Tab strip of dock groups, including floating groups. Default $chrome (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(VS Code) Tab strip of dock groups, including floating groups. Default `$chrome` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "tab.activeBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Visible tab of the focused dock group. Default $selection (Dark #24324a, Light #d6e3f3).",
+          "markdownDescription": "(VS Code) Visible tab of the focused dock group. Default `$selection` (Dark `#24324a`, Light `#d6e3f3`)."
+        },
+        "tab.inactiveBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Hidden tabs of the focused dock group. Default @editorGroupHeader.tabsBackground (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(VS Code) Hidden tabs of the focused dock group. Default `@editorGroupHeader.tabsBackground` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "tab.unfocusedActiveBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Visible tab of an unfocused dock group. Default $raised (Dark #202a39, Light #e1e7ee).",
+          "markdownDescription": "(VS Code) Visible tab of an unfocused dock group. Default `$raised` (Dark `#202a39`, Light `#e1e7ee`)."
+        },
+        "tab.unfocusedInactiveBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Hidden tabs of an unfocused dock group. Default @tab.inactiveBackground (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(VS Code) Hidden tabs of an unfocused dock group. Default `@tab.inactiveBackground` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "tab.activeForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Label of the visible tab of the focused dock group. Default $textStrong (Dark #ffffff, Light #0b1220).",
+          "markdownDescription": "(VS Code) Label of the visible tab of the focused dock group. Default `$textStrong` (Dark `#ffffff`, Light `#0b1220`)."
+        },
+        "tab.inactiveForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Labels of hidden tabs of the focused dock group. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Labels of hidden tabs of the focused dock group. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "tab.unfocusedActiveForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Label of the visible tab of an unfocused dock group. Default $textTertiary (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(VS Code) Label of the visible tab of an unfocused dock group. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
+        },
+        "tab.unfocusedInactiveForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Labels of hidden tabs of an unfocused dock group. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Labels of hidden tabs of an unfocused dock group. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "tab.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Dividers between dock tabs. Default $border (Dark #2b3443, Light #d3d9e2).",
+          "markdownDescription": "(VS Code) Dividers between dock tabs. Default `$border` (Dark `#2b3443`, Light `#d3d9e2`)."
+        },
+        "tab.activeBorderTop": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Top border of the active query tab. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Top border of the active query tab. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "editorGroup.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Dock splitters and group separators. Default $borderStrong (Dark #303b4c, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Dock splitters and group separators. Default `$borderStrong` (Dark `#303b4c`, Light `#c3ccd8`)."
+        },
+        "editorGroup.dropBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Drop target while a panel is dragged. Default $focus/30 (Dark #76acff4d, Light #005fb84d).",
+          "markdownDescription": "(VS Code) Drop target while a panel is dragged. Default `$focus/30` (Dark `#76acff4d`, Light `#005fb84d`)."
+        },
+        "dock.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dock groups. Default @editor.background (Dark #11151c, Light #ffffff).",
+          "markdownDescription": "(Varia) Dock groups. Default `@editor.background` (Dark `#11151c`, Light `#ffffff`)."
+        },
+        "dock.guideBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Docking compass cells. The compass looks the same in every theme by default. Default #edf4fb (Dark #edf4fb, Light #edf4fb).",
+          "markdownDescription": "(Varia) Docking compass cells. The compass looks the same in every theme by default. Default `#edf4fb` (Dark `#edf4fb`, Light `#edf4fb`)."
+        },
+        "dock.guideForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Docking compass arrows. Default #2777c7 (Dark #2777c7, Light #2777c7).",
+          "markdownDescription": "(Varia) Docking compass arrows. Default `#2777c7` (Dark `#2777c7`, Light `#2777c7`)."
+        },
+        "dock.guideBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Border of docking compass cells. Default #aac4de (Dark #aac4de, Light #aac4de).",
+          "markdownDescription": "(Varia) Border of docking compass cells. Default `#aac4de` (Dark `#aac4de`, Light `#aac4de`)."
+        },
+        "dock.guideShadow": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Shadow of docking compass cells. Default #00000088 (Dark #00000088, Light #00000088).",
+          "markdownDescription": "(Varia) Shadow of docking compass cells. Default `#00000088` (Dark `#00000088`, Light `#00000088`)."
+        },
+        "dock.guideActiveBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Docking compass cell under the pointer. Default #b9d9f7 (Dark #b9d9f7, Light #b9d9f7).",
+          "markdownDescription": "(Varia) Docking compass cell under the pointer. Default `#b9d9f7` (Dark `#b9d9f7`, Light `#b9d9f7`)."
+        },
+        "dock.guideActiveBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Border of the docking compass cell under the pointer. Default #247adb (Dark #247adb, Light #247adb).",
+          "markdownDescription": "(Varia) Border of the docking compass cell under the pointer. Default `#247adb` (Dark `#247adb`, Light `#247adb`)."
+        },
+        "dock.guideActiveRing": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Ring around the docking compass cell under the pointer. Default #78b9ff (Dark #78b9ff, Light #78b9ff).",
+          "markdownDescription": "(Varia) Ring around the docking compass cell under the pointer. Default `#78b9ff` (Dark `#78b9ff`, Light `#78b9ff`)."
+        },
+        "dock.previewBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Area a dragged panel will occupy. Default #3288d94d (Dark #3288d94d, Light #3288d94d).",
+          "markdownDescription": "(Varia) Area a dragged panel will occupy. Default `#3288d94d` (Dark `#3288d94d`, Light `#3288d94d`)."
+        },
+        "dock.previewBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Border of the docking preview. Default #64b2ff (Dark #64b2ff, Light #64b2ff).",
+          "markdownDescription": "(Varia) Border of the docking preview. Default `#64b2ff` (Dark `#64b2ff`, Light `#64b2ff`)."
+        },
+        "dock.previewInnerBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Inner line of the docking preview. Default #badfff66 (Dark #badfff66, Light #badfff66).",
+          "markdownDescription": "(Varia) Inner line of the docking preview. Default `#badfff66` (Dark `#badfff66`, Light `#badfff66`)."
+        },
+        "documentTabs.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Query tab strip. Default @editorGroupHeader.tabsBackground (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(Varia) Query tab strip. Default `@editorGroupHeader.tabsBackground` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "documentTabs.activeBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Active query tab. Default @editor.background (Dark #11151c, Light #ffffff).",
+          "markdownDescription": "(Varia) Active query tab. Default `@editor.background` (Dark `#11151c`, Light `#ffffff`)."
+        },
+        "documentTabs.activeForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Label of the active query tab. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Label of the active query tab. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "documentTabs.inactiveForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Labels of inactive query tabs. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Labels of inactive query tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "documentTabs.border": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dividers between query tabs. Default $border (Dark #2b3443, Light #d3d9e2).",
+          "markdownDescription": "(Varia) Dividers between query tabs. Default `$border` (Dark `#2b3443`, Light `#d3d9e2`)."
+        },
+        "documentTabs.closeForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Close buttons of query tabs. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Close buttons of query tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "documentTabs.iconForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) SQL badge of query tabs. Default $warning (Dark #dfbd82, Light #8a5300).",
+          "markdownDescription": "(Varia) SQL badge of query tabs. Default `$warning` (Dark `#dfbd82`, Light `#8a5300`)."
+        },
+        "documentTabs.modifiedIndicator": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dot that marks a query with unsaved changes. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Dot that marks a query with unsaved changes. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "breadcrumb.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Query context line (server and database). Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Query context line (server and database). Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "breadcrumb.separatorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Separator in the query context line. Default @breadcrumb.foreground (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Separator in the query context line. Default `@breadcrumb.foreground` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "editor.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Editor and application background; also the native window background. Made opaque over black (Dark) or white (Light). Default $canvas (Dark #11151c, Light #ffffff).",
+          "markdownDescription": "(VS Code) Editor and application background; also the native window background. Made opaque over black (Dark) or white (Light). Default `$canvas` (Dark `#11151c`, Light `#ffffff`)."
+        },
+        "editor.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Default editor text. Default $syntaxIdentifier (Dark #d4d4d4, Light #1f2733).",
+          "markdownDescription": "(VS Code) Default editor text. Default `$syntaxIdentifier` (Dark `#d4d4d4`, Light `#1f2733`)."
+        },
+        "editor.lineHighlightBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Highlight of the current line. Made opaque over editor.background. Default $accent/6 (Dark #181f29, Light #f0f6fb).",
+          "markdownDescription": "(VS Code) Highlight of the current line. Made opaque over `editor.background`. Default `$accent/6` (Dark `#181f29`, Light `#f0f6fb`)."
+        },
+        "editor.selectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Selected text in the editor. Default $textSelection (Dark #264f78, Light #add6ff).",
+          "markdownDescription": "(VS Code) Selected text in the editor. Default `$textSelection` (Dark `#264f78`, Light `#add6ff`)."
+        },
+        "editorLineNumber.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Line numbers. Made opaque over editor.background. Default Dark $textMuted/80, Light $textMuted (Dark #728195, Light #566377).",
+          "markdownDescription": "(VS Code) Line numbers. Made opaque over `editor.background`. Default Dark `$textMuted/80`, Light `$textMuted` (Dark `#728195`, Light `#566377`)."
+        },
+        "editorLineNumber.activeForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Line number of the current line. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(VS Code) Line number of the current line. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "editorWidget.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Dialogs and editor widgets such as find, suggest, and hover. Default $overlay (Dark #1a2230, Light #ffffff).",
+          "markdownDescription": "(VS Code) Dialogs and editor widgets such as find, suggest, and hover. Default `$overlay` (Dark `#1a2230`, Light `#ffffff`)."
+        },
+        "editorWidget.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Text of dialogs and editor widgets. Default $text (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Text of dialogs and editor widgets. Default `$text` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "editorWidget.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Border of dialogs and editor widgets. Default Dark $controlBorder, Light $borderStrong (Dark #40516b, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Border of dialogs and editor widgets. Default Dark `$controlBorder`, Light `$borderStrong` (Dark `#40516b`, Light `#c3ccd8`)."
+        },
+        "emptyState.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of empty views (no query, no results, empty dock). Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Text of empty views (no query, no results, empty dock). Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "emptyState.titleForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Heading of empty views. Default $textTertiary (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(Varia) Heading of empty views. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
+        },
+        "emptyState.iconForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Decorative glyph of empty views. Default $iconMuted/60 (Dark #7e93b199, Light #63718999).",
+          "markdownDescription": "(Varia) Decorative glyph of empty views. Default `$iconMuted/60` (Dark `#7e93b199`, Light `#63718999`)."
+        },
+        "panel.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Output panel. Default $panel (Dark #141a23, Light #fafbfc).",
+          "markdownDescription": "(VS Code) Output panel. Default `$panel` (Dark `#141a23`, Light `#fafbfc`)."
+        },
+        "panel.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Lines inside the output panel. Default $border (Dark #2b3443, Light #d3d9e2).",
+          "markdownDescription": "(VS Code) Lines inside the output panel. Default `$border` (Dark `#2b3443`, Light `#d3d9e2`)."
+        },
+        "panelTitle.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Output panel tab bar. Default $chrome (Dark #181f2a, Light #e9edf2).",
+          "markdownDescription": "(Varia) Output panel tab bar. Default `$chrome` (Dark `#181f2a`, Light `#e9edf2`)."
+        },
+        "panelTitle.activeForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Active output tab, and the selected tab of the connection dialog. Default $textAccent (Dark #bcd4fa, Light #0b4f99).",
+          "markdownDescription": "(VS Code) Active output tab, and the selected tab of the connection dialog. Default `$textAccent` (Dark `#bcd4fa`, Light `#0b4f99`)."
+        },
+        "panelTitle.inactiveForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Inactive output tabs. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(VS Code) Inactive output tabs. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "panelTitle.activeBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Underline of the active output tab. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Underline of the active output tab. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "badge.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Count badges on output tabs. Default $active (Dark #2e3c51, Light #ccd6e3).",
+          "markdownDescription": "(VS Code) Count badges on output tabs. Default `$active` (Dark `#2e3c51`, Light `#ccd6e3`)."
+        },
+        "badge.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Count badge text. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(VS Code) Count badge text. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "resultsGrid.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Results grid. Not used yet; reserved for the results grid. Default @panel.background (Dark #141a23, Light #fafbfc).",
+          "markdownDescription": "(Varia) Results grid. Not used yet; reserved for the results grid. Default `@panel.background` (Dark `#141a23`, Light `#fafbfc`)."
+        },
+        "resultsGrid.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Results grid cells. Not used yet; reserved for the results grid. Default @foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Results grid cells. Not used yet; reserved for the results grid. Default `@foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "resultsGrid.headerBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Column headers. Default $raised (Dark #202a39, Light #e1e7ee).",
+          "markdownDescription": "(Varia) Column headers. Default `$raised` (Dark `#202a39`, Light `#e1e7ee`)."
+        },
+        "resultsGrid.headerForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Column names. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(Varia) Column names. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "resultsGrid.headerDescriptionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Column data types below the names. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Column data types below the names. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "resultsGrid.gridlines": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Cell borders. Default $borderSubtle (Dark #252f3d, Light #e3e7ed).",
+          "markdownDescription": "(Varia) Cell borders. Default `$borderSubtle` (Dark `#252f3d`, Light `#e3e7ed`)."
+        },
+        "resultsGrid.alternateRowBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Tint of every other row. Default $text/3 (Dark #d9e1ec08, Light #1f273308).",
+          "markdownDescription": "(Varia) Tint of every other row. Default `$text/3` (Dark `#d9e1ec08`, Light `#1f273308`)."
+        },
+        "resultsGrid.rowNumberForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Row numbers. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Row numbers. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "resultsGrid.nullForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) NULL values. Default Dark $warning/70, Light $warning (Dark #dfbd82b3, Light #8a5300).",
+          "markdownDescription": "(Varia) NULL values. Default Dark `$warning/70`, Light `$warning` (Dark `#dfbd82b3`, Light `#8a5300`)."
+        },
+        "resultsGrid.truncationForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Notice that results were truncated. Default @warningForeground (Dark #dfbd82, Light #8a5300).",
+          "markdownDescription": "(Varia) Notice that results were truncated. Default `@warningForeground` (Dark `#dfbd82`, Light `#8a5300`)."
+        },
+        "resultsGrid.selectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Selected cells. Not used yet; reserved for the results grid. Default @list.activeSelectionBackground (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(Varia) Selected cells. Not used yet; reserved for the results grid. Default `@list.activeSelectionBackground` (Dark `#2e4058`, Light `#c4daf4`)."
+        },
+        "resultsGrid.selectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of selected cells. Not used yet; reserved for the results grid. Default @list.activeSelectionForeground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Text of selected cells. Not used yet; reserved for the results grid. Default `@list.activeSelectionForeground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "resultsGrid.inactiveSelectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Selected cells while the grid is not focused. Not used yet; reserved for the results grid. Default @list.inactiveSelectionBackground (Dark #24324a, Light #d6e3f3).",
+          "markdownDescription": "(Varia) Selected cells while the grid is not focused. Not used yet; reserved for the results grid. Default `@list.inactiveSelectionBackground` (Dark `#24324a`, Light `#d6e3f3`)."
+        },
+        "resultsGrid.activeCellBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Outline of the active cell. Not used yet; reserved for the results grid. Default @focusBorder (Dark #76acff, Light #005fb8).",
+          "markdownDescription": "(Varia) Outline of the active cell. Not used yet; reserved for the results grid. Default `@focusBorder` (Dark `#76acff`, Light `#005fb8`)."
+        },
+        "resultsGrid.hoverBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default @list.hoverBackground (Dark #263041, Light #dce3ec).",
+          "markdownDescription": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default `@list.hoverBackground` (Dark `#263041`, Light `#dce3ec`)."
+        },
+        "resultsMessages.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of the Messages tab. Default Dark $accentMuted, Light $text (Dark #a3bbdc, Light #1f2733).",
+          "markdownDescription": "(Varia) Text of the Messages tab. Default Dark `$accentMuted`, Light `$text` (Dark `#a3bbdc`, Light `#1f2733`)."
+        },
+        "statusBar.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Status bar when connected and idle. Default $accentSurface (Dark #1d2b40, Light #e3ebf5).",
+          "markdownDescription": "(VS Code) Status bar when connected and idle. Default `$accentSurface` (Dark `#1d2b40`, Light `#e3ebf5`)."
+        },
+        "statusBar.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Status bar text when connected and idle. Default $accentMuted (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(VS Code) Status bar text when connected and idle. Default `$accentMuted` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "statusBar.separatorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dividers between status bar items. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Dividers between status bar items. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "statusBar.onlineIndicator": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dot shown while connected. Default $success (Dark #8addac, Light #146c38).",
+          "markdownDescription": "(Varia) Dot shown while connected. Default `$success` (Dark `#8addac`, Light `#146c38`)."
+        },
+        "statusBar.idleIndicator": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dot shown while not connected. Default $textMuted (Dark #8a9cb3, Light #566377).",
+          "markdownDescription": "(Varia) Dot shown while not connected. Default `$textMuted` (Dark `#8a9cb3`, Light `#566377`)."
+        },
+        "statusBar.executingBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status bar while a query runs. Default @statusBar.background (Dark #1d2b40, Light #e3ebf5).",
+          "markdownDescription": "(Varia) Status bar while a query runs. Default `@statusBar.background` (Dark `#1d2b40`, Light `#e3ebf5`)."
+        },
+        "statusBar.executingForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status bar text while a query runs. Default @statusBar.foreground (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(Varia) Status bar text while a query runs. Default `@statusBar.foreground` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "statusBar.disconnectedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status bar without a connection. Default @statusBar.background (Dark #1d2b40, Light #e3ebf5).",
+          "markdownDescription": "(Varia) Status bar without a connection. Default `@statusBar.background` (Dark `#1d2b40`, Light `#e3ebf5`)."
+        },
+        "statusBar.disconnectedForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status bar text without a connection. Default @statusBar.foreground (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(Varia) Status bar text without a connection. Default `@statusBar.foreground` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "statusBar.errorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status bar when the backend is unavailable. Default $errorSurface (Dark #48242d, Light #fbe4e6).",
+          "markdownDescription": "(Varia) Status bar when the backend is unavailable. Default `$errorSurface` (Dark `#48242d`, Light `#fbe4e6`)."
+        },
+        "statusBar.errorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status bar text when the backend is unavailable. Default $errorSurfaceText (Dark #f3bac0, Light #8a1c25).",
+          "markdownDescription": "(Varia) Status bar text when the backend is unavailable. Default `$errorSurfaceText` (Dark `#f3bac0`, Light `#8a1c25`)."
+        },
+        "banner.errorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Error banner. Default $errorSurface (Dark #48242d, Light #fbe4e6).",
+          "markdownDescription": "(Varia) Error banner. Default `$errorSurface` (Dark `#48242d`, Light `#fbe4e6`)."
+        },
+        "banner.errorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Error banner text. Default $errorSurfaceText (Dark #f3bac0, Light #8a1c25).",
+          "markdownDescription": "(Varia) Error banner text. Default `$errorSurfaceText` (Dark `#f3bac0`, Light `#8a1c25`)."
+        },
+        "banner.warningBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Warning banner, such as theme problems. Default $warningSurface (Dark #3d3322, Light #fff3d6).",
+          "markdownDescription": "(Varia) Warning banner, such as theme problems. Default `$warningSurface` (Dark `#3d3322`, Light `#fff3d6`)."
+        },
+        "banner.warningForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Warning banner text. Default $warningSurfaceText (Dark #f0d49b, Light #6b4400).",
+          "markdownDescription": "(Varia) Warning banner text. Default `$warningSurfaceText` (Dark `#f0d49b`, Light `#6b4400`)."
+        },
+        "dialog.backdropBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Scrim behind modal dialogs. Default $backdrop (Dark #080c14bf, Light #1f273366).",
+          "markdownDescription": "(Varia) Scrim behind modal dialogs. Default `$backdrop` (Dark `#080c14bf`, Light `#1f273366`)."
+        },
+        "dialog.separatorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Separators inside dialogs. Default $separator (Dark #354359, Light #cdd4de).",
+          "markdownDescription": "(Varia) Separators inside dialogs. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
+        },
+        "dialog.labelForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Field labels in dialogs. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(Varia) Field labels in dialogs. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "dialog.descriptionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Secondary text in dialogs. Default $textTertiary (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(Varia) Secondary text in dialogs. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
+        },
+        "settings.headerForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Section headings in dialogs. Default $accentMuted (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(VS Code) Section headings in dialogs. Default `$accentMuted` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "notifications.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Notification toasts. Not used yet; reserved for notifications. Default @editorWidget.background (Dark #1a2230, Light #ffffff).",
+          "markdownDescription": "(VS Code) Notification toasts. Not used yet; reserved for notifications. Default `@editorWidget.background` (Dark `#1a2230`, Light `#ffffff`)."
+        },
+        "notifications.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Notification text. Not used yet; reserved for notifications. Default @editorWidget.foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Notification text. Not used yet; reserved for notifications. Default `@editorWidget.foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "notifications.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Notification border. Not used yet; reserved for notifications. Default @widget.border (Dark #40516b, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Notification border. Not used yet; reserved for notifications. Default `@widget.border` (Dark `#40516b`, Light `#c3ccd8`)."
+        },
+        "notificationsErrorIcon.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default @errorForeground (Dark #f39c9f, Light #b42318).",
+          "markdownDescription": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default `@errorForeground` (Dark `#f39c9f`, Light `#b42318`)."
+        },
+        "notificationsWarningIcon.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Warning notification icon. Not used yet; reserved for notifications. Default @warningForeground (Dark #dfbd82, Light #8a5300).",
+          "markdownDescription": "(VS Code) Warning notification icon. Not used yet; reserved for notifications. Default `@warningForeground` (Dark `#dfbd82`, Light `#8a5300`)."
+        },
+        "notificationsInfoIcon.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Information notification icon. Not used yet; reserved for notifications. Default @infoForeground (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Information notification icon. Not used yet; reserved for notifications. Default `@infoForeground` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "quickInput.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Command palette. Not used yet; reserved for the command palette. Default @editorWidget.background (Dark #1a2230, Light #ffffff).",
+          "markdownDescription": "(VS Code) Command palette. Not used yet; reserved for the command palette. Default `@editorWidget.background` (Dark `#1a2230`, Light `#ffffff`)."
+        },
+        "quickInput.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Command palette text. Not used yet; reserved for the command palette. Default @editorWidget.foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Command palette text. Not used yet; reserved for the command palette. Default `@editorWidget.foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "quickInputTitle.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Command palette title. Not used yet; reserved for the command palette. Default $raised (Dark #202a39, Light #e1e7ee).",
+          "markdownDescription": "(VS Code) Command palette title. Not used yet; reserved for the command palette. Default `$raised` (Dark `#202a39`, Light `#e1e7ee`)."
+        },
+        "quickInputList.focusBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Focused command palette item. Not used yet; reserved for the command palette. Default @list.activeSelectionBackground (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(VS Code) Focused command palette item. Not used yet; reserved for the command palette. Default `@list.activeSelectionBackground` (Dark `#2e4058`, Light `#c4daf4`)."
+        },
+        "quickInputList.focusForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Text of the focused command palette item. Not used yet; reserved for the command palette. Default @list.activeSelectionForeground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Text of the focused command palette item. Not used yet; reserved for the command palette. Default `@list.activeSelectionForeground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "pickerGroup.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Command palette group labels. Not used yet; reserved for the command palette. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Command palette group labels. Not used yet; reserved for the command palette. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "pickerGroup.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Command palette group separators. Not used yet; reserved for the command palette. Default $separator (Dark #354359, Light #cdd4de).",
+          "markdownDescription": "(VS Code) Command palette group separators. Not used yet; reserved for the command palette. Default `$separator` (Dark `#354359`, Light `#cdd4de`)."
+        },
+        "connection.red": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Red connection color. Default $red (Dark #e66b73, Light #c42b3c).",
+          "markdownDescription": "(Varia) Red connection color. Default `$red` (Dark `#e66b73`, Light `#c42b3c`)."
+        },
+        "connection.orange": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Orange connection color. Default $orange (Dark #e6a15c, Light #b45309).",
+          "markdownDescription": "(Varia) Orange connection color. Default `$orange` (Dark `#e6a15c`, Light `#b45309`)."
+        },
+        "connection.yellow": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Yellow connection color. Default $yellow (Dark #dec766, Light #8f6b00).",
+          "markdownDescription": "(Varia) Yellow connection color. Default `$yellow` (Dark `#dec766`, Light `#8f6b00`)."
+        },
+        "connection.green": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Green connection color. Default $green (Dark #79bb8b, Light #2e7d4f).",
+          "markdownDescription": "(Varia) Green connection color. Default `$green` (Dark `#79bb8b`, Light `#2e7d4f`)."
+        },
+        "connection.blue": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Blue connection color. Default $blue (Dark #71a7df, Light #2563a8).",
+          "markdownDescription": "(Varia) Blue connection color. Default `$blue` (Dark `#71a7df`, Light `#2563a8`)."
+        },
+        "connection.purple": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Purple connection color. Default $purple (Dark #ad8bd8, Light #7a4bbf).",
+          "markdownDescription": "(Varia) Purple connection color. Default `$purple` (Dark `#ad8bd8`, Light `#7a4bbf`)."
+        },
+        "connection.default": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Swatch of connections without a color. Default $neutral (Dark #8b9bb0, Light #6b7789).",
+          "markdownDescription": "(Varia) Swatch of connections without a color. Default `$neutral` (Dark `#8b9bb0`, Light `#6b7789`)."
+        },
+        "connection.favoriteForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Favorite star in the connection dialog. Default $yellow (Dark #dec766, Light #8f6b00).",
+          "markdownDescription": "(Varia) Favorite star in the connection dialog. Default `$yellow` (Dark `#dec766`, Light `#8f6b00`)."
+        }
+      }
+    },
+    "tokenColors": {
+      "type": "array",
+      "maxItems": 256,
+      "description": "SQL syntax colors.",
+      "items": {
+        "$ref": "#/definitions/tokenRule"
+      }
+    }
+  },
+  "definitions": {
+    "hex": {
+      "type": "string",
+      "format": "color-hex",
+      "maxLength": 9,
+      "pattern": "^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+    },
+    "ref": {
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^\\$[a-z][A-Za-z0-9]{0,31}(/(100|[1-9]?[0-9]))?$",
+      "description": "A palette slot, optionally with an opacity percentage: $accent or $accent/20."
+    },
+    "color": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/hex"
+        },
+        {
+          "$ref": "#/definitions/ref"
+        }
+      ]
+    },
+    "value": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/color"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "dark": {
+              "$ref": "#/definitions/color"
+            },
+            "light": {
+              "$ref": "#/definitions/color"
+            }
+          }
+        }
+      ]
+    },
+    "scope": {
+      "type": "string",
+      "maxLength": 128,
+      "examples": [
+        "keyword",
+        "keyword.block",
+        "keyword.try",
+        "keyword.catch",
+        "keyword.choice",
+        "operator",
+        "predefined",
+        "string",
+        "number",
+        "comment",
+        "comment.quote",
+        "identifier",
+        "identifier.quote",
+        "delimiter",
+        "delimiter.parenthesis",
+        "delimiter.square",
+        "keyword.control",
+        "keyword.other",
+        "storage",
+        "storage.type",
+        "storage.modifier",
+        "keyword.operator",
+        "support.function",
+        "entity.name.function",
+        "variable.language",
+        "support.constant",
+        "string.quoted",
+        "string.quoted.single",
+        "string.quoted.double",
+        "constant.numeric",
+        "comment.line",
+        "comment.block",
+        "punctuation.definition.comment",
+        "variable",
+        "variable.other",
+        "entity.name",
+        "punctuation",
+        "punctuation.separator",
+        "meta.brace"
+      ]
+    },
+    "tokenRule": {
+      "type": "object",
+      "required": [
+        "scope",
+        "settings"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/scope"
+            },
+            {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "$ref": "#/definitions/scope"
+              }
+            }
+          ]
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "foreground": {
+              "$ref": "#/definitions/value"
+            },
+            "fontStyle": {
+              "type": "string",
+              "pattern": "^((italic|bold|underline|strikethrough)( (italic|bold|underline|strikethrough)){0,3})?$"
+            }
+          }
+        }
+      }
+    }
+  }
+}
