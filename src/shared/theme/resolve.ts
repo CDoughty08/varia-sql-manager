@@ -44,8 +44,14 @@ function evaluateBuiltin(variant: ThemeType): Map<string, Rgba> {
  */
 export function resolveTheme(layers: readonly ParsedTheme[], variant: ThemeType): ThemeResolution {
   for (const layer of layers) if (layer.type !== 'dual' && layer.type !== variant) throw new Error(`Theme ${layer.id} has no ${variant} variant.`)
-  const problems: ThemeProblem[] = []
-  const warn = (layer: ParsedTheme, path: string, failure: Extract<Evaluated, { ok: false }>) => problems.push(createProblem(failure.code, layer.fileName, path, failure.message))
+  const problems: ThemeProblem[] = [], warned = new Set<string>()
+  // A rule naming 16 scopes is 16 entries with one path; reporting it once keeps problems proportional to the file.
+  const warn = (layer: ParsedTheme, path: string, failure: Extract<Evaluated, { ok: false }>) => {
+    const identity = layer.fileName + path
+    if (warned.has(identity)) return
+    warned.add(identity)
+    problems.push(createProblem(failure.code, layer.fileName, path, failure.message))
+  }
 
   const entries = new Map<string, PaletteEntry>(paletteSlots.map(slot => [slot, { expression: builtinPalettes[variant][slot] }]))
   for (const layer of [...layers].reverse()) {

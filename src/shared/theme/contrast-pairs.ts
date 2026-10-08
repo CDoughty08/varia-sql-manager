@@ -15,6 +15,7 @@ const inactiveSelection: ColorKey[] = ['sideBar.background', 'list.inactiveSelec
 const panelTitle: ColorKey[] = ['panelTitle.background'], titleBar: ColorKey[] = ['titleBar.activeBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
+const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
 const pairs = (minimum: number, foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]): ContrastPair[] =>
   foregrounds.flatMap(foreground => backgrounds.map(background => ({ foreground, background, minimum })))
 const text = (foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]) => pairs(4.5, foregrounds, ...backgrounds)
@@ -32,7 +33,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['menu.foreground'], ['menu.background']),
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
-  ...text(['badge.foreground'], ['panelTitle.background', 'badge.background']),
+  ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),
   ...text(['inputValidation.errorForeground'], ['editorWidget.background', 'inputValidation.errorBackground']),
   ...text(['banner.errorForeground'], ['editor.background', 'banner.errorBackground']),
   ...text(['banner.warningForeground'], ['editor.background', 'banner.warningBackground']),
@@ -70,7 +71,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text(sqlScopes.map(scope => `syntax:${scope}` as const), editor, ['editor.background', 'editor.lineHighlightBackground']),
 
-  ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, dockTabs('tab.activeBackground'), strip, input),
+  ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, strip, input, ...dockTabBackgrounds.map(dockTabs)),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground', 'objectExplorer.actionForeground'], sideBar),
   ...graphic(['titleBar.iconForeground'], titleBar),
   ...graphic(['connection.red', 'connection.orange', 'connection.yellow', 'connection.green', 'connection.blue', 'connection.purple'], sideBar, strip, editor, statusBar, widget),
@@ -83,6 +84,12 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
   ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground'])
 ]
+
+/**
+ * Hover fills carry no information (WCAG asks nothing of them) but must still be noticeable on every surface they
+ * appear on; 1.2:1 is what the Dockview hover gave Varia Dark before themes.
+ */
+export const hoverPairs: readonly ContrastPair[] = pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs))
 
 /** Reported, not enforced: the Dark control borders are below 3:1 until the owner decides on a heavier look. */
 export const advisoryPairs: readonly ContrastPair[] = graphic(['input.border', 'button.border'], input, widget)

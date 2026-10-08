@@ -18,7 +18,7 @@ macOS, from the menu bar.
 
 | Item | Effect |
 | --- | --- |
-| **Dark**, **Light**, **Follow System** | The mode. Dark is the default. Native menus and dialogs follow the mode too. |
+| **Dark**, **Light**, **Follow System** | The mode. Dark is the default. Native menus follow the mode too; system dialogs such as file pickers follow it on macOS and keep the system appearance on Windows and Linux. |
 | **Dark Theme ▸**, **Light Theme ▸** | The theme used in each mode. Choosing from the list opposite a fixed mode switches the mode as well. |
 | **Create Custom Theme…** | Writes a starter theme seeded with the current accent colors, selects it, and shows it in the file manager. |
 | **Open Themes Folder** | Opens the themes folder, creating it if needed. |
@@ -121,7 +121,7 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 180 keys are listed in [`tokens.md`](tokens.md#color-keys-180) by area: title bar and menus, buttons and inputs,
+The 181 keys are listed in [`tokens.md`](tokens.md#color-keys-181) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
 dialogs, and connection colors. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
 are reserved for upcoming features (the command palette, themed menus, the new Object Explorer and results grid): they

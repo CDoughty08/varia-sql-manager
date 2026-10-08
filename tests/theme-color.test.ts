@@ -53,10 +53,15 @@ describe('theme value grammar', () => {
   })
   it.each([
     'url(x)', 'var(--a)', 'expression(1)', '#fff;}body{', 'red', 'rgb(0,0,0)', 'hsl(0 0% 0%)', '#12345', '＃fff', ' #fff', '#fff ', '#fff\n',
-    '$a/101', '$a/01', '$a/-1', '$a/', '$__proto__', '$Accent', '$a-b', '$a' + 'b'.repeat(32), '@editor.background', 'transparent', '', 'x'.repeat(1_000_000)
+    '$a/101', '$a/01', '$a/-1', '$a/', '$__proto__', '$Accent', '$a-b', '$a' + 'b'.repeat(32), '@editor.background', 'transparent', ''
   ])('rejects %j', value => {
     expect(isColorText(value)).toBe(false)
     expect(parseThemeValue(value, 'dual')).toMatchObject({ ok: false, code: 'W_VALUE' })
+  })
+  // Kept out of the table above, whose titles would carry the whole megabyte.
+  it('rejects a 1 MB string', () => {
+    expect(isColorText('x'.repeat(1_000_000))).toBe(false)
+    expect(parseThemeValue('x'.repeat(1_000_000), 'dual')).toMatchObject({ ok: false, code: 'W_VALUE' })
   })
   it('rejects non-strings and malformed variant objects', () => {
     for (const value of [null, 1, true, ['#fff'], {}, { dark: '#fff', other: '#000' }, { dark: 'red' }, { dark: { dark: '#fff' } }]) expect(parseThemeValue(value, 'dual').ok, JSON.stringify(value)).toBe(false)

@@ -23,13 +23,14 @@ const patterns = Object.fromEntries(Object.entries(themePatterns).map(([name, so
 const deniedKeys = new Set(['constructor', 'prototype'])
 const topLevelFields = new Set(['$schema', 'kind', 'version', 'name', 'description', 'author', 'type', 'palette', 'colors', 'tokenColors'])
 
-// C0/C1 controls, bidi controls, zero-width characters, and line/paragraph separators.
-const unsafeCharacters = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu
+// Controls, format characters (bidi controls, zero-width characters, tags) and every other default-ignorable code point
+// such as variation selectors and Hangul fillers: all invisible, so a name could otherwise pose as another one.
+const unsafeCharacters = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/gu
 const hasUnsafeCharacters = (value: string) => { unsafeCharacters.lastIndex = 0; return unsafeCharacters.test(value) }
 const codePoints = (value: string) => [...value].length
 const clipCodePoints = (value: string, max: number) => codePoints(value) <= max ? value : [...value].slice(0, max).join('')
 
-/** Removes control, bidi and zero-width characters, trims, and caps the length in code points. */
+/** Removes control, bidi, zero-width and other invisible characters, trims, and caps the length in code points. */
 export function sanitizeLabel(value: string, max: number): string {
   return clipCodePoints(value.replace(unsafeCharacters, '').trim(), max)
 }
@@ -68,12 +69,18 @@ export function limitProblems(problems: readonly ThemeProblem[], max: number): {
 
 class Problems {
   private list: ThemeProblem[] = []
+  private dropped = 0
   constructor(private file: string) {}
-  add(code: ThemeProblemCode, path: string, message: string) { this.list.push(createProblem(code, this.file, path, message)) }
+  add(code: ThemeProblemCode, path: string, message: string) {
+    // Errors are few and all come first; warnings past a small multiple of the cap are only counted, so a file built to
+    // produce thousands of them costs no more than one that produces the cap.
+    if (code.startsWith('W_') && this.list.length >= themeLimits.problemsPerFile * 2) { this.dropped++; return }
+    this.list.push(createProblem(code, this.file, path, message))
+  }
   get hasErrors() { return this.list.some(problem => problem.severity === 'error') }
   result(theme: ParsedTheme | null): ThemeParseResult {
     const { problems, omitted } = limitProblems(this.list, themeLimits.problemsPerFile)
-    return { theme, problems, problemsOmitted: omitted }
+    return { theme, problems, problemsOmitted: omitted + this.dropped }
   }
 }
 
@@ -133,27 +140,34 @@ function tooComplex(value: unknown): boolean {
   return false
 }
 
-// Banded Levenshtein: only distances up to `limit` matter, so each row looks at 2 * limit + 1 cells.
+// Banded Levenshtein: only distances up to `limit` matter, so each row looks at 2 * limit + 1 cells. Keys are at most
+// 64 characters, so two fixed rows serve every comparison.
+const rows = [new Int32Array(themeLimits.colorKeyLength + 1), new Int32Array(themeLimits.colorKeyLength + 1)]
 function withinDistance(a: string, b: string, limit: number): number | undefined {
-  if (Math.abs(a.length - b.length) > limit) return undefined
-  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  if (Math.abs(a.length - b.length) > limit || b.length > themeLimits.colorKeyLength) return undefined
+  let [previous, current] = rows
+  for (let j = 0; j <= b.length; j++) previous[j] = j
   for (let i = 1; i <= a.length; i++) {
-    const current = new Array<number>(b.length + 1).fill(limit + 1)
+    current.fill(limit + 1, 0, b.length + 1)
     current[0] = i
-    let best = current[0]
+    let best = i
     for (let j = Math.max(1, i - limit); j <= Math.min(b.length, i + limit); j++) {
-      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1))
       best = Math.min(best, current[j])
     }
     if (best > limit) return undefined
-    previous = current
+    const done = previous; previous = current; current = done
   }
   return previous[b.length] <= limit ? previous[b.length] : undefined
 }
+const lowerColorKeys = colorKeys.map(key => [key, key.toLowerCase()] as const)
+/** Unknown keys looked at for a "did you mean"; the rest of a pasted VS Code block only counts toward the summary. */
+const suggestionAttempts = 64
 function suggestKey(key: string): ColorKey | undefined {
+  const lower = key.toLowerCase()
   let best: ColorKey | undefined, bestDistance = 3
-  for (const candidate of colorKeys) {
-    const distance = withinDistance(key.toLowerCase(), candidate.toLowerCase(), 2)
+  for (const [candidate, candidateLower] of lowerColorKeys) {
+    const distance = withinDistance(lower, candidateLower, 2)
     if (distance !== undefined && distance < bestDistance) { best = candidate; bestDistance = distance }
   }
   return best
@@ -204,13 +218,13 @@ export function parseThemeFile(json: unknown, fileName: string): ThemeParseResul
   for (const key of Object.keys(json)) if (!topLevelFields.has(key)) problems.add('W_FIELD', pointer(key), `Unknown field ${quote(key)} ignored.`)
   const schema = own(json, '$schema')
   if (schema !== undefined && (typeof schema !== 'string' || schema.length > themeLimits.schema)) problems.add('W_FIELD', '/$schema', `"$schema" must be a string of at most ${themeLimits.schema} characters; ignored.`)
-  if (hasUnsafeCharacters(rawName)) problems.add('W_TEXT_SANITISED', '/name', 'Control, bidirectional, and zero-width characters were removed from "name".')
+  if (hasUnsafeCharacters(rawName)) problems.add('W_TEXT_SANITISED', '/name', 'Control, bidirectional, and other invisible characters were removed from "name".')
   if (!name) { name = id; problems.add('W_FIELD', '/name', '"name" is empty; the theme id is shown instead.') }
   const text = (field: 'description' | 'author', max: number): string | undefined => {
     const raw = own(json, field)
     if (raw === undefined) return undefined
     if (typeof raw !== 'string') { problems.add('W_FIELD', '/' + field, `"${field}" must be a string; ignored.`); return undefined }
-    if (hasUnsafeCharacters(raw)) problems.add('W_TEXT_SANITISED', '/' + field, `Control, bidirectional, and zero-width characters were removed from "${field}".`)
+    if (hasUnsafeCharacters(raw)) problems.add('W_TEXT_SANITISED', '/' + field, `Control, bidirectional, and other invisible characters were removed from "${field}".`)
     const clean = sanitizeLabel(raw, Infinity)
     if (codePoints(clean) > max) problems.add('W_FIELD', '/' + field, `"${field}" is longer than ${max} characters and was shortened.`)
     return clipCodePoints(clean, max) || undefined
@@ -244,8 +258,8 @@ export function parseThemeFile(json: unknown, fileName: string): ThemeParseResul
     colors.set(key, value.value)
   }
   let suggestions = 0
-  const unused = unknown.filter(key => {
-    const suggestion = suggestions < 10 ? suggestKey(key) : undefined
+  const unused = unknown.filter((key, index) => {
+    const suggestion = suggestions < 10 && index < suggestionAttempts ? suggestKey(key) : undefined
     if (!suggestion) return true
     suggestions++
     problems.add('W_KEY_UNKNOWN', pointer('colors', key), `Unknown color key ${quote(key)}; did you mean \`${suggestion}\`?`)
@@ -268,11 +282,15 @@ export function parseThemeFile(json: unknown, fileName: string): ThemeParseResul
     items.forEach((item: unknown, itemIndex: number) => {
       const itemPath = path + '/scope' + (Array.isArray(scope) ? '/' + itemIndex : '')
       if (typeof item !== 'string' || item.length > themeLimits.scopeLength) { problems.add('W_SCOPE', itemPath, `Each scope is a string of at most ${themeLimits.scopeLength} characters; ignored.`); return }
+      const unknownParts = new Set<string>()
       for (const part of item.split(',').map(value => value.trim())) {
         const mapped = isSqlScope(part) ? part : scopeAliases.get(part)
         if (mapped) scopes.add(mapped)
-        else problems.add('W_SCOPE', itemPath, `Unknown scope ${quote(part)} ignored; docs/themes/tokens.md lists the scopes.`)
+        else unknownParts.add(part)
       }
+      // One warning per item: a comma list is one entry, however many of its parts are unknown.
+      const [first, ...others] = unknownParts
+      if (first !== undefined) problems.add('W_SCOPE', itemPath, `Unknown scope ${quote(first)}${others.length ? ` and ${others.length} more` : ''} ignored; docs/themes/tokens.md lists the scopes.`)
     })
     const settings = own(rule, 'settings')
     if (!isPlainObject(settings)) { problems.add('W_SETTING', path + '/settings', '"settings" must be an object; the rule is ignored.'); return }

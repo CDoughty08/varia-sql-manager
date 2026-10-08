@@ -1,4 +1,5 @@
-import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises'
+import { constants, type BigIntStats } from 'node:fs'
+import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -6,21 +7,46 @@ import { randomUUID } from 'node:crypto'
 export type JsonInvalidReason = 'size' | 'encoding' | 'json'
 export type JsonRead = { kind: 'missing' } | { kind: 'invalid'; tooLarge: boolean; reason?: JsonInvalidReason } | { kind: 'ok'; value: unknown }
 
+const posix = process.platform !== 'win32'
+export interface RegularFileOptions {
+  /** Refuse a symbolic link at the path itself (POSIX); Windows relies on `expect`. */
+  followLinks?: boolean
+  /** The file an earlier lstat saw: a file replaced since then, or a link it pointed at, is not read. */
+  expect?: Pick<BigIntStats, 'dev' | 'ino'>
+}
+
+/**
+ * Reads at most `limit` + 1 bytes of a regular file, or returns undefined when the path holds anything else. The
+ * check runs on the opened handle, and O_NONBLOCK keeps a FIFO swapped in after an earlier check from hanging the read.
+ */
+export async function readRegularFile(path: string, limit: number, options: RegularFileOptions = {}): Promise<Buffer | undefined> {
+  const flags = constants.O_RDONLY | (posix ? constants.O_NONBLOCK | (options.followLinks === false ? constants.O_NOFOLLOW : 0) : 0)
+  const file = await open(path, flags)
+  try {
+    const info = await file.stat({ bigint: true })
+    if (!info.isFile() || (options.expect && (info.dev !== options.expect.dev || info.ino !== options.expect.ino))) return undefined
+    const capacity = Number(info.size < BigInt(limit) ? info.size : BigInt(limit)) + 1, buffer = Buffer.alloc(capacity)
+    let length = 0
+    while (length < capacity) {
+      const { bytesRead } = await file.read(buffer, length, capacity - length, length)
+      if (!bytesRead) break
+      length += bytesRead
+    }
+    return buffer.subarray(0, length)
+  } finally { await file.close() }
+}
+
 /**
  * Reads a bounded UTF-8 JSON file. File-system failures (permissions, locks, a directory at the path) are thrown so
  * callers never overwrite data they could not read; only content problems are reported as `invalid`.
  */
 export async function readJsonFile(path: string, limit: number): Promise<JsonRead> {
-  let bytes: Buffer
-  try {
-    const info = await stat(path)
-    if (!info.isFile()) throw new Error('Expected a regular file at ' + path + '.')
-    if (info.size > limit) return { kind: 'invalid', tooLarge: true, reason: 'size' }
-    bytes = await readFile(path)
-  } catch (error) {
+  let bytes: Buffer | undefined
+  try { bytes = await readRegularFile(path, limit) } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
     throw error
   }
+  if (!bytes) throw new Error('Expected a regular file at ' + path + '.')
   if (bytes.length > limit) return { kind: 'invalid', tooLarge: true, reason: 'size' }
   let text: string
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { return { kind: 'invalid', tooLarge: false, reason: 'encoding' } }

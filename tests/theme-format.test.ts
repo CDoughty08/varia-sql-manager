@@ -141,6 +141,10 @@ describe('theme files', () => {
     const pasted = parse({ colors: Object.fromEntries(Array.from({ length: 30 }, (_, index) => ['editor.background' + index, '#000'])) })
     expect(codes(pasted).filter(code => code === 'W_KEY_UNKNOWN')).toHaveLength(10)
     expect(pasted.problems.at(-1)!.message).toMatch(/^20 keys are not used by Varia/)
+    // Only the first 64 unknown keys are compared with the registry, which keeps a large pasted block cheap.
+    const late = parse({ colors: { ...Object.fromEntries(Array.from({ length: 64 }, (_, index) => ['unrelatedKey' + index, '#000'])), 'editor.backgroud': '#000' } })
+    expect(codes(late)).toEqual(['W_KEYS_UNUSED'])
+    expect(late.problems[0].message).toMatch(/^65 keys are not used by Varia/)
   })
   it('drop variant values in single-type themes and invalid values, keeping the rest', () => {
     const result = parse({ type: 'dark', palette: { accent: { dark: '#fff' }, focus: '#fff' }, colors: { 'focusBorder': { dark: '#fff' }, 'tab.border': 'red', 'panel.border': '#123' } })
@@ -170,6 +174,11 @@ describe('theme files', () => {
     expect(codes(parse({ description: 5 }))).toEqual(['W_FIELD'])
     expect(sanitizeLabel('  a' + char(0x9f) + char(0xfeff) + 'b' + char(0x2029) + '  ', 64)).toBe('ab')
     expect(sanitizeLabel('😀'.repeat(5), 3)).toBe('😀😀😀')
+    // Every other invisible character too: format characters, tags, variation selectors, and Hangul fillers.
+    for (const code of [0x2060, 0xad, 0x180e, 0x2061, 0x2064, 0x206a, 0x206f, 0xfff9, 0xe0001, 0xe0041, 0xe0100, 0x34f, 0xfe0f, 0x3164, 0x115f, 0xffa0]) {
+      expect(sanitizeLabel('Varia Dark' + char(code), 64), code.toString(16)).toBe('Varia Dark')
+    }
+    expect(only(parse({ name: 'Varia Dark' + char(0x2060) }))).toEqual([['W_TEXT_SANITISED', '/name']])
   })
   it('maps comma-separated scopes and aliases, and warns about unknown scopes and settings', () => {
     const result = parse({ tokenColors: [
@@ -190,6 +199,18 @@ describe('theme files', () => {
       ['W_FONT_STYLE', '/tokenColors/2/settings/fontStyle'], ['W_FIELD', '/tokenColors/3/extra'], ['W_SCOPE', '/tokenColors/4/scope'],
       ['W_SETTING', '/tokenColors/5/settings'], ['W_FIELD', '/tokenColors/6']
     ])
+  })
+  it('reports a scope list once, and keeps the work for a file of warnings proportional to the cap', () => {
+    const list = parse({ tokenColors: [{ scope: 'keyword, nope, , also.nope, nope', settings: { foreground: '#111' } }] })
+    expect(only(list)).toEqual([['W_SCOPE', '/tokenColors/0/scope']])
+    expect(list.problems[0].message).toBe('Unknown scope `nope` and 2 more ignored; docs/themes/tokens.md lists the scopes.')
+    expect(list.theme!.rules.map(rule => rule.scope)).toEqual(['keyword'])
+    // 31 rules of 32 scope strings that are nothing but commas: one warning per string, all but 50 only counted.
+    const commas = parse({ tokenColors: Array.from({ length: 31 }, () => ({ scope: Array.from({ length: 32 }, () => ','.repeat(127)), settings: { foreground: '#fff' } })) })
+    expect(commas.problems).toHaveLength(themeLimits.problemsPerFile)
+    expect(commas.problems.length + commas.problemsOmitted).toBe(31 * 32)
+    const values = parse({ palette: Object.fromEntries(Array.from({ length: themeLimits.palette }, (_, index) => ['slot' + index, 'red'])) })
+    expect([values.problems.length, values.problemsOmitted]).toEqual([themeLimits.problemsPerFile, themeLimits.palette - themeLimits.problemsPerFile])
   })
   it.each([
     ['', true], ['italic', true], ['bold underline', true], ['italic bold underline strikethrough', true],

@@ -30,9 +30,10 @@ describe('Varia Dark fidelity', () => {
   it('gives a reason for every deliberate change and points it at a real difference', () => {
     const changes = all.filter(entry => entry.change)
     expect(changes.map(entry => entry.keys[0]).sort()).toEqual([
-      'badge.foreground', 'breadcrumb.separatorForeground', 'dock.background', 'editorGroupHeader.tabsBackground', 'editorLineNumber.foreground',
-      'resultsGrid.headerDescriptionForeground', 'resultsGrid.rowNumberForeground', 'statusBar.separatorForeground', 'syntax:comment', 'syntax:string',
-      'tab.border', 'tab.inactiveForeground', 'tab.unfocusedActiveForeground', 'tab.unfocusedInactiveForeground'
+      'badge.foreground', 'breadcrumb.separatorForeground', 'dock.background', 'editorGroup.dropBackground', 'editorGroupHeader.tabsBackground',
+      'editorLineNumber.foreground', 'focusBorder', 'focusBorder', 'input.placeholderForeground', 'resultsGrid.headerDescriptionForeground',
+      'resultsGrid.rowNumberForeground', 'scrollbarSlider.background', 'statusBar.separatorForeground', 'syntax:comment', 'syntax:string',
+      'tab.border', 'tab.inactiveForeground', 'tab.unfocusedActiveForeground', 'tab.unfocusedInactiveForeground', 'widget.border'
     ])
     for (const entry of changes) {
       expect(entry.change!.length).toBeGreaterThan(10)

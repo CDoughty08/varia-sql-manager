@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult } from '../src/shared/contracts'
 import { contrast, hexColor } from '../src/shared/theme/color'
-import { connectionAccent, connectionAccentSurfaces } from '../src/shared/theme/connection-colors'
+import { connectionAccent, connectionAccentSurfaces, connectionPickerColor } from '../src/shared/theme/connection-colors'
 import { defaultThemePreference } from '../src/shared/theme/format'
 import { colorKeys, cssVariable } from '../src/shared/theme/registry'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
@@ -139,6 +139,15 @@ describe('ThemeService', () => {
     push(state(2, 'light'))
     expect(service.accent('#202020')).toBe('#202020')
     expect(vi.mocked(connectionAccent).mock.calls.length).toBe(calls + 1)
+  })
+  it('shows presets in the color picker as the active theme paints them, without changing what is stored', () => {
+    const dark = resolveBuiltin('dark'), light = resolveBuiltin('light')
+    expect(connectionPickerColor('#e66b73', dark)).toBe('#e66b73')
+    expect(connectionPickerColor('#e66b73', light)).toBe(light.colors['connection.red'])
+    expect(connectionPickerColor(undefined, light)).toBe(light.colors['connection.blue'])
+    expect(connectionPickerColor('not a color', dark)).toBe(dark.colors['connection.blue'])
+    expect(connectionPickerColor('#202020', light)).toBe('#202020')
+    expect(connectionPickerColor('#e66b7380', light)).toBe('#e66b73')
   })
   it('reloads through main and stops listening when disposed', async () => {
     const { api, subscribed } = fakeApi(), { target, applied } = fakeTarget()

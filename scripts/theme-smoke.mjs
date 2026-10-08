@@ -48,6 +48,15 @@ const backgroundOf = selector => page.locator(selector).first().evaluate(element
 const shellClasses = () => page.locator('.dv-shell').evaluate(element => [...element.classList].filter(name => /^(dockview-theme-|varia-dock$)/.test(name)).sort())
 const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
+// Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
+const dockTabFocusRing = () => page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] })
+const contextMenuBorder = () => page.evaluate(() => {
+  for (const host of document.querySelectorAll('.shadow-root-host')) {
+    const menu = host.shadowRoot?.querySelector('.monaco-menu')
+    if (menu) { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` }
+  }
+  return null
+})
 // expect.poll does not retry a callback that throws, and appearance.json appears only after the first choice.
 const appearance = () => readFile(appearanceFile, 'utf8').then(JSON.parse, () => null)
 const lightKeys = ['editor.background', 'foreground', 'button.background', 'titleBar.activeBackground', 'connection.red']
@@ -72,6 +81,13 @@ try {
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   console.log('Theme checks: floating groups use the theme colors.')
 
+  expect(await dockTabFocusRing()).toEqual([true, 'rgb(118, 172, 255)'])
+  // Monaco's context menu border needs --vscode-strokeThickness, which standalone Monaco leaves undefined.
+  await page.locator('.monaco-editor .view-lines').click({ button: 'right' })
+  await expect.poll(contextMenuBorder).toBe('1px solid rgb(64, 81, 107)')
+  await page.keyboard.press('Escape')
+  console.log('Theme checks: dock tab focus rings and the editor context menu border use the theme colors.')
+
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
@@ -95,6 +111,7 @@ try {
   expect(await page.evaluate(() => window.__themeSentinel)).toBe(1)
   expect(await editorText()).toBe(typed)
   expect(await menuItem('theme.mode.light')).toMatchObject({ checked: true })
+  expect(await dockTabFocusRing()).toEqual([true, 'rgb(0, 95, 184)'])
   await page.screenshot({ path: resolve('artifacts', 'theme-light.png') })
   console.log('Theme checks: switching to Light updates CSS, Monaco, Dockview, native chrome, and the preference without a reload.')
 
@@ -121,6 +138,12 @@ try {
   expect(applied.filter(([, value]) => !canonical.test(value))).toEqual([])
   await expect(page.locator('body')).toBeVisible()
   expect(await page.evaluate(() => getComputedStyle(document.body).display)).not.toBe('none')
+  // The button's own failure is shown once, under the notice, and does not also become the notice.
+  await application.evaluate(({ shell }) => { shell.openPath = async () => 'No application is registered' })
+  await notice.getByRole('button', { name: 'Open Themes Folder', exact: true }).click()
+  await expect(notice).toContainText('The themes folder could not be opened: No application is registered')
+  expect((await notice.innerText()).split('could not be opened').length - 1).toBe(1)
+  expect((await themeState()).notice).toBe('Reloaded 1 theme; 1 has problems.')
   await application.evaluate(({ shell }) => { shell.openPath = async path => { globalThis.openedThemes = path; return '' } })
   await notice.getByRole('button', { name: 'Open Themes Folder', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.openedThemes)).toBe(themesFolder)

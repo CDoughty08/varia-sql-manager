@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
-import { advisoryPairs, contrastExemptions, contrastPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
+import { advisoryPairs, contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
 import { colorKeys, sqlScopes, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 import type { ResolvedTheme, ThemeType } from '../src/shared/theme/types'
@@ -22,6 +22,12 @@ describe('built-in theme contrast', () => {
       .filter(([pair, value]) => value < pair.minimum).map(([pair, value]) => describePair(type, pair, value)))
     expect(failures, failures.join('\n')).toEqual([])
   })
+  it('keeps hover fills noticeable on every surface they appear on', () => {
+    const failures = types.flatMap(type => hoverPairs.map(pair => [pair, ratio(resolveBuiltin(type), pair)] as const)
+      .filter(([pair, value]) => value < pair.minimum).map(([pair, value]) => describePair(type, pair, value)))
+    expect(hoverPairs.length).toBeGreaterThan(4)
+    expect(failures, failures.join('\n')).toEqual([])
+  })
   it('reports the advisory pairs without failing', () => {
     const report = types.flatMap(type => advisoryPairs.map(pair => describePair(type, pair, ratio(resolveBuiltin(type), pair))))
     console.info('Advisory contrast (not enforced):\n' + report.join('\n'))
@@ -37,7 +43,7 @@ describe('built-in theme contrast', () => {
       expect(checked.has(key), `${key} is both checked and exempt`).toBe(false)
       expect(reason!.length).toBeGreaterThan(10)
     }
-    for (const pair of [...contrastPairs, ...advisoryPairs]) {
+    for (const pair of [...contrastPairs, ...advisoryPairs, ...hoverPairs]) {
       expect(pair.background.length).toBeGreaterThan(0)
       for (const key of pair.background) expect(colorKeys).toContain(key)
       if (!pair.foreground.startsWith('syntax:')) expect(colorKeys).toContain(pair.foreground)

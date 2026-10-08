@@ -36,6 +36,7 @@
     "menu.border": "#40516b",
     "toolbar.background": "#181f2a",
     "toolbar.border": "#2b3443",
+    "toolbar.hoverBackground": "#d9e1ec1f",
     "toolbar.separatorBackground": "#354359",
     "toolbar.labelForeground": "#9eafc5",
     "keybindingLabel.foreground": "#8a9cb3",

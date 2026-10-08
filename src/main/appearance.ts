@@ -6,7 +6,7 @@ import { builtinThemes } from '../shared/theme/palette'
 import { resolveTheme } from '../shared/theme/resolve'
 import type { ParsedTheme, ThemeMode, ThemePreference, ThemePreferencePatch, ThemeProblem, ThemeResolution, ThemeState, ThemeSummary, ThemeType } from '../shared/theme/types'
 import { AppearanceStore } from './appearance-store'
-import { scanThemes, themesFolderName, writeSchemaFile, writeStarterTheme, type ThemeFile, type ThemeScan } from './theme-files'
+import { scanThemes, ThemeActionError, themesFolderName, writeSchemaFile, writeStarterTheme, type ThemeFile, type ThemeScan } from './theme-files'
 
 /** The part of Electron's `nativeTheme` the service uses, so tests can drive System mode. */
 export interface NativeThemeLike { themeSource: ThemeMode; readonly shouldUseDarkColors: boolean }
@@ -25,6 +25,10 @@ const detail = (error: unknown) => {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   return typeof code === 'string' && /^[A-Z0-9_]{1,32}$/.test(code) ? ` (${code})` : ''
 }
+const readOnly = new Set(['EROFS', 'EACCES', 'EPERM'])
+/** A folder action's failure as a fixed sentence: its own message when it has one, otherwise `failed` and the code. */
+const actionError = (error: unknown, failed: string) => error instanceof ThemeActionError ? error
+  : new ThemeActionError(`${failed}${readOnly.has((error as NodeJS.ErrnoException | undefined)?.code ?? '') ? ' because the themes folder is not writable' : ''}${detail(error)}.`)
 const builtinResolutions: Record<ThemeType, ThemeResolution> = { dark: resolveTheme([], 'dark'), light: resolveTheme([], 'light') }
 const builtinEntries = themeTypes.map((type): CatalogEntry => ({
   summary: { ...builtinThemes[type], source: 'builtin', types: [type], usable: true, errors: 0, warnings: 0 }, resolutions: { [type]: builtinResolutions[type] }, problems: [], problemsOmitted: 0
@@ -70,6 +74,8 @@ export class AppearanceService {
   private complete = false
   private loaded = false
   private writable = true
+  /** The last choice was applied but not saved, so choosing it again retries the save. */
+  private unsaved = false
   private message: string | undefined
   private current: ThemeState
   private fingerprint: string
@@ -136,23 +142,33 @@ export class AppearanceService {
     return { backgroundColor: opaqueHex(hexColor(active.colors['editor.background'])), overlay: nativeOverlay(active) }
   }
 
-  /** Creates the themes folder and refreshes its schema file. */
+  /** Creates the themes folder and refreshes its schema file. Failures are `ThemeActionError`s with fixed messages. */
   async ensureFolder(): Promise<string> {
-    await mkdir(this.folder, { recursive: true })
-    await writeSchemaFile(this.folder)
+    try { await mkdir(this.folder, { recursive: true }) } catch (error) { throw actionError(error, 'The themes folder could not be created') }
+    // The schema only gives editors completion, so a folder that cannot take it (read-only, locked) still opens.
+    await writeSchemaFile(this.folder).catch(() => {})
     return this.folder
   }
 
-  /** Writes a starter seeded from the active theme, rescans, and selects it for the active type. Returns its path. */
+  /**
+   * Writes a starter seeded from the active theme, rescans, and selects it for the active type. Returns its path;
+   * failures are `ThemeActionError`s with fixed messages.
+   */
   createStarterTheme(): Promise<string> {
     return this.enqueue(async () => {
-      const folder = await this.ensureFolder()
-      const { type, resolution } = this.selection()
-      const fileName = await writeStarterTheme(folder, starterTheme(type, (resolution ?? builtinResolutions[type]).palette))
-      await this.scanAll()
-      const id = themeIdFromFileName(fileName)!
-      await this.choose(type === 'dark' ? { darkTheme: id } : { lightTheme: id })
-      return join(folder, fileName)
+      try {
+        const folder = await this.ensureFolder()
+        const { type, resolution } = this.selection()
+        const fileName = await writeStarterTheme(folder, starterTheme(type, (resolution ?? builtinResolutions[type]).palette))
+        await this.scanAll()
+        const id = themeIdFromFileName(fileName)!
+        if (!this.catalogue.get(id)?.resolutions[type]) {
+          this.update()
+          throw new ThemeActionError(`${fileName} was created in the themes folder but could not be selected.`)
+        }
+        await this.choose(type === 'dark' ? { darkTheme: id } : { lightTheme: id })
+        return join(folder, fileName)
+      } catch (error) { throw actionError(error, 'The custom theme could not be created') }
     })
   }
 
@@ -212,18 +228,28 @@ export class AppearanceService {
     const previous = this.preference
     this.preference = { ...previous, ...patch }
     this.applySource()
-    const { entry, resolution } = this.selection()
-    const warnings = resolution && entry?.summary.source === 'user' ? entry.summary.warnings : 0
-    this.message = warnings ? `${quote(entry!.summary.name)} has ${plural(warnings, 'problem', 'problems')}; the affected entries use their defaults.` : undefined
+    this.message = this.warningNotice(patch)
     this.update()
-    if (JSON.stringify(this.preference) === JSON.stringify(previous)) return this.current
-    const unsaved = (reason: string) => { this.message = [this.message, `The theme was applied but could not be saved${reason}.`].filter(Boolean).join(' ') }
+    if (!this.unsaved && JSON.stringify(this.preference) === JSON.stringify(previous)) return this.current
+    const unsaved = (reason: string) => { this.unsaved = true; this.message = [this.message, `The theme was applied but could not be saved${reason}.`].filter(Boolean).join(' ') }
     if (!this.writable) unsaved(' because the preferences file could not be read')
     else {
-      try { await this.store.save(this.preference) } catch (error) { unsaved(detail(error)) }
+      try { await this.store.save(this.preference); this.unsaved = false } catch (error) { unsaved(detail(error)) }
     }
     this.update()
     return this.current
+  }
+
+  /** Names the warnings of the themes a choice selects; a mode change is about the theme it makes active. */
+  private warningNotice(patch: ThemePreferencePatch): string | undefined {
+    const chosen = new Set([patch.darkTheme, patch.lightTheme].filter((id): id is string => id !== undefined))
+    if (!chosen.size) {
+      const { id, resolution } = this.selection()
+      if (resolution) chosen.add(id)
+    }
+    const notices = [...chosen].map(id => this.catalogue.get(id)?.summary).filter(summary => summary?.source === 'user' && summary.warnings > 0)
+      .map(summary => `${quote(summary!.name)} has ${plural(summary!.warnings, 'problem', 'problems')}; the affected entries use their defaults.`)
+    return notices.join(' ') || undefined
   }
 
   private setCatalogue(scan: ThemeScan): void {

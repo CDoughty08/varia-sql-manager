@@ -57,6 +57,7 @@ const groups = {
     'menu.border': ['V', '@editorWidget.border', 'Context menu border.', 'monaco'],
     'toolbar.background': ['X', '@titleBar.activeBackground', 'Main toolbar.', 'css'],
     'toolbar.border': ['X', '@titleBar.border', 'Line below the main toolbar.', 'css'],
+    'toolbar.hoverBackground': ['V', '$text/12', 'Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color.', 'css monaco'],
     'toolbar.separatorBackground': ['X', '$separator', 'Dividers between toolbar groups.', 'css'],
     'toolbar.labelForeground': ['X', '$textTertiary', 'Labels of the toolbar server and database fields.', 'css'],
     'keybindingLabel.foreground': ['V', '$textMuted', 'Keyboard shortcut hints.', 'css monaco'],
@@ -305,4 +306,3 @@ export const scopeAliases: ReadonlyMap<string, SqlScope> = new Map<string, SqlSc
   ['variable', 'identifier'], ['variable.other', 'identifier'], ['entity.name', 'identifier'],
   ['punctuation', 'delimiter'], ['punctuation.separator', 'delimiter'], ['meta.brace', 'delimiter']
 ])
-

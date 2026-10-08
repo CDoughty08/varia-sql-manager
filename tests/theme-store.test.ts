@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { AppearanceStore } from '../src/main/appearance-store'
 import { AppearanceService, type NativeThemeLike } from '../src/main/appearance'
+import { readRegularFile } from '../src/main/json-file'
 import { scanThemes, schemaFileName, writeSchemaFile } from '../src/main/theme-files'
 import { buildThemeJsonSchema } from '../src/shared/theme/schema'
 import { parseThemeFile, themeLimits } from '../src/shared/theme/format'
@@ -152,6 +154,29 @@ describe('theme folder scan', () => {
     const scan = await scanThemes(themes, id => id === 'c')
     expect(scan.themes.map(item => item.id)).toEqual(['c'])
   })
+  it('reads a file only if it is still the one an earlier lstat saw', async () => {
+    await themeFiles({ 'a.json': theme(), 'b.json': theme() })
+    const a = await lstat(join(themes, 'a.json'), { bigint: true }), b = await lstat(join(themes, 'b.json'), { bigint: true })
+    expect((await readRegularFile(join(themes, 'a.json'), 1024, { expect: a }))?.toString()).toBe(theme())
+    expect(await readRegularFile(join(themes, 'a.json'), 1024, { expect: b })).toBeUndefined()
+    expect(await readRegularFile(join(themes, 'a.json'), 4)).toHaveLength(5)
+  })
+  it.skipIf(!posix)('never waits on a FIFO swapped in for a file it reads', async () => {
+    const fifo = (path: string) => execFileSync('mkfifo', [path])
+    await mkdir(themes)
+    // The type is checked on the opened handle, so there is no gap between check and read for a swap to slip into,
+    // and opening a FIFO without a writer returns at once instead of blocking.
+    fifo(join(themes, 'pipe.json'))
+    expect(await readRegularFile(join(themes, 'pipe.json'), 1024)).toBeUndefined()
+    fifo(join(themes, schemaFileName))
+    expect(await writeSchemaFile(themes)).toBe(true)
+    expect(JSON.parse(await readFile(join(themes, schemaFileName), 'utf8'))).toEqual(buildThemeJsonSchema())
+    fifo(join(directory, 'appearance.json'))
+    const { appearance } = await service()
+    expect(appearance.state.notice).toBe('Theme preferences could not be read; the defaults are used and changes are not saved.')
+    // The service's queue is not stuck behind the read.
+    expect((await appearance.setPreference({ mode: 'light' })).active.id).toBe('varia-light')
+  })
   it('rewrites the schema file only when its content differs', async () => {
     await mkdir(themes)
     const path = join(themes, schemaFileName)
@@ -265,6 +290,23 @@ describe('appearance service', () => {
     const unsaved = await appearance.setPreference({ mode: 'dark' })
     expect(unsaved.active.id).toBe('warned')
     expect(unsaved.notice).toMatch(/^`Warned` has 2 problems; the affected entries use their defaults\. The theme was applied but could not be saved \(E[A-Z]+\)\.$/)
+    // Choosing the same option again retries the save instead of silently dropping the warning.
+    expect((await appearance.setPreference({ mode: 'dark' })).notice).toMatch(/could not be saved \(E[A-Z]+\)\.$/)
+    await rm(join(directory, 'appearance.json'), { recursive: true })
+    expect((await appearance.setPreference({ mode: 'dark' })).notice).toBe('`Warned` has 2 problems; the affected entries use their defaults.')
+    expect(JSON.parse(await readFile(join(directory, 'appearance.json'), 'utf8'))).toMatchObject({ mode: 'dark', darkTheme: 'warned' })
+    expect((await appearance.setPreference({ mode: 'dark' })).notice).toBe('`Warned` has 2 problems; the affected entries use their defaults.')
+  })
+  it('names the warnings of the theme a choice selects, even for the slot System mode is not showing', async () => {
+    await themeFiles({ 'warnd.json': theme({ name: 'WarnD', palette: { accent: 'red' } }), 'warnl.json': theme({ name: 'WarnL', type: 'light', palette: { accent: 'blue' } }) })
+    await preference({ mode: 'system', lightTheme: 'warnl' })
+    const { appearance } = await service(false)
+    const state = await appearance.setPreference({ darkTheme: 'warnd' })
+    expect(state.active.id).toBe('warnl')
+    expect(state.notice).toBe('`WarnD` has 1 problem; the affected entries use their defaults.')
+    // A mode change is about the theme it shows.
+    expect((await appearance.setPreference({ mode: 'dark' })).notice).toBe('`WarnD` has 1 problem; the affected entries use their defaults.')
+    expect((await appearance.setPreference({ mode: 'light' })).notice).toBe('`WarnL` has 1 problem; the affected entries use their defaults.')
   })
   it('never overwrites a preferences file it could not read', async () => {
     await mkdir(join(directory, 'appearance.json'))
@@ -302,6 +344,40 @@ describe('appearance service', () => {
     expect(appearance.state).toMatchObject({ preference: { mode: 'light', lightTheme: 'custom-theme-2' }, active: { id: 'custom-theme-2', name: 'My Theme' } })
     expect(await readFile(join(themes, schemaFileName), 'utf8')).toBe(JSON.stringify(buildThemeJsonSchema(), null, 2) + '\n')
     expect(await appearance.createStarterTheme()).toBe(join(themes, 'custom-theme-3.json'))
+  })
+  it('never creates a starter the next scan could not select', async () => {
+    // Ids ignore case: on a case-sensitive file system custom-theme.json would collide with the user's own theme.
+    await themeFiles({ 'Custom-Theme.json': theme({ name: 'Mine' }) })
+    const { appearance } = await service()
+    await appearance.setPreference({ darkTheme: 'custom-theme' })
+    expect(await appearance.createStarterTheme()).toBe(join(themes, 'custom-theme-2.json'))
+    expect(appearance.state).toMatchObject({ fallback: false, preference: { darkTheme: 'custom-theme-2' }, active: { id: 'custom-theme-2' } })
+    expect(appearance.state.themes.find(item => item.id === 'custom-theme')).toMatchObject({ name: 'Mine', usable: true })
+    // A starter that sorts past the 64-file cap would never load, so a full folder is refused and nothing is written.
+    await rm(themes, { recursive: true })
+    await themeFiles(Object.fromEntries(Array.from({ length: themeLimits.files }, (_, index) => [`a${String(index).padStart(2, '0')}.json`, theme()])))
+    await expect(appearance.createStarterTheme()).rejects.toThrow('The themes folder already has 64 theme files, the most Varia loads; remove one before creating another.')
+    expect((await readdir(themes)).filter(name => name.startsWith('custom-theme'))).toEqual([])
+  })
+  it('opens the folder even when the schema cannot be written, and reports failures as fixed sentences', async () => {
+    await mkdir(join(themes, schemaFileName), { recursive: true })
+    const { appearance } = await service()
+    expect(await appearance.ensureFolder()).toBe(themes)
+    expect(await appearance.createStarterTheme()).toBe(join(themes, 'custom-theme.json'))
+    await rm(themes, { recursive: true })
+    await writeFile(themes, 'not a folder')
+    await expect(appearance.ensureFolder()).rejects.toThrow(/^The themes folder could not be created \(E[A-Z]+\)\.$/)
+    await expect(appearance.createStarterTheme()).rejects.toThrow(/^The themes folder could not be created \(E[A-Z]+\)\.$/)
+  })
+  it.skipIf(!posix || root)('says the folder is not writable when a starter cannot be written there', async () => {
+    await mkdir(themes)
+    await writeSchemaFile(themes)
+    await chmod(themes, 0o555)
+    try {
+      const { appearance } = await service()
+      expect(await appearance.ensureFolder()).toBe(themes)
+      await expect(appearance.createStarterTheme()).rejects.toThrow('The custom theme could not be created because the themes folder is not writable (EACCES).')
+    } finally { await chmod(themes, 0o755) }
   })
   it('shows the built-in after the startup timeout and applies the real choice when it arrives', async () => {
     await preference({ mode: 'light' })

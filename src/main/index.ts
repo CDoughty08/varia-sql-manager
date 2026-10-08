@@ -80,10 +80,11 @@ const menuActions: ApplicationMenuActions = {
   command,
   // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
   setTheme: patch => { appearance.setPreference(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
+  // The menu has no other way to report a failure, so it becomes the theme notice; the messages are fixed sentences.
   createTheme: () => {
-    appearance.createStarterTheme().then(path => shell.showItemInFolder(path), error => { void appearance.notify('The custom theme could not be created: ' + errorMessage(error, 'unknown error')) })
+    appearance.createStarterTheme().then(path => shell.showItemInFolder(path), error => { void appearance.notify(errorMessage(error, 'The custom theme could not be created.')) })
   },
-  openThemesFolder: () => { openThemesFolder().catch(() => {}) },
+  openThemesFolder: () => { openThemesFolder().catch(error => { void appearance.notify(errorMessage(error, 'The themes folder could not be opened.')) }) },
   reloadThemes: () => { void appearance.reload() }
 }
 
@@ -92,15 +93,10 @@ function buildMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform)))
 }
 
-/** The menu and the IPC call share this; a failure becomes a notice because the menu has no other way to report it. */
+/** Shared by the menu and the notice's button; the notice shows the IPC error itself, so only the menu notifies. */
 async function openThemesFolder(): Promise<void> {
-  let failure: string
-  try { failure = await shell.openPath(await appearance.ensureFolder()) }
-  catch (error) { failure = errorMessage(error, 'unknown error') }
-  if (!failure) return
-  const message = 'The themes folder could not be opened: ' + sanitizeLabel(failure, 200)
-  void appearance.notify(message)
-  throw new Error(message)
+  const failure = await shell.openPath(await appearance.ensureFolder())
+  if (failure) throw new Error('The themes folder could not be opened: ' + sanitizeLabel(failure, 200))
 }
 
 /** Native chrome, the renderer, and the menu follow every published theme state; nothing reloads. */

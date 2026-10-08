@@ -29,15 +29,17 @@ export function themeLabel(name: string): string {
   return characters.length > themeLabelLength ? characters.slice(0, themeLabelLength - 1).join('') + '…' : characters.join('')
 }
 const mnemonicSafe = (label: string, platform: NodeJS.Platform) => platform === 'darwin' ? label : label.replaceAll('&', '&&')
+/** How a label reads on screen: compatibility forms folded (a no-break space is a space) and runs of spaces collapsed. */
+const lookalike = (label: string) => label.normalize('NFKC').replace(/\s+/gu, ' ')
 
 function themeList(model: ApplicationMenuModel, list: ThemeType, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
   const { preference, themes } = model.theme
   const selected = preference[slotOf(list)], fallback = builtinThemes[list].name
   const shown = themes.filter(theme => theme.types.includes(list) || !theme.usable || theme.id === selected)
-  const labels = shown.map(theme => themeLabel(theme.name))
+  const labels = shown.map(theme => themeLabel(theme.name)), looks = labels.map(lookalike)
   const items = shown.map((theme, index): MenuItemConstructorOptions => {
     const supported = theme.usable && theme.types.includes(list), checked = theme.id === selected
-    let label = labels.indexOf(labels[index]) !== labels.lastIndexOf(labels[index]) ? `${labels[index]} (${theme.id})` : labels[index]
+    let label = looks.indexOf(looks[index]) !== looks.lastIndexOf(looks[index]) ? `${labels[index]} (${theme.id})` : labels[index]
     if (!theme.usable) label += checked ? ` (invalid: using ${fallback})` : ' (invalid)'
     else if (!supported) label += ` (no ${list} variant: using ${fallback})`
     return { id: `theme.${list}.${theme.id}`, label: mnemonicSafe(label, platform), type: 'radio', checked, enabled: supported, click: () => actions.setTheme(themeChoice(preference, theme, list)) }

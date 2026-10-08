@@ -207,8 +207,8 @@
         },
         "error": {
           "$ref": "#/definitions/value",
-          "description": "Error text. Varia Dark #f39c9f · Varia Light #b42318",
-          "markdownDescription": "Error text. Varia Dark `#f39c9f` · Varia Light `#b42318`"
+          "description": "Error text. Varia Dark #f39c9f · Varia Light #ae2117",
+          "markdownDescription": "Error text. Varia Dark `#f39c9f` · Varia Light `#ae2117`"
         },
         "warning": {
           "$ref": "#/definitions/value",
@@ -373,8 +373,8 @@
         },
         "errorForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Error text. Default $error (Dark #f39c9f, Light #b42318).",
-          "markdownDescription": "(VS Code) Error text. Default `$error` (Dark `#f39c9f`, Light `#b42318`)."
+          "description": "(VS Code) Error text. Default $error (Dark #f39c9f, Light #ae2117).",
+          "markdownDescription": "(VS Code) Error text. Default `$error` (Dark `#f39c9f`, Light `#ae2117`)."
         },
         "warningForeground": {
           "$ref": "#/definitions/value",
@@ -520,6 +520,11 @@
           "$ref": "#/definitions/value",
           "description": "(Varia) Line below the main toolbar. Default @titleBar.border (Dark #2b3443, Light #d3d9e2).",
           "markdownDescription": "(Varia) Line below the main toolbar. Default `@titleBar.border` (Dark `#2b3443`, Light `#d3d9e2`)."
+        },
+        "toolbar.hoverBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. Default $text/12 (Dark #d9e1ec1f, Light #1f27331f).",
+          "markdownDescription": "(VS Code) Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. Default `$text/12` (Dark `#d9e1ec1f`, Light `#1f27331f`)."
         },
         "toolbar.separatorBackground": {
           "$ref": "#/definitions/value",
@@ -1168,8 +1173,8 @@
         },
         "notificationsErrorIcon.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default @errorForeground (Dark #f39c9f, Light #b42318).",
-          "markdownDescription": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default `@errorForeground` (Dark `#f39c9f`, Light `#b42318`)."
+          "description": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default @errorForeground (Dark #f39c9f, Light #ae2117).",
+          "markdownDescription": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default `@errorForeground` (Dark `#f39c9f`, Light `#ae2117`)."
         },
         "notificationsWarningIcon.foreground": {
           "$ref": "#/definitions/value",

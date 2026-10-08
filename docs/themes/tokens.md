@@ -41,7 +41,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `accentHover` | Primary button hover. | `#accaff` | `#004c94` |
 | `onAccent` | Text on the accent color. | `#101b2d` | `#ffffff` |
 | `focus` | Focus rings and the active sash. | `#76acff` | `#005fb8` |
-| `error` | Error text. | `#f39c9f` | `#b42318` |
+| `error` | Error text. | `#f39c9f` | `#ae2117` |
 | `warning` | Warning text. | `#dfbd82` | `#8a5300` |
 | `success` | Success text. | `#8addac` | `#146c38` |
 | `info` | Information text. Follows `$accent`. | `#8fb7ff` | `#005fb8` |
@@ -70,7 +70,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (180)
+## Color keys (181)
 
 ### Base
 
@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Default text color of the workbench. |
 | `descriptionForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#566377` | Secondary text: hints, captions, and explanations. |
 | `disabledForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#566377` | Text of disabled controls. |
-| `errorForeground` | VS Code | `$error` | `#f39c9f` | `#b42318` | Error text. |
+| `errorForeground` | VS Code | `$error` | `#f39c9f` | `#ae2117` | Error text. |
 | `warningForeground` | Varia | `$warning` | `#dfbd82` | `#8a5300` | Warning text. |
 | `successForeground` | Varia | `$success` | `#8addac` | `#146c38` | Success text, such as the Execute button and confirmations. |
 | `infoForeground` | Varia | `$info` | `#8fb7ff` | `#005fb8` | Information text. Not used yet; reserved for notifications. |
@@ -114,6 +114,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `menu.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Context menu border. |
 | `toolbar.background` | Varia | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Main toolbar. |
 | `toolbar.border` | Varia | `@titleBar.border` | `#2b3443` | `#d3d9e2` | Line below the main toolbar. |
+| `toolbar.hoverBackground` | VS Code | `$text/12` | `#d9e1ec1f` | `#1f27331f` | Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. |
 | `toolbar.separatorBackground` | Varia | `$separator` | `#354359` | `#cdd4de` | Dividers between toolbar groups. |
 | `toolbar.labelForeground` | Varia | `$textTertiary` | `#9eafc5` | `#465366` | Labels of the toolbar server and database fields. |
 | `keybindingLabel.foreground` | VS Code | `$textMuted` | `#8a9cb3` | `#566377` | Keyboard shortcut hints. |
@@ -283,7 +284,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `notifications.background` | VS Code | `@editorWidget.background` | `#1a2230` | `#ffffff` | Notification toasts. Not used yet; reserved for notifications. |
 | `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9e1ec` | `#1f2733` | Notification text. Not used yet; reserved for notifications. |
 | `notifications.border` | VS Code | `@widget.border` | `#40516b` | `#c3ccd8` | Notification border. Not used yet; reserved for notifications. |
-| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39c9f` | `#b42318` | Error notification icon. Not used yet; reserved for notifications. |
+| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39c9f` | `#ae2117` | Error notification icon. Not used yet; reserved for notifications. |
 | `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#dfbd82` | `#8a5300` | Warning notification icon. Not used yet; reserved for notifications. |
 | `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8fb7ff` | `#005fb8` | Information notification icon. Not used yet; reserved for notifications. |
 | `quickInput.background` | VS Code | `@editorWidget.background` | `#1a2230` | `#ffffff` | Command palette. Not used yet; reserved for the command palette. |

@@ -15,7 +15,7 @@ const resolve = (file: Record<string, unknown>, variant: ThemeType = 'dark') => 
 
 // Spec B1-B11 "Dark" and "Light" columns, transcribed independently of the registry defaults.
 const specValues = `
-foreground #d9e1ec #1f2733|descriptionForeground #8a9cb3 #566377|disabledForeground #8a9cb3 #566377|errorForeground #f39c9f #b42318
+foreground #d9e1ec #1f2733|descriptionForeground #8a9cb3 #566377|disabledForeground #8a9cb3 #566377|errorForeground #f39c9f #ae2117
 warningForeground #dfbd82 #8a5300|successForeground #8addac #146c38|infoForeground #8fb7ff #005fb8|focusBorder #76acff #005fb8
 icon.foreground #8aa9d4 #3e6696|widget.shadow #00000099 #0000002e|widget.border #40516b #c3ccd8|textPreformat.foreground #c3cddd #2f3a49
 sash.hoverBorder #76acff #005fb8|scrollbarSlider.background #8a9cb366 #56637766|scrollbarSlider.hoverBackground #8a9cb38c #5663778c
@@ -24,7 +24,7 @@ titleBar.inactiveBackground #181f2a #e9edf2|titleBar.inactiveForeground #9eafc5 
 titleBar.iconForeground #a3bbdc #2a4f7f|titleBar.controlsForeground #d9e1ec #1f2733|menubar.selectionBackground #2e3c51 #ccd6e3
 menubar.selectionForeground #ffffff #0b1220|menu.background #1a2230 #ffffff|menu.foreground #d9e1ec #1f2733|menu.selectionBackground #2e4058 #c4daf4
 menu.selectionForeground #ffffff #0b1220|menu.separatorBackground #354359 #cdd4de|menu.border #40516b #c3ccd8|toolbar.background #181f2a #e9edf2
-toolbar.border #2b3443 #d3d9e2|toolbar.separatorBackground #354359 #cdd4de|toolbar.labelForeground #9eafc5 #465366
+toolbar.border #2b3443 #d3d9e2|toolbar.hoverBackground #d9e1ec1f #1f27331f|toolbar.separatorBackground #354359 #cdd4de|toolbar.labelForeground #9eafc5 #465366
 keybindingLabel.foreground #8a9cb3 #566377|keybindingLabel.border #354359 #cdd4de|button.background #8fb7ff #005fb8|button.foreground #101b2d #ffffff
 button.hoverBackground #accaff #004c94|button.border #40516b #8792a2|button.secondaryForeground #c3cddd #2f3a49
 button.secondaryHoverBackground #263041 #dce3ec|button.secondaryHoverForeground #ffffff #0b1220|input.background #111721 #ffffff
@@ -66,7 +66,7 @@ statusBar.errorForeground #f3bac0 #8a1c25|banner.errorBackground #48242d #fbe4e6
 banner.warningBackground #3d3322 #fff3d6|banner.warningForeground #f0d49b #6b4400|dialog.backdropBackground #080c14bf #1f273366
 dialog.separatorBackground #354359 #cdd4de|dialog.labelForeground #c3cddd #2f3a49|dialog.descriptionForeground #9eafc5 #465366
 settings.headerForeground #a3bbdc #2a4f7f|notifications.background #1a2230 #ffffff|notifications.foreground #d9e1ec #1f2733
-notifications.border #40516b #c3ccd8|notificationsErrorIcon.foreground #f39c9f #b42318|notificationsWarningIcon.foreground #dfbd82 #8a5300
+notifications.border #40516b #c3ccd8|notificationsErrorIcon.foreground #f39c9f #ae2117|notificationsWarningIcon.foreground #dfbd82 #8a5300
 notificationsInfoIcon.foreground #8fb7ff #005fb8|quickInput.background #1a2230 #ffffff|quickInput.foreground #d9e1ec #1f2733
 quickInputTitle.background #202a39 #e1e7ee|quickInputList.focusBackground #2e4058 #c4daf4|quickInputList.focusForeground #d9e1ec #1f2733
 pickerGroup.foreground #8fb7ff #005fb8|pickerGroup.border #354359 #cdd4de|connection.red #e66b73 #c42b3c|connection.orange #e6a15c #b45309
@@ -98,10 +98,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 58 slots, 180 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 58 slots, 181 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(58)
-    expect(colorKeys).toHaveLength(180)
-    expect(new Set(colorKeys).size).toBe(180)
+    expect(colorKeys).toHaveLength(181)
+    expect(new Set(colorKeys).size).toBe(181)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -117,7 +117,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(180)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(181)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -205,12 +205,15 @@ describe('theme resolution', () => {
     expect(theme.syntax['comment.quote']).toEqual({ foreground: '#6a9955', fontStyle: '' })
     expect(theme.syntax['string']).toEqual({ foreground: '#ff4040', fontStyle: '' })
     expect(problems).toEqual([expect.objectContaining({ code: 'W_REF_UNKNOWN', path: '/tokenColors/3/settings/foreground' })])
+    // A rule naming every scope is one entry of the file, so a broken color in it is one problem, not sixteen.
+    const wide = resolve({ tokenColors: [{ scope: [...sqlScopes], settings: { foreground: '$missing' } }] })
+    expect(wide.problems.map(problem => [problem.code, problem.path])).toEqual([['W_REF_UNKNOWN', '/tokenColors/0/settings/foreground']])
   })
   it('emits only canonical colors and rejects tampered payloads', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(180)
+      expect(Object.keys(theme.colors)).toHaveLength(181)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

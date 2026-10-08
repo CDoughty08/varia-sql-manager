@@ -71,6 +71,12 @@ describe('application menu', () => {
     expect([...themeLabel(long)]).toHaveLength(48)
     expect(themeLabel('A'.repeat(48))).toBe('A'.repeat(48))
   })
+  it('tells apart themes whose names only look like another one', () => {
+    // A word joiner, a tag character, a no-break space, and a doubled space all read as "Varia Dark" in a menu.
+    const posers = [user('joiner', 'Varia Dark⁠', ['dark']), user('tag', 'Varia Dark\u{e0041}', ['dark']), user('nbsp', 'Varia Dark', ['dark']), user('spaces', 'Varia  Dark', ['dark'])]
+    const labels = submenu(applicationMenuTemplate(model({}, [...builtins, ...posers]), actions(), 'linux'), 'theme.dark').map(item => item.label)
+    expect(labels).toEqual(['Varia Dark (varia-dark)', 'Varia Dark (joiner)', 'Varia Dark (tag)', 'Varia Dark (nbsp)', 'Varia  Dark (spaces)'])
+  })
   it('turns clicks into preference changes', () => {
     const handlers = actions()
     const template = applicationMenuTemplate(model({ mode: 'light' }), handlers, 'linux')

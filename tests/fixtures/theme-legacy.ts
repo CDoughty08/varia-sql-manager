@@ -124,7 +124,7 @@ export const legacyStyles: LegacyColor[] = [
 const other = (source: string, value: string, key: LegacyTarget, extra: Partial<LegacyColor> = {}): LegacyColor => ({ source, value, keys: [key], ...extra })
 const floatingFix = 'Bug fix: floating groups and the dock context menu showed Dockview defaults instead of Varia colors.'
 
-/** Colors set outside the stylesheet: Monaco, the native window, the connection dialog, Dockview and Monaco defaults. */
+/** Colors set outside the stylesheet: Monaco, the native window, the connection dialog, and Dockview, Monaco and Chromium defaults. */
 export const legacyOther: LegacyColor[] = [
   other('main.tsx:23', '#11151c', 'editor.background'),
   other('main.tsx:23', '#4c586b', 'editorLineNumber.foreground', { change: aa('2.54', '4.61') + ' A user theme can restore the old value.' }),
@@ -144,6 +144,14 @@ export const legacyOther: LegacyColor[] = [
   other('dockview.css tab-divider-color', '#1e1e1e', 'tab.border', { change: 'Dockview defaults now use Varia colors.' }),
   other('dockview.css floating group-view-background-color', '#1e1e1e', 'dock.background', { change: floatingFix }),
   other('dockview.css floating tabs-and-actions-container-background-color', '#252526', 'editorGroupHeader.tabsBackground', { change: floatingFix }),
+  other('dockview.css floating-border', '#ffffff1a', 'widget.border', { change: floatingFix }),
+  other('dockview.css floating-box-shadow', '#00000066', 'widget.shadow'),
+  other('dockview.css icon-hover-background-color (tab close button)', '#5a5d5e4f', 'toolbar.hoverBackground', { over: 'tab.activeBackground' }),
+  other('dockview.css tab focus ring (tab-divider-color)', '#1e1e1e', 'focusBorder', { over: 'tab.activeBackground', change: aa('1.15', '5.59') }),
+  other('dockview.css drag-over-background-color', '#53595d80', 'editorGroup.dropBackground', { change: 'Consistency: the drop target is tinted with the focus color, like the docking preview drawn over it.' }),
+  other('dockview.css edge-dock-indicator-color', '#388bfde6', 'focusBorder', { change: 'Consistency: every drop indicator uses the focus color.' }),
+  other('dockview.css tabs-container-scrollbar-color', '#888', 'scrollbarSlider.background', { over: 'editorGroupHeader.tabsBackground', change: "Consistency: the tab strip scrollbar matches the editor's scrollbars." }),
+  other('Chromium placeholder (connection filter, layout name)', '#757575', 'input.placeholderForeground', { over: 'input.background', change: aa('3.90', '6.41') }),
   other('vs-dark editor foreground', '#d4d4d4', 'editor.foreground'),
   other('vs-dark editor.selectionBackground', '#264f78', 'editor.selectionBackground'),
   other('vs-dark keyword', '#569cd6', 'syntax:keyword'),

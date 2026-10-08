@@ -35,7 +35,7 @@ const slots = {
   accentHover: ['Primary button hover.', '#accaff', '#004c94'],
   onAccent: ['Text on the accent color.', '#101b2d', '#ffffff'],
   focus: ['Focus rings and the active sash.', '#76acff', '#005fb8'],
-  error: ['Error text.', '#f39c9f', '#b42318'],
+  error: ['Error text.', '#f39c9f', '#ae2117'],
   warning: ['Warning text.', '#dfbd82', '#8a5300'],
   success: ['Success text.', '#8addac', '#146c38'],
   info: ['Information text.', '$accent', '$accent'],
