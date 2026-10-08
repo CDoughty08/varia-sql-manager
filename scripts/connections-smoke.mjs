@@ -75,7 +75,8 @@ try {
   await advanced.screenshot({ path: resolve('artifacts', 'advanced-connection-properties.png') })
   await advanced.getByRole('button', { name: 'OK', exact: true }).click()
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
-  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced?.commandTimeout).toBe(7)
+  // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
+  await expect.poll(async () => ({ commandTimeout: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced?.commandTimeout, errors: await dialog.locator('.connect-error').allTextContents() })).toEqual({ commandTimeout: 7, errors: [] })
   await dialog.getByRole('tab', { name: 'Connection String', exact: true }).click()
   await expect(dialog.getByLabel('Connection string preview')).toContainText('tcp:sql-dev')
   await expect(dialog.getByLabel('Connection string preview')).toContainText('Application Intent=ReadOnly')
