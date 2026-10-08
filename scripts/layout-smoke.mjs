@@ -173,7 +173,8 @@ try {
   // Outer cells split the entire workspace, not just the hovered destination.
   await aimGuide(page.locator('[data-pane-tab="explorer"]'), 'editor', 'left', 'workspace')
   await page.mouse.up()
-  await expect.poll(async () => Math.round((await pane('explorer').boundingBox()).height)).toBeGreaterThan(700)
+  // Relative to the workspace rather than a pixel height: Windows shrinks the window to fit small displays (1024x768 on CI).
+  await expect.poll(async () => (await page.locator('.workbench').boundingBox()).height - (await pane('explorer').boundingBox()).height).toBeLessThan(40)
   await expect(page.locator('.layout-error')).toHaveCount(0)
   console.log('Layout checks: tab grouping, named load, and Monaco undo preservation passed.')
   await page.getByLabel('Move Object Explorer', { exact: true }).selectOption('right')
