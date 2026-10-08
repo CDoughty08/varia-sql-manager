@@ -126,13 +126,35 @@ export const commandCatalog = {
     title: 'Cancel Executing Query', category: 'Query', icon: 'debug-stop', precondition: 'queryRunning', unavailableHint: 'No query is running in this tab.',
     keybindings: [{ win: 'alt+pause', linux: 'alt+pause' }], menus: [{ menu: 'query', group: '1_execute', order: 2 }]
   },
+  'workbench.showCommands': {
+    title: 'Show All Commands', palette: false,
+    keybindings: [{ key: 'mod+shift+p' }, { key: 'f1' }], menus: [{ menu: 'view', group: '0_palette', order: 1, title: 'Command Palette…' }]
+  },
+  'workbench.quickOpen': {
+    title: 'Go to Query…', icon: 'go-to-file', precondition: 'hasActiveDocument', unavailableHint: 'No queries are open.',
+    keybindings: [{ key: 'mod+p' }], menus: [{ menu: 'view', group: '0_palette', order: 2 }]
+  },
   'connection.connect': {
     title: 'Connect to Server…', category: 'Connection', icon: 'plug', keywords: ['login', 'server'], precondition: 'backendReady',
     unavailableHint: 'The backend is still starting.', menus: [{ menu: 'file', group: '0_connect', order: 1 }]
   },
+  'connection.disconnect': {
+    title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    menus: [{ menu: 'file', group: '0_connect', order: 2 }]
+  },
   'explorer.refresh': {
     title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer,
     keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }]
+  },
+  'query.changeConnection': {
+    title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && !queryRunning && !documentBusy',
+    menus: [{ menu: 'query', group: '2_target', order: 1 }]
+  },
+  'query.changeDatabase': {
+    title: 'Change Database…', category: 'Query', icon: 'database', keywords: ['use', 'catalog'],
+    precondition: 'activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
+    // SSMS's Change Database key; Ctrl/⌘+K Ctrl/⌘+U in editor text still reaches Monaco (the dispatcher passes the chord through).
+    keybindings: [{ key: 'mod+u' }], menus: [{ menu: 'query', group: '2_target', order: 2 }]
   },
   'document.next': {
     title: 'Next Query', category: 'View', precondition: 'multipleDocuments', unavailableHint: secondQuery,

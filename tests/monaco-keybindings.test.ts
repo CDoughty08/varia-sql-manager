@@ -19,7 +19,8 @@ const reviewedImports = [
   'monaco-editor/editor/contrib/comment/browser/comment.js',
   'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js',
   'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js',
-  'monaco-editor/editor/contrib/hover/browser/hoverContribution.js'
+  'monaco-editor/editor/contrib/hover/browser/hoverContribution.js',
+  'monaco-editor/features/codicon/register.js'
 ]
 /** Workbench keys Monaco also binds, each with the reason the workbench may have it. Unused entries fail the test. */
 const monacoShadowAllowlist: Readonly<Record<string, string>> = {

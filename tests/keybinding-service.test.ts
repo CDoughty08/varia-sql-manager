@@ -15,6 +15,8 @@ function key(code: string, keyValue: string, modifiers: { ctrl?: boolean; shift?
   }
   return event
 }
+/** Stands for an element inside the query editor, such as Monaco's IME text area. */
+const editorNode = new EventTarget()
 const mod = (platform: Platform) => platform === 'darwin' ? { meta: true } : { ctrl: true }
 const letter = (character: string, platform: Platform, extra: Parameters<typeof key>[2] = {}) => key(`Key${character.toUpperCase()}`, extra.shift ? character.toUpperCase() : character, { ...mod(platform), ...extra })
 
@@ -23,7 +25,7 @@ function service(platform: Platform = 'win32', options: { values?: Partial<Conte
   const execute = vi.fn<CommandService['execute']>(async () => true)
   const keybindings = new KeybindingService({
     platform, commands: { execute }, context: { get: () => contextRecord(platform, state.values) }, modalOpen: () => state.modal, editorHasTextFocus: () => state.textFocus,
-    ...(options.rules ? { rules: options.rules } : {})
+    editorContains: target => target === editorNode, ...(options.rules ? { rules: options.rules } : {})
   })
   const press = (event: FakeEvent) => { keybindings.handleKeyDown(event); return event }
   const ran = () => execute.mock.calls.map(call => call[0])
@@ -100,9 +102,9 @@ describe('keybinding dispatch', () => {
     expect(press(key('Enter', 'Enter', { ctrl: true })).consumed).toBe(false)
     expect(ran()).toEqual(['query.execute'])
   })
+  // Ctrl/⌘+K Ctrl/⌘+U is Monaco's Uncomment Selection; Ctrl/⌘+U alone is Change Database.
   it.each(platforms)("lets Monaco's chord prefix and the next key through in editor text on %s", platform => {
-    const rules = [...defaultRules(platform), resolveKeybinding('query.execute', { key: 'mod+u' }, platform)!]
-    const { press, ran, state } = service(platform, { values: editorText, textFocus: true, rules })
+    const { press, ran, state } = service(platform, { values: editorText, textFocus: true })
     expect(press(letter('k', platform)).consumed).toBe(false)
     expect(press(letter('u', platform)).consumed).toBe(false)
     expect(ran()).toEqual([])
@@ -110,16 +112,15 @@ describe('keybinding dispatch', () => {
     press(letter('k', platform)); press(key(platform === 'darwin' ? 'MetaLeft' : 'ControlLeft', platform === 'darwin' ? 'Meta' : 'Control', mod(platform)))
     expect(press(letter('u', platform)).consumed).toBe(false)
     expect(press(letter('u', platform)).consumed).toBe(true)
-    expect(ran()).toEqual(['query.execute'])
+    expect(ran()).toEqual(['query.changeDatabase'])
     // Outside editor text, Ctrl/⌘+K is not a prefix.
     state.textFocus = false
     press(letter('k', platform))
     expect(press(letter('u', platform)).consumed).toBe(true)
-    expect(ran()).toEqual(['query.execute', 'query.execute'])
+    expect(ran()).toEqual(['query.changeDatabase', 'query.changeDatabase'])
   })
   it('forgets a pending chord prefix when focus moves or the window loses focus', () => {
-    const rules = [...defaultRules('win32'), resolveKeybinding('query.execute', { key: 'mod+u' }, 'win32')!]
-    const { keybindings, press, ran } = service('win32', { values: editorText, textFocus: true, rules })
+    const { keybindings, press, ran } = service('win32', { values: editorText, textFocus: true })
     const listeners = new Map<string, EventListener>()
     const target = { addEventListener: vi.fn((type: string, listener: EventListener, _options?: boolean) => { listeners.set(type, listener) }), removeEventListener: vi.fn() }
     const attached = keybindings.attach(target as unknown as EventTarget)
@@ -129,7 +130,15 @@ describe('keybinding dispatch', () => {
       listeners.get(type)!(new Event(type))
       expect(press(letter('u', 'win32')).consumed, type).toBe(true)
     }
-    expect(ran()).toEqual(['query.execute', 'query.execute'])
+    expect(ran()).toEqual(['query.changeDatabase', 'query.changeDatabase'])
+    // Monaco 0.57 moves focus to its IME text area after Ctrl+K; focus moving within the editor keeps the chord.
+    press(letter('k', 'win32'))
+    listeners.get('focusout')!({ type: 'focusout', relatedTarget: editorNode } as unknown as Event)
+    expect(press(letter('u', 'win32')).consumed).toBe(false)
+    press(letter('k', 'win32'))
+    listeners.get('focusout')!({ type: 'focusout', relatedTarget: new EventTarget() } as unknown as Event)
+    expect(press(letter('u', 'win32')).consumed).toBe(true)
+    expect(ran()).toEqual(['query.changeDatabase', 'query.changeDatabase', 'query.changeDatabase'])
     const event = letter('n', 'win32')
     listeners.get('keydown')!(event as unknown as Event)
     expect(event.consumed).toBe(true)
@@ -165,6 +174,8 @@ describe('keybinding dispatch', () => {
     expect(labels('win32', 'edit.redo')?.text).toBe('Ctrl+Y')
     expect(labels('darwin', 'query.cancel')).toBeUndefined()
     expect(labels('win32', 'window.editor')).toBeUndefined()
+    expect(labels('win32', 'edit.commentLines')).toEqual({ parts: ['Ctrl+K', 'Ctrl+C'], text: 'Ctrl+K Ctrl+C', aria: 'Control+K, then Control+C' })
+    expect(labels('darwin', 'edit.uncommentLines')?.text).toBe('⌘K ⌘U')
   })
   it('rejects conflicting rules in development and keeps the first in production', () => {
     const conflicting = [resolveKeybinding('file.new', { key: 'f6' }, 'win32')!, resolveKeybinding('file.open', { key: 'f6' }, 'win32')!]

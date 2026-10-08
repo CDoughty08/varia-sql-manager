@@ -13,15 +13,15 @@ const displayRoles = ['role:reload', 'role:toggleDevTools', 'role:resetZoom', 'r
 describe('menu model', () => {
   it('builds the menubar from the catalogue and the extras', () => {
     for (const platform of ['win32', 'linux'] as const) {
-      expect(outline('file', platform)).toEqual(['connection.connect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'role:quit'])
+      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'role:quit'])
       expect(outline('window', platform)).toEqual(['window.explorer', 'window.editor', 'window.output', '-', 'document.next', 'document.previous', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window'])
     }
-    expect(outline('file', 'darwin')).toEqual(['connection.connect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close'])
+    expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close'])
     expect(outline('window', 'darwin')).toEqual(['window.explorer', 'window.editor', 'window.output', '-', 'document.next', 'document.previous', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window', '-', 'role:minimize', 'role:zoom'])
     for (const platform of platforms) {
       expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'role:cut', 'role:copy', 'role:paste', 'role:selectAll', '-', 'edit.find', 'edit.replace', '-', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
-      expect(outline('view', platform)).toEqual(['layout.save', 'layout.load', 'layout.reset', '-', 'editor.toggleWordWrap', '-', 'submenu:view.theme', '-', ...displayRoles])
-      expect(outline('query', platform)).toEqual(['query.execute', 'query.cancel'])
+      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'editor.toggleWordWrap', '-', 'submenu:view.theme', '-', ...displayRoles])
+      expect(outline('query', platform)).toEqual(['query.execute', 'query.cancel', '-', 'query.changeConnection', 'query.changeDatabase'])
       expect(outline('theme', platform)).toEqual([])
     }
     expect(applicationMenus.map(menu => menu.id)).toEqual(['file', 'edit', 'view', 'query', 'window'])
@@ -49,6 +49,10 @@ describe('menu model', () => {
     expect(find('window', 'win32', 'layout.reset@window')).toMatchObject({ id: 'layout.reset', title: 'Reset Window Layout' })
     expect(find('window', 'win32', 'window.explorer')).toEqual({ kind: 'command', id: 'window.explorer', nativeId: 'window.explorer', title: 'Object Explorer', toggle: false, accelerator: 'F8' })
     expect(find('window', 'darwin', 'document.next')).toMatchObject({ accelerator: 'Ctrl+Tab' })
+    expect(find('view', 'win32', 'workbench.showCommands')).toEqual({ kind: 'command', id: 'workbench.showCommands', nativeId: 'workbench.showCommands', title: 'Command Palette…', toggle: false, accelerator: 'Ctrl+Shift+P' })
+    expect(find('view', 'darwin', 'workbench.quickOpen')).toMatchObject({ title: 'Go to Query…', accelerator: 'Cmd+P' })
+    expect(find('query', 'linux', 'query.changeDatabase')).toMatchObject({ title: 'Change Database…', accelerator: 'Ctrl+U' })
+    expect(find('file', 'darwin', 'connection.disconnect')).toEqual({ kind: 'command', id: 'connection.disconnect', nativeId: 'connection.disconnect', title: 'Disconnect from Server…', toggle: false })
   })
   it('gives each command item a unique native id, the first placement keeping the bare command id', () => {
     for (const platform of platforms) {

@@ -163,9 +163,9 @@ describe('default keybindings', () => {
     expect(Object.isFrozen(defaultRules('darwin'))).toBe(true)
     const native = ['edit.find', 'edit.replace', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines']
     expect(defaultRules('win32').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'file.close', 'edit.undo', 'edit.redo', 'edit.redo', 'window.explorer',
-      'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'explorer.refresh', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', ...native])
+      'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', ...native])
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'edit.undo', 'edit.redo', 'window.explorer',
-      'query.execute', 'query.execute', 'explorer.refresh', 'document.next', 'document.previous', ...native])
+      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.previous', ...native])
   })
   it('pick the first one-chord rule as the primary, native or not', () => {
     expect(primaryRule('edit.redo', 'win32')).toMatchObject({ chords: ['ctrl+y'], native: true })
@@ -189,17 +189,19 @@ describe('default keybindings', () => {
   })
   // Before PR2, main's before-input-event and bindFileShortcuts mapped Ctrl/⌘ letters through fileShortcut (this table),
   // and Monaco's addAction bound F5 and Ctrl/⌘+Enter in the editor; the catalogue must give the same commands. Ctrl/⌘
-  // letters it left alone stay unbound, except the SSMS keys PR2 adds on Windows and Linux.
+  // letters it left alone stay unbound, except the keys PR2 adds: the palette and Change Database (SSMS) everywhere, and
+  // the SSMS Execute key in the editor on Windows and Linux.
   it('match the legacy file shortcuts and editor actions', () => {
     const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close', 'shift+s': 'file.saveAs' }
+    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase' }
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute' }, linux: { e: 'query.execute' }, darwin: {} }
     for (const platform of platforms) {
       const primary = platform === 'darwin' ? 'metaKey' : 'ctrlKey'
       for (const character of 'abcdefghijklmnopqrstuvwxyz') for (const shiftKey of [false, true]) {
         const input = event(shiftKey ? character.toUpperCase() : character, letter(character), { [primary]: true, shiftKey })
         const name = `${shiftKey ? 'shift+' : ''}${character}`
-        expect(commandFor(input, platform), `${platform} ${name}`).toBe(legacy[name])
-        if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? added[platform][name])
+        expect(commandFor(input, platform), `${platform} ${name}`).toBe(legacy[name] ?? palette[name])
+        if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? palette[name] ?? added[platform][name])
         for (const extra of ['altKey', platform === 'darwin' ? 'ctrlKey' : 'metaKey']) {
           expect(commandFor(event(character, letter(character), { [primary]: true, shiftKey, [extra]: true }), platform), `${platform} ${extra} ${character}`).toBeUndefined()
         }

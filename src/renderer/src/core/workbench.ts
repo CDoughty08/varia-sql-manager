@@ -11,6 +11,9 @@ import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { filesContribution } from '../contributions/files'
 import { editorContribution } from '../contributions/editor'
+import { paletteContribution } from '../contributions/palette'
+import { domFocusAdapter } from '../quickinput/focus'
+import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
 import { ContextKeyService } from './contextkeys'
 import { EventBus } from './events'
@@ -27,6 +30,7 @@ export interface Workbench extends Disposable {
   readonly context: ContextKeyService
   readonly keybindings: KeybindingService
   readonly menuState: MenuStatePublisher
+  readonly quickInput: QuickInputService
   readonly documents: DocumentService
   readonly queries: QueryService
   readonly connections: ConnectionService
@@ -42,20 +46,23 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const queries = new QueryService(documents, api, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)
   const targets = new TargetService(documents, queries, connections, files, api)
-  const context = new ContextKeyService({ platform, documents, queries, connections, editorOptions, editor: () => documents.boundEditor })
+  const quickInput = new QuickInputService(domFocusAdapter(documents))
+  const context = new ContextKeyService({ platform, documents, queries, connections, editorOptions, quickInput: quickInput.visibility, editor: () => documents.boundEditor })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
-  const keybindings = new KeybindingService({ platform, commands, context, modalOpen, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false })
+  const keybindings = new KeybindingService({ platform, commands, context, modalOpen, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
+    editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, documents, queries, connections, files, targets, editorOptions, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, quickInput, documents, queries, connections, files, targets, editorOptions, theme, dispose: () => {
     if (disposed) return
     disposed = true
-    listener.dispose(); menuState.dispose(); keybindings.dispose()
+    // Hiding the quick input first aborts its loads before the services they use go away.
+    listener.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
     cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); connections.dispose(); editorOptions.dispose(); theme.dispose(); events.dispose()
   } }
-  const contributions = [queryContribution(workbench), filesContribution(workbench), editorContribution(workbench)]
+  const contributions = [queryContribution(workbench, api), filesContribution(workbench), editorContribution(workbench), paletteContribution(workbench)]
   // Capture on window runs before Monaco's own listeners, the title bar's document listener, and React's handlers.
   const listener = keybindings.attach(window)
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')

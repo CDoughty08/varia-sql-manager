@@ -7,7 +7,7 @@ limits where the key works; for example, `editorFocus` means the query editor ha
 editor or the browser engine: menus show them, but Varia does not dispatch them. "Available when" is the condition
 under which menus, the toolbar, and the keyboard can run the command; the context keys it uses are listed below.
 
-## Commands (26)
+## Commands (31)
 
 ### File
 
@@ -51,12 +51,15 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | --- | --- | --- | --- | --- | --- | --- |
 | Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query |
+| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Change Connection… |
+| Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
 
 ### Connection
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server… |
+| Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server… |
 
 ### Object Explorer
 
@@ -69,6 +72,8 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Close Window (not in the palette) | `window.close` | — | — | — | Always | — |
+| Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette… |
+| Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
 
 ## Context keys (17)
 

@@ -13,6 +13,7 @@ const hover: ColorKey[] = ['toolbar.background', 'button.secondaryHoverBackgroun
 const activeSelection: ColorKey[] = ['editorWidget.background', 'list.activeSelectionBackground']
 const inactiveSelection: ColorKey[] = ['sideBar.background', 'list.inactiveSelectionBackground']
 const panelTitle: ColorKey[] = ['panelTitle.background'], titleBar: ColorKey[] = ['titleBar.activeBackground']
+const quickInput: ColorKey[] = ['quickInput.background'], quickInputActive: ColorKey[] = ['quickInput.background', 'quickInputList.focusBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
@@ -52,8 +53,13 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['list.activeSelectionForeground', 'dialog.descriptionForeground'], activeSelection),
   ...text(['list.inactiveSelectionForeground'], inactiveSelection),
   ...text(['list.highlightForeground'], widget, sideBar),
-  ...text(['quickInput.foreground'], ['quickInput.background']),
-  ...text(['quickInputList.focusForeground'], ['quickInput.background', 'quickInputList.focusBackground']),
+  ...text(['quickInput.foreground'], quickInput),
+  ...text(['quickInputList.focusForeground'], quickInputActive),
+  // On the active row these parts take quickInputList.focusForeground (styles.css), as in VS Code: $textMuted and $accent
+  // fall below 4.5:1 on the focused row's fill.
+  ...text(['list.highlightForeground', 'descriptionForeground', 'keybindingLabel.foreground', 'pickerGroup.foreground'], quickInput),
+  ...text(['banner.warningForeground'], ['quickInput.background', 'banner.warningBackground']),
+  ...text(['banner.errorForeground'], ['quickInput.background', 'banner.errorBackground']),
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),

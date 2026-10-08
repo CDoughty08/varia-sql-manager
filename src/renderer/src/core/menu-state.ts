@@ -1,6 +1,7 @@
 import { menuCommandIds, toggleCommandIds, type MenuState } from '../../../shared/commands/menus'
 import type { CommandService } from './commands'
 import { onUnexpectedError } from './errors'
+import { browserTimers, type Timers } from './timers'
 import type { Disposable } from './types'
 
 /** Which native menu commands are unavailable and which checkboxes are on. */
@@ -8,8 +9,7 @@ export function computeMenuState(commands: Pick<CommandService, 'isEnabled' | 'i
   return { disabled: menuCommandIds.filter(id => !commands.isEnabled(id)), checked: toggleCommandIds.filter(id => commands.isToggled(id)) }
 }
 
-export interface Timers { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(handle: unknown): void }
-const browserTimers: Timers = { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) }
+export type { Timers } from './timers'
 const delay = 50
 
 /**

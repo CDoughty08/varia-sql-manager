@@ -14,6 +14,7 @@ import TitleBar from './TitleBar'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
 import ThemeNotice from './ThemeNotice'
+import QuickInput from './quickinput/QuickInput'
 import { connectionDefaults } from '../../shared/connections'
 
 const emptyTab: QueryTab = { id: '', name: '', dirty: false, savedVersionId: null, database: 'master' }
@@ -60,15 +61,17 @@ export default function App() {
   const availableDatabases = databases.some(value => value.name === active.database) ? databases : [{ name: active.database, isSystem: false }, ...databases]
 
   function activate(id: string) { documents.activate(id) }
+  const disconnectServer = useStableCallback((id: string) => disconnect(id))
   // Stable for the app's lifetime; it reaches the dock workspace through its ref.
   const shellHost = useMemo<ShellHost>(() => ({
+    disconnect: disconnectServer,
     reveal: pane => workspaceRef.current?.reveal(pane),
     manageLayouts: mode => workspaceRef.current?.manage(mode),
     resetLayout: () => workspaceRef.current?.reset(),
     flushLayout: async () => { await workspaceRef.current?.flush() },
     showConnect: () => setShowConnect(true),
     refreshExplorer: () => setRefresh(value => value + 1)
-  }), [])
+  }), [disconnectServer])
 
   useEffect(() => {
     let disposed = false
@@ -192,5 +195,6 @@ export default function App() {
       </main>} output={<QueryOutput tabId={active.id} result={active.result} error={active.error} running={!!activeRunning} connected={!!connection} />} />
     <footer className="status-bar" data-state={backendError ? 'error' : activeRunning ? 'executing' : !connection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${health ? 'online' : ''}`} />{health ? `${health.runtime} · Ready` : backendError ? 'Backend unavailable' : 'Starting backend…'}</span><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection?.server ?? 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}<span className="status-divider">|</span>1,000 row display limit</span></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => setShowConnect(false)} />}
+    <QuickInput />
   </div>
 }

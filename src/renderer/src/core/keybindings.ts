@@ -21,6 +21,8 @@ export interface KeybindingServiceOptions {
   readonly context: { get(): ContextKeys }
   readonly modalOpen: () => boolean
   readonly editorHasTextFocus: () => boolean
+  /** Whether a focus target is inside the query editor; focus moving within it keeps a pending chord prefix. */
+  readonly editorContains?: (target: EventTarget | null) => boolean
   /** Defaults to the catalogue's rules for the platform. */
   readonly rules?: readonly ResolvedRule[]
   /** What to do with conflicting rules: development builds throw, production logs and keeps the first rule. */
@@ -59,21 +61,26 @@ export class KeybindingService implements Disposable {
     }) : [])
   }
   private primaryRule(id: CommandId): ResolvedRule | undefined { return this.rules.find(rule => rule.command === id && rule.chords.length === 1) }
-  /** The label of the command's primary keybinding, for menus, tooltips, and the palette. */
+  /**
+   * The label of the command's primary keybinding, for tooltips and the palette. A command bound only to a two-part
+   * chord shows that ("Ctrl+K Ctrl+C"); native menus cannot, because Electron accelerators are single chords.
+   */
   lookup(id: CommandId): KeybindingLabel | undefined {
-    const rule = this.primaryRule(id)
+    const rule = this.primaryRule(id) ?? this.rules.find(candidate => candidate.command === id)
     return rule && keybindingLabel(rule.chords, this.options.platform)
   }
   attach(target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>): Disposable {
     this.detach?.()
     const keyDown = (event: Event) => this.handleKeyDown(event as KeyboardEvent)
     const reset = () => { this.pendingNativePrefix = false }
+    // Monaco moves focus to its IME text area while it waits for a chord's second key; that is not leaving the editor.
+    const focusOut = (event: Event) => { if (!this.options.editorContains?.((event as FocusEvent).relatedTarget)) reset() }
     target.addEventListener('keydown', keyDown, true)
-    target.addEventListener('focusout', reset, true)
+    target.addEventListener('focusout', focusOut, true)
     target.addEventListener('blur', reset)
     const detach = () => {
       target.removeEventListener('keydown', keyDown, true)
-      target.removeEventListener('focusout', reset, true)
+      target.removeEventListener('focusout', focusOut, true)
       target.removeEventListener('blur', reset)
       if (this.detach === detach) this.detach = undefined
     }
