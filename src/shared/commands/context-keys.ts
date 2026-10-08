@@ -2,14 +2,18 @@ import type { Platform } from './keybindings'
 import { comparisons, parseWhen, referencedKeys, type ContextRecord } from './when'
 
 /**
- * `static` keys never change while the app runs, `state` keys come from service snapshots, and `focus` keys from the
- * focused element. Preconditions and toggled state may use only static and state keys, so menus, the toolbar, and the
- * palette agree on enablement wherever focus is; keybinding `when` clauses may use any key.
+ * `static` keys never change while the app runs, `state` keys come from service snapshots, `focus` keys from the
+ * focused element, and `target` keys from the item a context menu opens for. Preconditions and toggled state may use
+ * only static and state keys, so menus, the toolbar, and the palette agree on enablement wherever focus is; keybinding
+ * `when` clauses may use static, state, and focus keys; context-menu placements may use static, state, and target keys.
  */
-export type ContextKeyScope = 'static' | 'state' | 'focus'
+export type ContextKeyScope = 'static' | 'state' | 'focus' | 'target'
+interface Declared { readonly scope: Exclude<ContextKeyScope, 'target'>; readonly description: string; readonly menu?: undefined }
+/** A target key describes one kind of context-menu target, so it may appear only in that context menu's placements. */
+interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' }
 export type ContextKeyDeclaration =
-  | { readonly type: 'boolean'; readonly scope: ContextKeyScope; readonly description: string }
-  | { readonly type: 'enum'; readonly scope: ContextKeyScope; readonly values: readonly string[]; readonly description: string }
+  | ({ readonly type: 'boolean' } & (Declared | DeclaredTarget))
+  | ({ readonly type: 'enum'; readonly values: readonly string[] } & (Declared | DeclaredTarget))
 
 export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
@@ -28,7 +32,13 @@ export const contextKeys = {
   hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected.' },
   activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
-  editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' }
+  editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
+  explorerNode: {
+    type: 'enum', scope: 'target', menu: 'explorer.context', description: "The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object.",
+    values: ['background', 'server', 'databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'database', 'tablesFolder', 'table', 'securityFolder', 'serverObjectsFolder', 'serverObject', '']
+  },
+  outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', 'plan', ''], description: 'The Query Output view the menu is for: a results grid, the messages, or an execution plan.' },
+  paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel whose tab the menu is for is floating.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys
@@ -38,10 +48,13 @@ export type ContextKeys = { readonly [K in ContextKey]: ContextKeyValue<K> }
 type KeysOfScope<S extends ContextKeyScope> = { [K in ContextKey]: Declarations[K]['scope'] extends S ? K : never }[ContextKey]
 export type StateKeys = Pick<ContextKeys, KeysOfScope<'static' | 'state'>>
 export type FocusKeys = Pick<ContextKeys, KeysOfScope<'focus'>>
+export type TargetKeys = Pick<ContextKeys, KeysOfScope<'target'>>
 
 export const contextKeyNames = Object.keys(contextKeys) as ContextKey[]
 export const isContextKey = (value: string): value is ContextKey => Object.hasOwn(contextKeys, value)
 const declaration = (key: ContextKey): ContextKeyDeclaration => contextKeys[key]
+/** The context menu a target key belongs to; undefined for every other scope. */
+export const targetKeyMenu = (key: ContextKey): DeclaredTarget['menu'] | undefined => declaration(key).menu
 export const keysOfScope = (...scopes: ContextKeyScope[]): ContextKey[] => contextKeyNames.filter(key => scopes.includes(declaration(key).scope))
 /** Every value a key can take, for enumerating contexts: both booleans, or the enum's values. */
 export const contextKeyValues = (key: ContextKey): readonly (boolean | string)[] => { const info = declaration(key); return info.type === 'enum' ? info.values : [false, true] }

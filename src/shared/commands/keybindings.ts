@@ -171,6 +171,8 @@ export interface ResolvedRule {
   readonly whenSource?: string
   readonly native: boolean
   readonly allowRepeat: boolean
+  /** The key also works while a modal dialog is open. */
+  readonly modal: boolean
 }
 
 /** The spec string that applies on `platform`, or undefined when the keybinding is unbound there. */
@@ -186,7 +188,7 @@ export function resolveKeybinding(command: CommandId, spec: KeybindingSpec, plat
   const chords = parseKeySpec(source, platform)
   if (chords.length > 1 && !spec.native) throw new KeySpecError(`${command}: "${source}" has two parts; only native keybindings may be chords.`)
   return {
-    command, chords, native: spec.native === true, allowRepeat: spec.allowRepeat === true,
+    command, chords, native: spec.native === true, allowRepeat: spec.allowRepeat === true, modal: spec.modal === true,
     ...(spec.when === undefined ? {} : { when: compileWhen(spec.when), whenSource: spec.when })
   }
 }

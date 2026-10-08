@@ -3,12 +3,13 @@ import { contextKeyNames, contextKeys, type ContextKeyDeclaration } from './cont
 import { keybindingLabel, platforms, reservedChords, resolveKeybinding, type Platform } from './keybindings'
 import { applicationMenus, type MenuId } from './menus'
 
-const categories: readonly (Category | undefined)[] = ['File', 'Edit', 'View', 'Query', 'Connection', 'Object Explorer', 'Preferences', undefined]
+const categories: readonly (Category | undefined)[] = ['File', 'Edit', 'View', 'Query', 'Connection', 'Object Explorer', 'Preferences', 'Developer', undefined]
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(applicationMenus.map(menu => [menu.id, menu.label])) as Record<typeof applicationMenus[number]['id'], string>,
-  theme: 'View › Theme', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
-  'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu'
+  theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
+  'explorer.scriptTableAs': 'Object Explorer context menu › Script Table as', 'explorer.scriptTableAs.create': 'Object Explorer context menu › Script Table as › CREATE To',
+  'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
 }
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -75,9 +76,10 @@ export function renderCommandDocs(): string {
     }
   }
   lines.push('', `## Context keys (${contextKeyNames.length})`, '',
-    '`static` keys never change while Varia runs, `state` keys follow the open queries and connections, and `focus` keys follow',
-    'keyboard focus. "Available when" conditions use only static and state keys, so a command is enabled the same way in',
-    'every menu wherever focus is; key conditions may also use focus keys.', '',
+    '`static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow',
+    'keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only',
+    'static and state keys, so a command is enabled the same way in every menu wherever focus is; key conditions may also',
+    'use focus keys, and context-menu items may also use the target keys of their own menu.', '',
     row(['Key', 'Values', 'Scope', 'Meaning']), row(['---', '---', '---', '---']),
     ...contextKeyNames.map(key => { const info: ContextKeyDeclaration = contextKeys[key]; return row([code(key), contextKeyType(info), info.scope, info.description]) }),
     '', '## Reserved keys', '',

@@ -44,12 +44,12 @@ README.md documents user-facing behaviour, limits, and the protocol.
   zod and C#.
 - Preferences are written atomically (`src/main/json-file.ts`); unreadable files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- Commands, keybindings and menu placements are declared only in `src/shared/commands/catalog.ts` (View › Theme's
-  `theme.*` items stay main-owned). Main builds native menus from it and accepts only command-id sets from the renderer
-  (`menuStateSchema`); clicks send back a bare id. `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the
-  only workbench key dispatcher; main handles only Alt mnemonics and F10, which `TitleBar.tsx` mirrors for keys that
-  skip main (`tests/keyboard-lint.test.ts`). After catalogue changes, regenerate `docs/commands.md` with
-  `npx vitest run tests/commands-docs.test.ts -u`.
+- Commands, keybindings and menu placements are declared only in `src/shared/commands/catalog.ts` (submenus in
+  `menus.ts`; View › Theme's `theme.*` items in `src/shared/theme/menu.ts`). Main builds native menus from it and
+  accepts only command-id sets from the renderer (`menuStateSchema`); clicks send back a bare id. `KeybindingService`
+  (`src/renderer/src/core/keybindings.ts`) is the only workbench key dispatcher; main handles only Alt mnemonics and F10,
+  which `TitleBar.tsx` mirrors for keys that skip main (`tests/keyboard-lint.test.ts`). After catalogue changes,
+  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 

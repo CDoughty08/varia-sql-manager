@@ -106,10 +106,13 @@ export class KeybindingService implements Disposable {
         if (now() - pending <= nativeChordTimeout) return
       }
       if (this.prefixes.has(chord) && this.options.editorHasTextFocus()) { this.pendingNativePrefix = now(); return }
-      const rules = this.table.get(chord)
+      let rules = this.table.get(chord)
       if (!rules) return
-      // Dialogs own their keys, so the key is not consumed.
-      if (this.options.modalOpen()) return
+      // Dialogs own their keys, so the key is not consumed, unless a rule is marked to work over them.
+      if (this.options.modalOpen()) {
+        rules = rules.filter(rule => rule.modal)
+        if (!rules.length) return
+      }
       const context = this.options.context.get()
       const rule = rules.find(candidate => !candidate.when || evaluateWhen(candidate.when, context))
       if (!rule) {

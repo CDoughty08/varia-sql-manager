@@ -84,11 +84,12 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette… |
 | Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
 
-## Context keys (17)
+## Context keys (20)
 
-`static` keys never change while Varia runs, `state` keys follow the open queries and connections, and `focus` keys follow
-keyboard focus. "Available when" conditions use only static and state keys, so a command is enabled the same way in
-every menu wherever focus is; key conditions may also use focus keys.
+`static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
+keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
+static and state keys, so a command is enabled the same way in every menu wherever focus is; key conditions may also
+use focus keys, and context-menu items may also use the target keys of their own menu.
 
 | Key | Values | Scope | Meaning |
 | --- | --- | --- | --- |
@@ -109,6 +110,9 @@ every menu wherever focus is; key conditions may also use focus keys.
 | `activeDocumentConnected` | boolean | state | The active query's server is connected. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
+| `explorerNode` | `'background'`, `'server'`, `'databasesFolder'`, `'systemDatabasesFolder'`, `'snapshotsFolder'`, `'database'`, `'tablesFolder'`, `'table'`, `'securityFolder'`, `'serverObjectsFolder'`, `'serverObject'`, `''` | target | The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object. |
+| `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
+| `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
 
 ## Reserved keys
 

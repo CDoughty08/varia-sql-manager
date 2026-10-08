@@ -73,6 +73,18 @@ describe('keybinding dispatch', () => {
     state.modal = false
     expect(press(letter('n', 'win32')).consumed).toBe(true)
   })
+  it('dispatches only keys marked modal while a modal is open', () => {
+    const rules = [resolveKeybinding('edit.undo', { key: 'f7', modal: true }, 'win32')!, resolveKeybinding('file.new', { key: 'f6' }, 'win32')!, resolveKeybinding('edit.redo', { key: 'f9', when: 'queryRunning', modal: true }, 'win32')!]
+    const { press, ran, state } = service('win32', { modal: true, rules })
+    expect(press(key('F7', 'F7')).consumed).toBe(true)
+    expect(press(key('F6', 'F6')).consumed).toBe(false)
+    expect(press(key('F9', 'F9')).consumed).toBe(false)
+    state.values = { queryRunning: true }
+    expect(press(key('F9', 'F9')).consumed).toBe(true)
+    state.modal = false
+    press(key('F6', 'F6'))
+    expect(ran()).toEqual(['edit.undo', 'edit.redo', 'file.new'])
+  })
   it('ignores IME composition, handled events, and modifier-only presses', () => {
     const { press, execute } = service('win32')
     for (const event of [letter('n', 'win32', { isComposing: true }), letter('n', 'win32', { keyCode: 229 }), letter('n', 'win32', { defaultPrevented: true }), key('ControlLeft', 'Control', { ctrl: true }), key('Quote', 'Dead', { ctrl: true })]) {
