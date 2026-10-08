@@ -4,7 +4,7 @@ A starting point for an SSMS-style SQL Server workbench: **Electron + React + Ty
 
 ## Run
 
-Prerequisites: Node.js 24 or newer and the .NET 10 SDK. Windows is the initial development target. SQL authentication can work on other desktop platforms, but those platforms are not verified yet.
+Prerequisites: Node.js 24 or newer and the .NET 10 SDK. Windows, Linux, and macOS are development targets, and CI builds and tests on all three. Windows authentication is Windows-only for now; on Linux and macOS, connect with SQL authentication until Kerberos support lands. On Ubuntu 24.04 and later, AppArmor blocks the unprivileged user namespaces that Electron's Chromium sandbox needs when it is installed through npm; allow them (for example `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`) rather than disabling the sandbox.
 
 ```powershell
 npm install
@@ -15,10 +15,13 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:electron   # Hidden Electron workbench/layout/connection-dialog tests
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog tests (after check)
+npm run test:electron   # Both of the above
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
 ```
+
+Without a desktop session on Linux, run the Electron tests under a virtual display: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`. Screenshots go to `artifacts/`. The tests keep Chromium's sandbox on unless they run as root, so the AppArmor note above applies to them too.
 
 The .NET SDK is selected through `global.json`. npm and NuGet lockfiles pin resolved dependencies. This bootstrap runs locally; installers, code signing, and bundled .NET distribution are future work.
 
@@ -146,17 +149,41 @@ Try [examples/statistics-and-batches.sql](examples/statistics-and-batches.sql) o
 - Syntax highlighting and raw plan/profile output are available. Schema-aware IntelliSense, graphical plans, profiler, backup/restore, security management, and job management are future milestones.
 - Default automated checks need no database. Optional live backend checks exercise GO, persistent sessions, statistics variants, transactions, errors, cancellation, timeout, display caps, and cleanup against a development instance.
 
-For live checks on Windows, use a disposable development SQL Server with Windows authentication:
+For live checks on any OS, run a disposable SQL Server container and use SQL authentication. Give the server about 20 seconds to start (on Apple silicon, Docker Desktop runs the image through Rosetta emulation):
+
+```sh
+docker run -d --name varia-sql -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=Varia_Dev_Pw1!' -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+VARIA_TEST_SQL_SERVER=localhost VARIA_TEST_SQL_USER=sa VARIA_TEST_SQL_PASSWORD='Varia_Dev_Pw1!' npm run backend:test
+```
+
+The `docker run` line works unchanged in PowerShell; set the variables there for one run like this:
+
+```powershell
+$env:VARIA_TEST_SQL_SERVER = 'localhost'; $env:VARIA_TEST_SQL_USER = 'sa'; $env:VARIA_TEST_SQL_PASSWORD = 'Varia_Dev_Pw1!'
+try { npm run backend:test } finally { Remove-Item Env:VARIA_TEST_SQL_* }
+```
+
+On Windows, a development SQL Server with Windows authentication needs only the server variable:
 
 ```powershell
 $env:VARIA_TEST_SQL_SERVER = 'localhost'
 try { npm run backend:test } finally { Remove-Item Env:VARIA_TEST_SQL_SERVER }
 ```
 
-These checks create only session-local temporary objects. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default.
+These checks create only session-local temporary objects. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default. With the same variables set, `npm run test:smoke` also connects the connection dialog to that server. The password is never printed.
 
-## Decisions for the next milestone
+## Continuous integration
 
-No planning phase is needed to run this foundation. Before implementing broad SSMS parity, agree on the target SQL Server/Azure SQL versions, authentication methods, Object Explorer depth, query/session semantics, packaging platforms, and whether VS Code extension compatibility is actually required. A full VS Code workbench fork would change the scope considerably.
+`.github/workflows/ci.yml` runs on pull requests (including ones stacked on another pull request), pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests currently assume Windows/Linux window chrome, so macOS skips them until the macOS menu bar work lands. A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`.
+
+## Direction
+
+- **Goal:** SSMS 2022-level polish with a VS Code-style **F1** command palette. Core management first (connections, databases, objects); SSIS, replication, and credentials later. Windows, Linux, and macOS are equally important. The workbench must never freeze or crash, and error states must stay recoverable.
+- **Roadmap:** CI and test foundations; theme tokens; command registry and F1 palette; context menus; Object Explorer v2 (backend node provider, virtualized keyboard tree); scripting (Script As…); binary IPC v2; a streaming, virtualized results grid.
+- **IPC v2:** length-prefixed MessagePack frames for control messages and row pages, server push and streams with credit-based backpressure, and a MessagePort with transferable ArrayBuffers to the renderer.
+- **Results:** memory-only, with a backend memory budget and explicit truncation. Results never spill to disk.
+- **Menus:** custom-rendered, themed title-bar and context menus on Windows and Linux; the native global menu bar on macOS.
+- **Servers and authentication:** SQL Server 2016 through 2025. SQL authentication and Integrated authentication (Windows SSPI; Kerberos on Linux/macOS) first, then Microsoft Entra ID.
+- **Visuals:** SSMS layout, density, and behaviours. Icons are codicons (bundled with Monaco) plus custom SVGs, since Microsoft's SSMS icons cannot be reused. Dark and Light themes (plus following the system), customizable through a standardized palette system in the style of VS Code and opencode.
 
 Reference documentation: [Electron security](https://www.electronjs.org/docs/latest/tutorial/security), [electron-vite](https://electron-vite.org/guide/), [.NET support](https://dotnet.microsoft.com/en-us/platform/support/policy), [SMO](https://github.com/microsoft/sqlmanagementobjects), [SqlClient](https://learn.microsoft.com/en-us/sql/connect/ado-net/download-microsoft-sqlclient-data-provider).

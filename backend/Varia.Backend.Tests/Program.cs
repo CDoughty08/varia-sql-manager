@@ -64,19 +64,26 @@ Console.WriteLine("Passed " + passed + " offline .NET checks.");
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
 if (string.IsNullOrWhiteSpace(server))
 {
-    Console.WriteLine("Live SQL checks skipped. Set VARIA_TEST_SQL_SERVER to a development SQL Server; tests use only session-local temporary objects.");
+    Console.WriteLine("Live SQL checks skipped. Set VARIA_TEST_SQL_SERVER to a development SQL Server (Windows authentication), plus VARIA_TEST_SQL_USER and VARIA_TEST_SQL_PASSWORD for SQL authentication; tests use only session-local temporary objects.");
     return;
 }
+// SQL authentication lets the live checks run against a container on any OS; without a user they keep using Windows authentication.
+var sqlUser = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_USER");
+var sqlPassword = string.IsNullOrWhiteSpace(sqlUser) ? null
+    : Environment.GetEnvironmentVariable("VARIA_TEST_SQL_PASSWORD") ?? throw new Exception("VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.");
+ConnectOptions Live(string database) => sqlPassword is null
+    ? new(server, database, "windows", null, null, true)
+    : new(server, database, "sql", sqlUser, sqlPassword, true);
 using var service = new SqlService();
 async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
-var info = await Call<ConnectionInfo>("connections.connect", new ConnectOptions(server, "master", "windows", null, null, true));
+var info = await Call<ConnectionInfo>("connections.connect", Live("master"));
 var sessionId = Guid.NewGuid().ToString();
 Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master") =>
     Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine));
 QueryResult result;
 try
 {
-    var discovered = await Call<List<DatabaseInfo>>("connections.databases", new ConnectOptions(server, "DatabaseThatDoesNotExist", "windows", null, null, true));
+    var discovered = await Call<List<DatabaseInfo>>("connections.databases", Live("DatabaseThatDoesNotExist"));
     Check(discovered.Any(database => database.Name == "master") && discovered.Any(database => database.Name == "tempdb"), "live database discovery ignores a stale selected database and closes its temporary connection");
     result = await Run("SELECT DB_NAME();", timeout: 0);
     Check(result.Status == "completed", "zero timeout allows execution without a deadline");

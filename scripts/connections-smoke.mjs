@@ -2,10 +2,15 @@ import { _electron as electron, expect } from '@playwright/test'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 
+// Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
+const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
+if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'connections-profile-'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
 delete env.ELECTRON_RUN_AS_NODE
+// Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
+const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
 const recentId = crypto.randomUUID()
 await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, profiles: [{ id: recentId, options: { server: 'recent-server', database: 'master', authentication: 'windows', trustServerCertificate: false }, favorite: false, registered: false, lastConnected: new Date().toISOString() }] }))
 let app
@@ -13,7 +18,7 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 180000)
 async function launch() {
-  app = await electron.launch({ args: ['.'], env })
+  app = await electron.launch(launchOptions)
   page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
@@ -70,7 +75,8 @@ try {
   await advanced.screenshot({ path: resolve('artifacts', 'advanced-connection-properties.png') })
   await advanced.getByRole('button', { name: 'OK', exact: true }).click()
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
-  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced?.commandTimeout).toBe(7)
+  // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
+  await expect.poll(async () => ({ commandTimeout: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced?.commandTimeout, errors: await dialog.locator('.connect-error').allTextContents() })).toEqual({ commandTimeout: 7, errors: [] })
   await dialog.getByRole('tab', { name: 'Connection String', exact: true }).click()
   await expect(dialog.getByLabel('Connection string preview')).toContainText('tcp:sql-dev')
   await expect(dialog.getByLabel('Connection string preview')).toContainText('Application Intent=ReadOnly')
@@ -130,7 +136,11 @@ try {
   if (process.env.VARIA_TEST_SQL_SERVER) {
     await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
     await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
-    await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    if (liveUser) {
+      await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+      await dialog.getByLabel('User Name', { exact: true }).fill(liveUser)
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Database Name', { exact: true }).focus()
     await expect(dialog.getByText(/databases available/)).toBeVisible({ timeout: 35000 })

@@ -37,6 +37,22 @@ export async function writeJsonAtomic(path: string, value: unknown, limit: numbe
   try {
     const file = await open(temporary, 'wx')
     try { await file.writeFile(bytes); await file.sync() } finally { await file.close() }
-    await rename(temporary, path)
+    await replaceFile(temporary, path)
   } finally { await rm(temporary, { force: true }) }
+}
+
+const replaceAttempts = 8
+/**
+ * Windows refuses to replace a file while another process has it open (a reader, an antivirus or indexer scan) and
+ * reports EPERM, EACCES, or EBUSY. Those holds are brief, so the rename is retried for about two seconds first.
+ */
+export async function replaceFile(from: string, to: string, platform: NodeJS.Platform = process.platform, move: typeof rename = rename): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await move(from, to) }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (platform !== 'win32' || attempt === replaceAttempts || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) throw error
+      await new Promise(resolve => setTimeout(resolve, Math.min(25 * 2 ** attempt, 500)))
+    }
+  }
 }

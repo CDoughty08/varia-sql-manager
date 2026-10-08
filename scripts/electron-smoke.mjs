@@ -6,7 +6,9 @@ await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
 delete env.ELECTRON_RUN_AS_NODE
-const application = await electron.launch({ args: ['.'], env })
+// Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
+const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
+const application = await electron.launch(launchOptions)
 const artifact = name => resolve('artifacts', name)
 await mkdir('artifacts', { recursive: true })
 async function menu(id) {
@@ -55,6 +57,7 @@ try {
   expect(health.ok).toBe(true)
   expect(health.value.protocolVersion).toBe(1)
   expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined' })
+  expect(await application.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox'))).toBe(process.platform === 'linux' && !launchOptions.chromiumSandbox)
   await expect(page.locator('.app-header')).toHaveCount(0)
   await expect(page.getByRole('menubar', { name: 'Application menu' })).toBeVisible()
   const chrome = await application.evaluate(({ BrowserWindow }) => {
