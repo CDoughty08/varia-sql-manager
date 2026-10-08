@@ -281,6 +281,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .quick-input-row.active { background: var(--varia-quickInputList-focusBackground); color: var(--varia-quickInputList-focusForeground); }
 /* Muted and accent text is too faint on the active row's fill, so it takes the row's color there (matches stay bold). */
 .quick-input-row.active .quick-input-description, .quick-input-row.active .quick-input-hl, .quick-input-row.active .quick-input-group, .quick-input-row.active kbd { color: inherit; }
+/* The key outline (keybindingLabel.border) all but vanishes on the active row's fill. */
+.quick-input-row.active kbd { border-color: currentColor; }
 .quick-input-row.disabled .quick-input-label, .quick-input-row.disabled .quick-input-icon { color: var(--varia-disabledForeground); }
 .quick-input-icon { width: 16px; height: 16px; flex: 0 0 16px; }
 .quick-input-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
