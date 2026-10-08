@@ -1,0 +1,3 @@
+# LF everywhere, as .editorconfig requires: Windows checkouts (core.autocrlf=true on CI runners) then test the
+# same bytes as Linux/macOS, and shell scripts such as .claude/hooks/session-start.sh stay runnable from WSL.
+* text=auto eol=lf

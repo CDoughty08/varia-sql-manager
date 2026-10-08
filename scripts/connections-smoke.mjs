@@ -130,7 +130,12 @@ try {
   if (process.env.VARIA_TEST_SQL_SERVER) {
     await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
     await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
-    await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    // Matches the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
+    if (process.env.VARIA_TEST_SQL_USER) {
+      await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+      await dialog.getByLabel('User Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_USER)
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD ?? '')
+    } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Database Name', { exact: true }).focus()
     await expect(dialog.getByText(/databases available/)).toBeVisible({ timeout: 35000 })

@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  linux:
+    name: Linux (live SQL Server, Electron smoke)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          # A fixed development password is fine here: the container is created for this job, holds no data, and is discarded with the runner.
+          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 20s
+    env:
+      VARIA_TEST_SQL_SERVER: localhost
+      VARIA_TEST_SQL_USER: sa
+      VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Type check, .NET checks (offline and live), vitest, production build
+        run: npm run check
+      - name: Prepare the Electron sandbox and display
+        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chromium's sandbox needs them because
+        # npm's chrome-sandbox helper is not setuid root. Re-enabling them keeps the app's sandbox on.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: Electron smoke tests
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
+      - name: Upload smoke-test profiles and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-artifacts-linux
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  desktop:
+    name: ${{ matrix.os }}
+    # Windows minutes bill at 2x and macOS at 10x, so draft pull requests run only the Linux job.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Type check, offline .NET checks, vitest, production build
+        run: npm run check
+      - name: Electron smoke tests
+        id: smoke
+        # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts).
+        # macOS results stay informational until its native menu bar and Cmd shortcuts are covered.
+        continue-on-error: ${{ runner.os == 'macOS' }}
+        run: npm run test:smoke
+      - name: Upload smoke-test profiles and screenshots
+        if: failure() || steps.smoke.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-artifacts-${{ matrix.os }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
