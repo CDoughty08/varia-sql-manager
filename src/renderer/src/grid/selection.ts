@@ -1,3 +1,4 @@
+import type { Platform } from '../../../shared/commands/keybindings'
 import type { ResultSet } from '../../../shared/contracts'
 
 /** A data cell: its row and column index in the result set. */
@@ -71,6 +72,14 @@ function covers(selection: GridSelection, hit: GridHit, rows: number, columns: n
   }
 }
 
+/**
+ * What a pointer press is to the grid. On macOS Control+click opens the context menu (Chromium does so on that press,
+ * which reports the left button), so it is a right press there, as Monaco treats it; other buttons do nothing.
+ */
+export function pressButton(event: { readonly button: number; readonly ctrlKey: boolean }, platform: Platform): 'primary' | 'secondary' | undefined {
+  if (event.button === 2 || (event.button === 0 && event.ctrlKey && platform === 'darwin')) return 'secondary'
+  return event.button === 0 ? 'primary' : undefined
+}
 /**
  * The selection after a press on `hit`, as in SSMS: a press selects that cell, row, column, or everything; Shift extends
  * the current selection from its anchor; a right press on something already selected keeps the selection (its menu

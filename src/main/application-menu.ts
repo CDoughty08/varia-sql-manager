@@ -10,6 +10,10 @@ export interface ApplicationMenuActions {
   command(id: CommandId): void
   /** Whether the renderer last reported the command as checked. */
   isChecked(id: CommandId): boolean
+  /** macOS: whether the page has the keyboard: its window is key (no sheet over it) and DevTools is not focused. */
+  pageHasKeyFocus(): boolean
+  /** macOS: sends an action selector to the key window's first responder, as a role item does. */
+  sendActionToFirstResponder(action: string): void
   setTheme(patch: ThemePreferencePatch): void
   createTheme(): void
   openThemesFolder(): void
@@ -34,10 +38,12 @@ function themeItems(items: readonly ThemeMenuItem[], actions: ApplicationMenuAct
 
 /**
  * Role commands whose handlers reach the query editor and the results grid, which their roles cannot (Delete and Select
- * All act on the page's DOM selection, not Monaco's). The macOS menu bar runs their handlers, as it does Undo's: an
- * NSMenu leaves DOM focus where it was. Elsewhere this menu is hidden and serves only the roles' keys.
+ * All act on the page's DOM selection, not Monaco's), with their roles' actions. The macOS menu bar runs the handlers, as
+ * it does Undo's: an NSMenu leaves DOM focus where it was. ⌘A is still the item's key equivalent (Electron cannot show a
+ * key without one), so while a Save sheet or DevTools has the keyboard the item sends its role's action there instead.
+ * Elsewhere this menu is hidden and serves only the roles' keys.
  */
-const macHandlerRoles: ReadonlySet<CommandId> = new Set(['edit.delete', 'edit.selectAll'])
+const macHandlerRoles: Readonly<Partial<Record<CommandId, string>>> = { 'edit.delete': 'delete:', 'edit.selectAll': 'selectAll:' }
 /** A role command's further keys (Zoom In's Ctrl+Shift+=): an item has one accelerator, so hidden copies carry the rest. */
 const extraAccelerators = (id: CommandId, platform: Platform): string[] => defaultRules(platform)
   .filter(rule => rule.command === id && rule.chords.length === 1 && menuMayShowChords(rule.chords, platform)).slice(1)
@@ -45,9 +51,10 @@ const extraAccelerators = (id: CommandId, platform: Platform): string[] => defau
 
 function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
   const { id, toggle, role } = entry
+  const nativeAction = platform === 'darwin' ? macHandlerRoles[id] : undefined
   // Electron performs a role natively. Its accelerator is always the catalogue's, or none: Electron's own defaults would
   // give Reload Ctrl+R and ⌘R, which toggle the results pane.
-  if (role && !(platform === 'darwin' && macHandlerRoles.has(id))) {
+  if (role && !nativeAction) {
     const hidden = extraAccelerators(id, toPlatform(platform)).map((accelerator): MenuItemConstructorOptions =>
       ({ role, accelerator, visible: false, ...(platform === 'darwin' ? { acceleratorWorksWhenHidden: true } : {}) }))
     return [{ id: entry.nativeId, label: entry.title, role, accelerator: entry.accelerator ?? '' }, ...hidden]
@@ -56,7 +63,11 @@ function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: A
   return [{
     id: entry.nativeId, label: entry.title, ...(entry.accelerator ? { accelerator: entry.accelerator } : {}), registerAccelerator: false, type: toggle ? 'checkbox' : 'normal',
     // Electron flips a checkbox before calling click; the renderer owns the state, so the item keeps showing what it last sent.
-    click: item => { if (toggle) item.checked = actions.isChecked(id); actions.command(id) }
+    click: item => {
+      if (toggle) item.checked = actions.isChecked(id)
+      if (nativeAction && !actions.pageHasKeyFocus()) actions.sendActionToFirstResponder(nativeAction)
+      else actions.command(id)
+    }
   }]
 }
 

@@ -16,7 +16,7 @@ function model(preference: Partial<ThemePreference> = {}, themes: ThemeSummary[]
   return { theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light', ...preference }, themes } }
 }
 function actions() {
-  return { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(() => false), setTheme: vi.fn<ApplicationMenuActions['setTheme']>(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() } satisfies ApplicationMenuActions
+  return { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(() => false), pageHasKeyFocus: () => true, sendActionToFirstResponder: vi.fn(), setTheme: vi.fn<ApplicationMenuActions['setTheme']>(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() } satisfies ApplicationMenuActions
 }
 function find(items: MenuItemConstructorOptions[], id: string): MenuItemConstructorOptions {
   for (const item of items) {

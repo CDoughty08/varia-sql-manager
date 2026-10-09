@@ -55,8 +55,10 @@ README.md documents user-facing behaviour, limits, and the protocol.
   back a bare id; it is the macOS menu bar and stays hidden elsewhere, where it still serves Electron's role keys. macOS
   context menus (`src/main/context-menu.ts`) send back a token and an id. Menu targets
   (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
-  `contextmenu` listener, only `.menu-layer` reaches z-index 30000, and the page cannot read the clipboard: main runs
-  Paste only just after a click, key press or tap in the focused window.
+  `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
+- The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
+  in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 

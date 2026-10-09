@@ -96,6 +96,8 @@ function rendererCanConfirm(window: BrowserWindow): boolean {
 const menuActions: ApplicationMenuActions = {
   command,
   isChecked: id => menuBridge.isChecked(id),
+  pageHasKeyFocus: () => !!mainWindow?.isFocused() && !mainWindow.webContents.isDevToolsFocused(),
+  sendActionToFirstResponder: action => Menu.sendActionToFirstResponder(action),
   // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
   setTheme: patch => { chooseTheme(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
   // The menu has no other way to report a failure, so it becomes the theme notice; the messages are fixed sentences.
@@ -182,8 +184,8 @@ function createWindow(): void {
   contents.on('will-navigate', event => event.preventDefault())
   const activation = userActivation = new UserActivation()
   contents.on('input-event', (_event, input) => activation.note(input.type))
-  // The page cannot read the clipboard (Paste is Electron's role, run just after a click or key; copies the renderer
-  // makes go through main); every other permission stays denied.
+  // The page may write the clipboard but has no permission to read it: it reads only through the Paste role, which runs
+  // within a second of a click or key, and its copies go through main. Every other permission stays denied.
   contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
     callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
   })

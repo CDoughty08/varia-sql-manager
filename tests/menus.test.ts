@@ -196,7 +196,7 @@ describe('context menu model', () => {
 
 const themeModel = { theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes: [] } } as const
 function template(platform: NodeJS.Platform, checked: readonly CommandId[] = []) {
-  const actions = { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(id => checked.includes(id)), setTheme: vi.fn(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() }
+  const actions = { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(id => checked.includes(id)), pageHasKeyFocus: () => true, sendActionToFirstResponder: vi.fn(), setTheme: vi.fn(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() }
   return { actions, items: applicationMenuTemplate({ theme: { ...themeModel.theme, themes: [] } }, actions, platform) }
 }
 function flatten(items: readonly MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {

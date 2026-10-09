@@ -16,8 +16,8 @@
   {"accelerator":"Cmd+X","id":"edit.cut","label":"Cut","role":"cut"}
   {"accelerator":"Cmd+C","id":"edit.copy","label":"Copy","role":"copy"}
   {"accelerator":"Cmd+V","id":"edit.paste","label":"Paste","role":"paste"}
-  {"id":"edit.delete","label":"Delete","registerAccelerator":false,"type":"normal","click":[["command","edit.delete"]]}
-  {"accelerator":"Cmd+A","id":"edit.selectAll","label":"Select All","registerAccelerator":false,"type":"normal","click":[["command","edit.selectAll"]]}
+  {"id":"edit.delete","label":"Delete","registerAccelerator":false,"type":"normal","click":[["pageHasKeyFocus"],["command","edit.delete"]]}
+  {"accelerator":"Cmd+A","id":"edit.selectAll","label":"Select All","registerAccelerator":false,"type":"normal","click":[["pageHasKeyFocus"],["command","edit.selectAll"]]}
   {"type":"separator"}
   {"accelerator":"Cmd+F","id":"edit.find","label":"Find","registerAccelerator":false,"type":"normal","click":[["command","edit.find"]]}
   {"accelerator":"Cmd+Alt+F","id":"edit.replace","label":"Replace","registerAccelerator":false,"type":"normal","click":[["command","edit.replace"]]}

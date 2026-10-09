@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { Platform } from '../src/shared/commands/keybindings'
 import type { ResultSet } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
-import { cellText, columnTitle, describeRange, dragSelection, inRange, isEmptyRange, maxCopyLength, pressSelection, rangeOf, selectAll, toTsv, type GridHit, type GridSelection } from '../src/renderer/src/grid/selection'
+import { cellText, columnTitle, describeRange, dragSelection, inRange, isEmptyRange, maxCopyLength, pressButton, pressSelection, rangeOf, selectAll, toTsv, type GridHit, type GridSelection } from '../src/renderer/src/grid/selection'
 import { ResultSelectionService } from '../src/renderer/src/services/result-selection'
 
 const cells = (anchor: [number, number], focus: [number, number], resultIndex = 0): GridSelection =>
@@ -84,6 +85,15 @@ describe('grid selection', () => {
     expect(right(selectAll(0), { kind: 'column', column: 2 })).toEqual(selectAll(0))
     expect(right(selectAll(0), { kind: 'corner' })).toEqual(selectAll(0))
     expect(right(block, { kind: 'corner' })).toEqual(selectAll(0))
+  })
+  it('treats Control+click as a right press on macOS, where it opens the context menu, so Copy keeps the selection', () => {
+    const press = (button: number, ctrlKey: boolean, platform: Platform) => pressButton({ button, ctrlKey }, platform)
+    // Chromium on macOS reports Control+click as a left press with Control, then opens the menu.
+    expect([press(0, true, 'darwin'), press(2, false, 'darwin'), press(0, false, 'darwin'), press(1, false, 'darwin')]).toEqual(['secondary', 'secondary', 'primary', undefined])
+    // Elsewhere Control+click is a left press.
+    for (const platform of ['win32', 'linux'] as const) expect([press(0, true, platform), press(2, true, platform)]).toEqual(['primary', 'secondary'])
+    const block = cells([0, 0], [1, 1])
+    expect(pressSelection(block, { kind: 'cell', row: 1, column: 1 }, { resultIndex: 0, shift: false, right: press(0, true, 'darwin') === 'secondary', rows: 3, columns: 3 })).toBe(block)
   })
   it('describes the selection for screen readers', () => {
     expect(describeRange({ top: 0, left: 0, bottom: 0, right: 0 })).toBe('1 row, 1 column selected')

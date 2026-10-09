@@ -495,9 +495,9 @@ try {
   await expect(editorMenu).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
-  // The page cannot read the clipboard: Paste is Electron's role and copies go through main.
+  // The page has no clipboard read of its own: Paste is Electron's role, gated in main, and copies go through main.
   expect(await page.evaluate(() => navigator.clipboard.readText().then(() => 'read', error => error.name))).toBe('NotAllowedError')
-  console.log('Menus checks: the editor context menu by mouse, Shift+F10, and the context-menu key, and no clipboard reads.')
+  console.log('Menus checks: the editor context menu by mouse, Shift+F10, and the context-menu key, and no navigator.clipboard reads.')
 
   // 8. Query tab menus act on the tab they were opened for: Close All But This, and the file items of a saved query.
   await application.evaluate(({ dialog, shell }, path) => {
@@ -840,6 +840,13 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'menus-grid-dark.png') })
   await outputMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click(fast)
   await expect.poll(clipboard).toBe(['Id\t(No column name)', '1\ta', '2\tb', '3\tc'].join(eol))
+  // macOS reports Control+click as a left press with Control and opens the menu, so there it keeps the selection as a
+  // right-click does; elsewhere it is a left press.
+  await cell(0, 0).click(fast)
+  await cell(2, 1).click({ modifiers: ['Shift'], force: true })
+  await cell(1, 1).dispatchEvent('pointerdown', { button: 0, buttons: 1, ctrlKey: true, pointerType: 'mouse', isPrimary: true })
+  await cell(1, 1).dispatchEvent('pointerup', { button: 0, buttons: 0, ctrlKey: true, pointerType: 'mouse', isPrimary: true })
+  await expect(selected()).toHaveCount(process.platform === 'darwin' ? 6 : 1)
   // Ctrl+A and Ctrl+C in the focused grid, then Ctrl+Shift+C with headers.
   await expect(grid).toBeFocused()
   await page.keyboard.press('Control+A')
