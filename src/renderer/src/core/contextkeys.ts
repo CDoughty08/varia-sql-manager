@@ -8,12 +8,12 @@ import type { QuerySnapshot } from '../services/queries'
 import { onUnexpectedError } from './errors'
 import type { Disposable, ExternalStore } from './types'
 
-export interface FocusFacts { readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | '' }
+export interface FocusFacts { readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | ''; readonly outputGridFocus: boolean }
 /** The parts of a DOM element and of the editor that `focusFacts` reads, so tests can pass plain objects. */
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '' }
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor', 'output'])
 
 /** Focus keys for the focused element. The find widget is inside the editor, so its inputs give editorFocus and inputFocus. */
@@ -24,7 +24,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   const inputFocus = !editorTextFocus && (element.matches('input, textarea, select') || !!element.closest('[contenteditable]:not([contenteditable="false"])'))
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
-  return { editorFocus, editorTextFocus, inputFocus, activePanel: panels.has(pane) ? pane as FocusFacts['activePanel'] : '' }
+  return { editorFocus, editorTextFocus, inputFocus, activePanel: panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]') }
 }
 
 export interface ContextInputs {

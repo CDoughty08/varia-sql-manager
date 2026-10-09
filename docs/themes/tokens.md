@@ -257,10 +257,10 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | Dark `$warning/70`, Light `$warning` | `#dfbd82b3` | `#8a5300` | NULL values. |
 | `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#dfbd82` | `#8a5300` | Notice that results were truncated. |
-| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Selected cells. Not used yet; reserved for the results grid. |
-| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of selected cells. Not used yet; reserved for the results grid. |
-| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#24324a` | `#d6e3f3` | Selected cells while the grid is not focused. Not used yet; reserved for the results grid. |
-| `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the active cell. Not used yet; reserved for the results grid. |
+| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Selected cells. |
+| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of selected cells. |
+| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#24324a` | `#d6e3f3` | Selected cells while the grid is not focused; their text keeps its color. |
+| `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the active cell while the grid is focused. |
 | `resultsGrid.hoverBackground` | Varia | `@list.hoverBackground` | `#263041` | `#d0d8e3` | Hovered row. Not used yet; reserved for the results grid. |
 | `resultsMessages.foreground` | Varia | Dark `$accentMuted`, Light `$text` | `#a3bbdc` | `#1f2733` | Text of the Messages tab. |
 

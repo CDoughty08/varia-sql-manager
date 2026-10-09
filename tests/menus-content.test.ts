@@ -3,8 +3,8 @@ import type { Platform } from '../src/shared/commands/keybindings'
 import { applicationMenus } from '../src/shared/commands/menus'
 import type { ThemeState, ThemeSummary } from '../src/shared/theme/types'
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
-import { menuForTarget, type ExplorerNode, type InputTarget, type MenuTarget } from '../src/renderer/src/menus/targets'
-import { connectionInfo, workbenchFixture } from './fixtures/workbench'
+import { menuForTarget, type ExplorerNode, type InputTarget, type MenuTarget, type OutputView } from '../src/renderer/src/menus/targets'
+import { connectionInfo, queryOutput, workbenchFixture } from './fixtures/workbench'
 import { deferred } from './fixtures/documents'
 
 const cleanups: (() => void)[] = []
@@ -44,13 +44,24 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
 
 /**
  * Every context menu for each kind of target, resolved in the same states: the editor, a saved and an unsaved query's
- * tab, a docked and a floating panel's tab, text fields that are editable, read-only, a password, or empty, and every
- * kind of Object Explorer node (on server-a, which connects in the second state).
+ * tab, a docked and a floating panel's tab, text fields that are editable, read-only, a password, or empty, every
+ * kind of Object Explorer node (on server-a, which connects in the second state), and Query Output's views of a query
+ * that ran before (on server-r, gone since): its grid with and without selected cells, and Messages and the XML plan
+ * with and without selected text.
  */
 async function resolveContexts(platform: Platform): Promise<{ labels: string[]; snapshots: (readonly ResolvedMenuItem[])[][] }> {
   const fixture = workbenchFixture({ platform })
   cleanups.push(fixture.dispose)
   fixture.context.set({ backendReady: true })
+  const ran = fixture.documents.create('ran.sql', 'SELECT 3', 'master', 'server-r')
+  fixture.connections.add(connectionInfo('server-r'))
+  fixture.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, resultSets: [
+    { columns: [{ name: 'Id', dataType: 'int' }], rows: [[1]], truncated: false }, { columns: [{ name: 'Id', dataType: 'int' }], rows: [[2]], truncated: false }
+  ] } })
+  await fixture.queries.execute()
+  fixture.connections.remove('server-r')
+  fixture.resultSelection.set(ran.id, { resultIndex: 1, anchor: { row: 0, column: 0 }, focus: { row: 0, column: 0 }, mode: 'cells' })
+  const output = (view: OutputView, resultIndex: number, selectedText = ''): MenuTarget => ({ kind: 'output', tabId: ran.id, view, resultIndex, selectedText, element: { textContent: 'Completed.' } as HTMLElement })
   const unsaved = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
   const saved = fixture.documents.create('saved.sql', 'SELECT 2', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql' })
   vi.mocked(fixture.host.paneLocation).mockImplementation(pane => pane === 'output' ? 'floating' : 'grid')
@@ -66,7 +77,9 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ...(['databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'securityFolder'] as const).map((kind): [string, MenuTarget] => [`the ${kind} node`, node({ kind, ...server })]),
     ['a database', node({ kind: 'database', ...database })], ['a Tables folder', node({ kind: 'tablesFolder', ...database })],
     ['a table', node({ kind: 'table', ...database, schema: 'dbo', name: 'Orders' })], ['a server object folder', node({ kind: 'serverObjectsFolder', ...server, objectKind: 'logins' })],
-    ['a server object', node({ kind: 'serverObject', ...server, objectKind: 'logins', name: 'sa' })]
+    ['a server object', node({ kind: 'serverObject', ...server, objectKind: 'logins', name: 'sa' })],
+    ['a results grid with selected cells', output('grid', 1)], ['a results grid without', output('grid', 0)],
+    ['Messages with selected text', output('messages', 0, 'Completed.')], ['Messages without', output('messages', 0)], ['the XML plan', output('plan', 0)]
   ]
   const snapshots: (readonly ResolvedMenuItem[])[][] = []
   const capture = () => { snapshots.push(targets.map(([, target]) => fixture.menus.resolve(menuForTarget[target.kind], target))) }

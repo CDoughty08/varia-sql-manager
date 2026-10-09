@@ -440,8 +440,9 @@ try {
   await page.keyboard.press('Control+R')
   await expect(outputTab).toHaveCount(0)
   const editorArea = () => page.locator('.monaco-editor .overflow-guard').boundingBox()
-  // Dockview and Monaco follow the new size on a later frame.
-  await expect.poll(async () => { const box = await editorArea(); return box.x + box.width <= 1024 && box.y + box.height > 580 }).toBe(true)
+  // Dockview and Monaco follow the new size on a later frame; on a 1024-pixel screen the window was already that wide,
+  // so the editor's height shows when the layout has caught up.
+  await expect.poll(async () => { const box = await editorArea(); return box.x + box.width <= 1024 && box.y + box.height <= 700 && box.y + box.height > 580 }).toBe(true)
   const text = await editorArea()
   const corner = { x: Math.round(text.x + text.width - 30), y: Math.round(text.y + text.height - 20) }
   await page.mouse.click(corner.x, corner.y, { button: 'right' })
@@ -609,8 +610,99 @@ try {
   expect(await calls('connections.disconnect')).toHaveLength(1)
   console.log('Menus checks: Object Explorer menus for the empty area, a server, a database, a table, Tables, and a login, by mouse and keyboard.')
 
+  // 13. Query Output: the results grid selects cells as SSMS does and copies them as tab-separated text, by its menu,
+  // its keys, and Edit › Copy; Messages keep text selection, with Select All and Copy in their menu.
+  await application.evaluate(({ ipcMain }, realHealth) => {
+    ipcMain.removeHandler('varia:request')
+    ipcMain.handle('varia:request', async (_event, method, params) => {
+      if (method === 'system.health') return { ok: true, value: realHealth }
+      if (method === 'connections.connect') return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: 'master', serverVersion: '17.0.test' } }
+      if (method === 'databases.list' || method === 'server.objects.list') return { ok: true, value: [] }
+      if (method === 'query.session.close') return { ok: true, value: { closed: true } }
+      if (method === 'query.execute') return { ok: true, value: {
+        resultSets: [{ columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }, { name: 'Note', dataType: 'nvarchar' }], rows: [[1, 'a', null], [2, 'b', 'n2'], [3, 'c', 'n3']], truncated: false }],
+        messages: ['(3 rows affected)'], recordsAffected: 3, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false
+      } }
+      return { ok: false, error: 'Unsupported test operation.' }
+    })
+  }, health.value)
+  await choose('File', 'Connect to Server…')
+  await page.getByLabel('Server Name', { exact: true }).fill('server-b')
+  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await typeSql('SELECT Id, Name, Note FROM dbo.Notes')
+  await page.keyboard.press('F5')
+  const grid = page.locator('.grid-scroll'), outputMenu = menu('Query output'), eol = process.platform === 'win32' ? '\r\n' : '\n'
+  const cell = (row, column) => grid.locator(`td[data-row="${row}"][data-col="${column}"]`), selected = () => grid.locator('td.selected')
+  const outputLabels = () => outputMenu.locator('.menu-item .menu-label').allTextContents()
+  await expect(grid).toContainText('n3')
+  // Earlier steps shrank the window, so the output panel may be short. Every row must show: Playwright scrolls a cell
+  // into view before pressing it, and that scroll would close a menu the press had just opened.
+  const outputTop = (await page.locator('.output-panel').boundingBox()).y
+  const sashes = await Promise.all((await page.locator('.dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash.dv-enabled').all()).map(sash => sash.boundingBox()))
+  const above = sashes.filter(box => box && box.y < outputTop).sort((a, b) => b.y - a.y)[0]
+  await page.mouse.move(above.x + above.width / 2, above.y + above.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(above.x + above.width / 2, Math.min(above.y, 260), { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(() => grid.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true)
+  await expect(grid.getByRole('columnheader').nth(2)).toContainText('(No column name)')
+  // A right-click selects the cell under it first; Copy copies its value.
+  await cell(1, 2).click({ button: 'right' })
+  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Select All'])
+  await expect(selected()).toHaveCount(1)
+  await expect(cell(1, 2)).toHaveClass(/selected/)
+  await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toBe('n2')
+  await expect(grid).toBeFocused()
+  // Shift extends; a right-click inside the selection keeps it.
+  await cell(0, 0).click()
+  await cell(2, 1).click({ modifiers: ['Shift'] })
+  await expect(selected()).toHaveCount(6)
+  await cell(1, 1).click({ button: 'right' })
+  await expect(selected()).toHaveCount(6)
+  await page.screenshot({ path: resolve('artifacts', 'menus-grid-dark.png') })
+  await outputMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click()
+  await expect.poll(clipboard).toBe(['Id\t(No column name)', '1\ta', '2\tb', '3\tc'].join(eol))
+  // Ctrl+A and Ctrl+C in the focused grid, then Ctrl+Shift+C with headers.
+  await expect(grid).toBeFocused()
+  await page.keyboard.press('Control+A')
+  await expect(selected()).toHaveCount(9)
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(['1\ta\tNULL', '2\tb\tn2', '3\tc\tn3'].join(eol))
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe(['Id\t(No column name)\tNote', '1\ta\tNULL', '2\tb\tn2', '3\tc\tn3'].join(eol))
+  // A column header selects the column; Edit › Copy goes through Electron's copy role to the grid.
+  await grid.getByRole('columnheader').nth(3).click()
+  await expect(selected()).toHaveCount(3)
+  await choose('Edit', 'Copy')
+  await expect.poll(clipboard).toBe(['NULL', 'n2', 'n3'].join(eol))
+  // Shift+F10 opens the grid's menu below its active cell.
+  await cell(2, 0).click()
+  await page.keyboard.press('Shift+F10')
+  await expect(outputMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeFocused()
+  const activeCell = await cell(2, 0).boundingBox(), gridMenu = await outputMenu.boundingBox()
+  expect(Math.abs(gridMenu.y - (activeCell.y + activeCell.height)) <= 1 || gridMenu.y + gridMenu.height <= activeCell.y + 1).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(grid).toBeFocused()
+  // Messages: no Copy with Headers; Select All selects only the messages, which Copy then copies.
+  await page.locator('.output-toolbar').getByRole('button', { name: /^Messages/ }).click()
+  const messages = page.locator('.messages')
+  await messages.locator('pre').first().click({ button: 'right' })
+  expect(await outputLabels()).toEqual(['Copy', 'Select All'])
+  await expect(outputMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  await outputMenu.getByRole('menuitem', { name: 'Select All', exact: true }).click()
+  await expect(messages).toBeFocused()
+  await page.keyboard.press('Shift+F10')
+  await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toContain('(3 rows affected)')
+  expect(await clipboard()).toContain('Completed in 1 ms.')
+  expect(await clipboard()).not.toContain('SELECT')
+  console.log('Menus checks: results grid cell selection and copying by menu, keys, and Edit › Copy, and the Messages menu.')
+
   expect(failures).toEqual([])
-  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; and context menus for the editor, query tabs, panel tabs, text fields, and Object Explorer.')
+  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; and results grid cell selection.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'menus-failure.png') }).catch(() => {})
   console.log(await page?.evaluate(() => ({ focused: document.activeElement?.outerHTML.slice(0, 300), menus: document.querySelectorAll('.menu').length, errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })).catch(() => 'no page'))

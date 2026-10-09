@@ -3,9 +3,21 @@
  * `matches`, and `querySelector` over simple selectors (tags, classes, attributes, and `:not([…])`, comma-separated),
  * focus, rects, and the text-field properties `inputTarget` reads.
  */
-export interface FakeDocument { activeElement: FakeElement | null; selection: string; getSelection(): { toString(): string } }
+/** The document's selection: its text, and the element it starts and ends in (`selectionIn`), if any. */
+export interface FakeDocument {
+  activeElement: FakeElement | null
+  selection: string
+  selectionIn: FakeElement | null
+  getSelection(): { toString(): string; readonly anchorNode: FakeElement | null; readonly focusNode: FakeElement | null; selectAllChildren(element: FakeElement): void }
+}
 export function fakeDocument(): FakeDocument {
-  const document: FakeDocument = { activeElement: null, selection: '', getSelection: () => ({ toString: () => document.selection }) }
+  const document: FakeDocument = {
+    activeElement: null, selection: '', selectionIn: null,
+    getSelection: () => ({
+      toString: () => document.selection, anchorNode: document.selectionIn, focusNode: document.selectionIn,
+      selectAllChildren: element => { document.selection = element.textContent; document.selectionIn = element }
+    })
+  }
   return document
 }
 

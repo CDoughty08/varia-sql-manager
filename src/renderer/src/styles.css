@@ -4,7 +4,7 @@
 :root { --vscode-strokeThickness: 1px; --vscode-shadow-lg: 0 0 12px var(--varia-widget-shadow); }
 * { box-sizing: border-box; }
 body { margin: 0; user-select: none; }
-input, textarea, [contenteditable="true"], .monaco-editor, .messages, .plan-xml, .results-grid td, [role="alert"] { user-select: text; }
+input, textarea, [contenteditable="true"], .monaco-editor, .messages, .plan-xml, [role="alert"] { user-select: text; }
 button, select { user-select: none; }
 button, input, select { font: inherit; }
 button { color: var(--varia-button-secondaryForeground); background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; padding: 6px 9px; font-size: 12px; line-height: 16px; white-space: nowrap; }
@@ -182,6 +182,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .result-selector button { padding: 5px 12px; border-radius: 0; font-size: 10px; }
 .result-selector button.active { background: var(--varia-list-inactiveSelectionBackground); }
 .grid-scroll { overflow: auto; flex: 1; }
+.grid-scroll:focus-visible, .messages:focus-visible, .plan-output:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .results-grid { border-collapse: collapse; font-size: 12px; white-space: nowrap; width: max-content; min-width: 100%; }
 .results-grid th { text-align: left; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); position: sticky; top: 0; padding: 8px 15px; font-weight: 500; }
 .results-grid th small { display: block; color: var(--varia-resultsGrid-headerDescriptionForeground); font-size: 9px; margin-top: 3px; }
@@ -189,6 +190,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-grid tr:nth-child(even) { background: var(--varia-resultsGrid-alternateRowBackground); }
 .results-grid .row-number { width: 40px; min-width: 40px; color: var(--varia-resultsGrid-rowNumberForeground); font-size: 10px; }
 .null-value { color: var(--varia-resultsGrid-nullForeground); font-style: italic; }
+/* SSMS cell selection: the grid selects cells, never text. */
+.results-grid td { user-select: none; }
+.results-grid td.selected { background: var(--varia-resultsGrid-selectionBackground); color: var(--varia-resultsGrid-selectionForeground); }
+.grid-scroll:not(:focus-within) .results-grid td.selected { background: var(--varia-resultsGrid-inactiveSelectionBackground); color: inherit; }
+.results-grid td.selected .null-value { color: inherit; }
+.grid-scroll:focus-within .results-grid td.active-cell { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .truncation { font-size: 11px; color: var(--varia-resultsGrid-truncationForeground); padding: 10px 15px; }
 .messages { overflow: auto; padding: 10px 20px; color: var(--varia-resultsMessages-foreground); }
 .messages pre { font: 12px/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }

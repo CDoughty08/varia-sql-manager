@@ -1088,23 +1088,23 @@
         },
         "resultsGrid.selectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Selected cells. Not used yet; reserved for the results grid. Default @list.activeSelectionBackground (Dark #2e4058, Light #c4daf4).",
-          "markdownDescription": "(Varia) Selected cells. Not used yet; reserved for the results grid. Default `@list.activeSelectionBackground` (Dark `#2e4058`, Light `#c4daf4`)."
+          "description": "(Varia) Selected cells. Default @list.activeSelectionBackground (Dark #2e4058, Light #c4daf4).",
+          "markdownDescription": "(Varia) Selected cells. Default `@list.activeSelectionBackground` (Dark `#2e4058`, Light `#c4daf4`)."
         },
         "resultsGrid.selectionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Text of selected cells. Not used yet; reserved for the results grid. Default @list.activeSelectionForeground (Dark #d9e1ec, Light #1f2733).",
-          "markdownDescription": "(Varia) Text of selected cells. Not used yet; reserved for the results grid. Default `@list.activeSelectionForeground` (Dark `#d9e1ec`, Light `#1f2733`)."
+          "description": "(Varia) Text of selected cells. Default @list.activeSelectionForeground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Text of selected cells. Default `@list.activeSelectionForeground` (Dark `#d9e1ec`, Light `#1f2733`)."
         },
         "resultsGrid.inactiveSelectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Selected cells while the grid is not focused. Not used yet; reserved for the results grid. Default @list.inactiveSelectionBackground (Dark #24324a, Light #d6e3f3).",
-          "markdownDescription": "(Varia) Selected cells while the grid is not focused. Not used yet; reserved for the results grid. Default `@list.inactiveSelectionBackground` (Dark `#24324a`, Light `#d6e3f3`)."
+          "description": "(Varia) Selected cells while the grid is not focused; their text keeps its color. Default @list.inactiveSelectionBackground (Dark #24324a, Light #d6e3f3).",
+          "markdownDescription": "(Varia) Selected cells while the grid is not focused; their text keeps its color. Default `@list.inactiveSelectionBackground` (Dark `#24324a`, Light `#d6e3f3`)."
         },
         "resultsGrid.activeCellBorder": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Outline of the active cell. Not used yet; reserved for the results grid. Default @focusBorder (Dark #76acff, Light #005fb8).",
-          "markdownDescription": "(Varia) Outline of the active cell. Not used yet; reserved for the results grid. Default `@focusBorder` (Dark `#76acff`, Light `#005fb8`)."
+          "description": "(Varia) Outline of the active cell while the grid is focused. Default @focusBorder (Dark #76acff, Light #005fb8).",
+          "markdownDescription": "(Varia) Outline of the active cell while the grid is focused. Default `@focusBorder` (Dark `#76acff`, Light `#005fb8`)."
         },
         "resultsGrid.hoverBackground": {
           "$ref": "#/definitions/value",

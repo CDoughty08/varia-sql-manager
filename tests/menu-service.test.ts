@@ -364,6 +364,17 @@ describe('context menus', () => {
     expect(titles(level(menus).items)).toEqual(['Connection', '-', 'Execute', 'Cancel Executing Query', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
     expect(menus.openForElement(null, { keyboard: true })).toBe(false)
   })
+  it('opens a results grid\'s menu from the keyboard below its active cell, with focus in the grid', () => {
+    const { menus, doc, first } = setup()
+    const cell = new FakeElement(doc, 'td', { className: 'active-cell', attributes: { 'data-row': '0', 'data-col': '1' } })
+    cell.rect = { left: 400, top: 300, right: 480, bottom: 324 }
+    const grid = new FakeElement(doc, 'div', { attributes: { 'data-output-view': 'grid', 'data-tab-id': first.id, 'data-result-index': '0' } }).append(cell)
+    expect(menus.openForElement(grid.dom, { keyboard: true })).toBe(true)
+    expect(level(menus)).toMatchObject({ label: 'Query output', active: 0, anchor: { kind: 'below', rect: { left: 408, top: 300, right: 480, bottom: 324 } } })
+    expect(titles(level(menus).items)).toEqual(['Copy', 'Copy with Headers', '-', 'Select All'])
+    expect(doc.activeElement).toBe(grid)
+    expect(grid.hasAttribute('data-menu-target')).toBe(false)
+  })
   it('ignores events in the menus themselves, and shows nothing (not even the browser\'s menu) where nothing has one', () => {
     const { menus, layer, event, doc } = setup()
     for (const target of [layer.children[0], new FakeElement(doc, 'div')]) {

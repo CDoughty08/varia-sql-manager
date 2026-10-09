@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { BackendClient } from '../src/main/backend-client'
 import type { ConnectionOptions, QueryOptions } from '../src/shared/contracts'
 import { quoteName, selectTopRowsScript } from '../src/shared/sql/identifiers'
+import { selectAll, toTsv } from '../src/renderer/src/grid/selection'
 
 const server = process.env.VARIA_TEST_SQL_SERVER, user = process.env.VARIA_TEST_SQL_USER
 const clients: BackendClient[] = []
@@ -43,6 +44,8 @@ describe.runIf(server)('Select Top 1000 Rows against SQL Server', () => {
       expect(result.resultSets).toHaveLength(1)
       expect(result.resultSets[0].columns.map(column => column.name)).toEqual(['id', 'na]me'])
       expect(result.resultSets[0].rows).toEqual([[1, 'a'], [2, null]])
+      // What Copy with Headers puts on the clipboard for the whole grid.
+      expect(toTsv(result.resultSets[0], selectAll(0), { headers: true, eol: '\n' })).toBe('id\tna]me\n1\ta\n2\tNULL')
     } finally { await close() }
   }, 90_000)
   it('lists a catalogue view\'s columns in order, and selects them by name', async () => {

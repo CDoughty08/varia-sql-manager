@@ -289,7 +289,7 @@ describe('menu state', () => {
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.scriptCreateToNewQuery',
-      'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName']
+      'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

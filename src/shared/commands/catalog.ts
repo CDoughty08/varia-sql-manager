@@ -342,6 +342,20 @@ export const commandCatalog = {
     title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
   },
+  // The Query Output menu and the results grid's keys: the grid copies its selected cells (Ctrl+C reaches its copy
+  // event, and Ctrl+A is its own), and Messages and the XML plan their selected text.
+  'output.copy': {
+    title: 'Copy', category: 'Query', icon: 'copy', palette: false,
+    keybindings: [{ key: 'mod+c', when: 'outputGridFocus', native: true }], menus: [{ menu: 'output.context', group: '1_copy', order: 1, mnemonic: 'c' }]
+  },
+  'output.copyWithHeaders': {
+    title: 'Copy with Headers', category: 'Query', palette: false,
+    keybindings: [{ key: 'mod+shift+c', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '1_copy', order: 2, mnemonic: 'h', when: "outputView == 'grid'" }]
+  },
+  'output.selectAll': {
+    title: 'Select All', category: 'Query', palette: false,
+    keybindings: [{ key: 'mod+a', when: 'outputGridFocus', native: true }], menus: [{ menu: 'output.context', group: '2_select', order: 1, mnemonic: 'a' }]
+  },
   // A panel tab's menu: the panel comes from the menu's target, so these have no keys and are not in the palette.
   'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },
   'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }] },

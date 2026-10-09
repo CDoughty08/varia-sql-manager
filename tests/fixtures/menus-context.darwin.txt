@@ -126,3 +126,25 @@ explorer.context, for a server object folder
   Re&fresh  F5  -+++
 explorer.context, for a server object
   Copy &Name  -+++
+output.context, for a results grid with selected cells
+  &Copy  ⌘C  ++++
+  Copy with &Headers  ⇧⌘C  ++++
+  ---
+  Select &All  ⌘A  ++++
+output.context, for a results grid without
+  &Copy  ⌘C  ----
+  Copy with &Headers  ⇧⌘C  ----
+  ---
+  Select &All  ⌘A  ++++
+output.context, for Messages with selected text
+  &Copy  ⌘C  ++++
+  ---
+  Select &All  ⌘A  ++++
+output.context, for Messages without
+  &Copy  ⌘C  ----
+  ---
+  Select &All  ⌘A  ++++
+output.context, for the XML plan
+  &Copy  ⌘C  ----
+  ---
+  Select &All  ⌘A  ++++

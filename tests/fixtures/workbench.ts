@@ -12,7 +12,9 @@ import { QueryService } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
 import { PaneService } from '../../src/renderer/src/services/panes'
 import { ExplorerService } from '../../src/renderer/src/services/explorer'
+import { ResultSelectionService } from '../../src/renderer/src/services/result-selection'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
+import { outputContribution } from '../../src/renderer/src/contributions/output'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
 import { editContribution } from '../../src/renderer/src/contributions/edit'
 import { windowContribution } from '../../src/renderer/src/contributions/window'
@@ -91,6 +93,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerService()
   const queries = new QueryService(documents, api, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)
+  const resultSelection = new ResultSelectionService(events)
   const targets = new TargetService(documents, queries, connections, files, api)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
@@ -110,9 +113,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
-  const workbench = { commands, documents, queries, files, editorOptions, connections, targets, quickInput, keybindings, events, theme, panes, menus, explorer, menuTargets }
+  const workbench = { platform, commands, documents, queries, files, editorOptions, connections, targets, quickInput, keybindings, events, theme, panes, menus, explorer, menuTargets, resultSelection }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history), themeContribution(workbench, api, options.timers)]
+    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history), themeContribution(workbench, api, options.timers)]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
     const pending = deferred<Awaited<ReturnType<VariaApi['execute']>>>()
@@ -120,6 +123,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     const running = queries.execute()
     return { finish: async () => { pending.resolve({ ok: true, value: queryOutput }); await running } }
   }
-  const dispose = () => { menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose() }
-  return { ...doc, api, connections, editorOptions, panes, explorer, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, history, host, theme, startQuery, dispose }
+  const dispose = () => { menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose(); documents.dispose() }
+  return { ...doc, api, connections, editorOptions, panes, explorer, resultSelection, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, history, host, theme, startQuery, dispose }
 }

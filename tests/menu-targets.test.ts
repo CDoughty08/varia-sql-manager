@@ -12,7 +12,7 @@ describe('menu targets', () => {
     const input = inputTarget(element('input', { value: 'a' }).dom, () => true)
     const targets: MenuTarget[] = [
       { kind: 'editor', tabId: 't1' }, { kind: 'explorer', node: { kind: 'table', connectionId: 'c', database: 'd', schema: 's', name: 'n' } }, { kind: 'documentTab', tabId: 't2' },
-      { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '' }, { kind: 'dockTab', pane: 'output', floating: true }, input
+      { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'output', floating: true }, input
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
     expect(targets.map(targetKeys)).toEqual([
@@ -125,6 +125,32 @@ describe('menu target service', () => {
       expect(service.targetFor(dom(body))).toBeUndefined()
       expect(report).toHaveBeenCalledOnce()
     } finally { report.mockRestore() }
+  })
+  it('resolves Query Output\'s views: the grid below its active cell, and Messages and the plan with their selected text', () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const view = (kind: string, attributes: Record<string, string> = {}) => make('div', { attributes: { 'data-output-view': kind, 'data-tab-id': 't1', 'data-result-index': '2', ...attributes } })
+    const number = make('td', { className: 'row-number', attributes: { 'data-row': '0' } }), first = make('td', { attributes: { 'data-row': '0', 'data-col': '0' } })
+    const active = make('td', { className: 'active-cell', attributes: { 'data-row': '1', 'data-col': '1' } })
+    const grid = view('grid', { 'data-result-grid': '' }).append(make('table').append(make('tr').append(number, first), make('tr').append(active)))
+    const text = make('pre', { textContent: 'hello' }), messages = view('messages', { 'data-result-index': '0' }).append(text), plan = view('plan').append(make('pre'))
+    make('body').append(grid, messages, plan)
+    const service = new MenuTargetService()
+    const output = { kind: 'output', tabId: 't1', resultIndex: 2, selectedText: '' }
+    expect(service.targetFor(dom(number))).toEqual({ target: { ...output, view: 'grid', element: grid }, element: grid, focus: grid, anchor: active })
+    active.classes.delete('active-cell')
+    expect(service.targetFor(dom(active))?.anchor).toBe(first)
+    // Selected text counts only inside the view.
+    doc.selection = 'hello'
+    expect(service.targetFor(dom(text))?.target).toEqual({ ...output, resultIndex: 0, view: 'messages', element: messages })
+    doc.selectionIn = text
+    expect(service.targetFor(dom(text))).toEqual({ target: { ...output, resultIndex: 0, view: 'messages', selectedText: 'hello', element: messages }, element: messages, focus: messages })
+    expect(service.targetFor(dom(plan))?.target).toMatchObject({ view: 'plan', selectedText: '' })
+    // The grid's cells are selected, not its text.
+    doc.selectionIn = first
+    expect(service.targetFor(dom(first))?.target).toMatchObject({ view: 'grid', selectedText: '' })
+    for (const attributes of [{ 'data-output-view': 'chart' }, { 'data-tab-id': '' }, { 'data-result-index': '-1' }, { 'data-result-index': '1.5' }] as Record<string, string>[]) {
+      expect(service.targetFor(dom(make('div').append(view('messages', attributes)).children[0])), JSON.stringify(attributes)).toBeUndefined()
+    }
   })
   it('reads a text field\'s facts again once it has focus', () => {
     let undo = false

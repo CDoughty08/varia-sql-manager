@@ -25,12 +25,25 @@ export interface InputTarget {
   readonly canUndo: boolean
   readonly canRedo: boolean
 }
+export type OutputView = 'grid' | 'messages' | 'plan'
+/**
+ * A Query Output view: the query's results grid for one result set (its cell selection lives in
+ * `ResultSelectionService`), or Messages or the XML plan with the text selected in them when the menu opened.
+ */
+export interface OutputTarget {
+  readonly kind: 'output'
+  readonly tabId: string
+  readonly view: OutputView
+  readonly resultIndex: number
+  readonly selectedText: string
+  readonly element: HTMLElement
+}
 /** What a context menu was opened for. Renderer objects only: commands receive it as `CommandArgs.target`, and it never crosses IPC. */
 export type MenuTarget =
   | { readonly kind: 'editor'; readonly tabId: string }
   | { readonly kind: 'explorer'; readonly node: ExplorerNode }
   | { readonly kind: 'documentTab'; readonly tabId: string }
-  | { readonly kind: 'output'; readonly tabId: string; readonly view: 'grid' | 'messages' | 'plan'; readonly resultIndex: number; readonly selectedText: string }
+  | OutputTarget
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean }
   | InputTarget
 
@@ -58,6 +71,7 @@ export function argsFor(target: MenuTarget): CommandArgs {
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
 export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
+export const outputOf = (args: CommandArgs | undefined): OutputTarget | undefined => args?.target?.kind === 'output' ? args.target : undefined
 
 const textTypes: ReadonlySet<string> = new Set(['text', 'search', 'email', 'url', 'tel', 'number', 'password'])
 /**
@@ -98,6 +112,8 @@ export interface TargetHit {
   readonly element: Element
   readonly focus?: HTMLElement
   readonly mark?: Element
+  /** What a keyboard-opened menu opens below, when not `element`: the results grid's active cell. */
+  readonly anchor?: Element
 }
 export type TargetProvider = (element: Element) => MenuTarget | null
 export interface MenuTargetOptions {
@@ -110,12 +126,27 @@ const focusable = 'button, [tabindex], input, textarea, [contenteditable]'
 /** Parts of the query editor whose right-click shows no menu: scroll bars, the overview ruler, hovers, suggestions, and the find widget around its inputs. */
 const editorChrome = '.scrollbar, .decorationsOverviewRuler, .contentWidgets, .overflowingContentWidgets, .overlayWidgets'
 const documentCommandEnabled: CommandEnabled = command => typeof document === 'undefined' || document.queryCommandEnabled(command)
+const outputViews: ReadonlySet<string> = new Set<OutputView>(['grid', 'messages', 'plan'])
+
+/** The text selected inside `element`, or '' when the selection is elsewhere or crosses its edge. */
+export function selectedTextIn(element: Element): string {
+  const selection = element.ownerDocument?.getSelection()
+  if (!selection?.anchorNode || !selection.focusNode || !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return ''
+  return selection.toString()
+}
+/** The Query Output view `element` is in: QueryOutput marks each with its query, view, and result set. */
+export function outputTarget(element: Element): OutputTarget | undefined {
+  const view = element.closest<HTMLElement>('[data-output-view]')
+  const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', resultIndex = Number(view?.getAttribute('data-result-index') ?? 0)
+  if (!view || !outputViews.has(kind) || !tabId || !Number.isInteger(resultIndex) || resultIndex < 0) return undefined
+  return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view }
+}
 
 /**
- * Finds what a context menu is for. Components register elements with a provider (`useMenuTarget`); the query editor
- * and Dockview's tab elements are resolved here. `targetFor` returns a hit to open its menu, null to show no menu even
- * where an outer element has one (the palette's input, the editor's scroll bars), and undefined where nothing has a
- * menu. Providers run at event time, so a target is never stale.
+ * Finds what a context menu is for. Components register elements with a provider (`useMenuTarget`); the query editor,
+ * Dockview's tab elements, and Query Output's views are resolved here. `targetFor` returns a hit to open its menu, null
+ * to show no menu even where an outer element has one (the palette's input, the editor's scroll bars), and undefined
+ * where nothing has a menu. Providers run at event time, so a target is never stale.
  */
 export class MenuTargetService {
   private readonly providers = new WeakMap<Element, TargetProvider>()
@@ -141,7 +172,12 @@ export class MenuTargetService {
       // Dockview's focusable tab element wraps the panel's own tab content, which registers the target.
       const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab]')
       const provider = tab && this.providers.get(tab)
-      return provider ? this.hit(provider, tab, element) : undefined
+      if (provider) return this.hit(provider, tab, element)
+      const output = outputTarget(element)
+      if (!output) return undefined
+      // Keyboard menus open below the grid's active cell, else its first cell.
+      const anchor = output.view === 'grid' ? output.element.querySelector('td.active-cell') ?? output.element.querySelector('td[data-col]') ?? undefined : undefined
+      return { target: output, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
     } catch (error) { onUnexpectedError(error); return undefined }
   }
 

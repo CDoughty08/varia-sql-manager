@@ -66,6 +66,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['banner.errorForeground'], ['quickInput.background', 'banner.errorBackground']),
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground']),
+  // Selected cells keep their text color while the grid is not focused, NULL included.
+  ...text(['foreground'], ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
   ...text(['notifications.foreground'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
@@ -96,6 +98,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['connection.favoriteForeground'], widget),
   ...graphic(['tab.activeBorderTop', 'documentTabs.modifiedIndicator', 'documentTabs.closeForeground'], strip),
   ...graphic(['panelTitle.activeBorder'], panelTitle, widget),
+  ...graphic(['resultsGrid.activeCellBorder'], panel, ['resultsGrid.background', 'resultsGrid.selectionBackground']),
   ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
   ...graphic(['button.background'], widget),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),

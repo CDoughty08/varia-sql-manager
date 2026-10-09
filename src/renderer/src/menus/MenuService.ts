@@ -243,7 +243,7 @@ export class MenuService implements Disposable {
   private keyboardAnchor(hit: TargetHit): Anchor {
     const caret = hit.target.kind === 'editor' ? this.options.editorCaret?.() : undefined
     if (caret) return { kind: 'below', rect: caret }
-    const { left, top, right, bottom } = hit.element.getBoundingClientRect()
+    const { left, top, right, bottom } = (hit.anchor ?? hit.element).getBoundingClientRect()
     return { kind: 'below', rect: { left: left + 8, top, right, bottom } }
   }
   /** The menus took the keyboard: remember where focus was, unless a menu replaced another one. */

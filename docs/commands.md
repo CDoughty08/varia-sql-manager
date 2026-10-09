@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (64)
+## Commands (67)
 
 ### File
 
@@ -73,6 +73,9 @@ keys it uses are listed below.
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
 | Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
+| Copy (not in the palette) | `output.copy` | Ctrl+C * (`outputGridFocus`) | Ctrl+C * (`outputGridFocus`) | ⌘C * (`outputGridFocus`) | Always | Query Output context menu › Copy |
+| Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
+| Select All (not in the palette) | `output.selectAll` | Ctrl+A * (`outputGridFocus`) | Ctrl+A * (`outputGridFocus`) | ⌘A * (`outputGridFocus`) | Always | Query Output context menu › Select All |
 
 ### Connection
 
@@ -119,7 +122,7 @@ keys it uses are listed below.
 | Show Context Menu (not in the palette) | `workbench.showContextMenu` | Shift+F10, Menu | Shift+F10, Menu | ⇧F10 | `!quickInputVisible` | — |
 | Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
 
-## Context keys (22)
+## Context keys (23)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -136,6 +139,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
+| `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendReady` | boolean | state | The backend has answered its health check. |
 | `hasActiveDocument` | boolean | state | A query is open. |

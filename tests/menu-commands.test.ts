@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { connectionInfo, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, queryOutput, workbenchFixture } from './fixtures/workbench'
 import { deferred, TestEditor } from './fixtures/documents'
+import type { QueryResult } from '../src/shared/contracts'
+import { contextRecord } from '../src/shared/commands/context-keys'
+import type { Platform } from '../src/shared/commands/keybindings'
+import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import type { CommandArgs } from '../src/renderer/src/core/types'
-import type { ExplorerNode, InputTarget } from '../src/renderer/src/menus/targets'
+import { selectAll, type GridSelection } from '../src/renderer/src/grid/selection'
+import type { ExplorerNode, InputTarget, OutputView } from '../src/renderer/src/menus/targets'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
 const cleanups: (() => void)[] = []
@@ -333,5 +338,100 @@ describe('Object Explorer commands', () => {
     expect(commands.isEnabled('connection.disconnect')).toBe(true)
     await running.finish()
     expect(commands.isEnabled('connection.disconnect', node)).toBe(true)
+  })
+})
+
+describe('Query Output commands', () => {
+  const results: QueryResult = { ...queryOutput, messages: ['hello'], resultSets: [
+    { columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }], rows: [[1, 'a'], [2, null]], truncated: false },
+    { columns: [{ name: 'Microsoft SQL Server 2005 XML Showplan', dataType: 'xml' }], rows: [['<ShowPlanXML/>']], truncated: false, kind: 'executionPlan' }
+  ] }
+  const block = (resultIndex = 0): GridSelection => ({ resultIndex, anchor: { row: 0, column: 0 }, focus: { row: 1, column: 1 }, mode: 'cells' })
+  /** A query that has run and shows `value`, and targets for its views, each over an element of the fake document. */
+  async function ran(platform: Platform = 'win32', value: QueryResult = results) {
+    const fixture = workbenchFixture({ platform })
+    cleanups.push(fixture.dispose)
+    fixture.connections.add(connectionInfo('server-a'))
+    const tab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
+    fixture.api.execute.mockResolvedValueOnce({ ok: true, value })
+    await fixture.queries.execute()
+    const doc = fakeDocument()
+    const element = (view: OutputView, resultIndex = 0, text = '') => new FakeElement(doc, 'div', { textContent: text, attributes: { 'data-output-view': view, 'data-tab-id': tab.id, 'data-result-index': String(resultIndex) } })
+    const on = (view: OutputView, options: { resultIndex?: number; selectedText?: string; text?: string } = {}): CommandArgs => ({ tabId: tab.id, target: {
+      kind: 'output', tabId: tab.id, view, resultIndex: options.resultIndex ?? 0, selectedText: options.selectedText ?? '', element: element(view, options.resultIndex, options.text).dom
+    } })
+    return { ...fixture, tab, doc, element, on }
+  }
+  it('copy the grid\'s selected cells as tab-separated text, with or without headers, in the platform\'s line breaks', async () => {
+    const { commands, api, resultSelection, tab, on, element } = await ran()
+    const enabled = (args: CommandArgs) => (['output.copy', 'output.copyWithHeaders', 'output.selectAll'] as const).filter(id => commands.isEnabled(id, args))
+    expect(enabled(on('grid'))).toEqual(['output.selectAll'])
+    resultSelection.set(tab.id, block())
+    expect(enabled(on('grid'))).toEqual(['output.copy', 'output.copyWithHeaders', 'output.selectAll'])
+    expect(await commands.execute('output.copy', on('grid'), 'menu')).toBe(true)
+    expect(await commands.execute('output.copyWithHeaders', on('grid'), 'menu')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([['1\ta\r\n2\tNULL'], ['Id\t(No column name)\r\n1\ta\r\n2\tNULL']])
+    // A selection in another result set, the XML plan's result, and a closed query's results have nothing to copy.
+    resultSelection.set(tab.id, block(1))
+    expect(enabled(on('grid'))).toEqual(['output.selectAll'])
+    expect(enabled(on('grid', { resultIndex: 1 }))).toEqual([])
+    expect(enabled({ target: { kind: 'output', tabId: 'gone', view: 'grid', resultIndex: 0, selectedText: '', element: element('grid').dom } })).toEqual([])
+    const linux = await ran('linux')
+    linux.resultSelection.set(linux.tab.id, selectAll(0))
+    expect(await linux.commands.execute('output.copyWithHeaders', linux.on('grid'), 'menu')).toBe(true)
+    expect(linux.api.writeClipboardText.mock.calls).toEqual([['Id\t(No column name)\n1\ta\n2\tNULL']])
+  })
+  it('copy and select the text of Messages and the XML plan', async () => {
+    const { commands, api, doc, on } = await ran()
+    const messages = on('messages', { selectedText: 'hello', text: 'hello\nCompleted.' })
+    expect((['output.copy', 'output.copyWithHeaders', 'output.selectAll'] as const).filter(id => commands.isEnabled(id, messages))).toEqual(['output.copy', 'output.selectAll'])
+    expect(await commands.execute('output.copy', messages, 'menu')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([['hello']])
+    expect(commands.isEnabled('output.copy', on('plan'))).toBe(false)
+    // Select All selects only that view's text.
+    expect(await commands.execute('output.selectAll', on('plan', { resultIndex: 1, text: '<ShowPlanXML/>' }), 'menu')).toBe(true)
+    expect(doc.selection).toBe('<ShowPlanXML/>')
+    expect(commands.isEnabled('output.selectAll', on('messages'))).toBe(false)
+  })
+  it('select every cell from the menu, and from Edit › Select All while the grid has focus', async () => {
+    const { commands, api, resultSelection, tab, on, element } = await ran()
+    expect(await commands.execute('output.selectAll', on('grid'), 'menu')).toBe(true)
+    expect(resultSelection.get(tab.id, 0)).toEqual(selectAll(0))
+    resultSelection.clear(tab.id)
+    vi.stubGlobal('document', { activeElement: element('grid') })
+    cleanups.push(() => vi.unstubAllGlobals())
+    expect(await commands.execute('edit.selectAll', undefined, 'menu')).toBe(true)
+    expect(resultSelection.get(tab.id, 0)).toEqual(selectAll(0))
+    expect(api.runRole).not.toHaveBeenCalled()
+    // A text field's own menu still selects the field's text.
+    const input = new FakeElement(fakeDocument(), 'input', { value: 'x' })
+    expect(await commands.execute('edit.selectAll', { target: { kind: 'input', element: input.dom, readOnly: false, secret: false, hasSelection: false, empty: false, canUndo: true, canRedo: true } }, 'menu')).toBe(true)
+    expect(api.runRole.mock.calls).toEqual([['selectAll']])
+  })
+  it('copy with headers from Ctrl+Shift+C in a focused grid, and leave the key alone elsewhere', async () => {
+    const { commands, api, resultSelection, tab, element } = await ran()
+    resultSelection.set(tab.id, block())
+    vi.stubGlobal('document', { activeElement: element('grid') })
+    cleanups.push(() => vi.unstubAllGlobals())
+    const focus = { grid: true }
+    const keybindings = new KeybindingService({ platform: 'win32', commands, context: { get: () => contextRecord('win32', { activePanel: 'output', outputGridFocus: focus.grid }) }, modalOpen: () => false, editorHasTextFocus: () => false })
+    const press = () => {
+      const event = { key: 'C', code: 'KeyC', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, repeat: false, defaultPrevented: false, preventDefault: vi.fn(), stopPropagation: vi.fn() }
+      keybindings.handleKeyDown(event satisfies KeyDownEvent)
+      return event.preventDefault.mock.calls.length > 0
+    }
+    expect(press()).toBe(true)
+    await vi.waitFor(() => expect(api.writeClipboardText.mock.calls).toEqual([['Id\t(No column name)\r\n1\ta\r\n2\tNULL']]))
+    focus.grid = false
+    expect(press()).toBe(false)
+  })
+  it('refuse to copy more than the clipboard limit, with a message in the banner', async () => {
+    const huge = 'x'.repeat(5_000_000)
+    const { commands, api, resultSelection, tab, on } = await ran('win32', { ...queryOutput, resultSets: [{ columns: [{ name: 'a', dataType: 'nvarchar' }], rows: [[huge], [huge]], truncated: false }] })
+    resultSelection.set(tab.id, selectAll(0))
+    expect(await commands.execute('output.copy', on('grid'), 'menu')).toBe(false)
+    expect(commands.getSnapshot().error).toBe('Could not run “Query: Copy”: The selection is too large to copy.')
+    expect(await commands.execute('output.copy', on('messages', { selectedText: huge + huge }), 'menu')).toBe(false)
+    expect(api.writeClipboardText).not.toHaveBeenCalled()
   })
 })

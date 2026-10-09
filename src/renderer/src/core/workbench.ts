@@ -9,6 +9,7 @@ import { EditorOptionsService } from '../services/editor-options'
 import { TargetService } from '../services/targets'
 import { PaneService } from '../services/panes'
 import { ExplorerService } from '../services/explorer'
+import { ResultSelectionService } from '../services/result-selection'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { filesContribution } from '../contributions/files'
@@ -19,6 +20,7 @@ import { editContribution } from '../contributions/edit'
 import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
 import { explorerContribution } from '../contributions/explorer'
+import { outputContribution } from '../contributions/output'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -53,6 +55,8 @@ export interface Workbench extends Disposable {
   readonly panes: PaneService
   /** Which Object Explorer lists to load again. */
   readonly explorer: ExplorerService
+  /** The cells selected in each query's results grid. */
+  readonly resultSelection: ResultSelectionService
   readonly theme: ThemeService
 }
 /** The query editor's caret line in window coordinates, scrolled into view first: keyboard-opened editor menus open below it. */
@@ -72,6 +76,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const documents = new DocumentService((sql, uri) => monaco.editor.createModel(sql, 'sql', monaco.Uri.parse(uri)), api, events)
   const queries = new QueryService(documents, api, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)
+  const resultSelection = new ResultSelectionService(events)
   const targets = new TargetService(documents, queries, connections, files, api)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
@@ -91,16 +96,16 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, files, targets, editorOptions, panes, explorer, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, files, targets, editorOptions, panes, explorer, resultSelection, theme, dispose: () => {
     if (disposed) return
     disposed = true
     // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
     listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); explorer.dispose(); theme.dispose(); events.dispose()
+    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); explorer.dispose(); resultSelection.dispose(); theme.dispose(); events.dispose()
   } }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api)]
+    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api)]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')
