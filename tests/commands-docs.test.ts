@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { commandIds, paletteLabel } from '../src/shared/commands/catalog'
+import { commandDescriptor, commandIds, paletteLabel } from '../src/shared/commands/catalog'
 import { contextKeyNames } from '../src/shared/commands/context-keys'
 import { renderCommandDocs } from '../src/shared/commands/docs'
+import { contextMenuIds, menuIds, submenuIds, submenus } from '../src/shared/commands/menus'
 
-// Regenerate after changing the catalogue, context keys, or reserved keys: npx vitest run tests/commands-docs.test.ts -u
+// Regenerate after changing the catalogue, menus, context keys, or reserved keys: npx vitest run tests/commands-docs.test.ts -u
 describe('generated command documentation', () => {
   const docs = renderCommandDocs()
   it('keeps docs/commands.md in sync', async () => {
@@ -24,5 +25,26 @@ describe('generated command documentation', () => {
     expect(docs).toContain('| Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | View › Word Wrap |')
     expect(docs).toContain('| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `hasActiveDocument` | Edit › Uncomment Selection |')
     expect(docs).toContain('| Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |')
+    expect(docs).toContain('| Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | View › Theme › Create Custom Theme… |')
+  })
+  it('lists every menu\'s items in order, title-bar menus first, with each context menu\'s use', () => {
+    const menus = docs.slice(docs.indexOf('\n## Menus\n'), docs.indexOf('\n## Context keys'))
+    const sections = menus.split('\n#### ').slice(1)
+    expect(sections).toHaveLength(menuIds.length)
+    expect(menus.indexOf('### Context menus')).toBeGreaterThan(menus.indexOf('#### Window (Alt+W)'))
+    menuIds.forEach((menu, index) => {
+      const section = sections[index]
+      for (const id of commandIds.filter(id => commandDescriptor(id).menus?.some(placement => placement.menu === menu))) expect(section, `${menu}: ${id}`).toContain(`| \`${id}\` |`)
+      for (const id of submenuIds.filter(id => submenus[id].placements.some(placement => placement.menu === menu))) expect(section.replaceAll('**', ''), `${menu}: ${id}`).toContain(`| ${submenus[id].title} › | Submenu: `)
+    })
+    for (const menu of contextMenuIds) expect(menus).toMatch(new RegExp(`#### .* \\(\`${menu.replace('.', '\\.')}\`\\)\n\nRight-click `))
+    expect(menus).toContain('| `z_quit` | E**x**it | `window.close` | Windows only |')
+    expect(menus).toContain('| `z_quit` | **Q**uit | `window.close` | Linux only |')
+    expect(menus).toContain('| `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == \'server\' \\|\\| explorerNode == \'background\'` |')
+    expect(menus).toContain('| `3_file` | **O**pen Containing Folder | `file.revealInFolder` | Windows, Linux only |')
+    expect(menus).toContain('| `3_file` | Reveal in Finder | `file.revealInFolder` | macOS only |')
+    expect(menus).toContain('| `0_connection` | C**o**nnection › | Submenu: Query › Connection | Always |')
+    expect(menus).toContain('| theme items | **D**ark, **L**ight, Follow **S**ystem | `preferences.setTheme` | Always |')
+    expect(menus).toContain('| `4_window` | Minimize | Electron role `minimize` | macOS only |')
   })
 })

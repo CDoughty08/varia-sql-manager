@@ -101,10 +101,10 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Color Theme… | `preferences.colorTheme` | — | — | — | Always | View › Theme › Color Theme… |
-| Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | — |
-| Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | — |
-| Reload Themes | `preferences.reloadThemes` | — | — | — | Always | — |
-| Set Color Theme (not in the palette) | `preferences.setTheme` | — | — | — | Always | — |
+| Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | View › Theme › Create Custom Theme… |
+| Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | View › Theme › Open Themes Folder |
+| Reload Themes | `preferences.reloadThemes` | — | — | — | Always | View › Theme › Reload Themes |
+| Set Color Theme (not in the palette) | `preferences.setTheme` | — | — | — | Always | View › Theme › Dark, Light, Follow System, and each theme under Dark Theme and Light Theme |
 
 ### Developer
 
@@ -121,6 +121,205 @@ keys it uses are listed below.
 | Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette…; Editor context menu › Command Palette… |
 | Show Context Menu (not in the palette) | `workbench.showContextMenu` | Shift+F10, Menu | Shift+F10, Menu | ⇧F10 | `!quickInputVisible` | — |
 | Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
+
+## Menus
+
+Windows and Linux draw these menus in the window's theme. A title-bar menu opens from the menu bar, from F10 or a tap of
+Alt, or with Alt and its letter; a context menu opens from a right-click, Shift+F10, or the context-menu key. macOS
+shows the title-bar menus in its menu bar (without Exit or Quit: the application menu has Quit) and the context menus
+as native menus. The bold letter is an item's access key on Windows and Linux: with its menu open, press the letter to
+choose the item. Items are listed in menu order, and a separator divides groups. "Shown" limits an item to some
+platforms or, in a context menu, to targets that match its condition; an item that cannot run is dimmed, not hidden.
+
+### Title-bar menus
+
+#### File (Alt+F)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_connect` | Conn**e**ct to Server… | `connection.connect` | Always |
+| `0_connect` | **D**isconnect from Server… | `connection.disconnect` | Always |
+| `1_file` | **N**ew Query | `file.new` | Always |
+| `1_file` | **O**pen… | `file.open` | Always |
+| `1_file` | **S**ave | `file.save` | Always |
+| `1_file` | Save **A**s… | `file.saveAs` | Always |
+| `2_close` | **C**lose Query | `file.close` | Always |
+| `z_quit` | E**x**it | `window.close` | Windows only |
+| `z_quit` | **Q**uit | `window.close` | Linux only |
+
+#### Edit (Alt+E)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_undo` | **U**ndo | `edit.undo` | Always |
+| `1_undo` | **R**edo | `edit.redo` | Always |
+| `2_clipboard` | Cu**t** | `edit.cut` | Always |
+| `2_clipboard` | **C**opy | `edit.copy` | Always |
+| `2_clipboard` | **P**aste | `edit.paste` | Always |
+| `2_clipboard` | **D**elete | `edit.delete` | Always |
+| `2_clipboard` | Select **A**ll | `edit.selectAll` | Always |
+| `3_find` | **F**ind | `edit.find` | Always |
+| `3_find` | R**e**place | `edit.replace` | Always |
+| `4_comment` | Toggle **L**ine Comment | `edit.toggleLineComment` | Always |
+| `4_comment` | Co**m**ment Selection | `edit.commentLines` | Always |
+| `4_comment` | U**n**comment Selection | `edit.uncommentLines` | Always |
+
+#### View (Alt+V)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_palette` | **C**ommand Palette… | `workbench.showCommands` | Always |
+| `0_palette` | **G**o to Query… | `workbench.quickOpen` | Always |
+| `1_layout` | **S**ave Layout… | `layout.save` | Always |
+| `1_layout` | **L**oad Layout… | `layout.load` | Always |
+| `1_layout` | **R**eset Layout | `layout.reset` | Always |
+| `2_editor` | **W**ord Wrap | `editor.toggleWordWrap` | Always |
+| `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
+| `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
+| `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
+| `4_zoom` | Reset **Z**oom | `view.resetZoom` | Always |
+| `4_zoom` | **F**ull Screen | `view.toggleFullScreen` | Always |
+| `z_developer` | R**e**load Window | `developer.reloadWindow` | Always |
+| `z_developer` | Toggle **D**eveloper Tools | `developer.toggleDevTools` | Always |
+
+#### View › Theme
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_pick` | **C**olor Theme… | `preferences.colorTheme` | Always |
+| theme items | **D**ark, **L**ight, Follow **S**ystem | `preferences.setTheme` | Always |
+| theme items | Dar**k** Theme ›, Li**g**ht Theme ›: one item per theme | `preferences.setTheme` | Always |
+| theme items | Create Custom **T**heme… | `preferences.createTheme` | Always |
+| theme items | **O**pen Themes Folder | `preferences.openThemesFolder` | Always |
+| theme items | **R**eload Themes | `preferences.reloadThemes` | Always |
+
+#### Query (Alt+Q)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
+| `0_connection` | Change **D**atabase… | `query.changeDatabase` | Always |
+| `1_execute` | E**x**ecute | `query.execute` | Always |
+| `1_execute` | **C**ancel Executing Query | `query.cancel` | Always |
+
+#### Query › Connection
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_connect` | **C**onnect… | `connection.connect` | Always |
+| `1_connect` | **D**isconnect | `query.disconnect` | Always |
+| `1_connect` | Disconnect **A**ll Queries | `query.disconnectAll` | Always |
+| `2_change` | C**h**ange Connection… | `query.changeConnection` | Always |
+
+#### Window (Alt+W)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_panes` | **O**bject Explorer | `window.explorer` | Always |
+| `1_panes` | Query **E**ditor | `window.editor` | Always |
+| `1_panes` | Q**u**ery Output | `window.output` | Always |
+| `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
+| `2_documents` | **N**ext Query | `document.next` | Always |
+| `2_documents` | **P**revious Query | `document.previous` | Always |
+| `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
+| `3_layout` | **S**ave Window Layout… | `layout.save` | Always |
+| `3_layout` | Lo**a**d Window Layout… | `layout.load` | Always |
+| `3_layout` | **R**eset Window Layout | `layout.reset` | Always |
+| `4_window` | Minimize | Electron role `minimize` | macOS only |
+| `4_window` | Zoom | Electron role `zoom` | macOS only |
+
+### Context menus
+
+#### Editor context menu (`editor.context`)
+
+Right-click the query editor, or press Shift+F10 or the context-menu key in it. A right-click outside the selection moves the caret there first.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
+| `2_execute` | E**x**ecute | `query.execute` | Always |
+| `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
+| `3_clipboard` | Cu**t** | `edit.cut` | Always |
+| `3_clipboard` | **C**opy | `edit.copy` | Always |
+| `3_clipboard` | **P**aste | `edit.paste` | Always |
+| `9_palette` | Comm**a**nd Palette… | `workbench.showCommands` | Always |
+
+#### Object Explorer context menu (`explorer.context`)
+
+Right-click an Object Explorer node or the empty area below the servers, or press Shift+F10 or the context-menu key on a focused node. Items act on that node.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == 'server' \|\| explorerNode == 'background'` |
+| `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server'` |
+| `1_query` | New **Q**uery | `explorer.newQuery` | `explorerNode == 'server' \|\| explorerNode == 'database'` |
+| `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerNode == 'table'` |
+| `2_script` | **S**cript Table as › | Submenu: Object Explorer context menu › Script Table as | `explorerNode == 'table'` |
+| `5_copy` | Copy **N**ame | `explorer.copyName` | `explorerNode == 'server' \|\| explorerNode == 'database' \|\| explorerNode == 'table' \|\| explorerNode == 'serverObject'` |
+| `8_refresh` | Re**f**resh | `explorer.refresh` | `explorerNode != 'table' && explorerNode != 'serverObject'` |
+
+#### Object Explorer context menu › Script Table as
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_create` | **C**REATE To › | Submenu: Object Explorer context menu › Script Table as › CREATE To | Always |
+
+#### Object Explorer context menu › Script Table as › CREATE To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptCreateToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptCreateToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptCreateToClipboard` | Always |
+
+#### Query tab context menu (`documentTab.context`)
+
+Right-click a query tab, or press Shift+F10 or the context-menu key on a focused tab. Items act on that tab's query.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_save` | **S**ave | `file.save` | Always |
+| `1_save` | Save **A**s… | `file.saveAs` | Always |
+| `2_close` | **C**lose | `file.close` | Always |
+| `2_close` | Close All **B**ut This | `file.closeOthers` | Always |
+| `2_close` | C**l**ose All | `file.closeAll` | Always |
+| `3_file` | Copy Full **P**ath | `file.copyPath` | Always |
+| `3_file` | **O**pen Containing Folder | `file.revealInFolder` | Windows, Linux only |
+| `3_file` | Reveal in Finder | `file.revealInFolder` | macOS only |
+
+#### Query Output context menu (`output.context`)
+
+Right-click the results grid, Messages, or an XML plan, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid's selection selects that cell first.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_copy` | **C**opy | `output.copy` | Always |
+| `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
+| `2_select` | Select **A**ll | `output.selectAll` | Always |
+
+#### Panel tab context menu (`dockTab.context`)
+
+Right-click a panel's tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_dock` | **F**loat | `pane.float` | `!paneFloating` |
+| `1_dock` | **D**ock | `pane.dock` | `paneFloating` |
+| `2_close` | **C**lose | `pane.close` | Always |
+
+#### Text field context menu (`input.context`)
+
+Right-click a text field, including those in dialogs and the editor's find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette's field has none.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_undo` | **U**ndo | `edit.undo` | Always |
+| `1_undo` | **R**edo | `edit.redo` | Always |
+| `2_clipboard` | Cu**t** | `edit.cut` | Always |
+| `2_clipboard` | **C**opy | `edit.copy` | Always |
+| `2_clipboard` | **P**aste | `edit.paste` | Always |
+| `2_clipboard` | **D**elete | `edit.delete` | Always |
+| `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
 ## Context keys (23)
 

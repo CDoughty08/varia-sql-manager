@@ -44,17 +44,18 @@ README.md documents user-facing behaviour, limits, and the protocol.
   zod and C#.
 - Preferences are written atomically (`src/main/json-file.ts`); unreadable files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- Commands, keybindings and menu placements are declared only in `src/shared/commands/catalog.ts` (submenus in
-  `menus.ts`; View › Theme's `theme.*` items in `src/shared/theme/menu.ts`). Main builds native menus from it and
-  accepts only command-id sets from the renderer (`menuStateSchema`); clicks send back a bare id. Windows/Linux render
-  the title-bar menus in `src/renderer/src/menus` (main's menu stays hidden); macOS shows the native menu bar.
-  `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to the menus
-  first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
-  the role, custom menus and the palette run it through `varia:run-role`. Context menus are for typed targets
-  (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) that never cross IPC; `MenuService` is the only
-  `contextmenu` listener, and the page never reads the clipboard. macOS shows context menus natively: main builds them
-  from command ids (`src/main/context-menu.ts`) and sends a choice back as a token and an id. After catalogue changes,
-  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+- Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
+  (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
+  no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show the role, and custom
+  menus and the palette run it through `varia:run-role`. After catalogue changes, regenerate `docs/commands.md` with
+  `npx vitest run tests/commands-docs.test.ts -u`.
+- Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
+  provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
+  natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends
+  back a bare id; it is the macOS menu bar and stays hidden elsewhere, where it still serves Electron's role keys. macOS
+  context menus (`src/main/context-menu.ts`) send back a token and an id. Menu targets
+  (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
+  `contextmenu` listener, only `.menu-layer` reaches z-index 30000, and the page never reads the clipboard.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 
@@ -88,7 +89,8 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - IPC v2: length-prefixed MessagePack frames (control and row pages), server push and streams with credit-based
   backpressure, MessagePort with transferable ArrayBuffers to the renderer.
 - Results stay in memory under a backend memory budget with explicit truncation. No spill to disk.
-- Menus: custom-rendered themed menus (title bar and context menus) on Windows/Linux; native global menu bar on macOS.
+- Menus: custom-rendered themed menus (title bar and context menus) on Windows/Linux; native global menu bar and native
+  context menus on macOS.
 - SQL Server 2016-2025. Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft
   Entra ID next.
 - Visuals: SSMS layout, density, and behaviours. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's

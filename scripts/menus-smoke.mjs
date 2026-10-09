@@ -2,6 +2,8 @@ import { _electron as electron, expect } from '@playwright/test'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
+const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
+if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'menus-profile-'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
@@ -12,7 +14,7 @@ const appearanceFile = join(profile, 'appearance.json'), savedPath = join(profil
 let application
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Menus suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 420000)
+const watchdog = setTimeout(() => { console.error('Menus suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 540000)
 
 const menubar = () => page.getByRole('menubar', { name: 'Application menu' })
 const menubarItem = name => menubar().getByRole('menuitem', { name, exact: true })
@@ -50,8 +52,11 @@ async function choose(name, label, role = 'menuitem') {
   await expect(openMenus()).toHaveCount(0)
 }
 const exit = process.platform === 'win32' ? { label: 'Exit', key: 'Alt+F4' } : { label: 'Quit', key: 'Ctrl+Q' }
-/** Replaces main's backend requests with a server that has AppData and dbo.Orders, recording every call (runs in main). */
-function explorerBackend({ ipcMain }, { realHealth, script }) {
+/**
+ * Replaces main's backend requests with a server that has AppData and dbo.Orders, recording every call (runs in main).
+ * Queries return one row, and with `plan` an XML plan after it.
+ */
+function explorerBackend({ ipcMain }, { realHealth, script, plan = false }) {
   globalThis.variaCalls = []
   globalThis.variaConnections = {}
   ipcMain.removeHandler('varia:request')
@@ -71,7 +76,8 @@ function explorerBackend({ ipcMain }, { realHealth, script }) {
     if (method === 'tables.columns') return { ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } }
     if (method === 'query.session.close') return { ok: true, value: { closed: true } }
     if (method === 'query.execute') return { ok: true, value: {
-      resultSets: [{ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], rows: [[1, 'Contoso']], truncated: false }],
+      resultSets: [{ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], rows: [[1, 'Contoso']], truncated: false },
+        ...plan ? [{ columns: [{ name: 'Microsoft SQL Server 2005 XML Showplan', dataType: 'xml' }], rows: [['<ShowPlanXML Version="1.6"><BatchSequence /></ShowPlanXML>']], truncated: false, kind: 'executionPlan' }] : []],
       messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false
     } }
     return { ok: false, error: 'Unsupported test operation.' }
@@ -395,6 +401,13 @@ try {
   const panelMenu = menu('Panel tab')
   await outputTab.click({ button: 'right' })
   await expect(panelMenu.locator('.menu-item .menu-label')).toHaveText(['Float', 'Close'])
+  // The tab's outline shows on every side, although the output tab has splitters above it and to its left.
+  expect(await page.locator('.dv-tab[data-menu-target]').evaluate(tab => {
+    const box = tab.getBoundingClientRect(), style = getComputedStyle(tab), inset = -parseFloat(style.outlineOffset) - parseFloat(style.outlineWidth) + 0.5
+    // A quarter of the way along each edge: the menu opened at the tab's center covers the rest of its right and bottom.
+    const edges = [[box.left + inset, box.top + box.height / 4], [box.right - inset, box.top + box.height / 4], [box.left + box.width / 4, box.top + inset], [box.left + box.width / 4, box.bottom - inset]]
+    return style.outlineStyle !== 'none' && edges.every(([x, y]) => tab.contains(document.elementFromPoint(x, y)))
+  })).toBe(true)
   await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   await outputTab.click({ button: 'right' })
@@ -703,7 +716,128 @@ try {
   expect(await clipboard()).not.toContain('SELECT')
   console.log('Menus checks: results grid cell selection and copying by menu, keys, and Edit › Copy, and the Messages menu.')
 
-  // 14. Native context menus, as macOS shows them: main builds each from command ids and sends back the request's token
+  // 14. Every surface, twice: each menu opens by mouse or keyboard, Escape closes all of it, the outline goes, and focus
+  // returns where it was. Then the table's menu, with its submenus open, is captured in Dark and Light.
+  await application.evaluate(explorerBackend, { realHealth: health.value, script: createScript, plan: true })
+  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await serverA.locator('[data-database="AppData"] .database-node').click()
+  await expect(orders).toBeVisible()
+  await serverA.getByRole('button', { name: 'Security', exact: true }).click()
+  await serverA.getByRole('button', { name: 'Logins', exact: true }).click()
+  const login = serverA.locator('.object-node').filter({ hasText: 'sa' })
+  await expect(login).toBeVisible()
+  await typeSql('SELECT Id, CustomerName FROM dbo.Orders')
+  await page.keyboard.press('F5')
+  await page.locator('.output-toolbar').getByRole('button', { name: /^Results/ }).click()
+  await expect(page.locator('.result-selector').getByRole('button', { name: 'XML plan', exact: true })).toBeVisible()
+  const showResult = name => page.locator('.result-selector').getByRole('button', { name, exact: true }).click({ force: true })
+  // The smoke window is hidden, so animation frames come once a second and Playwright's two-frame stability check costs
+  // two seconds a click: these presses skip it. An element out of view is scrolled first, and the menu opens only after
+  // the scroll event, which would otherwise close it. The find widget slides in, so a press there waits for it to settle.
+  const tap = (locator, options = {}) => locator.click({ force: true, ...options })
+  const point = locator => locator.hover({ force: true })
+  const rightClick = async (locator, { force = true } = {}) => {
+    await locator.evaluate(element => new Promise(resolve => {
+      let scroller = element.parentElement
+      while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement
+      const box = element.getBoundingClientRect(), view = scroller?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight }
+      if (box.top >= view.top && box.bottom <= view.bottom) { resolve(); return }
+      addEventListener('scroll', () => resolve(), { capture: true, once: true })
+      setTimeout(resolve, 3000)
+      element.scrollIntoView({ block: 'center' })
+    }))
+    await locator.click({ button: 'right', force })
+  }
+  const inMenubar = () => page.evaluate(() => !!document.activeElement?.closest('[role="menubar"]'))
+  const dockTab = pane => page.locator('.dv-tab').filter({ has: page.locator(`[data-pane-tab="${pane}"]`) })
+  const fromEditor = open => async () => { await textbox().focus(); await open() }
+  const findField = page.locator('.find-widget .monaco-findInput .input').first(), firstTab = page.locator('.query-tab').first()
+  const surfaces = [
+    ['File by mouse', fromEditor(() => tap(menubarItem('File'))), textbox()],
+    ['Edit by Alt+E', fromEditor(() => page.keyboard.press('Alt+e')), textbox()],
+    ['View by F10', fromEditor(async () => { for (const key of ['F10', 'ArrowRight', 'ArrowRight', 'ArrowDown']) await page.keyboard.press(key) }), textbox()],
+    ['View › Theme › Dark Theme by hover', fromEditor(async () => {
+      await tap(menubarItem('View'))
+      await point(menu('View').getByRole('menuitem', { name: 'Theme', exact: true }))
+      await point(menu('Theme').getByRole('menuitem', { name: 'Dark Theme', exact: true }))
+      await expect(menu('Dark Theme')).toBeVisible()
+    }), textbox()],
+    ['Query › Connection by keyboard', fromEditor(async () => { await page.keyboard.press('Alt+q'); await page.keyboard.press('ArrowRight'); await expect(menu('Connection')).toBeVisible() }), textbox()],
+    ['Window by mouse', fromEditor(() => tap(menubarItem('Window'))), textbox()],
+    ['the editor by mouse', () => rightClick(page.locator('.monaco-editor .view-lines').getByText('SELECT', { exact: true }).first()), textbox()],
+    ['the editor by Shift+F10', fromEditor(() => page.keyboard.press('Shift+F10')), textbox()],
+    ['the editor\'s Connection by the context-menu key', fromEditor(async () => { await page.keyboard.press('ContextMenu'); await page.keyboard.press('ArrowRight'); await expect(menu('Connection')).toBeVisible() }), textbox()],
+    ['a query tab by mouse', () => rightClick(firstTab.locator('.tab-name')), firstTab.getByRole('tab')],
+    ['a query tab by Shift+F10', async () => { await firstTab.getByRole('tab').focus(); await page.keyboard.press('Shift+F10') }, firstTab.getByRole('tab')],
+    ['a panel tab by mouse', () => rightClick(page.locator('[data-pane-tab="explorer"]')), dockTab('explorer')],
+    ['a panel tab by Shift+F10', async () => { await dockTab('output').focus(); await page.keyboard.press('Shift+F10') }, dockTab('output')],
+    ['a server', () => rightClick(serverA.locator('.server-toggle')), serverA.locator('.server-toggle')],
+    ['the Databases folder', () => rightClick(serverA.getByRole('button', { name: 'Databases', exact: true })), serverA.getByRole('button', { name: 'Databases', exact: true })],
+    ['a database', () => rightClick(appData), appData],
+    ['a Tables folder', () => rightClick(serverA.getByRole('button', { name: 'Tables in AppData', exact: true })), serverA.getByRole('button', { name: 'Tables in AppData', exact: true })],
+    ['a table\'s Script Table as › CREATE To', async () => {
+      await rightClick(orders)
+      await tap(explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }))
+      await tap(menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }))
+      await expect(menu('CREATE To')).toBeVisible()
+    }, orders],
+    ['a table by Shift+F10', async () => { await orders.focus(); await page.keyboard.press('Shift+F10') }, orders],
+    ['the Logins folder', () => rightClick(serverA.getByRole('button', { name: 'Logins', exact: true })), serverA.getByRole('button', { name: 'Logins', exact: true })],
+    ['a login', () => rightClick(login), null],
+    ['a results grid cell', async () => { await showResult('Result 1'); await rightClick(cell(0, 1)) }, grid],
+    ['the results grid by Shift+F10', async () => { await grid.focus(); await page.keyboard.press('Shift+F10') }, grid],
+    ['Messages', async () => { await tap(page.locator('.output-toolbar').getByRole('button', { name: /^Messages/ })); await rightClick(messages.locator('pre').first()) }, messages],
+    ['the XML plan', async () => {
+      await tap(page.locator('.output-toolbar').getByRole('button', { name: /^Results/ }))
+      await showResult('XML plan')
+      await rightClick(page.locator('.plan-output'))
+    }, page.locator('.plan-output')],
+    ['the find widget\'s field', fromEditor(async () => { await page.keyboard.press('Control+F'); await expect(findField).toBeFocused(); await rightClick(findField, { force: false }) }), findField, () => page.keyboard.press('Escape')],
+    ['a dialog\'s field', async () => { await tap(page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true })); await rightClick(page.locator('#connect-server')) },
+      page.locator('#connect-server'), async () => { await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0) }]
+  ]
+  let opened = 0
+  for (let round = 0; round < 2; round++) {
+    for (const [label, open, restore, after] of surfaces) {
+      await open()
+      await expect(openMenus().first(), label).toBeVisible()
+      opened++
+      for (let presses = 0; presses < 5 && await openMenus().count(); presses++) await page.keyboard.press('Escape')
+      await expect(openMenus(), label).toHaveCount(0)
+      await expect(page.locator('[data-menu-target]'), label).toHaveCount(0)
+      // A title-bar menu closes to its menubar button; one more Escape leaves the menubar.
+      if (await inMenubar()) await page.keyboard.press('Escape')
+      if (restore) await expect(restore, label).toBeFocused()
+      await after?.()
+    }
+  }
+  expect(opened).toBeGreaterThanOrEqual(50)
+  expect(failures).toEqual([])
+  await showResult('Result 1')
+  for (const mode of ['dark', 'light']) {
+    await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
+    await expect.poll(appearance).toContain(`"mode": "${mode}"`)
+    await expect.poll(async () => await variable('editor.background') === '#ffffff').toBe(mode === 'light')
+    await rightClick(orders)
+    await tap(explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }))
+    await tap(menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }))
+    await point(menu('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }))
+    await expect(menu('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true })).toBeFocused()
+    await page.screenshot({ path: resolve('artifacts', `menus-${mode}.png`) })
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await expect(openMenus()).toHaveCount(0)
+  }
+  await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
+  await expect.poll(appearance).toContain('"mode": "dark"')
+  console.log(`Menus checks: ${opened} menus opened and closed across every surface, by mouse and keyboard, with focus restored each time.`)
+
+  // 15. Native context menus, as macOS shows them: main builds each from command ids and sends back the request's token
   // with the chosen id. The custom style refuses them; the app is relaunched with the native style, Electron's popups
   // are recorded (one is really shown), and choices are made as Electron would make them.
   expect(await page.evaluate(() => window.varia.menuStyle)).toBe('custom')
@@ -820,8 +954,54 @@ try {
   expect((await popups()).length).toBe(7)
   console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, and the fallback.')
 
+  // 16. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
+  // master, and the server's Refresh reloads its lists without an error.
+  if (process.env.VARIA_TEST_SQL_SERVER) {
+    expect(failures).toEqual([])
+    await application.close()
+    application = await electron.launch(launchOptions)
+    page = await application.firstWindow()
+    page.setDefaultTimeout(10000)
+    page.on('pageerror', error => failures.push(error.message))
+    await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+    // The typed query makes exit ask about saving; answer Don't Save.
+    await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+    await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+    const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
+    await expect(connect.getByText('Loading saved connections…')).toHaveCount(0)
+    await connect.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
+    if (liveUser) {
+      await connect.getByLabel('Authentication', { exact: true }).selectOption('sql')
+      await connect.getByLabel('User Name', { exact: true }).fill(liveUser)
+      await connect.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    } else await connect.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    await connect.getByLabel('Trust server certificate', { exact: true }).check()
+    await connect.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(connect).toHaveCount(0, { timeout: 30000 })
+    const live = page.locator('.server-section'), systemDatabases = live.getByRole('button', { name: 'System Databases', exact: true })
+    await expect(systemDatabases).toBeVisible({ timeout: 30000 })
+    if (await systemDatabases.getAttribute('aria-expanded') === 'false') await systemDatabases.click()
+    const master = live.locator('[data-database="master"] .database-node')
+    const liveTabs = await tabs().count()
+    await master.click({ button: 'right' })
+    await menu('Object Explorer').getByRole('menuitem', { name: 'New Query', exact: true }).click()
+    await expect(tabs()).toHaveCount(liveTabs + 1)
+    await expect(textbox()).toBeFocused()
+    await expect(page.locator('#query-database')).toHaveValue('master')
+    await page.keyboard.insertText('SELECT DB_NAME()')
+    await page.keyboard.press('F5')
+    await expect(page.locator('.grid-scroll td[data-row="0"][data-col="0"]')).toHaveText('master', { timeout: 30000 })
+    await live.locator('.server-toggle').click({ button: 'right' })
+    await menu('Object Explorer').getByRole('menuitem', { name: 'Refresh', exact: true }).click()
+    await expect(live.getByText('Loading…')).toHaveCount(0, { timeout: 30000 })
+    await expect(master).toBeVisible()
+    // Monaco's empty live regions are alerts too; these are the workbench's error messages.
+    await expect(page.locator('.global-error, .explorer-error, .query-error')).toHaveCount(0)
+    console.log('Menus checks: a real server\'s master database opens a query on master from its menu, and the server refreshes.')
+  } else console.log('Menus checks: the live server step was skipped (VARIA_TEST_SQL_SERVER is not set).')
+
   expect(failures).toEqual([])
-  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; and native context menus.')
+  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; and a live server when configured.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'menus-failure.png') }).catch(() => {})
   console.log(await page?.evaluate(() => ({ focused: document.activeElement?.outerHTML.slice(0, 300), menus: document.querySelectorAll('.menu').length, errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })).catch(() => 'no page'))
