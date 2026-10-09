@@ -181,6 +181,9 @@ try {
   await typeSql('SELECT 43 AS answer;')
   await menu('file.save')
   await expect.poll(() => readFile(savedPath, 'utf8')).toBe('SELECT 43 AS answer;')
+  // The file is in place before the save finishes, and Save As is disabled until it has (a slow disk widens the gap).
+  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
   const copyPath = artifact('saved-as.sql')
   await dialogs({ savePath: copyPath })
   await page.locator('.monaco-editor [role="textbox"]').focus()
