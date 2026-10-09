@@ -177,6 +177,34 @@ internal static class StoreChecks
                 "releasing more than 64 MiB in results under 64 MiB each, " + (together ? "in one call" : "one at a time") + ", collects them ("
                 + held / 1048576 + " MB held, " + after / 1048576 + " MB after)");
         }
+
+        // Only a compacting collection returns memory to the operating system. Closing a large result while a small one
+        // remains compacts (it copies little), and so does closing the last one, although it releases less than 64 MiB.
+        store = new ResultStore(1L << 30, 1L << 30);
+        var kept = Open(store, store.BeginQuery("kept", "c"));
+        Fill(kept, 0, 120_000);
+        kept.Complete();
+        var large = Open(store, store.BeginQuery("large", "c"));
+        Fill(large, 0, 600_000);
+        large.Complete();
+        // The working set, not GC.GetGCMemoryInfo(), which describes the heap as of the last collection.
+        held = Environment.WorkingSet;
+        var keptBytes = kept.Describe().BytesStored;
+        var largeBytes = large.Describe().BytesStored;
+        // Whether the release was followed by a full blocking collection that compacted.
+        bool Compacts(Action release)
+        {
+            var index = GC.GetGCMemoryInfo(GCKind.FullBlocking).Index;
+            release();
+            SpinWait.SpinUntil(() => GC.GetGCMemoryInfo(GCKind.FullBlocking).Index > index, 5000);
+            var info = GC.GetGCMemoryInfo(GCKind.FullBlocking);
+            return info.Index > index && info.Compacted;
+        }
+        var first = Compacts(() => store.Release(large.ResultId));
+        var second = Compacts(() => store.Release(kept.ResultId));
+        var left = Environment.WorkingSet;
+        check(keptBytes is > 16L * 1024 * 1024 and < 64L * 1024 * 1024 && largeBytes > 64L * 1024 * 1024 && first && second && held - left > (keptBytes + largeBytes) / 2,
+            "closing a large result, then the last small one, compacts both times and returns the memory (" + first + "/" + second + ", working set " + held / 1048576 + " MB, then " + left / 1048576 + " MB)");
     }
 
     private static void Events(Action<bool, string> check)

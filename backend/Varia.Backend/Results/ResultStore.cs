@@ -26,12 +26,14 @@ internal sealed class ResultStore
     /// <summary>Reservations are taken in steps this size, so the global counter is not touched for every row.</summary>
     public const long ReserveStep = 256 * 1024;
     private const long CollectAfterRelease = 64L * 1024 * 1024;
+    private const long CompactWhenEmpty = 16L * 1024 * 1024;
     private readonly object gate = new();
     private readonly Dictionary<uint, ResultSetBuffer> sets = [];
     private readonly Func<(long Load, long Threshold)> memory;
     private uint nextId = 1;
     private long used;
     private long freedSinceCollect;
+    private long freedSinceCompact;
     private int collecting;
 
     /// <param name="memory">The operating system's memory load and its high-load threshold, in bytes.</param>
@@ -173,16 +175,21 @@ internal sealed class ResultStore
     {
         long freed = 0;
         foreach (var set in released) freed += set.Release();
+        if (freed == 0) return released.Count;
         // Counted across calls: closing many small results, together or one at a time, frees as much as one large release.
-        if (freed > 0 && Interlocked.Add(ref freedSinceCollect, freed) > CollectAfterRelease) Collect();
+        var sinceCollect = Interlocked.Add(ref freedSinceCollect, freed);
+        var sinceCompact = Interlocked.Add(ref freedSinceCompact, freed);
+        if (sinceCollect > CollectAfterRelease || UsedBytes == 0 && sinceCompact > CompactWhenEmpty) Collect();
         return released.Count;
     }
 
     /// <summary>Pages are large arrays, which only a gen2 collection frees, and nothing else in the backend allocates enough
     /// to trigger one: without it the process keeps its peak memory after results are closed and grows under store and
-    /// close churn. One runs after every 64 MiB released, counted across releases; releases that come together share it,
-    /// off the caller's thread. Non-compacting while results remain (a short pause); when the store is empty, an
-    /// aggressive one also returns the freed memory to the operating system.</summary>
+    /// close churn. One runs after every 64 MiB released, counted across releases, and when a release empties the store
+    /// after 16 MiB released since the last compacting one; releases that come together share it, off the caller's thread.
+    /// Only an aggressive (compacting) collection returns the freed memory to the operating system. It copies what remains,
+    /// so it runs only when that is no more than what was released since the last one; otherwise a non-compacting one
+    /// keeps the pause short.</summary>
     private void Collect()
     {
         if (Interlocked.Exchange(ref collecting, 1) == 1) return;
@@ -190,7 +197,11 @@ internal sealed class ResultStore
         {
             Interlocked.Exchange(ref freedSinceCollect, 0);
             Volatile.Write(ref collecting, 0);
-            if (UsedBytes == 0) GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            if (UsedBytes <= Interlocked.Read(ref freedSinceCompact))
+            {
+                Interlocked.Exchange(ref freedSinceCompact, 0);
+                GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            }
             else GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);
         }, TaskScheduler.Default);
     }

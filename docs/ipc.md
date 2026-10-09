@@ -304,7 +304,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `connections.disconnect`, and process exit. A release fails the result's in-flight reads with `RESULT_RELEASED` after
   the current page. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
   or one at a time), triggers one gen2 collection shortly after (pages are large arrays that nothing else would
-  collect): non-compacting while results remain, aggressive (returning memory to the operating system) when none do.
+  collect), and so does a release that empties the store once 16 MiB were released since the last aggressive one. The
+  collection is aggressive (compacting, so it returns memory to the operating system) when what remains is no more than
+  what was released since the last aggressive one, and non-compacting otherwise, so its pause never copies much.
 
 Notes appended to the summary's messages:
 

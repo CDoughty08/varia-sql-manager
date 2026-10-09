@@ -366,6 +366,33 @@ describe('real .NET sidecar results (test hooks)', () => {
     expect(peak - after, `RSS ${peak >> 20} MiB with ${stored.bytesStored >> 20} MiB stored, ${after >> 20} MiB after closing`).toBeGreaterThan(stored.bytesStored / 2)
   }, 60_000)
 
+  it.runIf(process.platform === 'linux')('returns the memory of a large result closed while a small one remains, and of the small one closed last', async () => {
+    const connection = backend({ ...hooks, VARIA_RESULT_BUDGET_BYTES: String(1024 * 1024 * 1024) })
+    await connection.ready
+    const rss = () => Number(/VmRSS:\s+(\d+)/.exec(readFileSync(`/proc/${connection.pid}/status`, 'utf8'))?.[1] ?? 0) * 1024
+    const baseline = rss()
+    const small = await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 100_000 }) as ResultDescriptor
+    const large = await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 1_000_000 }) as ResultDescriptor
+    const stored = small.bytesStored + large.bytesStored, peak = rss()
+    // Down to near the baseline, not the peak: within a quarter of what was stored.
+    const settled = async (limit: number) => {
+      let current = rss()
+      for (let waited = 0; waited < 5000 && current - baseline > limit; waited += 100) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        current = rss()
+      }
+      return current
+    }
+    expect(await call(connection, 'results.close', { resultIds: [large.resultId] })).toMatchObject({ closed: 1 })
+    const between = await settled(small.bytesStored + stored / 4)
+    expect(await call(connection, 'results.close', { resultIds: [small.resultId] })).toEqual({ closed: 1, usedBytes: 0 })
+    const after = await settled(stored / 4)
+    const report = `RSS ${baseline >> 20} MiB at start, ${peak >> 20} MiB with ${small.bytesStored >> 20} + ${large.bytesStored >> 20} MiB stored, ${between >> 20} MiB with the small one left, ${after >> 20} MiB after closing both`
+    expect(small.bytesStored < 64 * 1024 * 1024 && large.bytesStored > 64 * 1024 * 1024, report).toBe(true)
+    expect(between - baseline, report).toBeLessThan(small.bytesStored + stored / 4)
+    expect(after - baseline, report).toBeLessThan(stored / 4)
+  }, 60_000)
+
   it('answers PING while every metadata slot runs a synthetic result', async () => {
     // Every request stores its rows, so each keeps a thread-pool thread busy (8 at a time, on the metadata slots).
     const backend = raw({ ...hooks, VARIA_RESULT_BUDGET_BYTES: String(1024 * 1024 * 1024) })
