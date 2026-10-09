@@ -12,8 +12,8 @@ internal sealed record SqlRun(string Status, string? Error, List<List<string?[]>
 
 /// <summary>A uniquely named, marked scratch database for the Object Explorer checks, created only with
 /// VARIA_TEST_SQL_SCRATCH=1 (a disposable development server): VariaScratch_&lt;yyyyMMddHHmmss&gt;_&lt;8 hex&gt; with a
-/// case-sensitive collation, plus _ro (read-only), _off (offline), _snap (a snapshot), and a low-privilege login when the
-/// server allows SQL logins. Everything is dropped on dispose; leftovers older than 6 h are swept on the next run.</summary>
+/// case-sensitive collation, plus _ro (read-only), _off (offline), _su (single-user), _snap (a snapshot), and a
+/// low-privilege login when the server allows SQL logins. Everything is dropped on dispose; leftovers older than 6 h are swept on the next run.</summary>
 internal sealed partial class ScratchDatabase : IAsyncDisposable
 {
     private readonly Func<string, string, Task<SqlRun>> run;
@@ -30,6 +30,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Name { get; }
     public string ReadOnly => Name + "_ro";
     public string Offline => Name + "_off";
+    public string SingleUser => Name + "_su";
     public string Snapshot => Name + "_snap";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
@@ -38,7 +39,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public bool HasSnapshot { get; private set; }
     public int Major { get; private set; }
 
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_snap)?$")]
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -61,7 +62,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public static async Task SweepAsync(Func<string, string, Task<SqlRun>> run, Action<string>? log = null)
     {
         log ??= Console.WriteLine;
-        var result = await run("SELECT d.name, d.state, CONVERT(bit, CASE WHEN d.create_date < DATEADD(hour, -6, GETDATE()) THEN 1 ELSE 0 END), CONVERT(bit, ISNULL(HAS_DBACCESS(d.name), 0)) "
+        // HAS_DBACCESS waits on a single-user database another session is in; reading its marker then fails, which leaves it alone.
+        var result = await run("SELECT d.name, d.state, CONVERT(bit, CASE WHEN d.create_date < DATEADD(hour, -6, GETDATE()) THEN 1 ELSE 0 END), "
+            + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) "
             + "FROM sys.databases AS d WHERE d.name LIKE N'VariaScratch[_]%' ORDER BY CASE WHEN d.source_database_id IS NULL THEN 1 ELSE 0 END;", "master");
         foreach (var row in result.Sets.Count == 0 ? [] : result.Sets[0])
         {
@@ -115,7 +118,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         Major = int.Parse(fact[0]!, CultureInfo.InvariantCulture);
         var sqlLogins = fact[1] == "0";
         const string marker = "EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;";
-        foreach (var name in new[] { Name, ReadOnly, Offline })
+        foreach (var name in new[] { Name, ReadOnly, Offline, SingleUser })
         {
             created.Add(name);
             await Exec("CREATE DATABASE " + Bracket(name) + (name == Name ? " COLLATE Latin1_General_100_CS_AS_SC" : "") + ";\nALTER DATABASE " + Bracket(name) + " SET RECOVERY SIMPLE;");
@@ -132,7 +135,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
             loginCreated = true;
             await Exec("CREATE USER " + Bracket(Login) + " FOR LOGIN " + Bracket(Login) + ";\nGRANT SELECT ON SCHEMA::[bulk] TO " + Bracket(Login) + ";", Name);
         }
-        await Exec("ALTER DATABASE " + Bracket(ReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(Offline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;");
+        await Exec("ALTER DATABASE " + Bracket(ReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(Offline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;\n"
+            + "ALTER DATABASE " + Bracket(SingleUser) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;");
         // Snapshots need an edition that has them; the file goes to the instance's default data path.
         var snapshot = await run("DECLARE @path nvarchar(4000) = CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath'));\n"
             + "DECLARE @logical sysname = (SELECT name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(Name) + ") AND type = 0);\n"

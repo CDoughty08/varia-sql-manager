@@ -180,7 +180,11 @@ internal sealed class ExplorerService : IDisposable
             if (!await reader.ReadAsync(token)) return new ExplorerChildrenResult([], 0, Error: ExplorerErrors.Create("NOT_FOUND", "Database " + name, null));
             var state = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
             if (state is not (0 or 5)) return new([], 0, Error: ExplorerErrors.Create("DATABASE_UNAVAILABLE", name, name, 0, ExplorerLabels.DatabaseState(state)));
-            if (!reader.GetBoolean(1)) return new([], 0, Error: ExplorerErrors.Create("NO_DB_ACCESS", name, name));
+            // A single-user database another session is in denies access until that session leaves (Msg 924).
+            if (!reader.GetBoolean(2))
+                return new([], 0, Error: Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture) == 1
+                    ? ExplorerErrors.Create("DATABASE_UNAVAILABLE", name, name, 0, "Single User, in use by another session")
+                    : ExplorerErrors.Create("NO_DB_ACCESS", name, name));
             return new([], 0);
         }, token, []);
         return result.Error;

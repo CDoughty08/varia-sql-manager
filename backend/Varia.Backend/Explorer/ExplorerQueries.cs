@@ -146,10 +146,12 @@ internal static class ExplorerQueries
 
     // --- Server scope -----------------------------------------------------------------------------------------------
 
+    // HAS_DBACCESS waits about 2 s on a single-user database another session is in, and then says no: such a database is
+    // listed as usable, and expanding it says whether it can be opened (DatabaseState).
     private static ExplorerQuery Databases(string id, string predicate, string? subtype) => new()
     {
         Id = id, Scope = QueryScope.Server, ChecksAccess = true, From = _ => "sys.databases AS d", Where = _ => predicate, Keys = ["d.name"],
-        Select = _ => "d.state, d.user_access, d.is_read_only, d.is_in_standby, CONVERT(bit, ISNULL(HAS_DBACCESS(d.name), 0)), d.create_date, d.compatibility_level, "
+        Select = _ => "d.state, d.user_access, d.is_read_only, d.is_in_standby, CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)), d.create_date, d.compatibility_level, "
             + "d.recovery_model_desc, own.name, CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END)",
         OwnerJoin = "LEFT JOIN sys.server_principals AS own ON own.sid = d.owner_sid", RowsNeedOwner = true,
         Filter = new(Name: "d.name", Owner: "own.name", Created: "d.create_date"),
@@ -465,6 +467,6 @@ internal static class ExplorerQueries
         + "JOIN sys.tables AS h ON h.object_id = " + r.Col(13, "t.history_table_id", "CONVERT(int, NULL)") + " JOIN sys.schemas AS hs ON hs.schema_id = h.schema_id "
         + "WHERE ts.name = @object_schema AND t.name = @object_name;";
 
-    /// <summary>Whether a database can be expanded: its state and the login's access (server scope).</summary>
-    public const string DatabaseState = "SELECT d.state, CONVERT(bit, ISNULL(HAS_DBACCESS(d.name), 0)) FROM sys.databases AS d WHERE d.name = @object_name;";
+    /// <summary>Whether a database can be expanded: its state, user access and the login's access (server scope).</summary>
+    public const string DatabaseState = "SELECT d.state, d.user_access, CONVERT(bit, ISNULL(HAS_DBACCESS(d.name), 0)) FROM sys.databases AS d WHERE d.name = @object_name;";
 }

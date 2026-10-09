@@ -9,8 +9,8 @@ internal sealed record CatalogKind(string Kind, string Title, string Scope, stri
     IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents);
 internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyList<string> Forbidden);
 
-/// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17; on cloud
-/// editions, the band of the catalog columns it has) and whether it is a cloud edition.</summary>
+/// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
+/// band of the catalog columns it has when that is higher) and whether it is a cloud edition.</summary>
 internal readonly record struct ExplorerProfile(int Band, bool Cloud)
 {
     public string Engine => Cloud ? "cloud" : "box";
@@ -75,13 +75,11 @@ internal sealed class ExplorerCatalog
     public CatalogKind? Kind(string kind) => kinds.GetValueOrDefault(kind);
     public CatalogKind KindOf(string kind) => kinds[kind];
 
-    /// <summary>A box server's band is its major version's; a cloud edition's is at least the band of the catalog columns
-    /// it has (<paramref name="catalogBand"/>), since Azure SQL Database reports version 12.</summary>
-    public ExplorerProfile Profile(int major, int edition, int catalogBand = MinBand)
-    {
-        var cloud = CloudEditions.Contains(edition);
-        return new(cloud ? Math.Max(BandOf(major), Math.Clamp(catalogBand, MinBand, MaxBand)) : BandOf(major), cloud);
-    }
+    /// <summary>A server's band is its major version's, raised to the band of the catalog columns it has
+    /// (<paramref name="catalogBand"/>): Azure SQL Database and Managed Instance report version 12 while running the newest
+    /// engine. On SQL Server the catalog band never exceeds the version's.</summary>
+    public ExplorerProfile Profile(int major, int edition, int catalogBand = MinBand) =>
+        new(Math.Max(BandOf(major), Math.Clamp(catalogBand, MinBand, MaxBand)), CloudEditions.Contains(edition));
 
     public string RootFolder(string id)
     {

@@ -213,8 +213,21 @@ internal static class ExplorerLiveChecks
 
         var databases = (await client.All(Folder(Server, "databases"))).Nodes.Where(node => node.Label.StartsWith(scratch.Name, StringComparison.Ordinal)).ToList();
         check(databases.Select(node => (Show(node), node.Status, node.HasChildren)).SequenceEqual([(scratch.Name, null, true), (scratch.Offline + " (Offline)", "unavailable", false),
-            (scratch.ReadOnly + " (Read-Only)", "readOnly", true)]), "scratch databases: offline ones do not expand, read-only ones say so: " + string.Join(", ", databases.Select(Show)));
+            (scratch.ReadOnly + " (Read-Only)", "readOnly", true), (scratch.SingleUser + " (Single User)", null, true)]),
+            "scratch databases: offline ones do not expand, read-only and single-user ones say so: " + string.Join(", ", databases.Select(Show)));
         check((await client.Children(Object(Database(scratch.Offline)))).Error?.Code == "DATABASE_UNAVAILABLE", "expanding an offline database explains why");
+        // Another session in a single-user database makes HAS_DBACCESS wait about 2 s and then deny access.
+        await using (var holder = new SqlConnection(new SqlConnectionStringBuilder(ConnectionSettings.Build(live(scratch.SingleUser)).ConnectionString) { Pooling = false }.ConnectionString))
+        {
+            await holder.OpenAsync();
+            var held = Stopwatch.StartNew();
+            var listed = (await client.All(Folder(Server, "databases"), pageSize: 1)).Nodes.SingleOrDefault(node => node.Label == scratch.SingleUser);
+            var listMs = held.ElapsedMilliseconds;
+            var expanded = await client.Children(Object(Database(scratch.SingleUser)));
+            check(listed is { Status: null, HasChildren: true } && listMs < 1500, "a single-user database another session is in is listed at once, not as inaccessible (" + listMs + " ms, one row a page)");
+            check(expanded.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && expanded.Error.Message.Contains("Single User", StringComparison.Ordinal),
+                "expanding a single-user database another session is in says it is unavailable, and can be retried: " + expanded.Error?.Message);
+        }
         if (scratch.HasSnapshot)
         {
             var snapshot = (await client.All(Folder(Server, "databaseSnapshots"))).Nodes.SingleOrDefault(node => node.Label == scratch.Snapshot);

@@ -81,9 +81,10 @@ internal static class ExplorerChecks
             }
         string Names(IEnumerable<string> ids) => string.Join(",", ids);
         check(catalog.Profile(12, 5, 16) == new ExplorerProfile(16, true) && catalog.Profile(12, 5) == new ExplorerProfile(12, true) && catalog.Profile(15, 9, 14) == new ExplorerProfile(15, true)
-            && catalog.Profile(12, 3, 16) == new ExplorerProfile(12, false) && catalog.Profile(16, 3, 13) == new ExplorerProfile(16, false) && catalog.Profile(17, 3, 16) == new ExplorerProfile(17, false)
+            && catalog.Profile(12, 3) == new ExplorerProfile(12, false) && catalog.Profile(16, 3, 13) == new ExplorerProfile(16, false) && catalog.Profile(17, 3, 16) == new ExplorerProfile(17, false)
+            && catalog.Profile(12, 8, 16) == new ExplorerProfile(16, false) && catalog.Profile(16, 8, 16) == new ExplorerProfile(16, false)
             && new ServerProfile(12, "12.0.2000.8", 5, "sa", false, false, true, 16).Explorer(catalog) == new ExplorerProfile(16, true),
-            "a box server's band is its version's; a cloud edition's is at least that of the catalog columns it has (Azure SQL Database reports 12)");
+            "a server's band is its version's, raised to that of the catalog columns it has (Azure SQL Database and Managed Instance report 12)");
         var box12 = new ExplorerProfile(12, false);
         check(Names(catalog.StaticFolders("server", null, box12)) == "databases,serverSecurity,serverObjects"
             && Names(catalog.StaticFolders("server", null, new ExplorerProfile(16, true))) == "databases", "the server's folders; cloud editions browse only Databases");
@@ -457,6 +458,15 @@ internal static class ExplorerChecks
         var azureDatabase = (await azure.ChildrenAsync(Args(Folder(database, "databaseSecurity")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
         check(azureTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"]) && azureDatabase.Contains("alwaysEncryptedKeys")
             && azureDatabase.Contains("securityPolicies"), "a cloud edition reporting version 12 serves the folders its catalog columns allow: " + string.Join(",", azureTables));
+        // Managed Instance (EngineEdition 8) reports version 12 too, and is browsed like SQL Server.
+        var instance = new ExplorerService(new FakeHost(12, 8, 16));
+        var instanceServer = (await instance.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
+        var instanceTables = (await instance.ChildrenAsync(Args(Folder(database, "tables")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
+        var instanceDatabase = ExplorerCatalog.Current.StaticFolders("database", null, new FakeHost(12, 8, 16).Profile("x").Explorer(ExplorerCatalog.Current));
+        var instanceSecurity = (await instance.ChildrenAsync(Args(Folder(database, "databaseSecurity")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
+        check(instanceServer.SequenceEqual(["databases", "serverSecurity", "serverObjects"]) && instanceTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"])
+            && instanceDatabase.Contains("externalResources") && instanceSecurity.Contains("alwaysEncryptedKeys") && instanceSecurity.Contains("securityPolicies"),
+            "Managed Instance reporting version 12 serves the server folders and the folders its catalog columns allow: " + string.Join(",", instanceTables));
 
         // A request cancelled before it runs takes no slot and opens nothing.
         using (var cancelled = new CancellationTokenSource())

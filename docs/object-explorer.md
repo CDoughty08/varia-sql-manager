@@ -5,8 +5,9 @@
 The tree Object Explorer serves, in SSMS order. Each folder lists its static subfolders first, then its rows. "Since" is
 the first SQL Server version (ProductMajorVersion) that has a folder; older servers do not show it. Planned folders are
 part of SSMS's tree but not served yet. Cloud editions (EngineEdition 5, 6, 9, 11 and 12) show only the folders marked
-for them; their version is taken from the catalog columns they have, because Azure SQL Database reports version 12. The
-backend embeds the same data as `backend/Varia.Backend/Explorer/explorer-catalog.json`.
+for them. A server whose catalog columns are newer than its reported version, such as Azure SQL Database or Managed
+Instance (both report version 12), is treated as the version those columns belong to. The backend embeds the same data
+as `backend/Varia.Backend/Explorer/explorer-catalog.json`.
 
 ## Server
 

@@ -5,8 +5,8 @@ namespace Varia.Backend.Explorer;
 
 /// <summary>What Object Explorer needs to know about a server, probed once at connect: the only place explorer code uses
 /// metadata functions. Hadr and ViewServerState are kept for availability-group sublabels (a follow-up). CatalogBand is
-/// the highest version band whose catalog columns exist, which cloud editions use because Azure SQL Database reports
-/// ProductMajorVersion 12 while running the newest engine.</summary>
+/// the highest version band whose catalog columns exist, which raises the band because Azure SQL Database and Managed
+/// Instance report ProductMajorVersion 12 while running the newest engine.</summary>
 internal sealed record ServerProfile(int Major, string? ProductVersion, int EngineEdition, string? Login, bool Hadr, bool ViewServerState, bool VectorDimensions,
     int CatalogBand = ExplorerCatalog.MinBand)
 {

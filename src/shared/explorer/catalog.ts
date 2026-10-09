@@ -114,7 +114,8 @@ export const engines: readonly Engine[] = ['box', 'cloud']
 export const cloudEngineEditions = [5, 6, 9, 11, 12] as const
 /**
  * The version band a server's queries and folders are chosen by: 12 below SQL Server 2016, else its major version up to 17.
- * The backend raises a cloud edition's band to that of the catalog columns it has, since Azure SQL Database reports 12.
+ * The backend raises it to the band of the catalog columns the server has, since Azure SQL Database and Managed Instance
+ * report 12.
  */
 export const minBand = 12, maxBand = 17
 export const bandOf = (major: number): number => major < 13 ? minBand : Math.min(major, maxBand)
