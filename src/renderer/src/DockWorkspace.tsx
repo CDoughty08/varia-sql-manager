@@ -10,6 +10,8 @@ interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTM
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
 const PaneContext = createContext<PaneHosts | null>(null)
 const PaneCommandContext = createContext<PaneCommands | null>(null)
+// Whether the saved layout has been applied; until then the workspace has no panels, and none were closed.
+const RestoredContext = createContext(false)
 function Pane({ api }: IDockviewPanelProps) {
   const content = useContext(PaneContext)!, slot = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -28,7 +30,8 @@ const dockThemes = {
 const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 function paneHost(id: PaneId) { const host = document.createElement('div'); host.className = 'dock-pane'; host.dataset.pane = id; return host }
 function EmptyWorkspace() {
-  const commands = useContext(PaneCommandContext)!
+  const commands = useContext(PaneCommandContext)!, restored = useContext(RestoredContext)
+  if (!restored) return null
   return <div className="dock-empty"><p>All panels are closed.</p><p>Open a panel from the Window menu.</p><button onClick={() => commands.reveal('editor')}>Open Query editor</button></div>
 }
 function PaneTab(props: IDockviewPanelHeaderProps) {
@@ -79,6 +82,9 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const restoring = useRef(false)
   const ready = useRef(false)
+  const [restored, setRestored] = useState(false)
+  // Panes asked for while the saved layout loads (a Window menu choice, the palette), shown once it has.
+  const pendingReveals = useRef(new Map<PaneId, { focus?: boolean }>())
   // After a failed preferences load, writing would replace the unread file and its saved layouts.
   const persistBlocked = useRef(false)
   const lastPersisted = useRef('')
@@ -134,7 +140,11 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
   function reveal(id: PaneId, options?: { focus?: boolean }) {
     const api = apiRef.current
-    if (!api || !ready.current) return
+    if (!api || !ready.current) {
+      const focus = pendingReveals.current.get(id)?.focus || options?.focus
+      pendingReveals.current.set(id, focus ? { focus } : {})
+      return
+    }
     let panel = api.getPanel(id)
     if (!panel) {
       const previous = returnLocations.current[id], preferred = previous?.reference && api.getPanel(previous.reference)
@@ -251,6 +261,10 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       subscription.current = api.onDidLayoutChange(changed)
       guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)))
       api.updateOptions({ dropPositionResolver: guides.current })
+      setRestored(true)
+      const pending = [...pendingReveals.current]
+      pendingReveals.current.clear()
+      for (const [id, options] of pending) reveal(id, options)
     })()
   }
 
@@ -267,13 +281,13 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   ], [])
   return <>
     {error && <div className="global-error layout-error" role="alert"><span>{error}</span><button aria-label="Dismiss layout error" onClick={() => setError('')}>×</button></div>}
-    <PaneContext.Provider value={paneHosts}><PaneCommandContext.Provider value={paneCommands}>
+    <PaneContext.Provider value={paneHosts}><PaneCommandContext.Provider value={paneCommands}><RestoredContext.Provider value={restored}>
       <div hidden ref={parking} />
       {paneIds.map(id => createPortal(panes[id], paneHosts.hosts[id], id))}
       <div className="workbench" ref={root}><DockviewReact className="dock-workbench" theme={dockThemes[themeType]} components={components} defaultTabComponent={PaneTab} watermarkComponent={EmptyWorkspace}
         rightHeaderActionsComponent={PaneActions} defaultRenderer="always" floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar"
         dndStrategy="pointer" proportionalLayout={false} getTabContextMenuItems={tabContextMenu} onReady={onReady} /></div>
-    </PaneCommandContext.Provider></PaneContext.Provider>
+    </RestoredContext.Provider></PaneCommandContext.Provider></PaneContext.Provider>
     {showManager && <div className="modal-backdrop" onKeyDown={event => {
       if (event.key === 'Escape' && !busy) { event.stopPropagation(); setShowManager(false) }
       if (event.key === 'Tab') {
