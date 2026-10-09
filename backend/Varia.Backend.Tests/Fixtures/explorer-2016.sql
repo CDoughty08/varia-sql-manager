@@ -89,6 +89,8 @@ SELECT @Count = COUNT(*) FROM Sales.Orders WHERE CustomerId = @CustomerId;
 GO
 CREATE PROCEDURE dbo.usp_Secret @x int = 1 WITH ENCRYPTION AS SELECT @x;
 GO
+CREATE PROCEDURE dbo.usp_Cursor @Rows CURSOR VARYING OUTPUT AS SET @Rows = CURSOR FOR SELECT 1; OPEN @Rows;
+GO
 CREATE FUNCTION dbo.fn_Inline (@x int = 1) RETURNS TABLE AS RETURN SELECT @x AS Value, N'a' AS Name;
 GO
 CREATE FUNCTION dbo.fn_Multi (@x int) RETURNS @t TABLE (Value int NOT NULL) AS BEGIN INSERT @t VALUES (@x); RETURN; END;

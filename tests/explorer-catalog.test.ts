@@ -284,7 +284,7 @@ describe('generated catalogue files', () => {
     expect(folder('tables').engines).toEqual(['box', 'cloud'])
     expect(folder('tables').since).toBeUndefined()
     expect(folder('columnMasterKeys').since).toBe(13)
-    for (const id of folderIds) for (const profile of [box(12), box(13), box(14), box(16), box(17), cloud(12), cloud(17)]) {
+    for (const id of folderIds) for (const profile of [box(12), box(13), box(14), box(16), box(17), cloud(12), cloud(16), cloud(17)]) {
       expect((folder(id).since ?? 12) <= profile.band && folder(id).engines.includes(profile.engine), `${id} ${profile.engine} ${profile.band}`).toBe(folderServed(id, profile))
     }
     expect(catalog.kinds.find(kind => kind.kind === 'column')?.parents).toEqual(['table', 'view', 'tableType', 'function'])

@@ -177,7 +177,8 @@ export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
 /**
- * A page of children: on the first page the static folders, then rows. `cursor` asks for the next page; `total` (first page
+ * A page of children: on the first page the static folders, then rows. `cursor` asks for the next page, even after a page
+ * that came back short or empty (Tables reads candidate keys, some of which another folder lists); `total` (first page
  * only) counts static folders, rows and a Parameters folder's return row. With `error`, `nodes` holds at most the static
  * folders that did not need the failed query.
  */

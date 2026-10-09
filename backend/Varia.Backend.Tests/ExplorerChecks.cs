@@ -27,7 +27,40 @@ internal static class ExplorerChecks
         Cursors(check);
         Refs(check);
         Filters(check);
+        await SweepAsync(check);
         await ServiceAsync(check);
+    }
+
+    /// <summary>The stale-scratch sweep against a fake server: what it drops, and what it leaves.</summary>
+    private static async Task SweepAsync(Action<bool, string> check)
+    {
+        const string prefix = "VariaScratch_20200101000000_";
+        // name, state (0 = ONLINE), older than 6 h, HAS_DBACCESS; the marker each online database reports (null: the query fails).
+        var databases = new (string Name, string State, string Stale, string Access, string? Marker)[]
+        {
+            (prefix + "0000000a", "0", "1", "0", "1"), (prefix + "0000000b", "0", "1", "1", "1"), (prefix + "0000000c", "0", "1", "1", "0"),
+            (prefix + "0000000d", "0", "1", "1", null), (prefix + "0000000e_off", "6", "1", "0", null), (prefix + "0000000f", "0", "0", "1", "1"),
+            ("VariaScratch_other", "6", "1", "0", null)
+        };
+        var markers = new List<string>();
+        var dropped = new List<string>();
+        Task<SqlRun> Run(string sql, string database)
+        {
+            static SqlRun Rows(params string?[][] rows) => new("completed", null, [[.. rows]]);
+            if (sql.StartsWith("SELECT d.name", StringComparison.Ordinal)) return Task.FromResult(Rows([.. databases.Select(item => new string?[] { item.Name, item.State, item.Stale, item.Access })]));
+            if (sql.Contains("varia.scratch", StringComparison.Ordinal))
+            {
+                var item = databases.Single(item => sql.Contains("N'" + item.Name + "'", StringComparison.Ordinal));
+                markers.Add(item.Name);
+                return Task.FromResult(item.Marker is null ? new SqlRun("failed", "The server principal is not able to access the database.", []) : Rows([item.Marker]));
+            }
+            if (sql.Contains("DROP DATABASE", StringComparison.Ordinal)) dropped.Add(databases.Single(item => sql.Contains("DROP DATABASE [" + item.Name + "]", StringComparison.Ordinal)).Name);
+            return Task.FromResult(Rows());
+        }
+        await ScratchDatabase.SweepAsync(Run, _ => { });
+        check(dropped.SequenceEqual([prefix + "0000000b", prefix + "0000000e_off"]) && markers.SequenceEqual([prefix + "0000000b", prefix + "0000000c", prefix + "0000000d"]),
+            "the stale-scratch sweep drops only marked online databases and offline ones; an online one whose marker cannot be read is left alone: dropped "
+            + string.Join(", ", dropped) + "; marker read for " + string.Join(", ", markers));
     }
 
     private static void Catalog(Action<bool, string> check)
@@ -47,6 +80,10 @@ internal static class ExplorerChecks
                 check(served.All(id => catalog.Folder(id)!.Parent is not { } parent || served.Contains(parent)), "a served folder's parent is served (band " + band + (cloud ? ", cloud)" : ")"));
             }
         string Names(IEnumerable<string> ids) => string.Join(",", ids);
+        check(catalog.Profile(12, 5, 16) == new ExplorerProfile(16, true) && catalog.Profile(12, 5) == new ExplorerProfile(12, true) && catalog.Profile(15, 9, 14) == new ExplorerProfile(15, true)
+            && catalog.Profile(12, 3, 16) == new ExplorerProfile(12, false) && catalog.Profile(16, 3, 13) == new ExplorerProfile(16, false) && catalog.Profile(17, 3, 16) == new ExplorerProfile(17, false)
+            && new ServerProfile(12, "12.0.2000.8", 5, "sa", false, false, true, 16).Explorer(catalog) == new ExplorerProfile(16, true),
+            "a box server's band is its version's; a cloud edition's is at least that of the catalog columns it has (Azure SQL Database reports 12)");
         var box12 = new ExplorerProfile(12, false);
         check(Names(catalog.StaticFolders("server", null, box12)) == "databases,serverSecurity,serverObjects"
             && Names(catalog.StaticFolders("server", null, new ExplorerProfile(16, true))) == "databases", "the server's folders; cloud editions browse only Databases");
@@ -153,8 +190,9 @@ internal static class ExplorerChecks
             && states[0] == (null, null, true) && states[5].HasChildren && states[5].Status is null && states.Where((_, index) => index is not (0 or 5)).All(item => item.Status == "unavailable" && !item.HasChildren),
             "database states: their text, unavailable status, and which expand");
         check(ExplorerLabels.Database(0, 0, true, false, true) == ("(Read-Only)", "readOnly", true) && ExplorerLabels.Database(0, 1, true, true, true) == ("(Standby / Read-Only, Single User)", "readOnly", true)
-            && ExplorerLabels.Database(6, 2, true, false, true) == ("(Offline, Read-Only, Restricted User)", "unavailable", false) && ExplorerLabels.Database(0, 0, false, false, false) == (null, "noAccess", false),
-            "database sublabels combine state, read-only and user access in one pair of parentheses; no access is its own status");
+            && ExplorerLabels.Database(6, 2, true, false, true) == ("(Offline, Read-Only, Restricted User)", "unavailable", false) && ExplorerLabels.Database(0, 0, false, false, false) == (null, "noAccess", true)
+            && ExplorerLabels.Database(6, 0, false, false, false) == ("(Offline)", "unavailable", false),
+            "database sublabels combine state, read-only and user access in one pair of parentheses; no access is its own status and still expands, to explain why");
         check(ExplorerLabels.ParameterSublabel("int", false, false, false) == "(int, Input, No default)" && ExplorerLabels.ParameterSublabel("int", true, false, true) == "(int, Input/Output, Default)"
             && ExplorerLabels.ParameterSublabel("Sales.OrderLines", false, true, false) == "(Sales.OrderLines, Input, ReadOnly, No default)" && ExplorerLabels.ParameterSublabel("int", false, false, null) == "(int, Input)",
             "parameter sublabels: direction, ReadOnly, and the default token");
@@ -331,13 +369,24 @@ internal static class ExplorerChecks
             "LIKE operands escape %, _, [ and the escape character");
         check(CatalogSql.Text("t.name", "contains", "@fname") == "t.name LIKE N'%' + @fname + N'%' ESCAPE N'\\'" && CatalogSql.Text("t.name", "notContains", "@fname") == "t.name NOT LIKE N'%' + @fname + N'%' ESCAPE N'\\'"
             && CatalogSql.Text("own.name", "equals", "@fowner") == "own.name = @fowner", "text filter fragments");
-        check(CatalogSql.Date("c", "equals") == "c >= @d1 AND c < DATEADD(day, 1, @d1)" && CatalogSql.Date("c", "lessThan") == "c < @d1" && CatalogSql.Date("c", "lessOrEqual") == "c < DATEADD(day, 1, @d1)"
-            && CatalogSql.Date("c", "greaterThan") == "c >= DATEADD(day, 1, @d1)" && CatalogSql.Date("c", "greaterOrEqual") == "c >= @d1"
-            && CatalogSql.Date("c", "between") == "c >= @d1 AND c < DATEADD(day, 1, @d2)" && CatalogSql.Date("c", "notBetween") == "c < @d1 OR c >= DATEADD(day, 1, @d2)",
-            "date filter fragments treat a day as [d, d + 1)");
+        var dateOps = new[] { "equals", "lessThan", "lessOrEqual", "greaterThan", "greaterOrEqual", "between", "notBetween" };
+        check(string.Join(" | ", dateOps.Select(op => CatalogSql.Date("c", op))) == "CONVERT(date, c) = @d1 | CONVERT(date, c) < @d1 | CONVERT(date, c) <= @d1 | CONVERT(date, c) > @d1 | "
+            + "CONVERT(date, c) >= @d1 | CONVERT(date, c) BETWEEN @d1 AND @d2 | CONVERT(date, c) NOT BETWEEN @d1 AND @d2" && dateOps.All(op => !CatalogSql.Date("c", op).Contains("DATEADD", StringComparison.Ordinal)),
+            "date filter fragments compare the date part, so 9999-12-31 never overflows");
         var text = ExplorerQueries.All["tables"].Render(new SqlRender(16, false, new FilterShape("contains", "equals", "notContains", "between")));
-        check(text.Contains(" AND (t.name LIKE N'%' + @fname + N'%' ESCAPE N'\\') AND (s.name = @fschema) AND (own.name NOT LIKE N'%' + @fowner + N'%' ESCAPE N'\\') AND (t.create_date >= @d1 AND t.create_date < DATEADD(day, 1, @d2))")
-            && text.Split("LEFT JOIN sys.database_principals AS own").Length == 3, "filters combine with AND, and the count joins the owner only when filtering by it");
+        check(text.Contains(" AND (t.name LIKE N'%' + @fname + N'%' ESCAPE N'\\') AND (s.name = @fschema) AND (own.name NOT LIKE N'%' + @fowner + N'%' ESCAPE N'\\') AND (CONVERT(date, t.create_date) BETWEEN @d1 AND @d2)")
+            && text.Contains("WHERE o.type = 'U' AND (@k1 IS NULL OR s.name > @k1 OR (s.name = @k1 AND o.name > @k2)) AND (o.name LIKE N'%' + @fname + N'%' ESCAPE N'\\') AND (s.name = @fschema) "
+                + "AND (own.name NOT LIKE N'%' + @fowner + N'%' ESCAPE N'\\') AND (CONVERT(date, o.create_date) BETWEEN @d1 AND @d2) ORDER BY s.name, o.name)")
+            && text.Split("LEFT JOIN sys.database_principals AS own").Length == 4, "filters combine with AND, and the count and Tables' candidate keys join the owner only when filtering by it");
+        var tables = ExplorerQueries.All["tables"].Render(new SqlRender(16));
+        var candidates = tables[tables.IndexOf("WITH k AS (", StringComparison.Ordinal)..tables.IndexOf(")\nSELECT k.k1", StringComparison.Ordinal)];
+        check(candidates.StartsWith("WITH k AS (SELECT TOP (@take) s.name AS k1, o.name AS k2, o.object_id AS id, s.principal_id AS sp FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE o.type = 'U' ", StringComparison.Ordinal)
+            && !candidates.Contains("sys.tables", StringComparison.Ordinal) && !candidates.Contains("own", StringComparison.Ordinal)
+            && tables.Contains(", CONVERT(bit, CASE WHEN t.is_ms_shipped = 0 AND ep.major_id IS NULL AND t.is_filetable = 0 ", StringComparison.Ordinal)
+            && tables.EndsWith(" THEN 1 ELSE 0 END) FROM k JOIN sys.tables AS t ON t.object_id = k.id LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = t.object_id AND ep.minor_id = 0 "
+                + "AND ep.name = N'microsoft_database_tools_support' LEFT JOIN sys.database_principals AS own ON own.principal_id = COALESCE(t.principal_id, k.sp) ORDER BY k.k1, k.k2;", StringComparison.Ordinal)
+            && ExplorerQueries.All.Values.Count(query => query.Candidates is not null) == 1,
+            "Tables pages by candidate keys from sys.objects, then reads sys.tables and its predicate for those rows only");
         check(ExplorerRefs.Date("2024-02-29") == new DateTime(2024, 2, 29) && ExplorerRefs.Date("1753-01-01") is not null && ExplorerRefs.Date("9999-12-31") is not null && ExplorerRefs.Date("2023-02-29") is null,
             "filter dates parse within datetime's range");
         var node = new ExplorerNode(new NodeRefDto("object", new ObjectRefDto("column", new string('d', 128), Name: new string('c', 128), Parent: new ParentRefDto("table", new string('s', 128), new string('t', 128)))),
@@ -346,11 +395,11 @@ internal static class ExplorerChecks
     }
 
     /// <summary>A host whose connections never reach a server; <see cref="Hold"/> blocks connection requests until released.</summary>
-    private sealed class FakeHost(int major = 16, int edition = 3) : IExplorerHost
+    private sealed class FakeHost(int major = 16, int edition = 3, int catalogBand = ExplorerCatalog.MinBand) : IExplorerHost
     {
         public SemaphoreSlim? Hold { get; set; }
         public int Connections;
-        public ServerProfile Profile(string connectionId) => new(major, major + ".0.1.1", edition, "sa", false, true, false);
+        public ServerProfile Profile(string connectionId) => new(major, major + ".0.1.1", edition, "sa", false, true, false, catalogBand);
         public SqlConnection Connection(string connectionId, string? database)
         {
             Interlocked.Increment(ref Connections);
@@ -402,6 +451,12 @@ internal static class ExplorerChecks
         check((await cloud.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Select(node => node.Label).SequenceEqual(["Databases"]), "cloud editions show only Databases");
         try { await cloud.ChildrenAsync(Args(Folder(server, "logins")), CancellationToken.None); check(false, "a box-only folder is refused on a cloud edition"); }
         catch (RequestException error) { check(error.Code == "INVALID_PARAMS", "the service checks folders against the server's profile"); }
+        // Azure SQL Database reports version 12 but has every catalog column up to the ledger ones.
+        var azure = new ExplorerService(new FakeHost(12, 5, 16));
+        var azureTables = (await azure.ChildrenAsync(Args(Folder(database, "tables")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
+        var azureDatabase = (await azure.ChildrenAsync(Args(Folder(database, "databaseSecurity")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
+        check(azureTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"]) && azureDatabase.Contains("alwaysEncryptedKeys")
+            && azureDatabase.Contains("securityPolicies"), "a cloud edition reporting version 12 serves the folders its catalog columns allow: " + string.Join(",", azureTables));
 
         // A request cancelled before it runs takes no slot and opens nothing.
         using (var cancelled = new CancellationTokenSource())

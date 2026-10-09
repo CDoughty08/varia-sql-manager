@@ -157,10 +157,12 @@ internal sealed class ExplorerService : IDisposable
             while (await reader.ReadAsync(token))
             {
                 if (count == request.PageSize || estimate > Options.SizeCut) { more = true; break; }
-                var node = query.Map(row);
-                nodes.Add(node);
                 last = query.KeyOf(row);
                 count++;
+                // A candidate the folder does not list still moves the cursor on.
+                if (query.Candidates is not null && !row.Listed) continue;
+                var node = query.Map(row);
+                nodes.Add(node);
                 estimate += Estimate(node);
             }
             // Rows past the page are not drained: attention stops the statement.

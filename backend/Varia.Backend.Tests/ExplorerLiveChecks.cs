@@ -71,6 +71,13 @@ internal static class ExplorerLiveChecks
         var major = int.Parse(info.ServerVersion.Split('.')[0]);
 
         check(info.ProductVersion is { Length: > 0 } && info.Login is { Length: > 0 } && info.EngineEdition is > 0, "connect probes the server profile: product version, login and engine edition");
+        await using (var probe = new SqlConnection(ConnectionSettings.Build(live("master")).ConnectionString))
+        {
+            await probe.OpenAsync();
+            var profile = await ServerProfile.ProbeAsync(probe, CancellationToken.None);
+            check(profile.Major == major && profile.CatalogBand == Math.Min(ExplorerCatalog.BandOf(major), 16),
+                "the profile's catalog band matches the version's on a box server (" + profile.CatalogBand + " on " + major + ")");
+        }
         check((await client.Labels(Object(Server))).SequenceEqual(["Databases", "Security", "Server Objects"]), "the server's folders, in SSMS order");
         var system = await client.All(Folder(Server, "systemDatabases"));
         check(system.Nodes.Select(node => node.Label).SequenceEqual(["master", "model", "msdb", "tempdb"]) && system.Nodes.All(node => node is { Subtype: "system", Icon: "svg:database", HasChildren: true }),
@@ -272,6 +279,8 @@ internal static class ExplorerLiveChecks
             "@Lines (Sales.OrderLines, Input, ReadOnly, No default)", "@Label (nvarchar(20), Input, Default)", "Returns integer"]) && parameters[2].Subtype == "output"
             && parameters[^1] is { Icon: "arrow-left", Ref.Object: { Kind: "returnValue", Name: null } }, "parameters: defaults from the module header, OUTPUT, READONLY, then the return row: " + string.Join(", ", parameters.Select(Show)));
         check((await Labels(new ObjectRefDto("procedure", dbName, "dbo", "usp_Secret"), "parameters")).SequenceEqual(["@x (int, Input)", "Returns integer"]), "an encrypted module's parameters omit the default token");
+        var cursorParameters = await Labels(new ObjectRefDto("procedure", dbName, "dbo", "usp_Cursor"), "parameters");
+        check(cursorParameters.SequenceEqual(["@Rows (cursor, Input/Output, No default)", "Returns integer"]), "a CURSOR VARYING OUTPUT parameter is typed cursor, not int: " + string.Join(", ", cursorParameters));
         check((await client.All(Folder(db, "tableValuedFunctions"))).Nodes.Select(node => (node.Label, node.Subtype)).SequenceEqual([("dbo.fn_Inline", "inline"), ("dbo.fn_Multi", "tableValued"), ("dbo.fn_Policy", "inline")])
             && (await client.All(Folder(db, "scalarValuedFunctions"))).Nodes.Select(node => (node.Label, node.Subtype)).SequenceEqual([("dbo.fn_Scalar", "scalar")]), "table-valued and scalar functions with their subtypes");
         var inline = new ObjectRefDto("function", dbName, "dbo", "fn_Inline");
@@ -345,6 +354,15 @@ internal static class ExplorerLiveChecks
             && (await Filtered(new(Created: new("between", today, today), Schema: new("equals", "Sales")))).SequenceEqual(["Sales.Customers", "Sales.Invoices", "Sales.Orders"])
             && (await Filtered(new(Created: new("lessThan", today), Schema: new("equals", "Sales")))).Count == 0
             && (await Filtered(new(Owner: new("equals", "dbo"), Name: new("equals", "b")))).SequenceEqual(["dbo.b"]), "text, date and owner filters, combined with AND");
+        var lastDay = new List<string>();
+        foreach (var (op, second, expect) in new[] { ("equals", (string?)null, 0), ("lessThan", null, 3), ("lessOrEqual", null, 3), ("greaterThan", null, 0), ("greaterOrEqual", null, 0),
+            ("between", "9999-12-31", 3), ("notBetween", "9999-12-31", 0) })
+        {
+            var range = await client.All(Folder(db, "tables"), filter: new(Created: second is null ? new(op, "9999-12-31") : new(op, "2000-01-01", second), Schema: new("equals", "Sales")));
+            var count = range.Nodes.Count(node => node.Ref.Type == "object");
+            if (range.Error is not null || count != expect) lastDay.Add(op + ": " + (range.Error?.Message ?? count + " rows"));
+        }
+        check(lastDay.Count == 0, "every date operator accepts 9999-12-31 without overflowing: " + string.Join("; ", lastDay));
 
         // A dropped table's folders report NOT_FOUND with refresh-parent.
         await sql("DROP TABLE dbo.Doomed;", dbName);
@@ -383,7 +401,7 @@ internal static class ExplorerLiveChecks
                 var limited = new Client(service, reader.Id, json);
                 var listed = (await limited.All(Folder(Server, "databases"))).Nodes.Where(node => node.Label.StartsWith(scratch.Name, StringComparison.Ordinal)).ToList();
                 var readOnly = listed.SingleOrDefault(node => node.Label == scratch.ReadOnly);
-                check(readOnly is { Status: "noAccess", HasChildren: false } && (await limited.Children(Object(Database(scratch.ReadOnly)))).Error?.Code == "NO_DB_ACCESS",
+                check(readOnly is { Status: "noAccess", HasChildren: true } && (await limited.Children(Object(Database(scratch.ReadOnly)))).Error?.Code == "NO_DB_ACCESS",
                     "a database the login cannot open is listed with noAccess, and expanding it explains why");
                 var visible = (await limited.All(Folder(db, "tables"))).Nodes.Where(node => node.Ref.Type == "object").ToList();
                 check(visible.Count == 2500 && visible.All(node => node.Label.StartsWith("bulk.", StringComparison.Ordinal)), "a low-privilege login sees only the tables it may read");

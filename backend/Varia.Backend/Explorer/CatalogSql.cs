@@ -61,18 +61,22 @@ internal static partial class CatalogSql
         _ => throw new InvalidOperationException("Unknown text filter operator.")
     };
 
-    /// <summary>create_date is server local time; a day is [d, d + 1).</summary>
-    public static string Date(string column, string op) => op switch
+    /// <summary>create_date is server local time, compared by its date part: a day after 9999-12-31 cannot be computed.</summary>
+    public static string Date(string column, string op)
     {
-        "equals" => column + " >= @d1 AND " + column + " < DATEADD(day, 1, @d1)",
-        "lessThan" => column + " < @d1",
-        "lessOrEqual" => column + " < DATEADD(day, 1, @d1)",
-        "greaterThan" => column + " >= DATEADD(day, 1, @d1)",
-        "greaterOrEqual" => column + " >= @d1",
-        "between" => column + " >= @d1 AND " + column + " < DATEADD(day, 1, @d2)",
-        "notBetween" => column + " < @d1 OR " + column + " >= DATEADD(day, 1, @d2)",
-        _ => throw new InvalidOperationException("Unknown date filter operator.")
-    };
+        var day = "CONVERT(date, " + column + ")";
+        return op switch
+        {
+            "equals" => day + " = @d1",
+            "lessThan" => day + " < @d1",
+            "lessOrEqual" => day + " <= @d1",
+            "greaterThan" => day + " > @d1",
+            "greaterOrEqual" => day + " >= @d1",
+            "between" => day + " BETWEEN @d1 AND @d2",
+            "notBetween" => day + " NOT BETWEEN @d1 AND @d2",
+            _ => throw new InvalidOperationException("Unknown date filter operator.")
+        };
+    }
 
     /// <summary>A LIKE operand matches its text literally under ESCAPE N'\'.</summary>
     public static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_").Replace("[", "\\[");

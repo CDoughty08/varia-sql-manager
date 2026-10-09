@@ -58,8 +58,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     }
 
     /// <summary>Drops scratch databases and logins older than 6 hours that carry the marker or are not online (names only are logged).</summary>
-    public static async Task SweepAsync(Func<string, string, Task<SqlRun>> run)
+    public static async Task SweepAsync(Func<string, string, Task<SqlRun>> run, Action<string>? log = null)
     {
+        log ??= Console.WriteLine;
         var result = await run("SELECT d.name, d.state, CONVERT(bit, CASE WHEN d.create_date < DATEADD(hour, -6, GETDATE()) THEN 1 ELSE 0 END), CONVERT(bit, ISNULL(HAS_DBACCESS(d.name), 0)) "
             + "FROM sys.databases AS d WHERE d.name LIKE N'VariaScratch[_]%' ORDER BY CASE WHEN d.source_database_id IS NULL THEN 1 ELSE 0 END;", "master");
         foreach (var row in result.Sets.Count == 0 ? [] : result.Sets[0])
@@ -67,19 +68,21 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
             var name = row[0]!;
             if (!Pattern().IsMatch(name) || row[2] != "1") continue;
             var online = row[1] == "0";
-            if (online && row[3] == "1")
+            // An online database is dropped only when its marker can be read and is there; one this login cannot open is left alone.
+            if (online)
             {
+                if (row[3] != "1") continue;
                 var marker = await run("DECLARE @sql nvarchar(max) = N'SELECT COUNT(*) FROM ' + QUOTENAME(" + Quote(name) + ") + N'.sys.extended_properties WHERE class = 0 AND name = N''varia.scratch'';';\nEXEC (@sql);", "master");
-                if (marker.Status != "completed" || marker.Scalar == "0") continue;
+                if (marker.Status != "completed" || marker.Scalar is null or "0") continue;
             }
-            Console.WriteLine("Dropping stale scratch database " + name);
+            log("Dropping stale scratch database " + name);
             await Drop(run, name, online);
         }
         var logins = await run("SELECT name FROM sys.server_principals WHERE name LIKE N'VariaScratch[_]%' AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
         foreach (var row in logins.Sets.Count == 0 ? [] : logins.Sets[0])
             if (LoginPattern().IsMatch(row[0]!))
             {
-                Console.WriteLine("Dropping stale scratch login " + row[0]);
+                log("Dropping stale scratch login " + row[0]);
                 await run("DROP LOGIN " + Bracket(row[0]!) + ";", "master");
             }
     }

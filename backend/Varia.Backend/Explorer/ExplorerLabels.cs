@@ -75,7 +75,7 @@ internal static class ExplorerLabels
     };
 
     /// <summary>A database's sublabel, status and whether it expands: state, read-only (or standby) and user access, in
-    /// one pair of parentheses.</summary>
+    /// one pair of parentheses. One the login cannot open still expands, as in SSMS, so expanding it explains why.</summary>
     public static (string? Sublabel, string? Status, bool HasChildren) Database(int state, int userAccess, bool readOnly, bool standby, bool access)
     {
         var parts = new List<string>(3);
@@ -85,7 +85,7 @@ internal static class ExplorerLabels
         else if (userAccess == 2) parts.Add("Restricted User");
         var usable = state is 0 or 5;
         var status = !usable ? "unavailable" : !access ? "noAccess" : readOnly || standby ? "readOnly" : null;
-        return (parts.Count == 0 ? null : "(" + string.Join(", ", parts) + ")", status, usable && access);
+        return (parts.Count == 0 ? null : "(" + string.Join(", ", parts) + ")", status, usable);
     }
 
     /// <summary>"(System-Versioned)", "(Updatable Ledger)" or "(Append-Only Ledger)"; dropped ledger tables have none.</summary>

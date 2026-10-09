@@ -26,7 +26,18 @@ internal sealed class Row(SqlDataReader reader, RowContext context, int keys)
     public int? N(int index) => Null(index) ? null : Convert.ToInt32(reader.GetValue(keys + index), CultureInfo.InvariantCulture);
     public bool B(int index) => !Null(index) && Convert.ToBoolean(reader.GetValue(keys + index), CultureInfo.InvariantCulture);
     public DateTime? D(int index) => Null(index) ? null : reader.GetDateTime(keys + index);
+    /// <summary>A candidate key's row passes the folder's predicate (the last column of a candidate listing).</summary>
+    public bool Listed => reader.GetBoolean(reader.FieldCount - 1);
 }
+
+/// <summary>
+/// Pages a schema-scoped listing by candidate keys: TOP (@take) (schema, name) keys of one object type from sys.objects,
+/// which SQL Server reads in key order, then the catalog view's columns and the folder predicate for those rows only,
+/// returned as a last "listed" column. A page can hold fewer rows than it read, so its cursor is the last candidate key.
+/// </summary>
+/// <param name="Type">The sys.objects type letters, e.g. 'U'.</param>
+/// <param name="Join">Joins k (k1, k2, id, sp: the schema's principal) to the view and everything the select names.</param>
+internal sealed record CandidateKeys(string Type, string Join);
 
 /// <summary>A catalog listing: constant text per render (<see cref="SqlRender"/>), keyset paged, mapped row by row.</summary>
 internal sealed class ExplorerQuery
@@ -52,6 +63,8 @@ internal sealed class ExplorerQuery
     public Func<RowContext, ExplorerNode?>? Tail { get; init; }
     /// <summary>The listing may call HAS_DBACCESS (the database lists).</summary>
     public bool ChecksAccess { get; init; }
+    /// <summary>Pages by candidate keys (Tables: sorting every remaining sys.tables row per page is too slow at 100,000).</summary>
+    public CandidateKeys? Candidates { get; init; }
 
     public string Render(SqlRender render)
     {
@@ -75,6 +88,18 @@ internal sealed class ExplorerQuery
         }
         var select = Select(render);
         text.Append("IF @first = 1 SELECT COUNT_BIG(*) FROM ").Append(from).Append(render.Filter.Owner is null ? "" : owner).Append(Conditions(where)).Append(";\n");
+        if (Candidates is { } candidates)
+        {
+            // The candidates take the filter on sys.objects' own columns, so a filtered folder still reads full pages.
+            var candidateFilters = CatalogSql.Filters(render.Filter, new FilterColumns("o.name", "s.name", "own.name", "o.create_date"));
+            text.Append("WITH k AS (SELECT TOP (@take) s.name AS k1, o.name AS k2, o.object_id AS id, s.principal_id AS sp FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id")
+                .Append(render.Filter.Owner is null ? "" : " LEFT JOIN sys.database_principals AS own ON own.principal_id = COALESCE(o.principal_id, s.principal_id)")
+                .Append(" WHERE o.type = ").Append(candidates.Type).Append(" AND (@k1 IS NULL OR s.name > @k1 OR (s.name = @k1 AND o.name > @k2))").Append(candidateFilters)
+                .Append(" ORDER BY s.name, o.name)\n");
+            text.Append("SELECT k.k1, k.k2").Append(select.Length == 0 ? "" : ", " + select).Append(", CONVERT(bit, CASE WHEN ").Append(where ?? "1 = 1").Append(" THEN 1 ELSE 0 END) FROM k ")
+                .Append(candidates.Join).Append(" ORDER BY k.k1, k.k2;");
+            return text.ToString();
+        }
         text.Append("SELECT TOP (@take) ").Append(string.Join(", ", Keys)).Append(select.Length == 0 ? "" : ", " + select).Append(" FROM ").Append(from)
             .Append(RowsNeedOwner || render.Filter.Owner is not null ? owner : "").Append(Conditions(where, keyset)).Append(" ORDER BY ").Append(string.Join(", ", Keys)).Append(';');
         return text.ToString();
@@ -147,9 +172,11 @@ internal static class ExplorerQueries
 
     private const string TableFrom = "sys.tables AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id ";
 
-    private static ExplorerQuery Tables(string id, Func<SqlRender, string> predicate, string[] filters) => new()
+    private static ExplorerQuery Tables(string id, Func<SqlRender, string> predicate, string[] filters, bool candidates = false) => new()
     {
         Id = id, Scope = QueryScope.Database, Keyset = Keyset.SchemaName, From = _ => TableFrom + Tools("t"), Where = predicate, Keys = ["s.name", "t.name"],
+        // Only the main folder: nearly every user table is listed there, while the other folders list a few of them.
+        Candidates = candidates ? new("'U'", "JOIN sys.tables AS t ON t.object_id = k.id " + Tools("t") + " LEFT JOIN sys.database_principals AS own ON own.principal_id = COALESCE(t.principal_id, k.sp)") : null,
         Select = r => "t.create_date, " + r.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + ", " + r.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + ", "
             + r.Col(14, "t.is_node", "CONVERT(bit, 0)") + ", " + r.Col(14, "t.is_edge", "CONVERT(bit, 0)") + ", t.is_filetable, " + r.Col(13, "t.is_external", "CONVERT(bit, 0)") + ", "
             + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", CONVERT(bit, CASE WHEN t.is_ms_shipped = 1 OR ep.major_id IS NOT NULL THEN 1 ELSE 0 END), own.name",
@@ -251,7 +278,7 @@ internal static class ExplorerQueries
             + "LEFT JOIN sys.schemas AS xss ON xss.schema_id = xs.schema_id",
         Where = _ => "p.object_id = @object_id AND p.parameter_id > 0", Keys = ["p.parameter_id"],
         Select = _ => "p.name, ty.name, ty.is_user_defined, ty.is_assembly_type, ty.is_table_type, tys.name, bt.name, p.max_length, p.precision, p.scale, p.is_output, "
-            + "p.is_readonly, p.has_default_value, p.is_xml_document, xss.name, xs.name",
+            + "p.is_readonly, p.has_default_value, p.is_xml_document, xss.name, xs.name, p.is_cursor_ref",
         Map = row =>
         {
             var prelude = row.Context.Prelude as ParameterPrelude;
@@ -259,7 +286,9 @@ internal static class ExplorerQueries
             var type = new SqlTypeInfo(row.S(1)!, row.I(7), row.I(8), row.I(9), row.B(2), row.B(3), row.B(4), row.S(6), row.B(13), row.S(14), row.S(15), null, row.S(5));
             bool? hasDefault = prelude is { ObjectType: var objectType } && ClrModules.Contains(objectType) ? row.B(12) : prelude?.Defaults?.Contains(name);
             var output = row.B(10);
-            return Node(row.Context, Child(row.Context, "parameter", name), name, output ? "output" : "input", ExplorerLabels.ParameterSublabel(ExplorerLabels.TypeText(type), output, row.B(11), hasDefault));
+            // A CURSOR parameter is catalogued with user_type_id 56 (int); only is_cursor_ref says what it is.
+            var typeText = row.B(16) ? "cursor" : ExplorerLabels.TypeText(type);
+            return Node(row.Context, Child(row.Context, "parameter", name), name, output ? "output" : "input", ExplorerLabels.ParameterSublabel(typeText, output, row.B(11), hasDefault));
         },
         Tail = context => context.Prelude is ParameterPrelude prelude
             ? Node(context, Child(context, "returnValue", null), ExplorerLabels.ReturnLabel(prelude.ObjectType, prelude.ReturnType))
@@ -314,7 +343,7 @@ internal static class ExplorerQueries
 
         Tables("tables", r => "t.is_ms_shipped = 0 AND ep.major_id IS NULL AND t.is_filetable = 0 AND " + r.Col(13, "t.is_external", "CONVERT(bit, 0)") + " = 0 AND "
             + r.Col(14, "t.is_node", "CONVERT(bit, 0)") + " = 0 AND " + r.Col(14, "t.is_edge", "CONVERT(bit, 0)") + " = 0 AND " + r.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + " <> 1 AND "
-            + r.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + " <> 1 AND " + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " = 0", Full),
+            + r.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + " <> 1 AND " + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " = 0", Full, candidates: true),
         Tables("systemTables", _ => "(t.is_ms_shipped = 1 OR ep.major_id IS NOT NULL)", SchemaNamed),
         Tables("fileTables", _ => "t.is_filetable = 1", Full),
         Tables("externalTables", r => r.Col(13, "t.is_external", "CONVERT(bit, 0)") + " = 1", Full),

@@ -9,8 +9,8 @@ internal sealed record CatalogKind(string Kind, string Title, string Scope, stri
     IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents);
 internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyList<string> Forbidden);
 
-/// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17) and
-/// whether it is a cloud edition.</summary>
+/// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17; on cloud
+/// editions, the band of the catalog columns it has) and whether it is a cloud edition.</summary>
 internal readonly record struct ExplorerProfile(int Band, bool Cloud)
 {
     public string Engine => Cloud ? "cloud" : "box";
@@ -75,7 +75,13 @@ internal sealed class ExplorerCatalog
     public CatalogKind? Kind(string kind) => kinds.GetValueOrDefault(kind);
     public CatalogKind KindOf(string kind) => kinds[kind];
 
-    public ExplorerProfile Profile(int major, int edition) => new(BandOf(major), CloudEditions.Contains(edition));
+    /// <summary>A box server's band is its major version's; a cloud edition's is at least the band of the catalog columns
+    /// it has (<paramref name="catalogBand"/>), since Azure SQL Database reports version 12.</summary>
+    public ExplorerProfile Profile(int major, int edition, int catalogBand = MinBand)
+    {
+        var cloud = CloudEditions.Contains(edition);
+        return new(cloud ? Math.Max(BandOf(major), Math.Clamp(catalogBand, MinBand, MaxBand)) : BandOf(major), cloud);
+    }
 
     public string RootFolder(string id)
     {
