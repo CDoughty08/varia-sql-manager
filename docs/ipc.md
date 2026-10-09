@@ -511,7 +511,12 @@ last 120 s, the protocol, runtime and OS, and the stderr lines described above.
 The backend formats every non-binary value into the text SSMS 2022 shows (`CellFormat.cs`), so the renderer never
 formats SQL types. Every sample is a case in `tests/fixtures/sql-display.json`, checked against `CellFormat` offline and
 against SQL Server by the live type matrix. Reads use `CommandBehavior.SequentialAccess`, call `IsDBNull` first, and read
-each column once, in order, with a reader chosen once per result set from the schema table.
+each column once, in order, with a reader chosen once per result set from the schema table. A long value is kept up to
+its cap and the rest is read past in 8,192-unit chunks (text and ntext through `GetTextReader`: `GetChars` reads their
+whole value). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
+kept) are read past with a synchronous `Read` when their set has a long column. Either way, nothing near a huge value's
+size is held, and a cancel stops it: left unread, the next `ReadAsync` would buffer all of it, in time quadratic in its
+size.
 
 | SQL type | Display | Samples |
 | --- | --- | --- |

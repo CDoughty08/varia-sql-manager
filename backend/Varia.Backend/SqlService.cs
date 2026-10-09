@@ -409,11 +409,14 @@ internal sealed class SqlService : IRequestDispatcher
                     SqlDataReader? reader = null;
                     try
                     {
-                        // Sequential access streams each value once, in column order, so a huge value is never materialised.
+                        // Sequential access streams each value once, in column order, so a huge value is never materialised
+                        // (ColumnPlan reads past the rest of a truncated one).
                         reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, token);
                         do
                         {
                             ColumnPlan? plan = null;
+                            bool? hasLong = null;
+                            var skipped = false;
                             if (reader.FieldCount > 0)
                             {
                                 if (sets.Count >= args.MaxResultSets) overflowSets++;
@@ -430,22 +433,42 @@ internal sealed class SqlService : IRequestDispatcher
                             }
                             while (true)
                             {
-                                var read = reader.ReadAsync(token);
-                                // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
-                                // pages after 200 ms without a row, so a slow statement's rows become readable.
-                                if (!read.IsCompleted && currentSet?.SealDelay is { } delay
-                                    && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
+                                bool more;
+                                // ReadAsync would skip the long values of a row that was not stored by buffering all of them,
+                                // in time quadratic in their size and deaf to the token; a synchronous Read skips them in
+                                // linear time, and Cancel stops it. Rows already stored become readable first.
+                                if (skipped && (hasLong ??= plan?.HasLong ?? ColumnPlan.HasLongColumns(reader)))
                                 {
-                                    currentSet.Seal();
-                                    events.Sealed();
+                                    if (currentSet?.SealDelay is not null)
+                                    {
+                                        currentSet.Seal();
+                                        events.Sealed();
+                                    }
+                                    token.ThrowIfCancellationRequested();
+                                    using (token.Register(command.Cancel)) more = reader.Read();
                                 }
-                                if (!await read) break;
+                                else
+                                {
+                                    var read = reader.ReadAsync(token);
+                                    // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
+                                    // pages after 200 ms without a row, so a slow statement's rows become readable.
+                                    if (!read.IsCompleted && currentSet?.SealDelay is { } delay
+                                        && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
+                                    {
+                                        currentSet.Seal();
+                                        events.Sealed();
+                                    }
+                                    more = await read;
+                                }
+                                if (!more) break;
+                                skipped = true;
                                 if (currentSet is null) continue;
                                 currentSet.CountRow();
                                 events.RowsChanged();
                                 if (args.MaxRows > 0 && storedRows >= args.MaxRows) { currentSet.Skip(TruncationReason.RowLimit); continue; }
                                 var builder = currentSet.BeginRow();
                                 if (builder is null) continue;
+                                skipped = false;
                                 int truncatedCells;
                                 try { truncatedCells = plan!.ReadRow(reader, builder, messages.Add, token); }
                                 catch { currentSet.AbortRow(); throw; }

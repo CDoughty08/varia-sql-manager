@@ -16,10 +16,11 @@ internal enum CellCodec : byte
 }
 
 /// <summary>The codecs for one result set, chosen once from its schema (never by catching exceptions per cell). Reads
-/// follow CommandBehavior.SequentialAccess: IsDBNull first, then each column once, in ordinal order. Long values are read
-/// in 8,192-unit chunks only up to their cap plus one, so a huge value never materialises; SqlClient skips the rest.
-/// xml is the exception (see <see cref="Xml"/>). The query's token is checked between chunks, so a cancel or timeout
-/// takes effect inside a long cell.</summary>
+/// follow CommandBehavior.SequentialAccess: IsDBNull first, then each column once, in ordinal order. Long values are kept
+/// up to their cap plus one unit, read in 8,192-unit chunks, and the rest of a longer value is read past in chunks too, so
+/// a huge value never materialises. Left unread, it would be skipped by the next ReadAsync, which buffers all of it in
+/// time quadratic in its size. xml is the exception (see <see cref="Xml"/>). The query's token is checked between
+/// chunks, so a cancel or timeout takes effect inside a long cell.</summary>
 internal sealed class ColumnPlan
 {
     public const int TextCap = 65_535;
@@ -47,12 +48,13 @@ internal sealed class ColumnPlan
         public bool Warned;
     }
 
-    private ColumnPlan(Column[] columns, IReadOnlyList<ResultColumn> descriptors, bool isPlan)
+    private ColumnPlan(Column[] columns, IReadOnlyList<ResultColumn> descriptors, bool isPlan, bool hasLong)
     {
         this.columns = columns;
         Columns = descriptors;
         Wires = [.. columns.Select(column => column.Wire)];
         IsPlan = isPlan;
+        HasLong = hasLong;
     }
 
     public IReadOnlyList<ResultColumn> Columns { get; }
@@ -62,6 +64,12 @@ internal sealed class ColumnPlan
     public long DescriptorBytes => 512 + Columns.Sum(column => Encoding.UTF8.GetByteCount(column.Name) + Encoding.UTF8.GetByteCount(column.DataType) + 96L);
     /// <summary>Today's rule: a single column named "Microsoft SQL Server 2005 XML Showplan" is an execution plan.</summary>
     public bool IsPlan { get; }
+    /// <summary>Whether the set has a long column (max types, text, ntext, image, xml, CLR types), whose values can reach
+    /// 2 GB. A row that is not stored is then read past synchronously (SqlService.ExecuteAsync).</summary>
+    public bool HasLong { get; }
+
+    /// <summary><see cref="HasLong"/> for a set that has no plan because none of its rows are stored.</summary>
+    public static bool HasLongColumns(SqlDataReader reader) => reader.GetColumnSchema().Any(column => column.IsLong == true);
 
     public static ColumnPlan From(SqlDataReader reader)
     {
@@ -70,6 +78,7 @@ internal sealed class ColumnPlan
         var isPlan = count == 1 && reader.GetName(0).Equals(ShowplanColumn, StringComparison.OrdinalIgnoreCase);
         var columns = new Column[count];
         var descriptors = new ResultColumn[count];
+        var hasLong = false;
         for (var i = 0; i < count; i++)
         {
             var row = schema.Rows[i];
@@ -82,6 +91,7 @@ internal sealed class ColumnPlan
             var scale = Int(row, "NumericScale");
             var size = Int(row, "ColumnSize");
             var isLong = row["IsLong"] is true;
+            hasLong |= isLong;
             var nullable = row["AllowDBNull"] is not false;
             var clrType = row["DataType"] as Type;
             var (codec, wire, role, cap) = Choose(provider, precision, isLong, clrType, isPlan);
@@ -92,7 +102,7 @@ internal sealed class ColumnPlan
                 MaxLength: !isLong && size is > 0 and < int.MaxValue && codec is CellCodec.Chars or CellCodec.Bytes ? size : null,
                 Precision: exact ? precision : null, Scale: exact || scaled ? scale : null, Nullable: nullable);
         }
-        return new ColumnPlan(columns, descriptors, isPlan);
+        return new ColumnPlan(columns, descriptors, isPlan, hasLong);
     }
 
     private static int? Int(DataRow row, string column) => row.Table.Columns.Contains(column) && row[column] is not DBNull and var value ? Convert.ToInt32(value, Invariant) : null;
@@ -119,7 +129,9 @@ internal sealed class ColumnPlan
             (int)SqlDbType.DateTime2 => (CellCodec.DateTime2, text, null, 0),
             (int)SqlDbType.DateTimeOffset => (CellCodec.DateTimeOffset, text, null, 0),
             (int)SqlDbType.UniqueIdentifier => (CellCodec.Guid, text, null, 0),
-            (int)SqlDbType.Char or (int)SqlDbType.VarChar or (int)SqlDbType.Text or (int)SqlDbType.NChar or (int)SqlDbType.NVarChar or (int)SqlDbType.NText => (CellCodec.Chars, text, null, TextCap),
+            (int)SqlDbType.Char or (int)SqlDbType.VarChar or (int)SqlDbType.NChar or (int)SqlDbType.NVarChar => (CellCodec.Chars, text, null, TextCap),
+            // GetChars on text and ntext reads the whole value at its first call; GetTextReader streams it.
+            (int)SqlDbType.Text or (int)SqlDbType.NText => (CellCodec.LongText, text, null, TextCap),
             (int)SqlDbType.Xml => (CellCodec.Xml, text, "xml", DocumentCap),
             JsonType => (CellCodec.Chars, text, "json", DocumentCap),
             VectorType => (CellCodec.Vector, text, "vector", VectorCap),
@@ -233,7 +245,9 @@ internal sealed class ColumnPlan
         return bytes;
     }
 
-    /// <summary>Reads at most cap + 1 characters, so a longer value is known to be truncated without reading it all.</summary>
+    /// <summary>Keeps at most cap + 1 characters, so a longer value is known to be truncated. The rest of a longer value is
+    /// read in chunks into the buffer after the kept prefix, which stays intact (see the class summary); the other chunked
+    /// readers below do the same.</summary>
     private bool Chars(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
     {
         var limit = cap + 1;
@@ -246,6 +260,11 @@ internal sealed class ColumnPlan
             var read = (int)reader.GetChars(i, total, chars, total, length);
             if (read <= 0) break;
             total += read;
+        }
+        if (total == limit)
+        {
+            Chars(total + Chunk);
+            for (long offset = total, read; (read = reader.GetChars(i, offset, chars, total, Chunk)) > 0; offset += read) token.ThrowIfCancellationRequested();
         }
         return Text(chars.AsSpan(0, total), cap, builder);
     }
@@ -262,6 +281,7 @@ internal sealed class ColumnPlan
             if (read <= 0) break;
             total += read;
         }
+        if (total == limit) while (reader.Read(Chars(total + Chunk).Slice(total, Chunk)) > 0) token.ThrowIfCancellationRequested();
         return Text(chars.AsSpan(0, total), cap, builder);
     }
 
@@ -277,6 +297,11 @@ internal sealed class ColumnPlan
             var read = (int)reader.GetBytes(i, total, bytes, total, length);
             if (read <= 0) break;
             total += read;
+        }
+        if (total == limit)
+        {
+            Bytes(total + Chunk);
+            for (long offset = total, read; (read = reader.GetBytes(i, offset, bytes, total, Chunk)) > 0; offset += read) token.ThrowIfCancellationRequested();
         }
         builder.AppendBinary(bytes.AsSpan(0, Math.Min(total, cap)), total > cap);
         return total > cap;
@@ -294,6 +319,7 @@ internal sealed class ColumnPlan
             if (read <= 0) break;
             total += read;
         }
+        if (total == limit) while (stream.Read(Bytes(total + Chunk).Slice(total, Chunk)) > 0) token.ThrowIfCancellationRequested();
         builder.AppendBinary(bytes.AsSpan(0, Math.Min(total, cap)), total > cap);
         return total > cap;
     }
