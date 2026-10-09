@@ -1,8 +1,9 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
-import type { CommandId } from './commands/catalog'
-import type { MenubarId, MenuState } from './commands/menus'
+import type { CommandId, RendererRole } from './commands/catalog'
+import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
+import type { MenuStyle } from './menu-style'
 import type { ErrorCode } from './ipc/wire/protocol'
 
 export interface AdvancedConnectionOptions {
@@ -56,6 +57,8 @@ export const serverObjectKinds = ['logins', 'serverRoles', 'credentials', 'crypt
 export type ServerObjectKind = typeof serverObjectKinds[number]
 export interface ServerObjectInfo { name: string; description: string }
 export interface TableInfo { schema: string; name: string }
+/** A table's columns in order; `truncated` means it has more than the 4,096 returned. */
+export interface TableColumns { columns: { name: string; dataType: string }[]; truncated: boolean }
 export interface BackendHealth {
   protocolVersion: number
   runtime: string
@@ -162,6 +165,7 @@ export interface RpcMethods {
   'server.objects.list': { params: { connectionId: string; kind: ServerObjectKind }; result: ServerObjectInfo[] }
   'tables.list': { params: { connectionId: string; database: string }; result: TableInfo[] }
   'tables.script': { params: { connectionId: string; database: string; schema: string; name: string }; result: { sql: string } }
+  'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
   'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
@@ -199,17 +203,21 @@ export type BackendState =
   | { status: 'stopped' }
 export type BackendStatus = BackendState['status']
 
-export interface MenuPopup { menu: MenubarId; x: number; y: number }
 export interface SqlFile { id: string; name: string; path: string }
 export interface OpenSqlFile extends SqlFile { content: string }
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean }
 
 export interface VariaApi {
   readonly platform: string
-  showMenu(options: MenuPopup): Promise<ApiResult<void>>
-  onMenuFocus(callback: (menu: MenubarId | null) => void): () => void
   /** Which native menu items are disabled and checked; main validates the ids against its own catalogue. */
   setMenuState(state: MenuState): void
+  /** Runs an Electron role (Cut, Zoom In, Reload, …) on the window, for custom menus and the palette. */
+  runRole(role: RendererRole): Promise<ApiResult<void>>
+  /** Main's choice of context menus: 'native' (macOS) shows them through `showContextMenu`. */
+  readonly menuStyle: MenuStyle
+  /** Shows a native context menu of catalogue command ids; resolves when it closes. A chosen item arrives on `onContextMenuCommand`. */
+  showContextMenu(request: ContextMenuRequest): Promise<ApiResult<void>>
+  onContextMenuCommand(callback: (command: ContextMenuCommand) => void): () => void
   health(): Promise<ApiResult<BackendHealth>>
   connect(options: ConnectionOptions): Promise<ApiResult<ConnectionInfo>>
   discoverDatabases(options: ConnectionOptions): Promise<ApiResult<DatabaseInfo[]>>
@@ -223,6 +231,7 @@ export interface VariaApi {
   serverObjects(connectionId: string, kind: ServerObjectKind): Promise<ApiResult<ServerObjectInfo[]>>
   tables(connectionId: string, database: string): Promise<ApiResult<TableInfo[]>>
   scriptTable(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<{ sql: string }>>
+  tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>
@@ -239,6 +248,10 @@ export interface VariaApi {
   openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>
+  /** Shows an open query's saved file in the file manager; main looks its path up by id. */
+  revealSqlFile(fileId: string): Promise<ApiResult<void>>
+  /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
+  writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
   closeWindow(): Promise<void>
   loadLayouts(): Promise<ApiResult<LayoutLoad>>

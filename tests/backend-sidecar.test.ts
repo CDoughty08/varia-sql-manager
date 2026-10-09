@@ -124,6 +124,13 @@ describe('real .NET sidecar over protocol v2', () => {
     for (const kind of serverObjectKinds) await expect(call(connection, 'server.objects.list', { connectionId, kind })).rejects.toThrow('Connect to a SQL Server first.')
     await expect(call(connection, 'server.objects.list', { connectionId, kind: 'sys.credentials' as ServerObjectKind })).rejects.toThrow('Unsupported server object category.')
   })
+  it('reads a table\'s columns on the metadata lane, checking names before the connection', async () => {
+    const connection = backend()
+    const table = { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo' }
+    await expect(call(connection, 'tables.columns', { ...table, name: 'x'.repeat(129) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'tables.columns', { ...table, name: 'Orders' })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    expect(deadlineFor('tables.columns', { ...table, name: 'Orders' })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
+  })
   it('handles cancellation of a completed or unknown query', async () => {
     await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
   })

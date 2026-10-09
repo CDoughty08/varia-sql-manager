@@ -95,6 +95,8 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
   onDidExecute(listener: (event: CommandEvent) => void): Disposable { return this.didExecute.subscribe(listener) }
   onDidChangeHandlers(listener: () => void): Disposable { return this.handlersChanged.subscribe(listener) }
   clearError(): void { if (this.getSnapshot().error) this.publish({ error: '' }) }
+  /** Shows a failure outside a command (a menu that could not render) in the command banner. */
+  reportError(message: string): void { this.publish({ error: truncate(message) }) }
   private warnOnce(id: string): void {
     if (this.warned.has(id)) return
     this.warned.add(id)

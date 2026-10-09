@@ -1,11 +1,9 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import type { CommandId } from '../shared/commands/catalog'
-import { toPlatform } from '../shared/commands/keybindings'
-import { applicationMenus, buildMenuModel, type MenuEntry, type MenuId } from '../shared/commands/menus'
-import { themeChoice } from '../shared/theme/choice'
-import { sanitizeLabel } from '../shared/theme/format'
-import { builtinThemes } from '../shared/theme/palette'
-import type { ThemePreference, ThemePreferencePatch, ThemeState, ThemeType } from '../shared/theme/types'
+import { defaultRules, toAccelerator, toPlatform, type Platform } from '../shared/commands/keybindings'
+import { applicationMenus, buildMenuModel, menuMayShowChords, pruneMenu, type MenuEntry, type MenuId } from '../shared/commands/menus'
+import { themeMenuModel, type ThemeMenuItem } from '../shared/theme/menu'
+import type { ThemePreferencePatch, ThemeState } from '../shared/theme/types'
 
 export interface ApplicationMenuModel { theme: Pick<ThemeState, 'preference' | 'themes'> }
 export interface ApplicationMenuActions {
@@ -18,71 +16,60 @@ export interface ApplicationMenuActions {
   reloadThemes(): void
 }
 
-const themeLabelLength = 48
-const slotOf = (type: ThemeType) => type === 'dark' ? 'darkTheme' as const : 'lightTheme' as const
-
-/** Theme names come from user files: sanitized, cut to 48 characters, and `&` escaped where Electron reads mnemonics. */
-export function themeLabel(name: string): string {
-  const characters = [...sanitizeLabel(name, Infinity)]
-  return characters.length > themeLabelLength ? characters.slice(0, themeLabelLength - 1).join('') + '…' : characters.join('')
-}
 const mnemonicSafe = (label: string, platform: NodeJS.Platform) => platform === 'darwin' ? label : label.replaceAll('&', '&&')
-/** How a label reads on screen: compatibility forms folded (a no-break space is a space) and blank runs collapsed and trimmed. */
-const lookalike = (label: string) => [...label.normalize('NFKC').replace(/[\s\u2800]+/gu, ' ').trim()]
-/**
- * Labels that could pass for each other: the same length, and every difference pairs an ASCII character with a
- * non-ASCII one, as a Cyrillic а does with a Latin a. Names in one script that merely differ are left alone.
- */
-const confusable = (a: string[], b: string[]) => a.length === b.length && a.every((character, index) => character === b[index] || (character < '\x80') !== (b[index] < '\x80'))
+const themeActions: Readonly<Record<Extract<ThemeMenuItem, { kind: 'action' }>['id'], (actions: ApplicationMenuActions) => void>> = {
+  'theme.create': actions => actions.createTheme(), 'theme.openFolder': actions => actions.openThemesFolder(), 'theme.reload': actions => actions.reloadThemes()
+}
 
-function themeList(model: ApplicationMenuModel, list: ThemeType, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
-  const { preference, themes } = model.theme
-  const selected = preference[slotOf(list)], fallback = builtinThemes[list].name
-  const shown = themes.filter(theme => theme.types.includes(list) || !theme.usable || theme.id === selected)
-  const labels = shown.map(theme => themeLabel(theme.name)), looks = labels.map(lookalike)
-  const items = shown.map((theme, index): MenuItemConstructorOptions => {
-    const supported = theme.usable && theme.types.includes(list), checked = theme.id === selected
-    let label = looks.some((look, other) => other !== index && confusable(look, looks[index])) ? `${labels[index]} (${theme.id})` : labels[index]
-    if (!theme.usable) label += checked ? ` (invalid: using ${fallback})` : ' (invalid)'
-    else if (!supported) label += ` (no ${list} variant: using ${fallback})`
-    return { id: `theme.${list}.${theme.id}`, label: mnemonicSafe(label, platform), type: 'radio', checked, enabled: supported, click: () => actions.setTheme(themeChoice(preference, theme, list)) }
+/** View › Theme's theme items as native items, keeping PR1's ids; theme names are escaped where Electron reads mnemonics. */
+function themeItems(items: readonly ThemeMenuItem[], actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
+  return items.map((item): MenuItemConstructorOptions => {
+    if (item.kind === 'separator') return { type: 'separator' }
+    if (item.kind === 'submenu') return { id: item.id, label: item.label, submenu: themeItems(item.items, actions, platform) }
+    if (item.kind === 'action') return { id: item.id, label: item.label, click: () => themeActions[item.id](actions) }
+    const { patch } = item
+    return { id: item.id, label: mnemonicSafe(item.label, platform), type: 'radio', checked: item.checked, enabled: item.enabled, ...(patch ? { click: () => actions.setTheme(patch) } : {}) }
   })
-  if (!shown.some(theme => theme.id === selected)) items.push({ id: `theme.${list}.${selected}`, label: mnemonicSafe(`${selected} (missing: using ${fallback})`, platform), type: 'radio', checked: true, enabled: false })
-  return items
 }
 
-function themeMenu(model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
-  const mode = model.theme.preference.mode
-  const modeItem = (value: ThemePreference['mode'], label: string): MenuItemConstructorOptions => ({ id: 'theme.mode.' + value, label, type: 'radio', checked: mode === value, click: () => actions.setTheme({ mode: value }) })
-  return [
-    modeItem('dark', 'Dark'), modeItem('light', 'Light'), modeItem('system', 'Follow System'),
-    { type: 'separator' },
-    { id: 'theme.dark', label: 'Dark Theme', submenu: themeList(model, 'dark', actions, platform) },
-    { id: 'theme.light', label: 'Light Theme', submenu: themeList(model, 'light', actions, platform) },
-    { type: 'separator' },
-    { id: 'theme.create', label: 'Create Custom Theme…', click: () => actions.createTheme() },
-    { id: 'theme.openFolder', label: 'Open Themes Folder', click: () => actions.openThemesFolder() },
-    { id: 'theme.reload', label: 'Reload Themes', click: () => actions.reloadThemes() }
-  ]
-}
+/**
+ * Role commands whose handlers reach the query editor and the results grid, which their roles cannot (Delete and Select
+ * All act on the page's DOM selection, not Monaco's). The macOS menu bar runs their handlers, as it does Undo's: an
+ * NSMenu leaves DOM focus where it was. Elsewhere this menu is hidden and serves only the roles' keys.
+ */
+const macHandlerRoles: ReadonlySet<CommandId> = new Set(['edit.delete', 'edit.selectAll'])
+/** A role command's further keys (Zoom In's Ctrl+Shift+=): an item has one accelerator, so hidden copies carry the rest. */
+const extraAccelerators = (id: CommandId, platform: Platform): string[] => defaultRules(platform)
+  .filter(rule => rule.command === id && rule.chords.length === 1 && menuMayShowChords(rule.chords, platform)).slice(1)
+  .flatMap(rule => toAccelerator(rule.chords, platform) ?? [])
 
-function commandItem(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions): MenuItemConstructorOptions {
-  const { id, toggle } = entry
+function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
+  const { id, toggle, role } = entry
+  // Electron performs a role natively. Its accelerator is always the catalogue's, or none: Electron's own defaults would
+  // give Reload Ctrl+R and ⌘R, which toggle the results pane.
+  if (role && !(platform === 'darwin' && macHandlerRoles.has(id))) {
+    const hidden = extraAccelerators(id, toPlatform(platform)).map((accelerator): MenuItemConstructorOptions =>
+      ({ role, accelerator, visible: false, ...(platform === 'darwin' ? { acceleratorWorksWhenHidden: true } : {}) }))
+    return [{ id: entry.nativeId, label: entry.title, role, accelerator: entry.accelerator ?? '' }, ...hidden]
+  }
   // Main never resolves keys (the renderer's dispatcher owns them), so the accelerator is only a label.
-  return {
+  return [{
     id: entry.nativeId, label: entry.title, ...(entry.accelerator ? { accelerator: entry.accelerator } : {}), registerAccelerator: false, type: toggle ? 'checkbox' : 'normal',
     // Electron flips a checkbox before calling click; the renderer owns the state, so the item keeps showing what it last sent.
     click: item => { if (toggle) item.checked = actions.isChecked(id); actions.command(id) }
-  }
+  }]
 }
 
 function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
-  return buildMenuModel(menu, toPlatform(platform)).map((entry): MenuItemConstructorOptions => {
-    if (entry.kind === 'separator') return { type: 'separator' }
-    if (entry.kind === 'role') return { role: entry.role }
-    if (entry.kind === 'command') return commandItem(entry, actions)
-    const commands = menuItems(entry.menu, model, actions, platform)
-    return { id: entry.id, label: entry.title, submenu: [...commands, ...(commands.length ? [{ type: 'separator' as const }] : []), ...themeMenu(model, actions, platform)] }
+  const entries = (id: MenuId) => buildMenuModel(id, toPlatform(platform))
+  // Menubar placements have no `when`, so pruning only leaves out submenus with nothing in them.
+  return pruneMenu(entries(menu), () => true, entries).flatMap((entry): MenuItemConstructorOptions[] => {
+    if (entry.kind === 'separator') return [{ type: 'separator' }]
+    if (entry.kind === 'role') return [{ role: entry.role }]
+    if (entry.kind === 'command') return commandItems(entry, actions, platform)
+    const commands = menuItems(entry.id, model, actions, platform)
+    const dynamic = entry.dynamic === 'theme' ? themeItems(themeMenuModel(model.theme), actions, platform) : []
+    return [{ id: entry.nativeId, label: entry.title, submenu: [...commands, ...(commands.length && dynamic.length ? [{ type: 'separator' as const }] : []), ...dynamic] }]
   })
 }
 

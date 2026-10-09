@@ -1,20 +1,24 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ApiResult, BackendState, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
-import type { MenubarId } from '../shared/commands/menus'
+import type { ContextMenuCommand } from '../shared/commands/menus'
+import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
 
 const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params)
 
 const api: VariaApi = {
   platform: process.platform,
-  showMenu: options => ipcRenderer.invoke('varia:menu-popup', options),
-  onMenuFocus: callback => {
-    const listener = (_event: Electron.IpcRendererEvent, menu: MenubarId | null) => callback(menu)
-    ipcRenderer.on('varia:menu-focus', listener)
-    return () => { ipcRenderer.removeListener('varia:menu-focus', listener) }
-  },
   setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
+  runRole: role => ipcRenderer.invoke('varia:run-role', role),
+  // Main passes its choice as a renderer argument; anything else there means the platform's default.
+  menuStyle: menuStyleFromArgv(process.argv, process.platform),
+  showContextMenu: request => ipcRenderer.invoke('varia:context-menu', request),
+  onContextMenuCommand: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, command: ContextMenuCommand) => callback(command)
+    ipcRenderer.on('varia:context-menu-command', listener)
+    return () => { ipcRenderer.removeListener('varia:context-menu-command', listener) }
+  },
   health: () => request('system.health', {}),
   connect: options => request('connections.connect', options),
   discoverDatabases: options => request('connections.databases', options),
@@ -28,6 +32,7 @@ const api: VariaApi = {
   serverObjects: (connectionId, kind) => request('server.objects.list', { connectionId, kind }),
   tables: (connectionId, database) => request('tables.list', { connectionId, database }),
   scriptTable: (connectionId, database, schema, name) => request('tables.script', { connectionId, database, schema, name }),
+  tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
   closeQuerySession: sessionId => request('query.session.close', { sessionId }),
@@ -43,6 +48,8 @@ const api: VariaApi = {
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),
+  revealSqlFile: fileId => ipcRenderer.invoke('varia:files-reveal', fileId),
+  writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),
   loadLayouts: () => ipcRenderer.invoke('varia:layouts-load'),

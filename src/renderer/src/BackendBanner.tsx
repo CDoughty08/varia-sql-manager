@@ -28,7 +28,8 @@ export default function BackendBanner() {
   }
   if (state.status === 'failed') {
     const details = state.details
-    const copy = () => { void navigator.clipboard.writeText(details).then(() => setCopied(details), () => setCopied(undefined)) }
+    // Through main, like every copy: the page never touches the clipboard itself.
+    const copy = () => { void window.varia.writeClipboardText(details).then(result => setCopied(result.ok ? details : undefined), () => setCopied(undefined)) }
     return <div className="global-error backend-banner" role="alert">
       <span className="backend-banner-text">{state.message}</span>
       <div className="backend-banner-actions"><button onClick={restart}>Restart SQL Backend</button><button onClick={copy}>{copied === details ? 'Copied' : 'Copy details'}</button></div>

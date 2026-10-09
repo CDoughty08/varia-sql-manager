@@ -30,6 +30,14 @@ describe('IPC validation', () => {
     const query = { connectionId, sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'x'.repeat(1_000_001), maxRows: 1000, timeoutSeconds: 30 }
     expect(() => validateRequest('query.execute', query)).toThrow('too large to execute')
   })
+  it('takes a table\'s columns by connection, database, schema, and name only', () => {
+    const valid = { connectionId: crypto.randomUUID(), database: 'AppData', schema: 'dbo', name: "Order ]Lines'" }
+    expect(validateRequest('tables.columns', valid)).toEqual(valid)
+    for (const patch of [{ name: '' }, { name: ' ' }, { schema: 'x'.repeat(129) }, { database: '' }, { connectionId: 'server-a' }, { sql: 'SELECT 1' }]) {
+      expect(() => validateRequest('tables.columns', { ...valid, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
+    }
+    expect(validateRequest('tables.columns', { ...valid, name: 'x'.repeat(128) })).toMatchObject({ name: 'x'.repeat(128) })
+  })
   it('allowlists server object categories and rejects SQL or extra fields', () => {
     const connectionId = crypto.randomUUID()
     for (const kind of serverObjectKinds) expect(validateRequest('server.objects.list', { connectionId, kind })).toEqual({ connectionId, kind })

@@ -1,0 +1,94 @@
+{"id":"menu.file","label":"File"}
+  {"id":"connection.connect","label":"Connect to Server…","registerAccelerator":false,"type":"normal","click":[["command","connection.connect"]]}
+  {"id":"connection.disconnect","label":"Disconnect from Server…","registerAccelerator":false,"type":"normal","click":[["command","connection.disconnect"]]}
+  {"id":"connection.reconnect","label":"Reconnect…","registerAccelerator":false,"type":"normal","click":[["command","connection.reconnect"]]}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+N","id":"file.new","label":"New Query","registerAccelerator":false,"type":"normal","click":[["command","file.new"]]}
+  {"accelerator":"Ctrl+O","id":"file.open","label":"Open…","registerAccelerator":false,"type":"normal","click":[["command","file.open"]]}
+  {"accelerator":"Ctrl+S","id":"file.save","label":"Save","registerAccelerator":false,"type":"normal","click":[["command","file.save"]]}
+  {"accelerator":"Ctrl+Shift+S","id":"file.saveAs","label":"Save As…","registerAccelerator":false,"type":"normal","click":[["command","file.saveAs"]]}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+W","id":"file.close","label":"Close Query","registerAccelerator":false,"type":"normal","click":[["command","file.close"]]}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+Q","id":"window.close","label":"Quit","role":"quit"}
+{"id":"menu.edit","label":"Edit"}
+  {"accelerator":"Ctrl+Z","id":"edit.undo","label":"Undo","registerAccelerator":false,"type":"normal","click":[["command","edit.undo"]]}
+  {"accelerator":"Ctrl+Y","id":"edit.redo","label":"Redo","registerAccelerator":false,"type":"normal","click":[["command","edit.redo"]]}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+X","id":"edit.cut","label":"Cut","role":"cut"}
+  {"accelerator":"Ctrl+C","id":"edit.copy","label":"Copy","role":"copy"}
+  {"accelerator":"Ctrl+V","id":"edit.paste","label":"Paste","role":"paste"}
+  {"accelerator":"Delete","id":"edit.delete","label":"Delete","role":"delete"}
+  {"accelerator":"Ctrl+A","id":"edit.selectAll","label":"Select All","role":"selectAll"}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+F","id":"edit.find","label":"Find","registerAccelerator":false,"type":"normal","click":[["command","edit.find"]]}
+  {"accelerator":"Ctrl+H","id":"edit.replace","label":"Replace","registerAccelerator":false,"type":"normal","click":[["command","edit.replace"]]}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+/","id":"edit.toggleLineComment","label":"Toggle Line Comment","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleLineComment"]]}
+  {"id":"edit.commentLines","label":"Comment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.commentLines"]]}
+  {"id":"edit.uncommentLines","label":"Uncomment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.uncommentLines"]]}
+{"id":"menu.view","label":"View"}
+  {"accelerator":"Ctrl+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
+  {"accelerator":"Ctrl+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
+  {"type":"separator"}
+  {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
+  {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
+  {"id":"layout.reset","label":"Reset Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
+  {"type":"separator"}
+  {"accelerator":"Alt+Z","id":"editor.toggleWordWrap","label":"Word Wrap","registerAccelerator":false,"type":"checkbox","click":[["command","editor.toggleWordWrap"]],"checkedAfterClick":true}
+  {"type":"separator"}
+  {"id":"view.theme","label":"Theme"}
+    {"id":"preferences.colorTheme","label":"Color Theme…","registerAccelerator":false,"type":"normal","click":[["command","preferences.colorTheme"]]}
+    {"type":"separator"}
+    {"checked":false,"id":"theme.mode.dark","label":"Dark","type":"radio","click":[["setTheme",{"mode":"dark"}]]}
+    {"checked":false,"id":"theme.mode.light","label":"Light","type":"radio","click":[["setTheme",{"mode":"light"}]]}
+    {"checked":true,"id":"theme.mode.system","label":"Follow System","type":"radio","click":[["setTheme",{"mode":"system"}]]}
+    {"type":"separator"}
+    {"id":"theme.dark","label":"Dark Theme"}
+      {"checked":false,"id":"theme.dark.varia-dark","label":"Varia Dark","type":"radio","click":[["setTheme",{"darkTheme":"varia-dark"}]]}
+      {"checked":false,"id":"theme.dark.harbor","label":"Harbor && Sea","type":"radio","click":[["setTheme",{"darkTheme":"harbor","lightTheme":"harbor"}]]}
+      {"checked":true,"id":"theme.dark.dusk","label":"Dusk","type":"radio","click":[["setTheme",{"darkTheme":"dusk"}]]}
+      {"checked":false,"enabled":false,"id":"theme.dark.broken","label":"broken (invalid)","type":"radio","click":[["setTheme",{"darkTheme":"broken"}]]}
+    {"id":"theme.light","label":"Light Theme"}
+      {"checked":false,"id":"theme.light.varia-light","label":"Varia Light","type":"radio","click":[["setTheme",{"lightTheme":"varia-light"}]]}
+      {"checked":false,"id":"theme.light.harbor","label":"Harbor && Sea","type":"radio","click":[["setTheme",{"darkTheme":"harbor","lightTheme":"harbor"}]]}
+      {"checked":false,"id":"theme.light.paper","label":"Paper","type":"radio","click":[["setTheme",{"lightTheme":"paper"}]]}
+      {"checked":false,"enabled":false,"id":"theme.light.broken","label":"broken (invalid)","type":"radio","click":[["setTheme",{"lightTheme":"broken"}]]}
+      {"checked":true,"enabled":false,"id":"theme.light.gone","label":"gone (missing: using Varia Light)","type":"radio"}
+    {"type":"separator"}
+    {"id":"theme.create","label":"Create Custom Theme…","click":[["createTheme"]]}
+    {"id":"theme.openFolder","label":"Open Themes Folder","click":[["openThemesFolder"]]}
+    {"id":"theme.reload","label":"Reload Themes","click":[["reloadThemes"]]}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+=","id":"view.zoomIn","label":"Zoom In","role":"zoomIn"}
+  {"accelerator":"Ctrl+Shift+=","role":"zoomIn","visible":false}
+  {"accelerator":"Ctrl+-","id":"view.zoomOut","label":"Zoom Out","role":"zoomOut"}
+  {"accelerator":"Ctrl+0","id":"view.resetZoom","label":"Reset Zoom","role":"resetZoom"}
+  {"accelerator":"F11","id":"view.toggleFullScreen","label":"Full Screen","role":"togglefullscreen"}
+  {"type":"separator"}
+  {"accelerator":"","id":"developer.reloadWindow","label":"Reload Window","role":"reload"}
+  {"accelerator":"Ctrl+Shift+I","id":"developer.toggleDevTools","label":"Toggle Developer Tools","role":"toggleDevTools"}
+{"id":"menu.query","label":"Query"}
+  {"id":"query.connection","label":"Connection"}
+    {"id":"connection.connect@query.connection","label":"Connect…","registerAccelerator":false,"type":"normal","click":[["command","connection.connect"]]}
+    {"id":"query.disconnect","label":"Disconnect","registerAccelerator":false,"type":"normal","click":[["command","query.disconnect"]]}
+    {"id":"query.disconnectAll","label":"Disconnect All Queries","registerAccelerator":false,"type":"normal","click":[["command","query.disconnectAll"]]}
+    {"type":"separator"}
+    {"id":"query.changeConnection","label":"Change Connection…","registerAccelerator":false,"type":"normal","click":[["command","query.changeConnection"]]}
+  {"accelerator":"Ctrl+U","id":"query.changeDatabase","label":"Change Database…","registerAccelerator":false,"type":"normal","click":[["command","query.changeDatabase"]]}
+  {"type":"separator"}
+  {"accelerator":"F5","id":"query.execute","label":"Execute","registerAccelerator":false,"type":"normal","click":[["command","query.execute"]]}
+  {"id":"query.cancel","label":"Cancel Executing Query","registerAccelerator":false,"type":"normal","click":[["command","query.cancel"]]}
+{"id":"menu.window","label":"Window"}
+  {"accelerator":"F8","id":"window.explorer","label":"Object Explorer","registerAccelerator":false,"type":"normal","click":[["command","window.explorer"]]}
+  {"id":"window.editor","label":"Query Editor","registerAccelerator":false,"type":"normal","click":[["command","window.editor"]]}
+  {"id":"window.output","label":"Query Output","registerAccelerator":false,"type":"normal","click":[["command","window.output"]]}
+  {"accelerator":"Ctrl+R","id":"view.toggleResultsPane","label":"Show Results Pane","registerAccelerator":false,"type":"checkbox","click":[["command","view.toggleResultsPane"]],"checkedAfterClick":false}
+  {"type":"separator"}
+  {"accelerator":"Ctrl+Tab","id":"document.next","label":"Next Query","registerAccelerator":false,"type":"normal","click":[["command","document.next"]]}
+  {"accelerator":"Ctrl+Shift+Tab","id":"document.previous","label":"Previous Query","registerAccelerator":false,"type":"normal","click":[["command","document.previous"]]}
+  {"id":"file.closeAll","label":"Close All Documents","registerAccelerator":false,"type":"normal","click":[["command","file.closeAll"]]}
+  {"type":"separator"}
+  {"id":"layout.save@window","label":"Save Window Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
+  {"id":"layout.load@window","label":"Load Window Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
+  {"id":"layout.reset@window","label":"Reset Window Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}

@@ -35,9 +35,10 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['titleBar.activeForeground'], titleBar),
   ...text(['titleBar.inactiveForeground'], ['titleBar.inactiveBackground']),
   ...text(['menubar.selectionForeground'], ['titleBar.activeBackground', 'menubar.selectionBackground']),
-  // Monaco's context menu highlights with the list hover colors and keeps menu.foreground on them.
-  ...text(['menu.foreground'], ['menu.background'], ['menu.background', 'list.hoverBackground']),
+  ...text(['menu.foreground'], ['menu.background']),
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
+  // Keybinding labels in menus; the highlighted item shows them in menu.selectionForeground.
+  ...text(['descriptionForeground'], ['menu.background']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
   ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),
   ...text(['inputValidation.errorForeground'], ['editorWidget.background', 'inputValidation.errorBackground']),
@@ -65,6 +66,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['banner.errorForeground'], ['quickInput.background', 'banner.errorBackground']),
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground']),
+  // Selected cells keep their text color while the grid is not focused, NULL included.
+  ...text(['foreground'], ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
   ...text(['notifications.foreground'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
@@ -95,6 +98,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['connection.favoriteForeground'], widget),
   ...graphic(['tab.activeBorderTop', 'documentTabs.modifiedIndicator', 'documentTabs.closeForeground'], strip),
   ...graphic(['panelTitle.activeBorder'], panelTitle, widget),
+  ...graphic(['resultsGrid.activeCellBorder'], panel, ['resultsGrid.background', 'resultsGrid.selectionBackground']),
   ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
   ...graphic(['button.background'], widget),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
@@ -107,7 +111,9 @@ export const contrastPairs: readonly ContrastPair[] = [
  */
 export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs)),
-  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar)
+  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar),
+  // The highlighted menu item follows the pointer and the keyboard alike.
+  ...pairs(1.2, ['menu.selectionBackground'], ['menu.background'])
 ]
 
 /** Reported, not enforced: the Dark control borders are below 3:1 until the owner decides on a heavier look. */

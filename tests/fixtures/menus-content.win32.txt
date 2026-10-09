@@ -1,0 +1,89 @@
+# Title-bar menus on win32; enablement per state: disconnected, connected, running, busy
+File
+  Conn&ect to Server…  ++++
+  &Disconnect from Server…  -++-
+  &Reconnect…  ----
+  ---
+  &New Query  Ctrl+N  +++-
+  &Open…  Ctrl+O  +++-
+  &Save  Ctrl+S  +++-
+  Save &As…  Ctrl+Shift+S  +++-
+  ---
+  &Close Query  Ctrl+W  ++--
+  ---
+  E&xit  Alt+F4  ++++
+Edit
+  &Undo  Ctrl+Z  ++++
+  &Redo  Ctrl+Y  ++++
+  ---
+  Cu&t  Ctrl+X  ++++
+  &Copy  Ctrl+C  ++++
+  &Paste  Ctrl+V  ++++
+  &Delete  Delete  ++++
+  Select &All  Ctrl+A  ++++
+  ---
+  &Find  Ctrl+F  ++++
+  R&eplace  Ctrl+H  ++++
+  ---
+  Toggle &Line Comment  Ctrl+/  ++++
+  Co&mment Selection  Ctrl+K Ctrl+C  ++++
+  U&ncomment Selection  Ctrl+K Ctrl+U  ++++
+View
+  &Command Palette…  Ctrl+Shift+P  ++++
+  &Go to Query…  Ctrl+P  ++++
+  ---
+  &Save Layout…  ++++
+  &Load Layout…  ++++
+  &Reset Layout  ++++
+  ---
+  &Word Wrap  Alt+Z [ ]  ++++
+  ---
+  T&heme >
+    &Color Theme…  ++++
+    ---
+    &Dark (*)  ++++
+    &Light ( )  ++++
+    Follow &System ( )  ++++
+    ---
+    Dar&k Theme >
+      Varia Dark (*)  ++++
+      Harbor & Sea ( )  ++++
+    Li&ght Theme >
+      Varia Light (*)  ++++
+      Harbor & Sea ( )  ++++
+    ---
+    Create Custom &Theme…  ++++
+    &Open Themes Folder  ++++
+    &Reload Themes  ++++
+  ---
+  Zoom &In  Ctrl+=  ++++
+  Zoom &Out  Ctrl+-  ++++
+  Reset &Zoom  Ctrl+0  ++++
+  &Full Screen  F11  ++++
+  ---
+  R&eload Window  ++++
+  Toggle &Developer Tools  Ctrl+Shift+I  ++++
+Query
+  C&onnection >
+    &Connect…  ++++
+    &Disconnect  -+--
+    Disconnect &All Queries  -++-
+    ---
+    C&hange Connection…  ++--
+  Change &Database…  Ctrl+U  -+--
+  ---
+  E&xecute  F5  -+--
+  &Cancel Executing Query  Alt+Pause  --+-
+Window
+  &Object Explorer  F8  ++++
+  Query &Editor  ++++
+  Q&uery Output  ++++
+  S&how Results Pane  Ctrl+R [x]  ++++
+  ---
+  &Next Query  Ctrl+Tab  ----
+  &Previous Query  Ctrl+Shift+Tab  ----
+  C&lose All Documents  +++-
+  ---
+  &Save Window Layout…  ++++
+  Lo&ad Window Layout…  ++++
+  &Reset Window Layout  ++++

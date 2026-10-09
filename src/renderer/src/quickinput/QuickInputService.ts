@@ -3,6 +3,7 @@ import type { KeybindingLabel } from '../../../shared/commands/keybindings'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
+import type { FocusAdapter } from '../core/focus'
 import type { Disposable } from '../core/types'
 import { compareRanked, prepareQuery, scoreQuery, type MatchRange } from './fuzzy'
 
@@ -51,8 +52,7 @@ export interface QuickPickOptions<T extends QuickPickItem> {
   onDidAccept(item: T): void | Promise<void>
   onDidHide?(reason: HideReason): void
 }
-/** Where focus was before the widget opened, and how to return there; the DOM version is `domFocusAdapter`. */
-export interface FocusAdapter { capture(): unknown; restore(target: unknown): void }
+export type { FocusAdapter } from '../core/focus'
 /** A visible row. `group` is set on the first row of each run of a group, where the view draws the label and a border. */
 export interface QuickInputRow { readonly item: QuickPickItem; readonly ranges: readonly MatchRange[]; readonly descriptionRanges: readonly MatchRange[]; readonly group?: string }
 /** A value for the view to write into its (uncontrolled) input; `version` changes with every request. */

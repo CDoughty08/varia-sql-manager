@@ -130,7 +130,15 @@ export function themeContribution({ commands, quickInput, theme }: Pick<Workbenc
     commands.register('preferences.colorTheme', { run: colorTheme }),
     commands.register('preferences.createTheme', { run: async () => { const result = await api.createCustomTheme(); if (!result.ok) throw new Error(result.error) } }),
     commands.register('preferences.openThemesFolder', { run: () => theme.openFolder() }),
-    commands.register('preferences.reloadThemes', { run: () => theme.reload() })
+    commands.register('preferences.reloadThemes', { run: () => theme.reload() }),
+    // View › Theme's mode and theme items in custom menus; main applies the choice and publishes the new state.
+    commands.register('preferences.setTheme', { when: args => !!args?.theme, run: async args => {
+      if (!args?.theme) return
+      let result: ApiResult<ThemeState>
+      try { result = await api.setThemePreference(args.theme) } catch (error) { result = { ok: false, error: errorText(error) } }
+      if (!result.ok) throw new Error(result.error)
+      theme.receive(result.value)
+    } })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

@@ -40,6 +40,9 @@ export function queryContribution({ commands, queries, documents, connections, t
         onDidAccept: item => queries.isRunning(tabId) ? undefined : targets.changeConnection(tabId, item.id || undefined)
       })
     } }),
+    // Ends the query's session first, as Change Connection… → Disconnected does.
+    commands.register('query.disconnect', { run: async () => { const tab = documents.active; if (tab && !queries.isRunning(tab.id)) await targets.changeConnection(tab.id, undefined) } }),
+    commands.register('query.disconnectAll', { run: () => targets.disconnectAll() }),
     commands.register('query.changeDatabase', { run: () => {
       const tab = documents.active, connectionId = tab?.connectionId
       if (!tab || !connectionId) return

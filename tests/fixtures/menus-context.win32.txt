@@ -1,0 +1,150 @@
+# Context menus on win32; enablement per state: disconnected, connected, running, busy
+editor.context, for the query editor
+  C&onnection >
+    &Connect…  ++++
+    &Disconnect  -+--
+    Disconnect &All Queries  -++-
+    ---
+    C&hange Connection…  ++--
+  ---
+  E&xecute  F5  -+--
+  Ca&ncel Executing Query  Alt+Pause  --+-
+  ---
+  Cu&t  Ctrl+X  ++++
+  &Copy  Ctrl+C  ++++
+  &Paste  Ctrl+V  ++++
+  ---
+  Comm&and Palette…  Ctrl+Shift+P  ++++
+documentTab.context, for a saved query's tab
+  &Save  Ctrl+S  +++-
+  Save &As…  Ctrl+Shift+S  +++-
+  ---
+  &Close  Ctrl+W  ++--
+  Close All &But This  +++-
+  C&lose All  +++-
+  ---
+  Copy Full &Path  ++++
+  &Open Containing Folder  ++++
+documentTab.context, for an unsaved query's tab
+  &Save  Ctrl+S  +++-
+  Save &As…  Ctrl+Shift+S  +++-
+  ---
+  &Close  Ctrl+W  +++-
+  Close All &But This  +++-
+  C&lose All  +++-
+  ---
+  Copy Full &Path  ----
+  &Open Containing Folder  ----
+dockTab.context, for a docked panel's tab
+  &Float  ++++
+  ---
+  &Close  ++++
+dockTab.context, for a floating panel's tab
+  &Dock  ++++
+  ---
+  &Close  ++++
+input.context, for a text field with selected text
+  &Undo  Ctrl+Z  ++++
+  &Redo  Ctrl+Y  ----
+  ---
+  Cu&t  Ctrl+X  ++++
+  &Copy  Ctrl+C  ++++
+  &Paste  Ctrl+V  ++++
+  &Delete  Delete  ++++
+  ---
+  Select &All  Ctrl+A  ++++
+input.context, for a read-only text field
+  &Undo  Ctrl+Z  ++++
+  &Redo  Ctrl+Y  ----
+  ---
+  Cu&t  Ctrl+X  ----
+  &Copy  Ctrl+C  ++++
+  &Paste  Ctrl+V  ----
+  &Delete  Delete  ----
+  ---
+  Select &All  Ctrl+A  ++++
+input.context, for a password field
+  &Undo  Ctrl+Z  ++++
+  &Redo  Ctrl+Y  ----
+  ---
+  Cu&t  Ctrl+X  ----
+  &Copy  Ctrl+C  ----
+  &Paste  Ctrl+V  ++++
+  &Delete  Delete  ++++
+  ---
+  Select &All  Ctrl+A  ++++
+input.context, for an empty text field
+  &Undo  Ctrl+Z  ----
+  &Redo  Ctrl+Y  ----
+  ---
+  Cu&t  Ctrl+X  ----
+  &Copy  Ctrl+C  ----
+  &Paste  Ctrl+V  ++++
+  &Delete  Delete  ----
+  ---
+  Select &All  Ctrl+A  ----
+explorer.context, for Object Explorer's empty area
+  &Connect…  ++++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for a server
+  &Connect…  ++++
+  &Disconnect  -+--
+  ---
+  New &Query  -++-
+  ---
+  Copy &Name  -+++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for the databasesFolder node
+  Re&fresh  F5  -+++
+explorer.context, for the systemDatabasesFolder node
+  Re&fresh  F5  -+++
+explorer.context, for the snapshotsFolder node
+  Re&fresh  F5  -+++
+explorer.context, for the securityFolder node
+  Re&fresh  F5  -+++
+explorer.context, for a database
+  New &Query  -++-
+  ---
+  Copy &Name  -+++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for a Tables folder
+  Re&fresh  F5  -+++
+explorer.context, for a table
+  Select Top 1000 Ro&ws  -++-
+  ---
+  &Script Table as >
+    &CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+  ---
+  Copy &Name  -+++
+explorer.context, for a server object folder
+  Re&fresh  F5  -+++
+explorer.context, for a server object
+  Copy &Name  -+++
+output.context, for a results grid with selected cells
+  &Copy  Ctrl+C  ++++
+  Copy with &Headers  Ctrl+Shift+C  ++++
+  ---
+  Select &All  Ctrl+A  ++++
+output.context, for a results grid without
+  &Copy  Ctrl+C  ----
+  Copy with &Headers  Ctrl+Shift+C  ----
+  ---
+  Select &All  Ctrl+A  ++++
+output.context, for Messages with selected text
+  &Copy  Ctrl+C  ++++
+  ---
+  Select &All  Ctrl+A  ++++
+output.context, for Messages without
+  &Copy  Ctrl+C  ----
+  ---
+  Select &All  Ctrl+A  ++++
+output.context, for the XML plan
+  &Copy  Ctrl+C  ----
+  ---
+  Select &All  Ctrl+A  ++++

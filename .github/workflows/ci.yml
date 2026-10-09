@@ -44,6 +44,8 @@ jobs:
       VARIA_TEST_SQL_SERVER: localhost
       VARIA_TEST_SQL_USER: sa
       VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
+      # Live tests may create and drop a uniquely named scratch database (graph tables cannot be temporary).
+      VARIA_TEST_SQL_SCRATCH: '1'
     steps:
       - uses: actions/checkout@v7
         with:

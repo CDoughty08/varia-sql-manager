@@ -17,7 +17,7 @@ internal sealed class SqlService : IRequestDispatcher
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
-        "databases.list", "server.objects.list", "tables.list", "tables.script", "query.execute", "query.cancel", "query.session.close",
+        "databases.list", "server.objects.list", "tables.list", "tables.script", "tables.columns", "query.execute", "query.cancel", "query.session.close",
         "results.read", "results.close"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -113,6 +113,7 @@ internal sealed class SqlService : IRequestDispatcher
         "server.objects.list" => await ServerObjectsAsync(Read<ServerObjectArgs>(parameters, json), Token(context)),
         "tables.list" => await TablesAsync(Read<DatabaseArgs>(parameters, json), Token(context)),
         "tables.script" => await ScriptAsync(Read<TableArgs>(parameters, json), Token(context)),
+        "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
         "query.session.close" => CloseSession(Read<SessionArgs>(parameters, json)),
@@ -272,6 +273,37 @@ internal sealed class SqlService : IRequestDispatcher
             return new { Sql = string.Join(Environment.NewLine + Environment.NewLine, script.Cast<string>()) };
         }
         finally { serverConnection.Disconnect(); }
+    }
+
+    private const int MaxColumns = 4096;
+
+    // Select Top N Rows lists the columns; QUOTENAME and parameters keep the names out of the SQL text. Hidden internal
+    // columns (graph tables' graph_id and node ids) cannot be selected, unlike hidden temporal period and ledger columns,
+    // which are GENERATED ALWAYS.
+    private async Task<TableColumnsResult> ColumnsAsync(TableArgs args, CancellationToken token)
+    {
+        Name(args.Schema);
+        Name(args.Name);
+        await using var connection = CreateConnection(args.ConnectionId, args.Database);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        await connection.OpenAsync(deadline.Token);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = 30;
+        command.CommandText = "DECLARE @id int = OBJECT_ID(QUOTENAME(@schema) + N'.' + QUOTENAME(@name));\n"
+            + "SELECT CONVERT(bit, CASE WHEN @id IS NULL THEN 0 ELSE 1 END);\n"
+            + "SELECT TOP (" + (MaxColumns + 1) + ") c.name, TYPE_NAME(c.user_type_id) FROM sys.all_columns AS c WHERE c.object_id = @id"
+            + " AND (c.is_hidden = 0 OR c.generated_always_type <> 0) ORDER BY c.column_id;";
+        command.Parameters.Add(new SqlParameter("@schema", System.Data.SqlDbType.NVarChar, 128) { Value = args.Schema });
+        command.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = args.Name });
+        await using var reader = await command.ExecuteReaderAsync(deadline.Token);
+        if (!await reader.ReadAsync(deadline.Token) || !reader.GetBoolean(0)) throw new RequestException("NOT_FOUND", "Table was not found.");
+        await reader.NextResultAsync(deadline.Token);
+        var columns = new List<ColumnInfo>();
+        while (await reader.ReadAsync(deadline.Token)) columns.Add(new(reader.GetString(0), reader.IsDBNull(1) ? "" : reader.GetString(1)));
+        var truncated = columns.Count > MaxColumns;
+        if (truncated) columns.RemoveAt(MaxColumns);
+        return new(columns, truncated);
     }
 
     private async Task<QueryResult> ExecuteAsync(QueryArgs args, RequestContext? context)

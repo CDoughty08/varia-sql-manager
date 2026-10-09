@@ -30,9 +30,12 @@ const readOnly = new Set(['EROFS', 'EACCES', 'EPERM'])
 /** A folder action's failure as a fixed sentence: its own message when it has one, otherwise `failed` and the code. */
 const actionError = (error: unknown, failed: string) => error instanceof ThemeActionError ? error
   : new ThemeActionError(`${failed}${readOnly.has((error as NodeJS.ErrnoException | undefined)?.code ?? '') ? ' because the themes folder is not writable' : ''}${detail(error)}.`)
-/** The native window colors for a theme: the shown theme, which is the active one unless the palette previews another. */
-export function windowChromeFor(theme: ResolvedTheme): WindowChrome {
-  return { backgroundColor: opaqueHex(hexColor(theme.colors['editor.background'])), overlay: nativeOverlay(theme) }
+/**
+ * The native window colors for a theme: the shown theme, which is the active one unless the palette previews another.
+ * The window-controls overlay follows the title bar, which changes color while the window is inactive.
+ */
+export function windowChromeFor(theme: ResolvedTheme, options: { active?: boolean } = {}): WindowChrome {
+  return { backgroundColor: opaqueHex(hexColor(theme.colors['editor.background'])), overlay: nativeOverlay(theme, options) }
 }
 const builtinResolutions: Record<ThemeType, ThemeResolution> = { dark: resolveTheme([], 'dark'), light: resolveTheme([], 'light') }
 const builtinEntries = themeTypes.map((type): CatalogEntry => ({

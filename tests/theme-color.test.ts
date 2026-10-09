@@ -125,4 +125,16 @@ describe('contrast repair and window chrome', () => {
     const pale = { ...dark, colors: { ...dark.colors, 'titleBar.activeBackground': '#f0f0f080', 'titleBar.controlsForeground': '#ffffff80' } }
     expect(nativeOverlay(pale)).toEqual({ color: '#f0f0f0', symbolColor: '#000000' })
   })
+  it('colors the overlay like the inactive title bar while the window is inactive, keeping the symbols readable', () => {
+    for (const type of types) {
+      const theme = resolveBuiltin(type)
+      // Built-in themes keep one title bar color; a theme can give the inactive one its own.
+      expect(nativeOverlay(theme, { active: false })).toEqual(nativeOverlay(theme))
+      expect(theme.colors['titleBar.inactiveBackground']).toMatch(/^#[0-9a-f]{6}$/)
+    }
+    const dark = resolveBuiltin('dark')
+    const inactive = { ...dark, colors: { ...dark.colors, 'titleBar.inactiveBackground': '#f4f4f4', 'titleBar.controlsForeground': '#d9e1ec' } }
+    expect(nativeOverlay(inactive, { active: false })).toEqual({ color: '#f4f4f4', symbolColor: '#000000' })
+    expect(nativeOverlay(inactive, { active: true })).toEqual({ color: dark.colors['titleBar.activeBackground'], symbolColor: '#d9e1ec' })
+  })
 })

@@ -11,7 +11,17 @@ import { EditorOptionsService } from '../../src/renderer/src/services/editor-opt
 import { FileService } from '../../src/renderer/src/services/files'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
+import { PaneService } from '../../src/renderer/src/services/panes'
+import { ExplorerService } from '../../src/renderer/src/services/explorer'
+import { ResultSelectionService } from '../../src/renderer/src/services/result-selection'
+import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
+import { outputContribution } from '../../src/renderer/src/contributions/output'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
+import { editContribution } from '../../src/renderer/src/contributions/edit'
+import { windowContribution } from '../../src/renderer/src/contributions/window'
+import { MenuService } from '../../src/renderer/src/menus/MenuService'
+import { MenuTargetService } from '../../src/renderer/src/menus/targets'
+import { menusContribution } from '../../src/renderer/src/contributions/menus'
 import { filesContribution } from '../../src/renderer/src/contributions/files'
 import { paletteContribution } from '../../src/renderer/src/contributions/palette'
 import { queryContribution } from '../../src/renderer/src/contributions/query'
@@ -31,10 +41,11 @@ export const readyBackend = (generation = 1): BackendState => ({ status: 'ready'
 /** The backend half of VariaApi, with `push` standing in for main's state pushes. */
 export function backendApi(initial: BackendState = { status: 'starting', generation: 1 }) {
   const listeners = new Set<(state: BackendState) => void>()
-  // Like main, the request answers with the latest state, so a push made before it settles is not undone.
+  // Like main, the request answers with the latest state, so a push made before it settles is not undone: the answer is
+  // read when it arrives, not when it is asked for.
   let current = initial
   return {
-    getBackendState: vi.fn<VariaApi['getBackendState']>(async () => ({ ok: true, value: current })),
+    getBackendState: vi.fn<VariaApi['getBackendState']>(async () => { await Promise.resolve(); return { ok: true, value: current } }),
     onBackendState: vi.fn<VariaApi['onBackendState']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
     restartBackend: vi.fn<VariaApi['restartBackend']>(async () => ({ ok: true, value: true })),
     push: (state: BackendState) => { current = state; listeners.forEach(listener => listener(state)) },
@@ -91,28 +102,41 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     previewTheme: vi.fn<VariaApi['previewTheme']>(async () => ({ ok: true, value: null })),
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     createCustomTheme: vi.fn<VariaApi['createCustomTheme']>(async () => ({ ok: true, value: undefined })),
+    runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
+    writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
+    revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
+    scriptTable: vi.fn<VariaApi['scriptTable']>(async (_connectionId, _database, schema, name) => ({ ok: true, value: { sql: `CREATE TABLE [${schema}].[${name}] (Id int);` } })),
+    tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
     ...backendApi()
   }
   const { documents, events } = doc
-  const connections = new ConnectionService(), editorOptions = new EditorOptionsService()
+  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerService()
   const backend = new BackendStateService(api, connections)
   const queries = new QueryService(documents, api, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)
+  const resultSelection = new ResultSelectionService(events)
   const targets = new TargetService(documents, queries, connections, files, api)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, quickInput: quickInput.visibility, activeElement: () => null })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, activeElement: () => null })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
-  const host: ShellHost = { disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), refreshExplorer: vi.fn() }
+  const host: ShellHost = {
+    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
+    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn()
+  }
   const history = new CommandHistory(options.storage ?? memoryStorage())
   // tests/theme-picker.test.ts drives a real ThemeService; here the theme commands only need somewhere to go.
   const theme: ThemeController = {
     state: { revision: 0, preference: defaultThemePreference, active: resolveBuiltin('dark'), fallback: false, themes: [], problems: [], problemsOmitted: 0, noticeId: 0 },
     preview: vi.fn(), endPreview: vi.fn(), receive: vi.fn(), reload: vi.fn(async () => {}), openFolder: vi.fn(async () => {})
   }
-  const workbench = { commands, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme }
-  const contributions = [queryContribution(workbench, api), filesContribution(workbench), editorContribution(workbench), shellContribution(workbench, host), paletteContribution(workbench, history),
+  // The menus over these services: resolution, enablement, and activation, without the DOM.
+  const menuTargets = new MenuTargetService({ commandEnabled: () => true })
+  const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const workbench = { platform, commands, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, menuTargets, resultSelection }
+  const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
+    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers), backendContribution(workbench)]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
@@ -123,6 +147,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
-  const dispose = () => { quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); backend.dispose() }
-  return { ...doc, api, connections, backend, editorOptions, queries, files, targets, context, commands, keybindings, quickInput, focus: focus.state, history, host, theme, startQuery, connect, dispose }
+  const dispose = () => { menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose(); documents.dispose(); backend.dispose() }
+  return { ...doc, api, connections, backend, editorOptions, panes, explorer, resultSelection, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, history, host, theme, startQuery, connect, dispose }
 }

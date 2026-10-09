@@ -4,10 +4,11 @@
 
 Every command, keybinding, and menu placement is declared in `src/shared/commands/catalog.ts`. A condition after a key
 limits where the key works; for example, `editorFocus` means the query editor has focus. Keys marked * belong to the
-editor or the browser engine: menus show them, but Varia does not dispatch them. "Available when" is the condition
-under which menus, the toolbar, and the keyboard can run the command; the context keys it uses are listed below.
+editor, the browser engine, or Electron (zoom, full screen, quit): menus show them, but Varia does not dispatch them.
+"Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
+keys it uses are listed below.
 
-## Commands (37)
+## Commands (69)
 
 ### File
 
@@ -15,16 +16,25 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | --- | --- | --- | --- | --- | --- | --- |
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
-| Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save |
-| Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As… |
-| Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query |
+| Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
+| Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
+| Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
+| Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
+| Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents; Query tab context menu › Close All |
+| Copy Full Path | `file.copyPath` | — | — | — | `hasActiveDocument` | Query tab context menu › Copy Full Path |
+| Open Containing Folder | `file.revealInFolder` | — | — | — | `hasActiveDocument` | Query tab context menu › Open Containing Folder (Windows, Linux only); Query tab context menu › Reveal in Finder (macOS only) |
 
 ### Edit
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Undo | `edit.undo` | Ctrl+Z * | Ctrl+Z * | ⌘Z * | Always | Edit › Undo |
-| Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo |
+| Undo | `edit.undo` | Ctrl+Z * | Ctrl+Z * | ⌘Z * | Always | Edit › Undo; Text field context menu › Undo |
+| Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo; Text field context menu › Redo |
+| Cut (not in the palette) | `edit.cut` | Ctrl+X * | Ctrl+X * | ⌘X * | Always | Edit › Cut; Editor context menu › Cut; Text field context menu › Cut |
+| Copy (not in the palette) | `edit.copy` | Ctrl+C * | Ctrl+C * | ⌘C * | Always | Edit › Copy; Editor context menu › Copy; Text field context menu › Copy |
+| Paste (not in the palette) | `edit.paste` | Ctrl+V * | Ctrl+V * | ⌘V * | Always | Edit › Paste; Editor context menu › Paste; Text field context menu › Paste |
+| Delete (not in the palette) | `edit.delete` | Delete * | Delete * | ⌦ * | Always | Edit › Delete; Text field context menu › Delete |
+| Select All (not in the palette) | `edit.selectAll` | Ctrl+A * | Ctrl+A * | ⌘A * | Always | Edit › Select All; Text field context menu › Select All |
 | Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find |
 | Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Replace |
 | Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Toggle Line Comment |
@@ -38,28 +48,41 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 | Show Object Explorer | `window.explorer` | F8 | F8 | F8 | Always | Window › Object Explorer |
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
+| Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
 | Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown | Ctrl+Tab, Ctrl+PageDown | ⌃⇥ | `multipleDocuments` | Window › Next Query |
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | View › Word Wrap |
+| Zoom In | `view.zoomIn` | Ctrl+= *, Ctrl+Shift+= * | Ctrl+= *, Ctrl+Shift+= * | ⌘= *, ⇧⌘= * | Always | View › Zoom In |
+| Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
+| Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
+| Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
+| Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
+| Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
+| Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
 
 ### Query
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute |
-| Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query |
-| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Change Connection… |
+| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute; Editor context menu › Execute |
+| Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
+| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
+| Disconnect | `query.disconnect` | — | — | — | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
+| Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
 | Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
+| Copy (not in the palette) | `output.copy` | Ctrl+C * (`outputGridFocus`) | Ctrl+C * (`outputGridFocus`) | ⌘C * (`outputGridFocus`) | Always | Query Output context menu › Copy |
+| Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
+| Select All (not in the palette) | `output.selectAll` | Ctrl+A * (`outputGridFocus`) | Ctrl+A * (`outputGridFocus`) | ⌘A * (`outputGridFocus`) | Always | Query Output context menu › Select All |
 
 ### Connection
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server… |
-| Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server… |
+| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
+| Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
 | Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect… |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
@@ -67,30 +90,246 @@ under which menus, the toolbar, and the keyboard can run the command; the contex
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | — |
+| Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
+| New Query (not in the palette) | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
+| Select Top 1000 Rows (not in the palette) | `explorer.selectTopRows` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
+| Script Table as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › New Query Editor Window |
+| Script Table as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › File… |
+| Script Table as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady` | Object Explorer context menu › Script Table as › CREATE To › Clipboard |
+| Copy Name (not in the palette) | `explorer.copyName` | — | — | — | Always | Object Explorer context menu › Copy Name |
 
 ### Preferences
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Color Theme… | `preferences.colorTheme` | — | — | — | Always | View › Theme › Color Theme… |
-| Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | — |
-| Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | — |
-| Reload Themes | `preferences.reloadThemes` | — | — | — | Always | — |
+| Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | View › Theme › Create Custom Theme… |
+| Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | View › Theme › Open Themes Folder |
+| Reload Themes | `preferences.reloadThemes` | — | — | — | Always | View › Theme › Reload Themes |
+| Set Color Theme (not in the palette) | `preferences.setTheme` | — | — | — | Always | View › Theme › Dark, Light, Follow System, and each theme under Dark Theme and Light Theme |
+
+### Developer
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Reload Window | `developer.reloadWindow` | — | — | — | Always | View › Reload Window |
+| Toggle Developer Tools | `developer.toggleDevTools` | Ctrl+Shift+I * | Ctrl+Shift+I * | ⌥⌘I * | Always | View › Toggle Developer Tools |
 
 ### Other
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Close Window (not in the palette) | `window.close` | — | — | — | Always | — |
-| Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette… |
+| Close Window (not in the palette) | `window.close` | Alt+F4 * | Ctrl+Q * | — | Always | File › Exit (Windows only); File › Quit (Linux only) |
+| Show All Commands (not in the palette) | `workbench.showCommands` | Ctrl+Shift+P, F1 | Ctrl+Shift+P, F1 | ⇧⌘P, F1 | Always | View › Command Palette…; Editor context menu › Command Palette… |
+| Show Context Menu (not in the palette) | `workbench.showContextMenu` | Shift+F10, Menu | Shift+F10, Menu | ⇧F10 | `!quickInputVisible` | — |
 | Go to Query… | `workbench.quickOpen` | Ctrl+P | Ctrl+P | ⌘P | `hasActiveDocument` | View › Go to Query… |
 
-## Context keys (20)
+## Menus
 
-`static` keys never change while Varia runs, `state` keys follow the open queries and connections, and `focus` keys follow
-keyboard focus. "Available when" conditions use only static and state keys, so a command is enabled the same way in
-every menu wherever focus is; key conditions may also use focus keys.
+Windows and Linux draw these menus in the window's theme. A title-bar menu opens from the menu bar, from F10 or a tap of
+Alt, or with Alt and its letter; a context menu opens from a right-click, Shift+F10, or the context-menu key. macOS
+shows the title-bar menus in its menu bar (without Exit or Quit: the application menu has Quit) and the context menus
+as native menus. The bold letter is an item's access key on Windows and Linux: with its menu open, press the letter to
+choose the item. Items are listed in menu order, and a separator divides groups. "Shown" limits an item to some
+platforms or, in a context menu, to targets that match its condition; an item that cannot run is dimmed, not hidden.
+
+### Title-bar menus
+
+#### File (Alt+F)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_connect` | Conn**e**ct to Server… | `connection.connect` | Always |
+| `0_connect` | **D**isconnect from Server… | `connection.disconnect` | Always |
+| `0_connect` | **R**econnect… | `connection.reconnect` | Always |
+| `1_file` | **N**ew Query | `file.new` | Always |
+| `1_file` | **O**pen… | `file.open` | Always |
+| `1_file` | **S**ave | `file.save` | Always |
+| `1_file` | Save **A**s… | `file.saveAs` | Always |
+| `2_close` | **C**lose Query | `file.close` | Always |
+| `z_quit` | E**x**it | `window.close` | Windows only |
+| `z_quit` | **Q**uit | `window.close` | Linux only |
+
+#### Edit (Alt+E)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_undo` | **U**ndo | `edit.undo` | Always |
+| `1_undo` | **R**edo | `edit.redo` | Always |
+| `2_clipboard` | Cu**t** | `edit.cut` | Always |
+| `2_clipboard` | **C**opy | `edit.copy` | Always |
+| `2_clipboard` | **P**aste | `edit.paste` | Always |
+| `2_clipboard` | **D**elete | `edit.delete` | Always |
+| `2_clipboard` | Select **A**ll | `edit.selectAll` | Always |
+| `3_find` | **F**ind | `edit.find` | Always |
+| `3_find` | R**e**place | `edit.replace` | Always |
+| `4_comment` | Toggle **L**ine Comment | `edit.toggleLineComment` | Always |
+| `4_comment` | Co**m**ment Selection | `edit.commentLines` | Always |
+| `4_comment` | U**n**comment Selection | `edit.uncommentLines` | Always |
+
+#### View (Alt+V)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_palette` | **C**ommand Palette… | `workbench.showCommands` | Always |
+| `0_palette` | **G**o to Query… | `workbench.quickOpen` | Always |
+| `1_layout` | **S**ave Layout… | `layout.save` | Always |
+| `1_layout` | **L**oad Layout… | `layout.load` | Always |
+| `1_layout` | **R**eset Layout | `layout.reset` | Always |
+| `2_editor` | **W**ord Wrap | `editor.toggleWordWrap` | Always |
+| `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
+| `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
+| `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
+| `4_zoom` | Reset **Z**oom | `view.resetZoom` | Always |
+| `4_zoom` | **F**ull Screen | `view.toggleFullScreen` | Always |
+| `z_developer` | R**e**load Window | `developer.reloadWindow` | Always |
+| `z_developer` | Toggle **D**eveloper Tools | `developer.toggleDevTools` | Always |
+
+#### View › Theme
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_pick` | **C**olor Theme… | `preferences.colorTheme` | Always |
+| theme items | **D**ark, **L**ight, Follow **S**ystem | `preferences.setTheme` | Always |
+| theme items | Dar**k** Theme ›, Li**g**ht Theme ›: one item per theme | `preferences.setTheme` | Always |
+| theme items | Create Custom **T**heme… | `preferences.createTheme` | Always |
+| theme items | **O**pen Themes Folder | `preferences.openThemesFolder` | Always |
+| theme items | **R**eload Themes | `preferences.reloadThemes` | Always |
+
+#### Query (Alt+Q)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
+| `0_connection` | Change **D**atabase… | `query.changeDatabase` | Always |
+| `1_execute` | E**x**ecute | `query.execute` | Always |
+| `1_execute` | **C**ancel Executing Query | `query.cancel` | Always |
+
+#### Query › Connection
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_connect` | **C**onnect… | `connection.connect` | Always |
+| `1_connect` | **D**isconnect | `query.disconnect` | Always |
+| `1_connect` | Disconnect **A**ll Queries | `query.disconnectAll` | Always |
+| `2_change` | C**h**ange Connection… | `query.changeConnection` | Always |
+
+#### Window (Alt+W)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_panes` | **O**bject Explorer | `window.explorer` | Always |
+| `1_panes` | Query **E**ditor | `window.editor` | Always |
+| `1_panes` | Q**u**ery Output | `window.output` | Always |
+| `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
+| `2_documents` | **N**ext Query | `document.next` | Always |
+| `2_documents` | **P**revious Query | `document.previous` | Always |
+| `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
+| `3_layout` | **S**ave Window Layout… | `layout.save` | Always |
+| `3_layout` | Lo**a**d Window Layout… | `layout.load` | Always |
+| `3_layout` | **R**eset Window Layout | `layout.reset` | Always |
+| `4_window` | Minimize | Electron role `minimize` | macOS only |
+| `4_window` | Zoom | Electron role `zoom` | macOS only |
+
+### Context menus
+
+#### Editor context menu (`editor.context`)
+
+Right-click the query editor, or press Shift+F10 or the context-menu key in it. A right-click outside the selection moves the caret there first.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
+| `2_execute` | E**x**ecute | `query.execute` | Always |
+| `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
+| `3_clipboard` | Cu**t** | `edit.cut` | Always |
+| `3_clipboard` | **C**opy | `edit.copy` | Always |
+| `3_clipboard` | **P**aste | `edit.paste` | Always |
+| `9_palette` | Comm**a**nd Palette… | `workbench.showCommands` | Always |
+
+#### Object Explorer context menu (`explorer.context`)
+
+Right-click an Object Explorer node or the empty area below the servers, or press Shift+F10 or the context-menu key on a focused node. Items act on that node.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == 'server' \|\| explorerNode == 'background'` |
+| `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server'` |
+| `1_query` | New **Q**uery | `explorer.newQuery` | `explorerNode == 'server' \|\| explorerNode == 'database'` |
+| `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerNode == 'table'` |
+| `2_script` | **S**cript Table as › | Submenu: Object Explorer context menu › Script Table as | `explorerNode == 'table'` |
+| `5_copy` | Copy **N**ame | `explorer.copyName` | `explorerNode == 'server' \|\| explorerNode == 'database' \|\| explorerNode == 'table' \|\| explorerNode == 'serverObject'` |
+| `8_refresh` | Re**f**resh | `explorer.refresh` | `explorerNode != 'table' && explorerNode != 'serverObject'` |
+
+#### Object Explorer context menu › Script Table as
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_create` | **C**REATE To › | Submenu: Object Explorer context menu › Script Table as › CREATE To | Always |
+
+#### Object Explorer context menu › Script Table as › CREATE To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptCreateToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptCreateToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptCreateToClipboard` | Always |
+
+#### Query tab context menu (`documentTab.context`)
+
+Right-click a query tab, or press Shift+F10 or the context-menu key on a focused tab. Items act on that tab's query.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_save` | **S**ave | `file.save` | Always |
+| `1_save` | Save **A**s… | `file.saveAs` | Always |
+| `2_close` | **C**lose | `file.close` | Always |
+| `2_close` | Close All **B**ut This | `file.closeOthers` | Always |
+| `2_close` | C**l**ose All | `file.closeAll` | Always |
+| `3_file` | Copy Full **P**ath | `file.copyPath` | Always |
+| `3_file` | **O**pen Containing Folder | `file.revealInFolder` | Windows, Linux only |
+| `3_file` | Reveal in Finder | `file.revealInFolder` | macOS only |
+
+#### Query Output context menu (`output.context`)
+
+Right-click the results grid, Messages, or an XML plan, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid's selection selects that cell first.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_copy` | **C**opy | `output.copy` | Always |
+| `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
+| `2_select` | Select **A**ll | `output.selectAll` | Always |
+
+#### Panel tab context menu (`dockTab.context`)
+
+Right-click a panel's tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_dock` | **F**loat | `pane.float` | `!paneFloating` |
+| `1_dock` | **D**ock | `pane.dock` | `paneFloating` |
+| `2_close` | **C**lose | `pane.close` | Always |
+
+#### Text field context menu (`input.context`)
+
+Right-click a text field, including those in dialogs and the editor's find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette's field has none.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_undo` | **U**ndo | `edit.undo` | Always |
+| `1_undo` | **R**edo | `edit.redo` | Always |
+| `2_clipboard` | Cu**t** | `edit.cut` | Always |
+| `2_clipboard` | **C**opy | `edit.copy` | Always |
+| `2_clipboard` | **P**aste | `edit.paste` | Always |
+| `2_clipboard` | **D**elete | `edit.delete` | Always |
+| `3_select` | Select **A**ll | `edit.selectAll` | Always |
+
+## Context keys (26)
+
+`static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
+keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
+static and state keys, so a command is enabled the same way in every menu wherever focus is; key conditions may also
+use focus keys, and context-menu items may also use the target keys of their own menu.
 
 | Key | Values | Scope | Meaning |
 | --- | --- | --- | --- |
@@ -102,6 +341,7 @@ every menu wherever focus is; key conditions may also use focus keys.
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
+| `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
@@ -113,7 +353,12 @@ every menu wherever focus is; key conditions may also use focus keys.
 | `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
 | `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
+| `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
+| `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
+| `explorerNode` | `'background'`, `'server'`, `'databasesFolder'`, `'systemDatabasesFolder'`, `'snapshotsFolder'`, `'database'`, `'tablesFolder'`, `'table'`, `'securityFolder'`, `'serverObjectsFolder'`, `'serverObject'`, `''` | target | The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object. |
+| `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
+| `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
 
 ## Reserved keys
 
@@ -122,13 +367,13 @@ Workbench keybindings never use these keys, because menus, Electron, the operati
 | Reason | Windows | Linux | macOS |
 | --- | --- | --- | --- |
 | opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | — |
-| an Electron role or system key | Ctrl+R, Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu | Ctrl+R, Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Shift+F10, Menu, Ctrl+Q | — |
+| an Electron role or system key | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4 | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Ctrl+Q | — |
 | clipboard or text editing | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | — |
 | find or comment in the editor | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\ | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\, Ctrl+Shift+A | ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, ⌘E, ⌘/, ⌥⌘C, ⌥⌘W, ⌥⌘R, ⌥⌘P, ⌥⌘L |
 | the editor's chord prefix | Ctrl+K | Ctrl+K | ⌘K |
 | moves focus or closes a widget | Tab, Shift+Tab, Escape, Alt+PageUp, Alt+PageDown | Tab, Shift+Tab, Escape, Alt+PageUp, Alt+PageDown | — |
 | a macOS system key | — | — | ⌘Q, ⌘H, ⌥⌘H, ⌘M, ⌘` |
-| an Electron role | — | — | ⌃⌘F, ⌥⌘I, ⌘R, ⌘0, ⌘=, ⇧⌘=, ⌘- |
+| an Electron role | — | — | ⌃⌘F, ⌥⌘I, ⌘0, ⌘=, ⇧⌘=, ⌘- |
 | clipboard or undo | — | — | ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z, ⇧⌘Z |
 | an emacs editing key | — | — | ⌃A, ⌃B, ⌃D, ⌃E, ⌃F, ⌃H, ⌃K, ⌃N, ⌃O, ⌃P, ⌃T |
 | AltGr types characters with Ctrl+Alt | Ctrl+Alt+any letter | Ctrl+Alt+any letter | — |

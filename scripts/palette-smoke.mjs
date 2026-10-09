@@ -153,6 +153,18 @@ try {
   await expect(combobox('Command Palette')).not.toHaveValue('>abc')
   await expect(combobox('Command Palette')).toBeFocused()
   expect(await editorText()).toContain('SELECT\u00a07;')
+  // So do Select All and Delete, which the macOS menu bar runs as commands (\u2318A in the input arrives that way): main
+  // sends their ids as it does there, and they select and delete the palette's text, not the editor's.
+  await page.keyboard.type('def')
+  const field = widget().getByRole('combobox')
+  const sendCommand = id => application.evaluate(({ BrowserWindow }, command) => BrowserWindow.getAllWindows()[0].webContents.send('varia:command', command), id)
+  await sendCommand('edit.selectAll')
+  await expect.poll(() => field.evaluate(input => input.value.length > 0 && input.selectionStart === 0 && input.selectionEnd === input.value.length)).toBe(true)
+  await expect(field).toBeFocused()
+  await sendCommand('edit.delete')
+  await expect(field).toHaveValue('')
+  await expect(widget()).toHaveCount(1)
+  expect(await editorText()).toContain('SELECT\u00a07;')
   await page.keyboard.press('Escape')
 
   // 6. A disabled command explains itself and keeps the palette open.
@@ -187,14 +199,16 @@ try {
   await expect.poll(() => menuItem('editor.toggleWordWrap')).toMatchObject({ checked: true })
   await clickMenu('editor.toggleWordWrap')
   await expect.poll(() => menuItem('editor.toggleWordWrap')).toMatchObject({ checked: false })
-  await application.evaluate(({ Menu }) => {
-    globalThis.variaMenuPopups = []
-    const menu = Menu.getApplicationMenu().getMenuItemById('menu.query').submenu
-    menu.popup = options => { globalThis.variaMenuPopups.push(options.window.id); options.callback() }
-  })
+  // The title-bar Query menu opens with its first item focused; the custom menus show the same enablement.
   await textbox().focus()
   await page.keyboard.press('Alt+q')
-  await expect.poll(() => application.evaluate(() => globalThis.variaMenuPopups.length)).toBe(1)
+  const queryMenu = page.getByRole('menu', { name: 'Query', exact: true })
+  await expect(queryMenu).toBeVisible()
+  await expect(queryMenu.getByRole('menuitem', { name: 'Connection', exact: true })).toBeFocused()
+  await expect(queryMenu.getByRole('menuitem', { name: 'Execute', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(textbox()).toBeFocused()
   console.log('Palette checks: native menu clicks, enablement, checkbox state, and the Query menu mnemonic.')
 
   // Stub SQL responses so connected commands run without a server.

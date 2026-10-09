@@ -31,6 +31,8 @@ internal sealed record ResultColumn(string Name, string DataType, string Wire, s
 /// backend generation before the renderer sees it.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
     long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete);
+internal sealed record ColumnInfo(string Name, string DataType);
+internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
 internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read.</summary>

@@ -39,7 +39,7 @@ describe('IPC wire lint', () => {
     expect(main.match(/installTestHooks\(|VARIA_BACKEND_LIVENESS_MS|--varia-test-mode/g)).toHaveLength(3)
     expect(main).toContain('if (testSeams) installTestHooks(backend, results)')
     expect(main).toContain('const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN')
-    expect(main).toContain("additionalArguments: testSeams ? ['--varia-test-mode'] : []")
+    expect(main).toContain("...(testSeams ? ['--varia-test-mode'] : [])")
     // The fake backend is chosen in the spawn spec, after the packaged branch and only for smoke tests.
     const spec = readFileSync(join('src', 'main', 'backend', 'spawn-spec.ts'), 'utf8')
     expect(spec.indexOf('if (o.packaged) return')).toBeLessThan(spec.indexOf('VARIA_TEST_BACKEND :'))

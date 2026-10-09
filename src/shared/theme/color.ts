@@ -105,11 +105,12 @@ export function ensureContrast(color: string, surfaces: readonly string[], minim
 }
 
 /**
- * The native title-bar overlay. Electron reads 8-digit hex as ARGB, so only opaque #rrggbb is returned, and the symbol
- * color falls back to black or white when the theme's choice is unreadable.
+ * The native title-bar overlay, in the inactive title bar's color while the window is inactive. Electron reads 8-digit
+ * hex as ARGB, so only opaque #rrggbb is returned, and the symbol color falls back to black or white when the theme's
+ * choice is unreadable.
  */
-export function nativeOverlay(theme: ResolvedTheme): { color: string; symbolColor: string } {
-  const background = { ...hexColor(theme.colors['titleBar.activeBackground']), a: 255 }
+export function nativeOverlay(theme: ResolvedTheme, options: { active?: boolean } = {}): { color: string; symbolColor: string } {
+  const background = { ...hexColor(theme.colors[options.active === false ? 'titleBar.inactiveBackground' : 'titleBar.activeBackground']), a: 255 }
   const symbol = composite(hexColor(theme.colors['titleBar.controlsForeground']), background)
   const readable = contrast(symbol, background) >= 4.5 ? symbol : contrast(white, background) >= contrast(black, background) ? white : black
   return { color: opaqueHex(background), symbolColor: opaqueHex(readable) }

@@ -207,6 +207,15 @@ const fixtures = {
     messages: ['SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.', "Table '#temp'. Scan count 1, logical reads 2."], elapsedMs: 3, status: 'failed',
     error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8: Must declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 1, totalBatches: 3
   }),
+  // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
+  SelectTopNRows: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('CustomerName', 'nvarchar')], rows: [['1', 'Contoso']] }]),
+  MENUS_GRID_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('', 'nvarchar'), column('Note', 'nvarchar')], rows: [['1', 'a', null], ['2', 'b', 'n2'], ['3', 'c', 'n3']] }], {
+    messages: ['(3 rows affected)'], recordsAffected: 3
+  }),
+  MENUS_PLAN_FIXTURE: (id, params) => summary(id, params.database, [
+    { columns: [column('Id', 'int'), column('CustomerName', 'nvarchar')], rows: [['1', 'Contoso']] },
+    { columns: [{ ...column('Microsoft SQL Server 2005 XML Showplan', 'nvarchar'), role: 'plan' }], rows: [['<ShowPlanXML Version="1.6"><BatchSequence /></ShowPlanXML>']], kind: 'executionPlan' }
+  ]),
   XML_PLAN_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [column('answer', 'int')], rows: [['1']], batchNumber: 2 },
     { columns: [{ ...column('Microsoft SQL Server 2005 XML Showplan', 'nvarchar'), role: 'plan' }], rows: [['<ShowPlanXML><BatchSequence><Batch /></BatchSequence></ShowPlanXML>']], kind: 'executionPlan', batchNumber: 2 }
@@ -250,6 +259,7 @@ async function workbench(id, method, params, credit) {
       return respond(id, serverObjects[params.kind])
     case 'tables.list': return respond(id, [{ schema: 'dbo', name: 'Orders' }])
     case 'tables.script': return respond(id, { sql: 'CREATE TABLE dbo.Orders (Id int);' })
+    case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (control('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)

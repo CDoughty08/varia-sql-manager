@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
-import { applicationMenuTemplate, themeLabel, type ApplicationMenuActions, type ApplicationMenuModel } from '../src/main/application-menu'
+import { applicationMenuTemplate, type ApplicationMenuActions, type ApplicationMenuModel } from '../src/main/application-menu'
+import { themeLabel, themeMenuModel, type ThemeMenuItem } from '../src/shared/theme/menu'
 import { themeChoice } from '../src/shared/theme/choice'
 import type { ThemePreference, ThemeSummary } from '../src/shared/theme/types'
 
@@ -34,8 +35,9 @@ describe('application menu', () => {
   it('keeps the existing menus and commands, with Theme after the layout and editor items', () => {
     const handlers = actions(), template = applicationMenuTemplate(model(), handlers, 'linux')
     expect(template.map(item => item.id)).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.window'])
-    expect(submenu(template, 'menu.file').map(item => item.id ?? item.role ?? item.type)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', 'separator', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'separator', 'file.close', 'separator', 'quit'])
-    expect(submenu(template, 'menu.view').map(item => item.id ?? item.role ?? item.type)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'separator', 'layout.save', 'layout.load', 'layout.reset', 'separator', 'editor.toggleWordWrap', 'separator', 'view.theme', 'separator', 'reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen'])
+    expect(submenu(template, 'menu.file').map(item => item.id ?? item.role ?? item.type)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', 'separator', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'separator', 'file.close', 'separator', 'window.close'])
+    expect(submenu(template, 'menu.view').map(item => item.id ?? item.role ?? item.type)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'separator', 'layout.save', 'layout.load', 'layout.reset', 'separator', 'editor.toggleWordWrap', 'separator', 'view.theme', 'separator',
+      'view.zoomIn', 'zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'separator', 'developer.reloadWindow', 'developer.toggleDevTools'])
     expect(submenu(template, 'view.theme').map(item => item.id ?? item.type)).toEqual(['preferences.colorTheme', 'separator', 'theme.mode.dark', 'theme.mode.light', 'theme.mode.system', 'separator', 'theme.dark', 'theme.light', 'separator', 'theme.create', 'theme.openFolder', 'theme.reload'])
     click(find(template, 'file.saveAs'))
     click(find(template, 'window.output'))
@@ -102,5 +104,36 @@ describe('application menu', () => {
     expect([handlers.createTheme, handlers.openThemesFolder, handlers.reloadThemes].map(handler => handler.mock.calls.length)).toEqual([1, 1, 1])
     expect(themeChoice({ version: 1, mode: 'system', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, harbor, 'light')).toEqual({ darkTheme: 'harbor', lightTheme: 'harbor' })
     expect(themeChoice({ version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, paper, 'light')).toEqual({ lightTheme: 'paper', mode: 'light' })
+  })
+})
+
+describe('theme menu model', () => {
+  const outline = (items: readonly ThemeMenuItem[]): unknown[] => items.map(item => item.kind === 'separator' ? '-' : item.kind === 'submenu' ? [item.id, item.mnemonic, outline(item.items)] : item.id)
+  it('gives every renderer plain labels, PR1 ids, mnemonics for the fixed items only, and the choice each radio makes', () => {
+    const themes = [...builtins, user('salt', 'Salt & Pepper', ['dark']), broken]
+    const items = themeMenuModel(model({ mode: 'light', lightTheme: 'gone' }, themes).theme)
+    expect(outline(items)).toEqual(['theme.mode.dark', 'theme.mode.light', 'theme.mode.system', '-', ['theme.dark', 'k', ['theme.dark.varia-dark', 'theme.dark.salt', 'theme.dark.broken']],
+      ['theme.light', 'g', ['theme.light.varia-light', 'theme.light.broken', 'theme.light.gone']], '-', 'theme.create', 'theme.openFolder', 'theme.reload'])
+    expect(items.slice(0, 3)).toEqual([
+      { kind: 'radio', id: 'theme.mode.dark', label: 'Dark', mnemonic: 'd', checked: false, enabled: true, patch: { mode: 'dark' } },
+      { kind: 'radio', id: 'theme.mode.light', label: 'Light', mnemonic: 'l', checked: true, enabled: true, patch: { mode: 'light' } },
+      { kind: 'radio', id: 'theme.mode.system', label: 'Follow System', mnemonic: 's', checked: false, enabled: true, patch: { mode: 'system' } }
+    ])
+    const dark = items[4].kind === 'submenu' ? items[4].items : [], light = items[5].kind === 'submenu' ? items[5].items : []
+    expect(dark[1]).toEqual({ kind: 'radio', id: 'theme.dark.salt', label: 'Salt & Pepper', checked: false, enabled: true, patch: { darkTheme: 'salt', mode: 'dark' } })
+    expect(dark[2]).toMatchObject({ label: 'broken (invalid)', enabled: false })
+    expect(light.at(-1)).toEqual({ kind: 'radio', id: 'theme.light.gone', label: 'gone (missing: using Varia Light)', checked: true, enabled: false })
+    expect(items.slice(-3)).toEqual([
+      { kind: 'action', id: 'theme.create', label: 'Create Custom Theme…', mnemonic: 't', command: 'preferences.createTheme' },
+      { kind: 'action', id: 'theme.openFolder', label: 'Open Themes Folder', mnemonic: 'o', command: 'preferences.openThemesFolder' },
+      { kind: 'action', id: 'theme.reload', label: 'Reload Themes', mnemonic: 'r', command: 'preferences.reloadThemes' }
+    ])
+  })
+  it('is what the native menu shows, item for item', () => {
+    const state = model({ mode: 'system', darkTheme: 'dusk' })
+    const native = submenu(applicationMenuTemplate(state, actions(), 'darwin'), 'view.theme').slice(2)
+    const flat = (items: readonly ThemeMenuItem[]): ThemeMenuItem[] => items.flatMap(item => item.kind === 'submenu' ? [item, ...flat(item.items)] : [item])
+    const nativeFlat = (items: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] => items.flatMap(item => Array.isArray(item.submenu) ? [item, ...nativeFlat(item.submenu)] : [item])
+    expect(flat(themeMenuModel(state.theme)).map(item => item.kind === 'separator' ? ['-'] : [item.id, item.label])).toEqual(nativeFlat(native).map(item => item.type === 'separator' ? ['-'] : [item.id, item.label]))
   })
 })

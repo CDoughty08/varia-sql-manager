@@ -1,31 +1,39 @@
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { ApiResult, ConnectionInfo, DatabaseInfo, ServerObjectInfo, ServerObjectKind, TableInfo } from '../../shared/contracts'
 import Icon from './Icon'
-import { useConnectionAccent } from './core/WorkbenchContext'
+import { useConnectionAccent, useWorkbench } from './core/WorkbenchContext'
 import { useCommandEnabled } from './core/useCommand'
 import type { LiveConnection } from './services/connections'
+import type { ExplorerNode, MenuTarget } from './menus/targets'
+import { useMenuTarget } from './menus/useMenuTarget'
+import { explorerPaths, type ExplorerPath } from './services/explorer'
 
 interface Props {
   connection: ConnectionInfo
   selectedDatabase?: string
-  refresh: number
   canDisconnect: boolean
   onDatabases(id: string, databases: DatabaseInfo[]): void
   onSelect(id: string, database: string): void
-  onScript(id: string, database: string, table: TableInfo): void
   onDisconnect(id: string): void
 }
 
-function useCatalogue<T>(enabled: boolean, refresh: number, load: () => Promise<ApiResult<T[]>>) {
+const explorerTarget = (node: ExplorerNode): MenuTarget => ({ kind: 'explorer', node })
+/** Gives a node's element its Object Explorer context menu. */
+const useNodeTarget = <T extends Element>(node: () => ExplorerNode) => useMenuTarget<T>(() => explorerTarget(node()))
+
+/** A list that loads while `enabled`, again whenever Refresh reaches `path` (the node itself or one above it). */
+function useCatalogue<T>(enabled: boolean, path: ExplorerPath, load: () => Promise<ApiResult<T[]>>) {
+  const { explorer } = useWorkbench()
+  const version = useSyncExternalStore(explorer.subscribe, () => explorer.version(path))
   const [values, setValues] = useState<T[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
-  const cache = useRef<{ refresh: number; load: typeof load } | null>(null)
+  const cache = useRef<{ version: number; load: typeof load } | null>(null)
 
   useEffect(() => {
     if (!enabled) { setBusy(false); return }
-    if (cache.current?.refresh === refresh && cache.current.load === load) return
+    if (cache.current?.version === version && cache.current.load === load) return
     let disposed = false
     setBusy(true)
     setError('')
@@ -35,7 +43,7 @@ function useCatalogue<T>(enabled: boolean, refresh: number, load: () => Promise<
       if (!result.ok) throw new Error(result.error)
       setValues(result.value)
       setReady(true)
-      cache.current = { refresh, load }
+      cache.current = { version, load }
     }).catch(reason => {
       if (!disposed) {
         setValues([])
@@ -43,22 +51,24 @@ function useCatalogue<T>(enabled: boolean, refresh: number, load: () => Promise<
       }
     }).finally(() => { if (!disposed) setBusy(false) })
     return () => { disposed = true }
-  }, [enabled, refresh, load])
+  }, [enabled, version, load])
 
   return { values, busy, error, ready }
 }
 
-function Folder({ label, count, defaultExpanded = false, reveal, children }: {
+function Folder({ label, node, count, defaultExpanded = false, reveal, children }: {
   label: string
+  node: ExplorerNode
   count?: number | string
   defaultExpanded?: boolean
   reveal?: string
   children: (expanded: boolean) => ReactNode
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const target = useNodeTarget<HTMLButtonElement>(() => node)
   useEffect(() => { if (reveal) setExpanded(true) }, [reveal])
   return <div className="tree-folder" data-folder={label}>
-    <button className="tree-heading" aria-label={label} aria-expanded={expanded} title={label} onClick={() => setExpanded(value => !value)}>
+    <button ref={target} className="tree-heading" aria-label={label} aria-expanded={expanded} title={label} onClick={() => setExpanded(value => !value)}>
       <Icon name="chevron" className={expanded ? 'expanded' : ''} /><Icon name="folder" className="folder-icon" />
       <span className="node-label">{label}</span>{count !== undefined && <span className="tree-count">{count}</span>}
     </button>
@@ -76,23 +86,35 @@ function CatalogueState({ busy, error, ready, values, empty }: {
   </>
 }
 
-function DatabaseNode({ connectionId, value, selected, visible, refresh, onSelect, onScript }: {
+/** A table: clicking it scripts CREATE in a new query; its menu has Select Top 1000 Rows and Script Table as. */
+const TableNode = memo(function TableNode({ connectionId, database, table }: { connectionId: string; database: string; table: TableInfo }) {
+  const { commands } = useWorkbench()
+  const node = (): ExplorerNode => ({ kind: 'table', connectionId, database, schema: table.schema, name: table.name })
+  const target = useNodeTarget<HTMLButtonElement>(node)
+  return <button ref={target} className="tree-node table-node" title={'Script ' + table.schema + '.' + table.name + ' as CREATE using SMO'}
+    onClick={() => void commands.execute('explorer.scriptCreateToNewQuery', { target: explorerTarget(node()) }, 'toolbar')}>
+    <Icon name="table" /><span className="node-label">{table.schema}.{table.name}</span>
+  </button>
+})
+
+function DatabaseNode({ connectionId, value, selected, visible, onSelect }: {
   connectionId: string
   value: DatabaseInfo
   selected: boolean
   visible: boolean
-  refresh: number
   onSelect: Props['onSelect']
-  onScript: Props['onScript']
 }) {
   const [expanded, setExpanded] = useState(selected)
   const [tablesExpanded, setTablesExpanded] = useState(true)
   useEffect(() => { if (selected) setExpanded(true) }, [selected])
   const load = useCallback(() => window.varia.tables(connectionId, value.name), [connectionId, value.name])
-  const tables = useCatalogue(visible && expanded && tablesExpanded, refresh, load)
+  const tables = useCatalogue(visible && expanded && tablesExpanded, explorerPaths.tables(connectionId, value.name), load)
+  // The whole row, so its expand button has the database's menu too.
+  const row = useNodeTarget<HTMLDivElement>(() => ({ kind: 'database', connectionId, database: value.name }))
+  const tablesFolder = useNodeTarget<HTMLButtonElement>(() => ({ kind: 'tablesFolder', connectionId, database: value.name }))
 
   return <div className="database-branch" data-database={value.name}>
-    <div className={'database-row' + (selected ? ' selected' : '')}>
+    <div ref={row} className={'database-row' + (selected ? ' selected' : '')}>
       <button className="node-toggle" aria-label={(expanded ? 'Collapse ' : 'Expand ') + value.name} aria-expanded={expanded} onClick={() => setExpanded(open => !open)}>
         <Icon name="chevron" className={expanded ? 'expanded' : ''} />
       </button>
@@ -101,15 +123,14 @@ function DatabaseNode({ connectionId, value, selected, visible, refresh, onSelec
       </button>
     </div>
     <div className="database-objects tree-children" hidden={!expanded}>
-      <button className="tree-heading" aria-label={'Tables in ' + value.name} aria-expanded={tablesExpanded} onClick={() => setTablesExpanded(open => !open)}>
+      <button ref={tablesFolder} className="tree-heading" aria-label={'Tables in ' + value.name} aria-expanded={tablesExpanded} onClick={() => setTablesExpanded(open => !open)}>
         <Icon name="chevron" className={tablesExpanded ? 'expanded' : ''} /><Icon name="folder" className="folder-icon" />
         <span className="node-label">Tables</span><span className="tree-count">{tables.busy ? '…' : tables.ready ? tables.values.length : ''}</span>
       </button>
       <div className="tree-children" hidden={!tablesExpanded}>
         <CatalogueState {...tables} empty="No visible user tables." />
-        {tables.ready && tables.values.map(table => <button key={JSON.stringify([table.schema, table.name])} className="tree-node table-node" title={'Script ' + table.schema + '.' + table.name + ' as CREATE using SMO'} onClick={() => onScript(connectionId, value.name, table)}>
-          <Icon name="table" /><span className="node-label">{table.schema}.{table.name}</span>
-        </button>)}
+        {/* The previous list stays while a refresh loads, so a focused table keeps focus through F5. */}
+        {tables.values.map(table => <TableNode key={JSON.stringify([table.schema, table.name])} connectionId={connectionId} database={value.name} table={table} />)}
       </div>
     </div>
   </div>
@@ -124,32 +145,38 @@ const securityFolders: { kind: ServerObjectKind; label: string; icon: 'login' | 
   { kind: 'serverAuditSpecifications', label: 'Server Audit Specifications', icon: 'shield' }
 ]
 
-function SecurityFolder({ connectionId, kind, label, icon, visible, refresh }: typeof securityFolders[number] & {
-  connectionId: string; visible: boolean; refresh: number
-}) {
+function ObjectNode({ connectionId, kind, icon, object }: { connectionId: string; kind: ServerObjectKind; icon: typeof securityFolders[number]['icon']; object: ServerObjectInfo }) {
+  const target = useNodeTarget<HTMLDivElement>(() => ({ kind: 'serverObject', connectionId, objectKind: kind, name: object.name }))
+  return <div ref={target} className="tree-node object-node" title={object.name + ' — ' + object.description}>
+    <Icon name={icon} /><span className="node-label">{object.name}</span>
+  </div>
+}
+
+function SecurityFolder({ connectionId, kind, label, icon, visible }: typeof securityFolders[number] & { connectionId: string; visible: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const load = useCallback(() => window.varia.serverObjects(connectionId, kind), [connectionId, kind])
-  const objects = useCatalogue<ServerObjectInfo>(visible && expanded, refresh, load)
+  const objects = useCatalogue<ServerObjectInfo>(visible && expanded, explorerPaths.serverObjects(connectionId, kind), load)
+  const target = useNodeTarget<HTMLButtonElement>(() => ({ kind: 'serverObjectsFolder', connectionId, objectKind: kind }))
   return <div className="tree-folder" data-folder={label}>
-    <button className="tree-heading" aria-label={label} aria-expanded={expanded} title={label} onClick={() => setExpanded(open => !open)}>
+    <button ref={target} className="tree-heading" aria-label={label} aria-expanded={expanded} title={label} onClick={() => setExpanded(open => !open)}>
       <Icon name="chevron" className={expanded ? 'expanded' : ''} /><Icon name="folder" className="folder-icon" />
       <span className="node-label">{label}</span>
       {(objects.busy || objects.ready) && <span className="tree-count">{objects.busy ? '…' : objects.values.length}</span>}
     </button>
     <div className="tree-children" hidden={!expanded}>
       <CatalogueState {...objects} empty="No visible objects." />
-      {objects.ready && objects.values.map(object => <div key={object.name} className="tree-node object-node" title={object.name + ' — ' + object.description}>
-        <Icon name={icon} /><span className="node-label">{object.name}</span>
-      </div>)}
+      {objects.values.map(object => <ObjectNode key={object.name} connectionId={connectionId} kind={kind} icon={icon} object={object} />)}
     </div>
   </div>
 }
 
-function ServerExplorer({ connection, selectedDatabase, refresh, canDisconnect, onDatabases, onSelect, onScript, onDisconnect }: Props) {
+function ServerExplorer({ connection, selectedDatabase, canDisconnect, onDatabases, onSelect, onDisconnect }: Props) {
   const [expanded, setExpanded] = useState(true)
   const accent = useConnectionAccent(connection.color)
   const load = useCallback(() => window.varia.databases(connection.id), [connection.id])
-  const databases = useCatalogue(true, refresh, load)
+  const databases = useCatalogue(true, explorerPaths.databases(connection.id), load)
+  // The whole row, so the Disconnect button has the server's menu too.
+  const row = useNodeTarget<HTMLDivElement>(() => ({ kind: 'server', connectionId: connection.id }))
   useEffect(() => {
     if (databases.ready) onDatabases(connection.id, databases.values)
   }, [connection.id, databases.ready, databases.values, onDatabases])
@@ -158,26 +185,27 @@ function ServerExplorer({ connection, selectedDatabase, refresh, canDisconnect, 
   const userDatabases = databases.values.filter(value => !value.isSystem && !value.isSnapshot)
   const selectedSystem = systemDatabases.find(value => value.name === selectedDatabase)?.name
   const selectedSnapshot = snapshots.find(value => value.name === selectedDatabase)?.name
-  const nodes = (values: DatabaseInfo[], visible: boolean) => values.map(value => <DatabaseNode key={value.name} connectionId={connection.id} value={value} selected={selectedDatabase === value.name} visible={visible} refresh={refresh} onSelect={onSelect} onScript={onScript} />)
+  const nodes = (values: DatabaseInfo[], visible: boolean) => values.map(value => <DatabaseNode key={value.name} connectionId={connection.id} value={value} selected={selectedDatabase === value.name} visible={visible} onSelect={onSelect} />)
+  const folderNode = (kind: 'databasesFolder' | 'systemDatabasesFolder' | 'snapshotsFolder' | 'securityFolder'): ExplorerNode => ({ kind, connectionId: connection.id })
 
   return <section className="server-section" aria-label={'Server ' + connection.server} style={{ borderLeft: accent ? `3px solid ${accent}` : undefined }}>
-    <div className={'server-row' + (selectedDatabase ? ' selected' : '')}>
+    <div ref={row} className={'server-row' + (selectedDatabase ? ' selected' : '')}>
       <button className="server-toggle" data-pane-focus={selectedDatabase ? 'selected' : 'server'} aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={connection.server + ' (SQL Server ' + connection.serverVersion + ')'}>
         <Icon name="chevron" className={expanded ? 'expanded' : ''} /><Icon name="server" /><span>{connection.displayName || connection.server}</span>
       </button>
       <button className="icon-button" aria-label={'Disconnect ' + connection.server} title="Disconnect server" disabled={!canDisconnect} onClick={() => onDisconnect(connection.id)}><Icon name="disconnect" /></button>
     </div>
     <div className="server-objects tree-children" hidden={!expanded}>
-      <Folder label="Databases" defaultExpanded count={databases.busy ? '…' : databases.ready ? databases.values.length : undefined} reveal={selectedDatabase}>
+      <Folder label="Databases" node={folderNode('databasesFolder')} defaultExpanded count={databases.busy ? '…' : databases.ready ? databases.values.length : undefined} reveal={selectedDatabase}>
         {databasesExpanded => <>
           <CatalogueState {...databases} empty="No accessible databases." />
-          <Folder label="System Databases" count={databases.ready ? systemDatabases.length : undefined} reveal={selectedSystem}>
+          <Folder label="System Databases" node={folderNode('systemDatabasesFolder')} count={databases.ready ? systemDatabases.length : undefined} reveal={selectedSystem}>
             {systemExpanded => <>
               {databases.ready && !systemDatabases.length && <p className="explorer-hint">No accessible system databases.</p>}
               {nodes(systemDatabases, expanded && databasesExpanded && systemExpanded)}
             </>}
           </Folder>
-          <Folder label="Database Snapshots" count={databases.ready ? snapshots.length : undefined} reveal={selectedSnapshot}>
+          <Folder label="Database Snapshots" node={folderNode('snapshotsFolder')} count={databases.ready ? snapshots.length : undefined} reveal={selectedSnapshot}>
             {snapshotsExpanded => <>
               {databases.ready && !snapshots.length && <p className="explorer-hint">No accessible database snapshots.</p>}
               {nodes(snapshots, expanded && databasesExpanded && snapshotsExpanded)}
@@ -186,8 +214,8 @@ function ServerExplorer({ connection, selectedDatabase, refresh, canDisconnect, 
           {nodes(userDatabases, expanded && databasesExpanded)}
         </>}
       </Folder>
-      <Folder label="Security">
-        {securityExpanded => securityFolders.map(folder => <SecurityFolder key={folder.kind} {...folder} connectionId={connection.id} visible={expanded && securityExpanded} refresh={refresh} />)}
+      <Folder label="Security" node={folderNode('securityFolder')}>
+        {securityExpanded => securityFolders.map(folder => <SecurityFolder key={folder.kind} {...folder} connectionId={connection.id} visible={expanded && securityExpanded} />)}
       </Folder>
     </div>
   </section>

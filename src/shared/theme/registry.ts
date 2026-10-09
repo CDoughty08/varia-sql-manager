@@ -17,7 +17,7 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const menus = 'custom menus and the title bar', tree = 'the Object Explorer tree', grid = 'the results grid', toasts = 'notifications'
+const tree = 'the Object Explorer tree', grid = 'the results grid', toasts = 'notifications'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -42,19 +42,21 @@ const groups = {
   'Title bar, menus, and toolbar': {
     'titleBar.activeBackground': ['V', '$chrome', 'Title bar, and the native window-controls overlay on Windows and Linux.', 'css native', { opaqueOver: 'editor.background' }],
     'titleBar.activeForeground': ['V', '$textTertiary', 'Window caption in the title bar.', 'css'],
-    'titleBar.inactiveBackground': ['V', '@titleBar.activeBackground', 'Title bar while the window is inactive.', '', { reserved: menus }],
-    'titleBar.inactiveForeground': ['V', '@titleBar.activeForeground', 'Window caption while the window is inactive.', '', { reserved: menus }],
+    'titleBar.inactiveBackground': ['V', '@titleBar.activeBackground', 'Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive.', 'css native', { opaqueOver: 'editor.background' }],
+    'titleBar.inactiveForeground': ['V', '@titleBar.activeForeground', 'Window caption and menubar labels while the window is inactive.', 'css'],
     'titleBar.border': ['V', '$border', 'Line below the title bar.', 'css'],
     'titleBar.iconForeground': ['X', '$accentMuted', 'Application icon in the title bar.', 'css'],
     'titleBar.controlsForeground': ['X', '$text', 'Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable.', 'native', { opaqueOver: 'titleBar.activeBackground' }],
     'menubar.selectionBackground': ['V', '$active', 'Open title-bar menu.', 'css'],
     'menubar.selectionForeground': ['V', '$textStrong', 'Label of the open title-bar menu.', 'css'],
-    'menu.background': ['V', '$overlay', 'Editor and dock context menus.', 'css monaco'],
-    'menu.foreground': ['V', '$text', 'Context menu text.', 'css monaco'],
-    'menu.selectionBackground': ['V', '$selectionStrong', 'Highlighted menu item. The editor context menu highlights with list.hoverBackground instead.', '', { reserved: menus }],
-    'menu.selectionForeground': ['V', '$textStrong', 'Text of the highlighted menu item.', '', { reserved: menus }],
-    'menu.separatorBackground': ['V', '$separator', 'Context menu separators.', 'monaco'],
-    'menu.border': ['V', '@editorWidget.border', 'Context menu border.', 'monaco'],
+    'menubar.selectionBorder': ['V', '$accent/0', 'Outline of the open, hovered, or focused title-bar menu; none by default.', 'css'],
+    'menu.background': ['V', '$overlay', 'Title-bar and context menus.', 'css monaco'],
+    'menu.foreground': ['V', '$text', 'Title-bar and context menus.', 'css monaco'],
+    'menu.selectionBackground': ['V', '$selectionStrong', 'Highlighted item in title-bar and context menus.', 'css'],
+    'menu.selectionForeground': ['V', '$textStrong', 'Highlighted item in title-bar and context menus.', 'css'],
+    'menu.selectionBorder': ['V', '$accent/0', 'Outline of the highlighted menu item; none by default.', 'css'],
+    'menu.separatorBackground': ['V', '$separator', 'Menu separators.', 'css monaco'],
+    'menu.border': ['V', '@editorWidget.border', 'Menu border.', 'css monaco'],
     'toolbar.background': ['X', '@titleBar.activeBackground', 'Main toolbar.', 'css'],
     'toolbar.border': ['X', '@titleBar.border', 'Line below the main toolbar.', 'css'],
     'toolbar.hoverBackground': ['V', '$text/12', 'Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color.', 'css monaco'],
@@ -82,7 +84,7 @@ const groups = {
     'sideBar.background': ['V', '$sideBar', 'Object Explorer.', 'css'],
     'sideBarTitle.foreground': ['V', '$textTertiary', 'Object Explorer heading.', 'css'],
     'sideBarSectionHeader.border': ['V', '$borderSubtle', 'Lines around the Object Explorer heading and footer.', 'css'],
-    'list.hoverBackground': ['V', '$hover', 'Hovered list row (command palette rows included), and the highlighted item of the editor context menu.', 'css monaco'],
+    'list.hoverBackground': ['V', '$hover', 'Hovered list row (command palette rows included).', 'css monaco'],
     'list.activeSelectionBackground': ['V', '$selectionStrong', 'Selected row of a focused list.', 'css monaco'],
     'list.activeSelectionForeground': ['V', '$text', 'Text of the selected row of a focused list.', 'css monaco'],
     'list.inactiveSelectionBackground': ['V', '$selection', 'Selected row of an unfocused list, and the selected result set.', 'css monaco'],
@@ -177,10 +179,10 @@ const groups = {
     'resultsGrid.rowNumberForeground': ['X', '$textMuted', 'Row numbers.', 'css'],
     'resultsGrid.nullForeground': ['X', pair('$warning/70', '$warning'), 'NULL values.', 'css'],
     'resultsGrid.truncationForeground': ['X', '@warningForeground', 'Notice that results were truncated.', 'css'],
-    'resultsGrid.selectionBackground': ['X', '@list.activeSelectionBackground', 'Selected cells.', '', { reserved: grid }],
-    'resultsGrid.selectionForeground': ['X', '@list.activeSelectionForeground', 'Text of selected cells.', '', { reserved: grid }],
-    'resultsGrid.inactiveSelectionBackground': ['X', '@list.inactiveSelectionBackground', 'Selected cells while the grid is not focused.', '', { reserved: grid }],
-    'resultsGrid.activeCellBorder': ['X', '@focusBorder', 'Outline of the active cell.', '', { reserved: grid }],
+    'resultsGrid.selectionBackground': ['X', '@list.activeSelectionBackground', 'Selected cells.', 'css'],
+    'resultsGrid.selectionForeground': ['X', '@list.activeSelectionForeground', 'Text of selected cells.', 'css'],
+    'resultsGrid.inactiveSelectionBackground': ['X', '@list.inactiveSelectionBackground', 'Selected cells while the grid is not focused; their text keeps its color.', 'css'],
+    'resultsGrid.activeCellBorder': ['X', '@focusBorder', 'Outline of the active cell while the grid is focused.', 'css'],
     'resultsGrid.hoverBackground': ['X', '@list.hoverBackground', 'Hovered row.', '', { reserved: grid }],
     'resultsMessages.foreground': ['X', pair('$accentMuted', '$text'), 'Text of the Messages tab.', 'css']
   },
