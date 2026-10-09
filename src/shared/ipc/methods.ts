@@ -44,8 +44,14 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.close': control,
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
+  // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
+  'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
+  'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
+
+/** Methods only main sends, on its own behalf: no renderer schema (requestSchemas) or port schema accepts them. */
+export const mainOnlyMethods = ['results.copy', 'results.export', 'debug.results.synthesize'] as const satisfies readonly BackendMethod[]
 
 /** Every method main may call; a backend whose HELLO lacks one of them is from a different build. `debug.*` methods
  *  exist only in a backend started with test hooks, so HELLO need not list them. */

@@ -38,7 +38,7 @@ export const backendDescriptorSchema = z.object({
   columns: z.array(columnSchema).min(1).max(limits.page.maxColumns), rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncatedCells: count,
   state: z.enum(['open', 'complete', 'released']), truncated: truncationSchema.optional(), incomplete: z.boolean()
 }).strict()
-const message = z.string().max(limits.messages.characters)
+const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'error']) }).strict()
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),
@@ -55,7 +55,10 @@ export const queryResultSchema = z.object({
   recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'failed', 'cancelled', 'timedOut']),
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),
-  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count }).strict()
+  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count }).strict(), completedAt: z.string().max(40)
 }).strict()
+/** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
+export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()
+export type JobProgressEvent = z.infer<typeof jobProgressSchema>
 /** The global EVENT (id 0) for result memory. */
 export const memoryEventSchema = z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count }).strict()

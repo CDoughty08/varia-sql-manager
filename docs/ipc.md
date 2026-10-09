@@ -16,7 +16,8 @@ The code is the reference implementation; this document describes it.
 | One backend process | `src/main/backend/connection.ts` | `Protocol/ProtocolHost.cs`, `RequestContext.cs` |
 | Generations and restarts | `src/main/backend/supervisor.ts` | — |
 | Results port | `src/main/backend/results-port.ts`, `src/shared/ipc/port-messages.ts` | — |
-| Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs` |
+| Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
+| Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
 
 ## Contents
@@ -31,6 +32,8 @@ The code is the reference implementation; this document describes it.
 - [Query events](#query-events)
 - [Result pages](#result-pages)
 - [Result store and memory budget](#result-store-and-memory-budget)
+- [Messages](#messages)
+- [Copy and Save Results As](#copy-and-save-results-as)
 - [Results port and results worker](#results-port-and-results-worker)
 - [Malformed input](#malformed-input)
 - [Backend threads and exit codes](#backend-threads-and-exit-codes)
@@ -198,7 +201,12 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
+| `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
+| `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
+
+`mainOnlyMethods` (`results.copy`, `results.export`, `debug.results.synthesize`) are sent only by main on its own
+behalf: they are in no renderer schema (`requestSchemas`) and no port schema (`portRequestSchema`).
 
 **A backend method is added in five places:** `RpcMethods` (`src/shared/contracts.ts`); `requestSchemas`
 (`src/main/validation.ts`) for invoke or `portRequestSchema` for the port; a `methodPolicies` entry (a new unary method
@@ -242,13 +250,15 @@ when no port is open).
 | type | Emitted |
 | --- | --- |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
-| `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, so the first rows are readable without waiting for a tick |
-| `messages` | Every 100 ms or 64 KiB, only messages stored under the message caps |
+| `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
+| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
 | `results.memory` (id 0) | At most once a second, when usage crosses 50, 75, 90 or 100 % of the budget or changes by 64 MiB |
 
-Events are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new events are refused, and any event
-over 256 KiB is dropped. RESPONSE, PONG and GOAWAY are never dropped. The UI treats the summary as authoritative and
+Progress and messages are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new ones are refused,
+and one over 256 KiB is dropped. `resultSet.opened` and `resultSet.closed` are essential: never refused, and up to
+4 MiB, enough for a descriptor of 4,096 columns with 128-character names (about 3.5 MB). RESPONSE, PONG and GOAWAY are
+never dropped. The UI treats the summary as authoritative and
 ignores a query's events once its summary has arrived.
 
 ## Result pages
@@ -303,16 +313,27 @@ Results stay in backend memory, never on disk (`ResultStore`).
   in `discardedResultSets`), and execution always continues.
 - **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the PR6 table
   sends 1,000). **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
-  summary must fit the 16 MiB response: kept sets' descriptors may take 12 MiB (messages the rest), so once a set's
-  column list would pass that, it and later sets are counted as discarded.
+  summary must fit the 16 MiB response: kept sets' descriptors may take 8 MiB, each bounded by `512 + Σ(UTF-8 name +
+  UTF-8 type + 96)` bytes (messages and the error text take the rest, with room to spare), so once a set's column list
+  would pass that, it and later sets are counted as discarded.
+- **FOR XML and FOR JSON.** A set whose only column is `XML_F52E2B61-18A1-11d1-B105-00805F49916B` or
+  `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` (ntext or nvarchar) arrives as rows of about 2,033 characters;
+  `ForXmlCollector` joins them into one pooled buffer of up to 2,097,152 + 1 characters (the excess marks the value
+  truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
+  (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`, as SSMS shows one link. `FOR XML … TYPE` already arrives
+  as one xml cell.
 - **Never unowned.** If a `query.execute` summary still cannot be encoded (`RESPONSE_TOO_LARGE`), its results are
   released at once rather than left without an owner.
 - **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan', columns,
   rowsRead, rowsStored, rowsAvailable (rows in sealed pages), bytesStored, truncatedCells, state: 'open' | 'complete' |
   'released', truncated?, incomplete }`. Result ids are u32 from 1 per generation and always paired with it.
-- **Released** by `results.close`, the next `query.execute` on the same session, `query.session.close`,
-  `connections.disconnect`, and process exit. A release fails the result's in-flight reads with `RESULT_RELEASED` after
-  the current page. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
+- **Released** by `results.close`, the next `query.execute` on the same session (whatever its connection), and process
+  exit. Closing a session (`query.session.close`) and disconnecting keep results readable, copyable and saveable, as in
+  SSMS; the renderer closes them when their tab closes. A release fails the result's in-flight reads with
+  `RESULT_RELEASED` after the current page and stops storing at once.
+- **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
+  (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
+  closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
   or one at a time), triggers one gen2 collection shortly after (pages are large arrays that nothing else would
   collect), and so does a release that empties the store once 16 MiB were released since the last aggressive one. The
   collection is aggressive (compacting, so it returns memory to the operating system) when what remains is no more than
@@ -328,10 +349,80 @@ Notes appended to the summary's messages:
 | `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n} MB) is full. Execution continued; close other query results to free memory." |
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
-| column lists past the summary's 12 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
+| column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
 
 A cell whose typed read fails becomes NULL with the error flag; that column switches to its fallback reader and the
 messages get "Column ‘{name}’ ({type}): some values could not be read and are shown as NULL."
+
+## Messages
+
+The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'error' }`, in order, under
+the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, since events may be dropped.
+
+- **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
+  affected)", no digit grouping), the notes above, and "The SQL session closed. …".
+- **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within
+  the whole script or selection) or `Msg …, Procedure {p}, Line {k}` (the procedure's own line), then a line feed and the
+  message. Errors that arrive with an exception are added unless InfoMessage already delivered them (matched by number,
+  state, line and text over the last 20). A cancel adds "The script was cancelled. Remaining batches were not executed."
+  and a timeout "The script exceeded its execution timeout. Remaining batches were not executed."; an unexpected stop adds
+  "Execution stopped unexpectedly: …". The summary's `error` keeps the first 20 errors (16,384 characters) as before.
+- **`completedAt`** is the backend's local time, `yyyy-MM-ddTHH:mm:ss.fffffffzzz`, for SSMS's "Completion time:" line.
+
+## Copy and Save Results As
+
+All Copy and Save text comes from one formatter, `ResultTextWriter` (C#), which reads stored pages in place through
+`PageView` (a production reader of trusted pages, parsed in O(columns); `Varia.Backend.Tests/PageReader.cs` stays the
+independent oracle). It works on UTF-8 bytes; CSV quoting, TSV replacement and JSON escaping are safe at byte level
+because every byte that needs attention is ASCII (and U+2028/U+2029, matched as their three bytes).
+
+| | Copy (TSV) | Save TSV (`.txt`, `.tsv`, `.tab`) | Save CSV (`.csv`) | Save JSON (`.json`) |
+| --- | --- | --- | --- | --- |
+| Encoding | UTF-8 to main, then the clipboard | UTF-8 with BOM | UTF-8 with BOM | UTF-8, no BOM |
+| Separator, end of line | TAB; CRLF on Windows, LF elsewhere; none after the last line | TAB; CRLF after every line | `,`; CRLF after every line | `[` LF, one compact object per line joined by `,` LF, then LF `]` LF; an empty result is `[]` LF |
+| Header | Copy with Headers only; one header line per part | on | on | object keys |
+| NULL and read errors | `NULL` | `NULL` | empty field | `null` |
+| Text | CRLF, CR, LF and TAB each become one space | same | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
+| Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number, otherwise a string; bit as `true`/`false`; everything else a string |
+| Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
+| Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
+
+`exportDefaults` (`src/main/results-jobs.ts`, owner decision 1) sets the saves' header row and NULL text; the backend
+takes `headers` and `nullText` as parameters. `tests/fixtures/results-text/cases.json` holds the golden bytes, checked
+against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (`tests/results-text.test.ts`).
+
+- **`results.copy { resultId, parts, headers, eol: 'crlf' | 'lf', maxBytes: 1 … 67,108,864 }`** (stream). A part is 1 –
+  64 ascending, disjoint inclusive row ranges (a last row of 2⁵³ − 1 runs to the end) by 1 – 64 column ranges; up to 64
+  parts, written in order. Open-ended rows end at the rows available when the copy starts, and `partial` says the set was
+  still open. Before any work, `EstimateBytes` (O(pages × columns): the stored text spans, `2 × bytes + 2` per binary
+  cell, 4 per NULL, separators and headers; replacements never lengthen text, so it is an upper bound) over `maxBytes`
+  answers `TOO_LARGE` ("The selection is too large to copy ({n} MB; the limit is {m} MB). Use Save Results As
+  instead.") with no DATA. Otherwise the text streams as DATA bodies of at most 1 MiB under the usual credit rules,
+  checked for cancellation per page, then the RESPONSE `{ rows, bytes, truncatedCells, partial }`.
+- **`results.export { resultId, path, format: 'csv' | 'tsv' | 'json', headers, nullText: 'empty' | 'NULL' }`** (unary).
+  The path must be fully qualified, without NUL and without a `\\.\` or `\\?\` prefix (`INVALID_PARAMS`); the set
+  must be complete (`RESULT_OPEN`). It writes `{folder}/.varia-{guid}.tmp` (`CreateNew`, `FileShare.None`, 1 MiB
+  chunks), checking cancellation per page, flushes it to disk and renames it over the target (a symlink there is
+  replaced, not followed). Any failure or cancel deletes the temporary file; the target is never touched before the
+  rename. Failures are `EXPORT_FAILED` whose message is one token, never a path or an OS message: `ACCESS`
+  (`UnauthorizedAccessException`, HRESULT 0x80070005), `IN_USE` (0x80070020, 0x80070021), `DISK_FULL` (0x80070070,
+  0x80070027, errno 28), `NOT_FOUND` (a missing folder), `IS_DIRECTORY`, otherwise `IO`.
+- **Progress.** Both send droppable `{ type: 'job.progress', rowsDone, rowsTotal, bytes }` EVENTs at most every 250 ms;
+  main validates them (`jobProgressSchema`) and pushes `varia:results-job { jobId, kind, rowsDone, rowsTotal, bytes }`
+  at most 4 times a second.
+- **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts }` and
+  `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128 }` are `trusted()`, strictly
+  validated, and checked against `ResultsPortHost.owns(generation, resultId)` and the ready generation
+  (`RESULT_UNAVAILABLE`). A copy decodes the chunks with a streaming `TextDecoder` (so a character split across chunks
+  survives), regrants their credit, cancels with `TOO_LARGE` past 64 MiB + 1 MiB received, and writes the clipboard once,
+  on the RESPONSE; a new copy cancels the running one. A save runs one at a time (`JOB_BUSY`), shows the native dialog
+  ("Save Grid Results", the requested format's filter first, then CSV, Text, JSON and All Files) with the sanitised
+  suggested name, takes the format from the chosen extension (any other extension keeps the requested format, and none
+  is appended, so the dialog's overwrite confirmation stays valid), checks ownership again, and returns only the file's
+  name; `EXPORT_FAILED` tokens become sentences naming only that name. `varia:results-job-cancel` sends CANCEL reason 1;
+  a page reload or closed window cancels with reason 3. Paths come only from the dialog, never from the renderer, and
+  reach only the backend.
 
 ## Results port and results worker
 
@@ -460,7 +551,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | --- | --- | --- |
 | Request body (main → backend) | 4 MiB; a 1,000,000-character script is at most 3,000,000 UTF-8 bytes | main before writing (`TOO_LARGE`); the backend skips larger bodies |
 | Response body (backend → main) | 16 MiB | backend (`RESPONSE_TOO_LARGE`); main skips larger bodies |
-| Event body | 256 KiB | backend |
+| Event body | 256 KiB; `resultSet.*` 4 MiB | backend |
 | Control decoding | depth 16; 4,096 map entries; 1,048,576 array items; 128-byte keys; integers within ±(2⁵³ − 1) | both |
 | Page | 1 – 4,096 rows and columns; sealed at 256 KiB or 4,096 rows; first page at 64 rows or 20 ms; idle seal 200 ms | backend; checked by the worker |
 | Encoded row | 8 MiB; later cells become truncated prefixes | backend |
@@ -468,7 +559,12 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Result sets kept per query | 1 – 1,000 (default 10) | zod and backend |
 | Rows stored per query | 0 – 2,147,483,647 (0 = budget only) | zod and backend |
 | Result budget | `clamp(available memory / 4, 256 MiB, 2 GiB)`; 50 % per query; none under high system memory load | backend |
-| Messages | 1,000 messages / 1,000,000 characters; error text 16,384 characters | backend |
+| Messages | 1,000 entries / 1,000,000 characters; error text 16,384 characters | backend |
+| Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
+| FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
+| Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
+| Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
+| Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 32 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
@@ -485,9 +581,9 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads); an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |
@@ -504,6 +600,11 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 | `TOO_MANY_REQUESTS` | "Too many pending backend requests." |
 | `STREAM_PROTOCOL` | "The SQL backend sent an invalid response. The request was cancelled." |
 | `RESPONSE_TOO_LARGE` | "The backend result is too large to return (limit 16 MB)." |
+| `TOO_LARGE` (copy, main's cap) | "The selection is too large to copy (more than 64 MB). Use Save Results As instead." |
+| `JOB_BUSY` | "Another Save Results As is in progress. Wait for it to finish or cancel it." |
+| `RESULT_UNAVAILABLE` (closed during the save dialog) | "These results were closed before they could be saved." |
+| `RESULT_OPEN` | "Save the results after this result set finishes loading." |
+| `EXPORT_FAILED` | "Could not save the results: " + `ACCESS` "access to {file} is denied.", `DISK_FULL` "the disk is full.", `IN_USE` "{file} is open in another program.", `NOT_FOUND` "the folder no longer exists.", `IS_DIRECTORY` "{file} is a folder.", otherwise "{file} could not be written." |
 
 | Surface | Text |
 | --- | --- |
@@ -594,7 +695,15 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   stripping, with modes for each misbehaviour (`silent`, `exit`, `crash-after`, `bad-magic`, `oversize`, `truncated`,
   `no-hello`, `v1`, `wrong-version`, `missing-method`, `late`, `credit-overrun`, `seq-gap`, `unknown-id`, `contained`,
   `unresponsive`, and others) and a `workbench` mode for the Electron smoke tests, controlled through
-  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `silent-<generation>`).
+  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `silent-<generation>`). A
+  script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92
+  hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`; `@rate` is rows a second, `M1*n` is n one-row sets)
+  with progress, message entries and a memory event, pages encoded per block on first read; `results.copy` and
+  `results.export` use `text-writer.mjs`, and `hold/results.export` pauses an export after each page so a test can
+  cancel it mid-save.
+- **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets (every edge the formats
+  treat specially) with the exact Copy, CSV, TSV and JSON bytes; the C# writer and the JavaScript twin are both checked
+  against them, through the real copy and export jobs on the C# side.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`, including
   malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation and the budget.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1

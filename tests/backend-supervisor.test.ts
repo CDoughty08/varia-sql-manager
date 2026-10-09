@@ -432,10 +432,10 @@ describe('BackendSupervisor results', () => {
     const script = failure(value.request('query.execute', query('tab-1'), { onEvent: event => { events.push(event) } }))
     await settle(8)
     const request = last().requests.at(-1)!
-    last().send(FrameKind.EVENT, request.id, 0, { type: 'messages', messages: ['ok'] })
+    last().send(FrameKind.EVENT, request.id, 0, { type: 'messages', messages: [{ text: 'ok', kind: 'info' }] })
     last().send(FrameKind.RESPONSE, request.id, 0, { result: { resultSets: [], messages: [] } })
     expect(await script).toMatchObject({ code: 'BACKEND_ERROR', message: sentences.invalid })
-    expect(events).toEqual([{ type: 'messages', messages: ['ok'] }])
+    expect(events).toEqual([{ type: 'messages', messages: [{ text: 'ok', kind: 'info' }] }])
     const second = failure(value.request('query.execute', query('tab-2'), { onEvent: () => {} }))
     await settle(8)
     last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, { type: 'progress', results: 'many' })

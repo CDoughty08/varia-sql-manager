@@ -11,8 +11,8 @@ const descriptor = (resultId: number, rows: number, patch: Partial<ResultDescrip
   rowsRead: rows, rowsStored: rows, rowsAvailable: rows, bytesStored: rows * 10, truncatedCells: 0, state: 'complete', incomplete: false, ...patch
 })
 const summary = (resultSets: ResultDescriptor[], patch: Partial<QueryResult> = {}): QueryResult => ({
-  resultSets, discardedResultSets: 0, messages: ['(1 rows affected)'], recordsAffected: 1, elapsedMs: 5, status: 'completed', completedBatches: 1, totalBatches: 1,
-  database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }, ...patch
+  resultSets, discardedResultSets: 0, messages: [{ text: '(1 row affected)', kind: 'info' }], recordsAffected: 1, elapsedMs: 5, status: 'completed', completedBatches: 1, totalBatches: 1,
+  database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }, completedAt: '2026-10-09T12:00:00.0000000+00:00', ...patch
 })
 
 /** Results whose cells are (row, column) → text, or a flag-carrying cell; windows honour the text budget as the worker does. */
@@ -64,7 +64,8 @@ describe('legacy results table', () => {
     expect(fixture.client.applySummary).toHaveBeenCalledWith(summary(sets))
     if (!result.ok) throw new Error(result.error)
     expect(result.value).toEqual({
-      messages: ['(1 rows affected)'], recordsAffected: 1, elapsedMs: 5, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false,
+      messages: ['(1 row affected)'], recordsAffected: 1, elapsedMs: 5, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false,
+      completedAt: '2026-10-09T12:00:00.0000000+00:00',
       resultSets: [
         { columns: [{ name: 'id', dataType: 'int' }, { name: 'name', dataType: 'nvarchar' }], rows: [['1:0:0', '1:0:1'], ['1:1:0', null], ['1:2:0', 'cut… [cell truncated]']], truncated: true, incomplete: true, batchNumber: 1, iteration: 1, kind: 'rows' },
         { columns: [{ name: 'Microsoft SQL Server 2005 XML Showplan', dataType: 'nvarchar' }], rows: [['2:0:0']], truncated: false, incomplete: false, batchNumber: 2, iteration: 3, kind: 'executionPlan' }
@@ -129,7 +130,7 @@ describe('legacy results table', () => {
     emit({ type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 1, rowsRead: 500, rowsStored: 500, rowsAvailable: 448, bytesStored: 1 }] })
     emit({ type: 'resultSet.closed', descriptor: descriptor(1, 700) })
     emit({ type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 2, rowsRead: 40, rowsStored: 40, rowsAvailable: 0, bytesStored: 1 }] })
-    emit({ type: 'messages', messages: ['ignored'] })
+    emit({ type: 'messages', messages: [{ text: 'ignored', kind: 'info' }] })
     expect(progress.mock.calls.map(call => call[0])).toEqual([0, 500, 700, 740])
     finish({ ok: true, value: summary([]) })
     await running

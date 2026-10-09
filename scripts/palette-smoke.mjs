@@ -244,8 +244,9 @@ try {
       if (method === 'query.session.close') return { ok: true, value: { closed: true } }
       // Rows live in the backend's result store, which a stub does not have; the summary's messages carry the target.
       if (method === 'query.execute') return { ok: true, value: {
-        resultSets: [], discardedResultSets: 0, messages: [`Executed on ${globalThis.variaConnections[params.connectionId].server} in ${params.database}`],
-        recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }
+        resultSets: [], discardedResultSets: 0, messages: [{ text: `Executed on ${globalThis.variaConnections[params.connectionId].server} in ${params.database}`, kind: 'info' }],
+        recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 },
+        completedAt: '2026-10-09T12:00:00.0000000+00:00'
       } }
       return { ok: false, error: 'Unsupported test operation.' }
     })

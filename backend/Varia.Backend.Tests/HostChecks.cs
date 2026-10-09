@@ -133,10 +133,11 @@ internal static class HostChecks
             host.Request(8, "test.events", new { });
             var firstEvent = host.Next(FrameKind.Event);
             var secondEvent = host.Next(FrameKind.Event);
+            var thirdEvent = host.Next(FrameKind.Event);
             var eventsDone = host.Next(FrameKind.Response);
             check(firstEvent?.Header.Id == 8 && Body(firstEvent.Value).GetProperty("messages")[0].GetString() == "first" && Body(secondEvent!.Value).GetProperty("type").GetString() == "resultSet.closed"
-                && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(secondEvent.Value) && host.Next(FrameKind.Event, 200) is null,
-                "a request's EVENT frames precede its RESPONSE, and an event body over 256 KiB is dropped");
+                && thirdEvent?.Body.Length > 1024 * 1024 && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(thirdEvent.Value) && host.Next(FrameKind.Event, 200) is null,
+                "a request's EVENT frames precede its RESPONSE; a droppable event over 256 KiB and an essential one over 4 MiB are dropped, a 1 MiB descriptor event is not");
 
             for (var id = 10u; id < 18; id++) host.Request(id, "test.slow", new { ms = 1500 });
             Thread.Sleep(100);
@@ -224,6 +225,7 @@ internal static class HostChecks
             catch (Exception) { /* Empty parameters are invalid for most methods; any other failure means it was dispatched. */ }
         }
         check(undispatched.Count == 0 && service.LaneOf("query.execute") == RequestLane.Query && service.LaneOf("tables.script") == RequestLane.Metadata
+            && service.LaneOf("results.copy") == RequestLane.Results && service.LaneOf("results.export") == RequestLane.Results
             && service.LaneOf("query.cancel") == RequestLane.Control && service.LaneOf("no.such.method") == RequestLane.Control,
             "every method announced in HELLO is dispatched, on its lane: " + string.Join(", ", undispatched));
         // explorer.children replaced the v1 catalog lists; a stale renderer or main must get METHOD_NOT_FOUND, not data.
@@ -334,7 +336,10 @@ internal sealed class StubDispatcher : IRequestDispatcher
                 context!.SendEvent(new { Type = "messages", Messages = new[] { "first" } }, true);
                 context.SendEvent(new { Type = "messages", Messages = new[] { new string('x', 300 * 1024) } }, true);
                 context.SendEvent(new { Type = "resultSet.closed" }, false);
-                return new { Sent = 3 };
+                // Essential events carry descriptors of up to 4,096 columns: 1 MiB passes, 5 MiB does not.
+                context.SendEvent(new { Type = "resultSet.opened", Descriptor = new string('d', 1024 * 1024) }, false);
+                context.SendEvent(new { Type = "resultSet.opened", Descriptor = new string('d', 5 * 1024 * 1024) }, false);
+                return new { Sent = 5 };
             case "test.unsent":
                 context!.Unsent = () => Interlocked.Increment(ref Unsent);
                 return new { Text = new string('x', ProtocolLimits.ResponseBody) };

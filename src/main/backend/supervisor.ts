@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor } from '../../shared/ipc/methods'
-import { queryEventSchema, queryResultSchema } from '../../shared/ipc/port-messages'
+import { jobProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent } from '../../shared/ipc/port-messages'
 import { PROTOCOL_VERSION, limits as wire, type CancelReason } from '../../shared/ipc/wire/protocol'
 import { BackendConnection, systemClock, type BackendHello, type Clock, type ConnectionDeps, type Loss, type SendOptions, type SpawnSpec } from './connection'
 import { BackendError, failureMessage, sentences } from './errors'
@@ -31,6 +31,8 @@ export interface SupervisorDeps extends ConnectionDeps {
 export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
   /** Query events, validated and stamped with the generation; an invalid one fails the request (STREAM_PROTOCOL). */
   onEvent?: (event: QueryEvent) => void
+  /** results.copy and results.export progress, validated the same way. */
+  onProgress?: (progress: JobProgressEvent) => void
   /** Only this generation may serve the request, and only while it is ready: results belong to one generation. */
   generation?: number
   /** The request's id and generation once it is written, for CREDIT and CANCEL frames. */
@@ -135,14 +137,18 @@ export class BackendSupervisor {
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
     }
-    const onEvent = o.onEvent
+    const { onEvent, onProgress } = o
     const sent = connection.send(method, params, {
       ...deadlineFor(method, params), stream: o.stream, credit: o.credit,
-      onEvent: onEvent && (raw => {
+      onEvent: onEvent ? raw => {
         const parsed = queryEventSchema.safeParse(raw)
         if (!parsed.success) return false
         const event = parsed.data
         onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? { ...event, descriptor: stamp(event.descriptor, connection.generation) } : event)
+      } : onProgress && (raw => {
+        const parsed = jobProgressSchema.safeParse(raw)
+        if (!parsed.success) return false
+        onProgress(parsed.data)
       })
     })
     if (sent.id) o.onSent?.(sent.id, connection.generation)

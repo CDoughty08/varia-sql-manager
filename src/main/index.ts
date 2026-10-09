@@ -8,6 +8,7 @@ import { backendSpawnSpec } from './backend/spawn-spec'
 import { installTestHooks } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
+import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
@@ -35,6 +36,7 @@ const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
 let resultsPort: ResultsPortHost | undefined
+let resultsJobs: ResultsJobHost | undefined
 // Test seams (fake backend, liveness override, __variaTest, the renderer test-mode flag) exist only in unpackaged smoke runs.
 const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 const files = new SqlFileStore()
@@ -92,7 +94,7 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
   ipcMain.handle(channel, async (event, value: unknown): Promise<ApiResult<T>> => {
     if (!trusted(event)) return { ok: false, error: 'Untrusted IPC sender.' }
     try { return { ok: true, value: await action(value) } }
-    catch (error) { return { ok: false, error: errorMessage(error, 'The operation failed.') } }
+    catch (error) { return { ok: false, error: errorMessage(error, 'The operation failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
 }
 
@@ -104,6 +106,7 @@ function resetRendererState(relaunch = true): void {
   contextMenus.close()
   endPreview()
   resultsPort?.reset()
+  resultsJobs?.reset()
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   files.clear()
 }
@@ -281,6 +284,12 @@ app.whenReady().then(async () => {
   })
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
   const explorerRequests = new ExplorerRequests(backend)
+  const jobs = resultsJobs = new ResultsJobHost({
+    backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), platform: process.platform,
+    writeClipboard: text => clipboard.writeText(text), documentsDir: () => app.getPath('documents'),
+    showSaveDialog: options => mainWindow ? dialog.showSaveDialog(mainWindow, options) : Promise.resolve({ canceled: true }),
+    progress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:results-job', progress) }
+  })
   backend.onState(state => {
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
@@ -363,6 +372,11 @@ app.whenReady().then(async () => {
     } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
+  // Copy and Save Results As: the renderer names a result it owns; the backend formats the text, main writes the
+  // clipboard or chooses the file, and only the file's name goes back.
+  handle('varia:results-copy', value => jobs.copy(value))
+  handle('varia:results-save', value => jobs.save(value))
+  handle('varia:results-job-cancel', value => jobs.cancel(value))
   handle('varia:files-open', async () => {
     const selected = await dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] })
     if (selected.canceled) return []

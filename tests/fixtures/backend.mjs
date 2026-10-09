@@ -2,20 +2,27 @@
 // real pipeline against misbehaviour the .NET backend never produces. Usage: node backend.mjs <mode> [argument].
 // Mode `workbench` answers every method well enough for the Electron smoke tests (main selects it with
 // VARIA_TEST_BACKEND): scripts return the fixtures below as stored results, which results.read serves as real pages
-// (encodePage) within the stream's credit. Its control directory, VARIA_TEST_BACKEND_DIR, holds:
+// (encodePage) within the stream's credit. A script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100
+// messages=40 errors=2 memory=0.92 hold` streams synthetic sets instead (backend/shapes.mjs). results.copy and
+// results.export format text with backend/text-writer.mjs, the C# ResultTextWriter's twin. Its control directory,
+// VARIA_TEST_BACKEND_DIR, holds:
 //   calls.jsonl         one { generation, method, params } line per request, passwords redacted
-//   hold/<method>       the method waits while this file exists
+//   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
+//                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
-import { appendFileSync, existsSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { appendFileSync, existsSync, rmSync, statSync } from 'node:fs'
+import { open, rename } from 'node:fs/promises'
+import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
 import { decodeControl, encodeControl } from '../../src/shared/ipc/wire/msgpack.ts'
-import { encodePage } from '../../src/shared/ipc/wire/pages.ts'
+import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
+import { copyText, exportText } from './backend/text-writer.mjs'
+import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
 
@@ -23,6 +30,10 @@ const [mode = 'echo', argument] = process.argv.slice(2)
 const parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
 const cancels = []
 const streams = new Map()
+// Requests a CANCEL frame named (an export stops at its next page), and directive scripts query.cancel stopped.
+const cancelled = new Set()
+const runningDirectives = new Set()
+const cancelledQueries = new Set()
 const controlDirectory = process.env.VARIA_TEST_BACKEND_DIR
 let answered = 0
 let generation = 0
@@ -51,7 +62,8 @@ function handle(frame) {
   if (frame.kind === FrameKind.PING) { if (mode !== 'unresponsive' && !control(`silent-${generation}`)) write(FrameKind.PONG, 0, frame.arg); return }
   if (frame.kind === FrameKind.CANCEL) {
     cancels.push({ id: frame.id, reason: frame.arg })
-    if (mode === 'echo' && streams.has(frame.id)) { streams.delete(frame.id); fail(frame.id, 'CANCELLED', 'The operation was cancelled.') }
+    cancelled.add(frame.id)
+    if ((mode === 'echo' || mode === 'workbench') && streams.has(frame.id)) { streams.delete(frame.id); fail(frame.id, 'CANCELLED', 'The operation was cancelled.') }
     return
   }
   if (frame.kind === FrameKind.CREDIT) { streams.get(frame.id)?.grant(frame.arg); return }
@@ -97,7 +109,7 @@ function request(id, deadline, { method, params, credit }) {
       // Global events (id 0) are advisory: an undecodable one is dropped, not a violation.
       write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: 1, globalBytes: 2 })
       process.stdout.write(encodeFrame(FrameKind.EVENT, 0, 0, Uint8Array.of(0xc1)))
-      write(FrameKind.EVENT, id, 0, { type: 'messages', messages: ['first'] })
+      write(FrameKind.EVENT, id, 0, { type: 'messages', messages: [{ text: 'first', kind: 'info' }] })
       process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, Uint8Array.of(0xc1)))
       return
   }
@@ -178,62 +190,183 @@ function explorerChildren({ node, subtype }) {
   const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : [])]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
-// Stored results of this process (one backend generation), by resultId, as the real result store keeps them.
+// Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come
+// from `rowAt`; pages are encoded per block of `pageRows` when first read (a few are kept), so a million-row set costs
+// nothing until it is read. While a set streams, only whole blocks are readable, like the real store's sealed pages.
 const stored = new Map()
 let nextResultId = 1
-const pageRows = 64
+const globalBytes = 256 * 1024 * 1024
 const column = (name, dataType) => ({ name, dataType, wire: 'text', nullable: true })
+const available = result => result.complete ? result.read : Math.floor(result.read / result.pageRows) * result.pageRows
 const describe = result => ({
   resultId: result.resultId, index: result.index, batchNumber: result.batchNumber, iteration: result.iteration, kind: result.kind, columns: result.columns,
-  rowsRead: result.rows.length, rowsStored: result.rows.length, rowsAvailable: result.rows.length, bytesStored: result.bytes, truncatedCells: 0, state: 'complete', incomplete: false
+  rowsRead: result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100, truncatedCells: 0,
+  state: result.complete ? 'complete' : 'open', incomplete: result.incomplete ?? false
 })
+function storeResult(set, index) {
+  const result = {
+    resultId: nextResultId++, index, batchNumber: set.batchNumber ?? 1, iteration: set.iteration ?? 1, kind: set.kind ?? 'rows', columns: set.columns,
+    rowAt: set.rowAt ?? (row => set.rows[row]), pageRows: set.pageRows ?? 64, read: set.read ?? set.rows.length, complete: set.complete ?? true, pages: new Map()
+  }
+  stored.set(result.resultId, result)
+  return result
+}
+/** The page of block `block`, encoded on first use; at most 64 are kept. */
+function pageOf(result, block) {
+  let page = result.pages.get(block)
+  if (!page) {
+    const first = block * result.pageRows, rows = Math.min(result.pageRows, available(result) - first)
+    page = { firstRow: first, rows, body: encodePage({ resultId: result.resultId, firstRow: first, columns: result.columns, rows: Array.from({ length: rows }, (_, i) => result.rowAt(first + i)) }) }
+    if (result.complete || rows === result.pageRows) {
+      result.pages.set(block, page)
+      if (result.pages.size > 64) result.pages.delete(result.pages.keys().next().value)
+    }
+  }
+  return page
+}
+const decodedPageAt = result => row => decodePage(pageOf(result, Math.floor(row / result.pageRows)).body, result.columns)
 /** Stores result sets ({ columns, rows, batchNumber?, iteration?, kind? }) and reports them as the real backend does. */
 function storeResults(id, sets) {
   return sets.map((set, index) => {
-    const result = { resultId: nextResultId++, index, batchNumber: set.batchNumber ?? 1, iteration: set.iteration ?? 1, kind: set.kind ?? 'rows', columns: set.columns, rows: set.rows, pages: [], bytes: 0 }
-    for (let first = 0; first < result.rows.length; first += pageRows) {
-      const page = encodePage({ resultId: result.resultId, firstRow: first, columns: result.columns, rows: result.rows.slice(first, first + pageRows) })
-      result.pages.push({ firstRow: first, rows: Math.min(pageRows, result.rows.length - first), body: page })
-      result.bytes += page.length
-    }
-    stored.set(result.resultId, result)
+    const result = storeResult(set, index)
     write(FrameKind.EVENT, id, 0, { type: 'resultSet.opened', descriptor: { ...describe(result), state: 'open' } })
     write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor: describe(result) })
     return describe(result)
   })
 }
+const info = text => ({ text, kind: 'info' })
 const summary = (id, database, sets, patch = {}) => ({
   resultSets: storeResults(id, sets), discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
-  database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 256 * 1024 * 1024, queryBytes: 128 * 1024 * 1024 }, ...patch
+  database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes, queryBytes: globalBytes / 2 }, completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...patch
 })
+const missing = (id, resultId) => fail(id, resultId < nextResultId ? 'RESULT_RELEASED' : 'RESULT_NOT_FOUND', resultId < nextResultId ? 'These results were closed. Execute the query again to see them.' : 'These results do not exist.')
+/** Sends `bodies` as DATA while credit lasts, then answers with `done()`. */
+function streamBodies(id, credit, bodies, done) {
+  let budget = credit, sent = 0
+  const pump = () => {
+    while (budget > 0 && sent < bodies.length) {
+      const body = bodies[sent++]
+      budget -= body.length
+      process.stdout.write(encodeFrame(FrameKind.DATA, id, sent, body))
+    }
+    if (sent === bodies.length && streams.delete(id)) respond(id, done())
+  }
+  streams.set(id, { grant: more => { budget += more; pump() } })
+  pump()
+}
 /** results.read: the stored pages overlapping the range, while credit lasts, then the terminal RESPONSE. */
 function readResults(id, credit, { resultId, firstRow, maxRows }) {
   const result = stored.get(resultId)
-  if (!result) return fail(id, resultId < nextResultId ? 'RESULT_RELEASED' : 'RESULT_NOT_FOUND', 'These results do not exist.')
-  const pages = result.pages.filter(page => page.firstRow < firstRow + maxRows && page.firstRow + page.rows > firstRow)
-  let available = credit, sent = 0, next = firstRow, rows = 0
-  const pump = () => {
-    while (available > 0 && sent < pages.length) {
-      const page = pages[sent++]
-      available -= page.body.length
-      next = page.firstRow + page.rows
-      rows += page.rows
-      process.stdout.write(encodeFrame(FrameKind.DATA, id, sent, page.body))
-    }
-    if (sent === pages.length && streams.delete(id)) respond(id, { nextRow: next, rowsAvailable: result.rows.length, complete: next >= result.rows.length, pages: sent, rows })
-  }
-  streams.set(id, { grant: more => { available += more; pump() } })
-  pump()
+  if (!result) return missing(id, resultId)
+  const end = Math.min(firstRow + maxRows, available(result))
+  const pages = []
+  for (let block = Math.floor(firstRow / result.pageRows); block * result.pageRows < end; block++) pages.push(pageOf(result, block))
+  const next = pages.length ? pages.at(-1).firstRow + pages.at(-1).rows : firstRow
+  streamBodies(id, credit, pages.map(page => page.body), () => ({ nextRow: next, rowsAvailable: available(result), complete: result.complete && next >= result.read, pages: pages.length, rows: pages.reduce((sum, page) => sum + page.rows, 0) }))
 }
+/** results.copy: the text_writer.mjs text in DATA chunks of 1 MiB within credit; TOO_LARGE before any DATA. */
+async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes }) {
+  const result = stored.get(resultId)
+  if (!result) return missing(id, resultId)
+  let copied
+  try { copied = await copyText({ columns: result.columns, pageAt: decodedPageAt(result), available: available(result), parts, headers, crlf: eol === 'crlf' }) }
+  catch { return fail(id, 'INVALID_PARAMS', 'The copy request is invalid.') }
+  if (copied.bytes > maxBytes) return fail(id, 'TOO_LARGE', `The selection is too large to copy (${Math.ceil(copied.bytes / 1048576)} MB; the limit is ${Math.floor(maxBytes / 1048576)} MB). Use Save Results As instead.`)
+  const chunks = []
+  for (let at = 0; at < copied.text.length; at += 1024 * 1024) chunks.push(copied.text.subarray(at, at + 1024 * 1024))
+  write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: copied.rows, rowsTotal: copied.rows, bytes: copied.bytes })
+  streamBodies(id, credit, chunks, () => ({ rows: copied.rows, bytes: copied.bytes, truncatedCells: copied.truncatedCells, partial: !result.complete }))
+}
+/** results.export: a temporary file renamed over the target; hold/results.export pauses it after each page, and a
+ *  CANCEL frame stops it (the temporary file is removed). */
+async function exportResults(id, { resultId, path, format, headers, nullText }) {
+  if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || !['csv', 'tsv', 'json'].includes(format) || !['empty', 'NULL'].includes(nullText)) return fail(id, 'INVALID_PARAMS', 'The export request is invalid.')
+  const result = stored.get(resultId)
+  if (!result) return missing(id, resultId)
+  if (!result.complete) return fail(id, 'RESULT_OPEN', 'Save the results after this result set finishes loading.')
+  if (!existsSync(dirname(path))) return fail(id, 'EXPORT_FAILED', 'NOT_FOUND')
+  if (existsSync(path) && statSync(path).isDirectory()) return fail(id, 'EXPORT_FAILED', 'IS_DIRECTORY')
+  const temporary = join(dirname(path), `.varia-${crypto.randomUUID().replaceAll('-', '')}.tmp`)
+  const file = await open(temporary, 'wx')
+  let last = Date.now()
+  try {
+    const writer = await exportText({ columns: result.columns, pageAt: decodedPageAt(result), rows: result.read, format, headers, nullText }, async writer => {
+      for (const chunk of writer.out.take()) await file.write(chunk)
+      if (Date.now() - last >= 250) { last = Date.now(); write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: writer.rows, rowsTotal: result.read, bytes: writer.bytes }) }
+      while (control(join('hold', 'results.export')) && !cancelled.has(id)) await sleep(25)
+      if (cancelled.has(id)) throw new Error('cancelled')
+    })
+    writer.out.seal()
+    for (const chunk of writer.out.take()) await file.write(chunk)
+    await file.sync()
+    await file.close()
+    await rename(temporary, path)
+    respond(id, { rows: writer.rows, bytes: writer.bytes, truncatedCells: writer.truncatedCells, partial: false })
+  } catch {
+    fail(id, cancelled.has(id) ? 'CANCELLED' : 'EXPORT_FAILED', cancelled.has(id) ? 'The operation was cancelled.' : 'IO')
+  } finally {
+    await file.close().catch(() => {})
+    rmSync(temporary, { force: true })
+    cancelled.delete(id)
+  }
+}
+
+/** A script with a `-- varia-fake:` first line (shapes.mjs): its sets stream at their rates, then messages, then the summary. */
+async function runDirective(id, params, directive) {
+  const results = [], discarded = []
+  const maxSets = params.maxResultSets ?? 10
+  const queryId = params.queryId
+  runningDirectives.add(queryId)
+  if (directive.memory !== undefined) write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: Math.round(directive.memory * globalBytes), globalBytes })
+  let status = 'completed'
+  try {
+    for (const [index, set] of directive.sets.entries()) {
+      const shape = shapes[set.shape]
+      if (index >= maxSets) { discarded.push(set); continue }
+      const result = storeResult({ columns: shape.columns, rowAt: shape.row, pageRows: shape.pageRows, read: set.rate === undefined ? set.rows : 0, complete: false }, index)
+      results.push(result)
+      write(FrameKind.EVENT, id, 0, { type: 'resultSet.opened', descriptor: describe(result) })
+      while (result.read < set.rows) {
+        if (cancelledQueries.has(queryId)) { status = 'cancelled'; result.incomplete = true; break }
+        await sleep(100)
+        result.read = Math.min(set.rows, result.read + Math.max(1, Math.round(set.rate / 10)))
+        write(FrameKind.EVENT, id, 0, { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: result.resultId, rowsRead: result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100 }] })
+      }
+      result.complete = true
+      write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor: describe(result) })
+      if (status === 'cancelled') break
+    }
+    const messages = [
+      ...Array.from({ length: directive.messages }, (_, i) => info(`Message ${i + 1}`)),
+      ...Array.from({ length: directive.errors }, (_, i) => ({ text: `Msg 50000, Level 16, State 1, Line ${i + 1}\nFake error ${i + 1}.`, kind: 'error' }))
+    ].slice(0, 1000)
+    if (status === 'cancelled') messages.push({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
+    if (messages.length) write(FrameKind.EVENT, id, 0, { type: 'messages', messages })
+    while (directive.hold && control(join('hold', 'query.execute')) && !cancelledQueries.has(queryId)) await sleep(25)
+    if (status === 'completed' && cancelledQueries.has(queryId)) status = 'cancelled'
+    const failed = status === 'completed' && directive.errors > 0
+    respond(id, {
+      resultSets: results.map(describe), discardedResultSets: discarded.length, messages, recordsAffected: -1, elapsedMs: 1, status: failed ? 'failed' : status,
+      ...failed ? { error: { code: 'SQL_ERROR', message: messages.find(message => message.kind === 'error').text, batchNumber: 1, iteration: 1 } } : {},
+      ...status === 'cancelled' ? { error: { code: 'CANCELLED', message: 'The script was cancelled. Remaining batches were not executed.', batchNumber: 1, iteration: 1 } } : {},
+      completedBatches: status === 'completed' && !failed ? 1 : 0, totalBatches: 1, database: params.database, messagesTruncated: false,
+      budget: { usedBytes: Math.round((directive.memory ?? 0) * globalBytes), globalBytes, queryBytes: globalBytes / 2 }, completedAt: new Date().toISOString().replace('Z', '0000+00:00')
+    })
+  } finally {
+    runningDirectives.delete(queryId)
+    cancelledQueries.delete(queryId)
+  }
+}
+
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
-    messages: ['SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.', "Table '#temp'. Scan count 1, logical reads 2."], elapsedMs: 3, status: 'failed',
-    error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8: Must declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 1, totalBatches: 3
+    messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2.")], elapsedMs: 3, status: 'failed',
+    error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 1, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
   SelectTopNRows: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('CustomerName', 'nvarchar')], rows: [['1', 'Contoso']] }]),
   MENUS_GRID_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('', 'nvarchar'), column('Note', 'nvarchar')], rows: [['1', 'a', null], ['2', 'b', 'n2'], ['3', 'c', 'n3']] }], {
-    messages: ['(3 rows affected)'], recordsAffected: 3
+    messages: [info('(3 rows affected)')], recordsAffected: 3
   }),
   MENUS_PLAN_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [column('Id', 'int'), column('CustomerName', 'nvarchar')], rows: [['1', 'Contoso']] },
@@ -242,12 +375,19 @@ const fixtures = {
   XML_PLAN_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [column('answer', 'int')], rows: [['1']], batchNumber: 2 },
     { columns: [{ ...column('Microsoft SQL Server 2005 XML Showplan', 'nvarchar'), role: 'plan' }], rows: [['<ShowPlanXML><BatchSequence><Batch /></BatchSequence></ShowPlanXML>']], kind: 'executionPlan', batchNumber: 2 }
-  ], { completedBatches: 3, totalBatches: 3 })
+  ], { completedBatches: 3, totalBatches: 3 }),
+  // FOR XML output joined into one value (role xml), as ForXmlCollector stores it, and an xml cast.
+  FOR_XML_FIXTURE: (id, params) => summary(id, params.database, [
+    { columns: [{ ...column('XML_F52E2B61-18A1-11d1-B105-00805F49916B', 'ntext'), role: 'xml' }], rows: [['<objects><o><name>Orders</name><object_id>1</object_id></o><o><name>Customers</name><object_id>2</object_id></o></objects>']] }
+  ]),
+  XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
 }
 
 async function workbench(id, method, params, credit) {
   if (controlDirectory) appendFileSync(join(controlDirectory, 'calls.jsonl'), JSON.stringify({ generation, method, params: params?.password === undefined ? params : { ...params, password: '<redacted>' } }) + '\n')
-  while (control(join('hold', method))) await sleep(25)
+  // A directive's `hold` and an export's hold apply later, after their first output.
+  const directive = method === 'query.execute' ? parseDirective(params.sql) : undefined
+  if (!directive?.hold && method !== 'results.export') while (control(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
@@ -264,9 +404,12 @@ async function workbench(id, method, params, credit) {
       const script = waitingScripts.get(params.queryId)
       waitingScripts.delete(params.queryId)
       if (script) respond(script.id, summary(script.id, script.database, [], { status: 'cancelled' }))
-      return respond(id, { cancelled: !!script })
+      if (runningDirectives.has(params.queryId)) cancelledQueries.add(params.queryId)
+      return respond(id, { cancelled: !!script || runningDirectives.has(params.queryId) })
     }
     case 'results.read': return credit === undefined ? fail(id, 'INVALID_REQUEST', 'Result pages are read as a stream with credit.') : readResults(id, credit, params)
+    case 'results.copy': return credit === undefined ? fail(id, 'INVALID_REQUEST', 'Copied text is sent as a stream with credit.') : copyResults(id, credit, params)
+    case 'results.export': return exportResults(id, params)
     case 'results.close': {
       let closed = 0
       for (const resultId of params.resultIds) if (stored.delete(resultId)) closed++
@@ -283,6 +426,7 @@ async function workbench(id, method, params, credit) {
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (control('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)
+      if (directive) return runDirective(id, params, directive)
       if (params.sql.includes('WAIT_FOR_CANCEL')) { waitingScripts.set(params.queryId, { id, database: params.database }); return }
       const fixture = Object.keys(fixtures).find(name => params.sql.includes(name))
       if (fixture) return respond(id, fixtures[fixture](id, params))

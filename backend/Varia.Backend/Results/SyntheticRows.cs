@@ -5,12 +5,14 @@ namespace Varia.Backend.Results;
 /// <summary>Deterministic synthetic result sets for the test hooks, benchmarks and golden pages. Every cell is a pure
 /// function of (shape, row), so any range can be regenerated.
 /// W1: a typical wide row (about 220 encoded bytes). B1: two nvarchar(max) values of about 4 KB. N1: edge cases
-/// (NULLs, read errors, truncated cells, empty values, astral characters, lone surrogates, a BOM, binary values).</summary>
+/// (NULLs, read errors, truncated cells, empty values, astral characters, lone surrogates, a BOM, binary values).
+/// X1: 300 columns cycling int, nvarchar(30) and datetime2. L1: well-formed xml, json and plan documents of about 1 KB,
+/// 64 KB and 2 MB (just under the document cap) in turn. M1: one int column (one-row sets).</summary>
 internal static class SyntheticRows
 {
-    internal sealed record Column(string Name, string DataType, WireKind Wire);
+    internal sealed record Column(string Name, string DataType, WireKind Wire, string? Role = null);
 
-    public static readonly IReadOnlyList<string> Shapes = ["W1", "B1", "N1"];
+    public static readonly IReadOnlyList<string> Shapes = ["W1", "B1", "N1", "X1", "L1", "M1"];
 
     private static readonly Column[] W1 =
     [
@@ -25,6 +27,20 @@ internal static class SyntheticRows
         new("clipped", "nvarchar(max)", WireKind.Text), new("failed", "int", WireKind.Text), new("bytes", "varbinary(16)", WireKind.Binary),
         new("none", "int", WireKind.Text)
     ];
+    private static readonly Column[] X1 = [.. Enumerable.Range(0, 300).Select(i => (i % 3) switch
+    {
+        0 => new Column("c" + i.ToString("D3", CultureInfo.InvariantCulture), "int", WireKind.Text),
+        1 => new Column("c" + i.ToString("D3", CultureInfo.InvariantCulture), "nvarchar(30)", WireKind.Text),
+        _ => new Column("c" + i.ToString("D3", CultureInfo.InvariantCulture), "datetime2(7)", WireKind.Text)
+    })];
+    private static readonly Column[] L1 =
+    [
+        new("id", "int", WireKind.Text), new("doc", "xml", WireKind.Text, "xml"), new("data", "json", WireKind.Text, "json"),
+        new("plan", "nvarchar(max)", WireKind.Text, "plan")
+    ];
+    private static readonly Column[] M1 = [new("value", "int", WireKind.Text)];
+    private static readonly int[] DocumentSizes = [1024, 65_536, ColumnPlan.DocumentCap - 1024];
+    private static readonly Lazy<string[][]> Documents = new(() => [.. DocumentSizes.Select(size => new[] { Xml(size), Json(size), Plan(size) })]);
     private static readonly string[] Unicode = ["", "é", "日本語", "😀 astral", "a\uD800b", "\uDC00z", "﻿bom", "tab\tline\nquote\"\\"];
     private const string Lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ";
     private static readonly string Filler = string.Concat(Enumerable.Repeat(Lorem, 40))[..4096];
@@ -35,6 +51,9 @@ internal static class SyntheticRows
         "W1" => W1,
         "B1" => B1,
         "N1" => N1,
+        "X1" => X1,
+        "L1" => L1,
+        "M1" => M1,
         _ => throw new ArgumentOutOfRangeException(nameof(shape))
     };
 
@@ -68,6 +87,9 @@ internal static class SyntheticRows
             case "W1": WriteW1(row, builder); break;
             case "B1": WriteB1(row, builder); break;
             case "N1": WriteN1(row, builder); break;
+            case "X1": WriteX1(row, builder); break;
+            case "L1": WriteL1(row, builder); break;
+            case "M1": Integer(builder, row); break;
             default: throw new ArgumentOutOfRangeException(nameof(shape));
         }
     }
@@ -102,6 +124,43 @@ internal static class SyntheticRows
         row.TryFormat(text, out _, "X10", CultureInfo.InvariantCulture);
         builder.AppendText(text[..^7]);
     }
+
+    private static void WriteX1(long row, PageBuilder builder)
+    {
+        Span<char> text = stackalloc char[32];
+        for (var c = 0; c < X1.Length; c++)
+        {
+            switch (c % 3)
+            {
+                case 0: Integer(builder, row * 1000 + c); break;
+                case 1:
+                    text.TryWrite(CultureInfo.InvariantCulture, $"r{row}c{c}", out var length);
+                    builder.AppendText(text[..length]);
+                    break;
+                default: builder.EndFormatted(CellFormat.WriteDateTime2(builder.BeginFormatted(), Epoch.AddSeconds(row).AddMilliseconds(c), 7)); break;
+            }
+        }
+    }
+
+    private static void WriteL1(long row, PageBuilder builder)
+    {
+        Integer(builder, row);
+        var documents = Documents.Value[row % DocumentSizes.Length];
+        foreach (var document in documents) builder.AppendText(document);
+    }
+
+    /// <summary>Repeats a unit between a head and a tail until the text is about <paramref name="size"/> characters.</summary>
+    private static string Document(int size, string head, Func<int, string> unit, string separator, string tail)
+    {
+        var text = new System.Text.StringBuilder(size + 256).Append(head);
+        for (var i = 1; text.Length + tail.Length < size - 128; i++) text.Append(i == 1 ? "" : separator).Append(unit(i));
+        return text.Append(tail).ToString();
+    }
+
+    private static string Xml(int size) => Document(size, "<root kind=\"synthetic\">", i => "<item id=\"" + i + "\"><name>Item " + i + "</name><note>a &amp; b</note></item>", "", "</root>");
+    private static string Json(int size) => Document(size, "{\"items\":[", i => "{\"id\":" + i + ",\"name\":\"Item " + i + "\",\"price\":12.50,\"tags\":[\"a\",\"b\"]}", ",", "]}");
+    private static string Plan(int size) => Document(size, "<ShowPlanXML xmlns=\"http://schemas.microsoft.com/sqlserver/2004/07/showplan\" Version=\"1.6\"><BatchSequence><Batch><Statements>",
+        i => "<StmtSimple StatementId=\"" + i + "\" StatementText=\"SELECT " + i + "\" StatementType=\"SELECT\" />", "", "</Statements></Batch></BatchSequence></ShowPlanXML>");
 
     private static void WriteN1(long row, PageBuilder builder)
     {

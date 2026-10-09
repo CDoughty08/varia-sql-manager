@@ -31,7 +31,7 @@ export async function legacyExecute(api: Pick<VariaApi, 'execute'>, results: Res
   if (!response.ok) return response
   const summary = response.value
   results.applySummary(summary)
-  const messages = [...summary.messages]
+  const messages = summary.messages.map(entry => entry.text)
   const resultSets: DisplayResultSet[] = []
   let cells = 0, characters = 0, budgetHit = false, failure: string | undefined
   for (const descriptor of summary.resultSets) {

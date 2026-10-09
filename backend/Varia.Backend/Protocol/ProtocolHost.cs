@@ -356,7 +356,7 @@ internal sealed class ProtocolHost
         try { body = JsonBridge.Encode(value, json); }
         catch (InvalidOperationException) { return; }
         // Events are best effort and bounded at the source; the summary carries everything that matters.
-        if (body.Length > ProtocolLimits.EventBody || Volatile.Read(ref exitCode) >= 0) return;
+        if (body.Length > (droppable ? ProtocolLimits.EventBody : ProtocolLimits.EssentialEventBody) || Volatile.Read(ref exitCode) >= 0) return;
         outbound.Control(Frames.Encode(FrameKind.Event, id, 0, body), droppable);
     }
 

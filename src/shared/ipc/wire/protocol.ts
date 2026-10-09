@@ -13,6 +13,8 @@ export const limits = {
   requestBody: 4 * MiB,
   responseBody: 16 * MiB,
   eventBody: 256 * KiB,
+  /** Essential (never dropped) events: a result set's descriptor of up to 4,096 columns. */
+  essentialEventBody: 4 * MiB,
   page: { maxRows: 4096, maxColumns: 4096, sealBytes: 256 * KiB, firstPageRows: 64, firstPageMs: 20, idleSealMs: 200 },
   rowBytes: 8 * MiB,
   /** Stored cell caps: characters for text, bytes for binary. */
@@ -28,7 +30,10 @@ export const limits = {
   timers: { helloMs: 20_000, pingMs: 5000, unresponsiveMs: 15_000, stopGraceMs: 2000, backstopMs: 5000, progressPerSecond: 10, messagesFlushMs: 100 },
   restart: { delaysMs: [0, 1000, 2000], breakerLosses: 3, breakerWindowMs: 120_000, resetAfterMs: 300_000 },
   ids: { maxRequestId: 2 ** 31 - 1 },
-  registries: { lostConnections: 1024, abandonedRequests: 4096, ownedResults: 100_000, stderrLines: 32, stderrCharacters: 512 }
+  registries: { lostConnections: 1024, abandonedRequests: 4096, ownedResults: 100_000, stderrLines: 32, stderrCharacters: 512 },
+  /** Copy and Save Results As (one of each per window). Copy text is capped before any work; progress is pushed at most
+   *  4 times a second. */
+  jobs: { copyBytes: 64 * MiB, chunkBytes: MiB, copyCredit: 16 * MiB, copyDeadlineMs: 120_000, progressPerSecond: 4, suggestedName: 128, path: 32_767 }
 } as const
 
 /** CANCEL frame reasons (the frame's arg). */
@@ -42,12 +47,17 @@ export const errorCodes = [
   'SESSION_LIMIT', 'AUTH_UNSUPPORTED', 'INVALID_SCRIPT',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
+  // Backend, results jobs: an export failure (its message is one token: ACCESS, DISK_FULL, IN_USE, NOT_FOUND,
+  // IS_DIRECTORY or IO) and an export of a set still loading.
+  'EXPORT_FAILED', 'RESULT_OPEN',
   // Backend and main: an Object Explorer requestId that is already running.
   'DUPLICATE_REQUEST',
   // GOAWAY.
   'PROTOCOL_ERROR', 'PROTOCOL_UNSUPPORTED', 'BACKEND_CRASH',
   // Main.
   'BACKEND_LOST', 'BACKEND_UNAVAILABLE', 'CONNECTION_LOST', 'RESULT_UNAVAILABLE', 'TOO_MANY_REQUESTS', 'STREAM_PROTOCOL', 'PORT_CLOSED',
+  // Main: a second Save Results As in the same window.
+  'JOB_BUSY',
   // Renderer.
   'PAGE_INVALID', 'RESULT_DECODER_FAILED'
 ] as const

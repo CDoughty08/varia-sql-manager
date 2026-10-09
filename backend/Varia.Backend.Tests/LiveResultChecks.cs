@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -11,6 +12,9 @@ internal static class LiveResultChecks
 {
     /// <summary>A stored result's rows as display text (null for NULL), decoded from its pages as the results worker would.</summary>
     public static List<string?[]> RowsOf(ResultStore store, ResultDescriptor set) => [.. CellsOf(store, set).Select(row => row.Select(cell => cell.Text).ToArray())];
+
+    /// <summary>A summary's message texts, whatever their kinds.</summary>
+    public static List<string> Texts(QueryResult result) => [.. result.Messages.Select(message => message.Text)];
 
     public static List<PageCell[]> CellsOf(ResultStore store, ResultDescriptor set)
     {
@@ -71,7 +75,7 @@ internal static class LiveResultChecks
             var huge = CellsOf(store, result.ResultSets[0])[0];
             check(result.Status == "completed" && huge[0].Text!.Length == ColumnPlan.TextCap && (huge[0].Flags & PageReader.Truncated) != 0
                 && huge[1].Text!.Length == ColumnPlan.DocumentCap && huge[1].Text!.StartsWith("<a>yyy") && (huge[1].Flags & PageReader.Truncated) != 0 && huge[2].Text == "7"
-                && result.ResultSets[0].TruncatedCells == 2 && result.ResultSets[0].Columns[1].Role == "xml" && result.Messages.Any(message => message.Contains("display limits")),
+                && result.ResultSets[0].TruncatedCells == 2 && result.ResultSets[0].Columns[1].Role == "xml" && Texts(result).Any(message => message.Contains("display limits")),
                 "a 50,000,000-character nvarchar(max) and a 3 MB xml value are stored as truncated prefixes");
             check(growth < 64L * 1024 * 1024, "reading the huge values grew the working set by " + growth / 1024 / 1024 + " MB, under 64 MB (" + watch.ElapsedMilliseconds + " ms)");
 
@@ -106,9 +110,11 @@ internal static class LiveResultChecks
                 () => service.DispatchAsync("system.health", JsonSerializer.SerializeToElement(new { }, json), json));
 
             var cancelled = await Cancelled(CancelReason.User);
-            check(cancelled.Status == "cancelled" && cancelled.Error?.Code == "CANCELLED", "a user CANCEL frame cancels the script");
+            check(cancelled.Status == "cancelled" && cancelled.Error?.Code == "CANCELLED"
+                && cancelled.Messages.Contains(new MessageEntry("The script was cancelled. Remaining batches were not executed.", "error")), "a user CANCEL frame cancels the script, and Messages say so in red");
             var expired = await Cancelled(CancelReason.Deadline);
-            check(expired.Status == "timedOut" && expired.Error?.Code == "TIMEOUT", "main's deadline backstop (CANCEL reason 2) times the script out");
+            check(expired.Status == "timedOut" && expired.Error?.Code == "TIMEOUT"
+                && expired.Messages.Contains(new MessageEntry("The script exceeded its execution timeout. Remaining batches were not executed.", "error")), "main's deadline backstop (CANCEL reason 2) times the script out");
 
             // 20 collected errors of about 2,000 characters each fill the error text; the stop reason must not push the
             // summary past main's limit of 16,384 characters plus the ellipsis.
@@ -121,14 +127,20 @@ internal static class LiveResultChecks
                 && noisyTimeout.Status == "timedOut" && noisyTimeout.Error!.Message.StartsWith("The script exceeded its execution timeout.") && noisyTimeout.Error.Message.Length == 16_385,
                 "a cancelled or timed-out script keeps its error text within 16,385 characters (" + noisyCancel.Error?.Message.Length + ", " + noisyTimeout.Error?.Message.Length + ")");
 
-            // Ten sets of 4,096 columns with 128-character CJK names would make an 18 MB summary, over the 16 MiB response
-            // limit: the sets whose descriptors do not fit are counted as discarded instead.
-            var wideSelect = "SELECT " + string.Join(", ", Enumerable.Range(0, 4096).Select(i => "1 AS [" + new string('名', 124) + i.ToString("D4", System.Globalization.CultureInfo.InvariantCulture) + "]")) + ";\nGO 10";
-            var wide = await Run(wideSelect);
+            // 40 sets of 4,096 columns with 128-character CJK names would make a 77 MB summary, over the 16 MiB response limit:
+            // sets are kept while their descriptors fit 8 MiB, and the rest are counted as discarded.
+            var wideSelect = "SELECT " + string.Join(", ", Enumerable.Range(0, 4096).Select(i => "1 AS [" + new string('名', 124) + i.ToString("D4", System.Globalization.CultureInfo.InvariantCulture) + "]")) + ";\nGO 40";
+            var wide = await Run(wideSelect, maxResultSets: 1000);
             var encoded = JsonBridge.Encode(wide, json).Length;
-            check(wide.Status == "completed" && wide.ResultSets.Count is > 0 and < 10 && wide.DiscardedResultSets == 10 - wide.ResultSets.Count && encoded < 15 * 1024 * 1024
-                && wide.Messages.Any(message => message.Contains("later result sets are not displayed")),
-                "result sets whose column lists would overflow the 16 MiB summary are discarded (" + wide.ResultSets.Count + " kept, " + encoded / 1024 + " KiB)");
+            var fit = wide.ResultSets.Count == 0 ? 0 : (int)(8L * 1024 * 1024 / ColumnPlan.DescriptorBytesOf(wide.ResultSets[0].Columns));
+            check(wide.Status == "completed" && wide.ResultSets.Count == fit && fit is > 0 and < 40 && wide.DiscardedResultSets == 40 - fit && encoded < 9 * 1024 * 1024
+                && Texts(wide).Contains((40 - fit) + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution."),
+                "result sets are kept while their descriptors fit 8 MiB, then discarded with a note (" + wide.ResultSets.Count + " kept, " + encoded / 1024 + " KiB)");
+            var many = await Run("SELECT " + string.Join(", ", Enumerable.Range(0, 1000).Select(i => i + " AS c" + i)) + ";\nGO 20", maxResultSets: 1000);
+            check(many.Status == "completed" && many.ResultSets.Count == 20 && many.DiscardedResultSets == 0 && many.ResultSets.All(set => set.Columns.Count == 1000),
+                "20 sets of 1,000 columns are all kept");
+
+            await ResultText(check, service, store, info, options, json, Run, Close);
 
             async Task<QueryResult> Cancelled(CancelReason reason, string sql = "WAITFOR DELAY '00:00:20';", int delayMs = 300)
             {
@@ -148,6 +160,150 @@ internal static class LiveResultChecks
             else Console.WriteLine("SQL Server 2025 type checks (json, vector) skipped: the server's major version is " + major + ".");
         }
         finally { await Close(session); }
+    }
+
+    private delegate Task<QueryResult> Runner(string sql, RequestContext? context = null, string? sessionId = null, string? connectionId = null, int maxRows = 1000, int maxResultSets = 10);
+
+    /// <summary>The results grid's backend: FOR XML and FOR JSON as one value, messages with kinds in SSMS's formats, Copy and
+    /// Save Results As over stored pages, and the release points (only re-execution and results.close release).</summary>
+    private static async Task ResultText(Action<bool, string> check, SqlService service, ResultStore store, ConnectionInfo info, ConnectOptions options, JsonSerializerOptions json,
+        Runner run, Func<string, Task> close)
+    {
+        async Task<T> Call<T>(string method, object args, RequestContext? context = null) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json, context);
+        static string Sha(string text) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.Unicode.GetBytes(text)));
+
+        // FOR XML and FOR JSON: rows of about 2,033 characters joined into one value, equal to the same output cast to text
+        // (computed on a second session, since a session's next query releases its results).
+        var referenceSession = Guid.NewGuid().ToString();
+        foreach (var (role, clause) in new[] { ("xml", "FOR XML PATH('o'), ROOT('objects')"), ("json", "FOR JSON PATH") })
+        {
+            var select = "SELECT name, object_id, type_desc FROM sys.all_objects ORDER BY object_id " + clause;
+            var result = await run(select + ";");
+            var reference = await run("DECLARE @t nvarchar(max) = CAST((" + select + ") AS nvarchar(max)); SELECT LEN(@t), CONVERT(varchar(64), HASHBYTES('SHA2_256', @t), 2);", sessionId: referenceSession);
+            var set = result.ResultSets[0];
+            var cell = CellsOf(store, set)[0][0];
+            var expected = RowsOf(store, reference.ResultSets[0])[0];
+            check(result.Status == "completed" && set is { RowsRead: 1, RowsStored: 1 } && set.Columns is [{ } column] && column.Role == role && cell.Flags == 0
+                && cell.Text!.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) == expected[0] && Sha(cell.Text) == expected[1] && cell.Text.Length > 2033,
+                "FOR " + role.ToUpperInvariant() + " output is one " + role + " value equal to the same output cast to nvarchar(max) (" + cell.Text?.Length + " characters)");
+        }
+        await close(referenceSession);
+        var huge = await run("SELECT TOP (60000) a.name, a.object_id, b.object_id AS other FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b FOR JSON PATH;");
+        var hugeCell = CellsOf(store, huge.ResultSets[0])[0][0];
+        check(huge.Status == "completed" && huge.ResultSets[0] is { RowsStored: 1, TruncatedCells: 1 } && hugeCell.Text!.Length == ColumnPlan.DocumentCap && (hugeCell.Flags & PageReader.Truncated) != 0,
+            "FOR JSON output past 2,097,152 characters keeps that prefix, marked truncated");
+        var typed = await run("SELECT TOP (3) name FROM sys.objects ORDER BY object_id FOR XML PATH('o'), TYPE;");
+        check(typed.ResultSets[0] is { RowsStored: 1 } && typed.ResultSets[0].Columns[0] is { DataType: "xml", Role: "xml" } && RowsOf(store, typed.ResultSets[0])[0][0]!.StartsWith("<o><name>"),
+            "FOR XML ... TYPE arrives as one xml cell");
+
+        // Messages: in order, errors in SSMS's two lines with the line in the whole script, and SSMS's row counts.
+        var messages = await run("SELECT 1 AS one;\nPRINT 'a';\nSELECT 1/0;\nPRINT 'b';\nSELECT TOP (2) name FROM sys.objects;");
+        var entries = messages.Messages;
+        check(messages.Status == "failed" && entries.Count == 6 && entries[0] == new MessageEntry("(1 row affected)", "info") && entries[1] == new MessageEntry("a", "info")
+            && entries[2] == new MessageEntry("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.", "error") && entries[3] == new MessageEntry("b", "info")
+            && entries[4] == new MessageEntry("(2 rows affected)", "info") && entries[5] == new MessageEntry("Stopped at batch 1, repetition 1; 0 of 1 batch executions completed.", "info") && messages.Error!.Message.StartsWith("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered."),
+            "messages keep their order and kinds in SSMS's formats: " + string.Join(" | ", entries.Select(entry => entry.Kind + ":" + entry.Text)));
+        check(System.Text.RegularExpressions.Regex.IsMatch(messages.CompletedAt, @"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{7}[+-]\d\d:\d\d$"), "the summary carries the completion time with 7 fractional digits: " + messages.CompletedAt);
+        var procedure = await run("CREATE PROCEDURE #varia_fails AS\nBEGIN\n  SELECT 1/0;\nEND;\nGO\nEXEC #varia_fails;");
+        check(procedure.Messages.Any(entry => entry.Kind == "error" && entry.Text.StartsWith("Msg 8134, Level 16, State 1, Procedure #varia_fails") && entry.Text.Contains(", Line 3\n")),
+            "an error in a procedure names it and its own line: " + string.Join(" | ", procedure.Messages.Select(entry => entry.Text)));
+
+        // Copy and Save Results As read the stored pages; a check-side parser and decoder are the oracles.
+        var folder = Directory.CreateTempSubdirectory("varia-live-export-");
+        try
+        {
+            var rows = await run("SELECT TOP (200000) a.object_id AS id, a.name, b.type_desc, CAST(a.object_id AS bigint) * 7 AS big, CASE WHEN b.object_id % 5 = 0 THEN NULL ELSE b.name END AS maybe,"
+                + " CAST(N'say \"hi\", ok' AS nvarchar(20)) AS quoted, a.create_date FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;", maxRows: 0);
+            var set = rows.ResultSets[0];
+            check(set.RowsStored == 200_000, "200,000 rows are stored for the export checks");
+            var paths = new Dictionary<string, string>();
+            foreach (var format in new[] { "csv", "tsv", "json" })
+            {
+                paths[format] = Path.Combine(folder.FullName, "rows." + format);
+                var saved = await Call<ResultsJobResult>("results.export", new ResultsExportArgs(set.ResultId, paths[format], format, true, format == "csv" ? "empty" : "NULL"));
+                check(saved.Rows == 200_000 && saved.Bytes == new FileInfo(paths[format]).Length, "results.export writes " + format + " (" + saved.Bytes / 1024 + " KiB)");
+            }
+            var records = ParseCsv(Encoding.UTF8.GetString(File.ReadAllBytes(paths["csv"])));
+            var decoded = RowsOf(store, set);
+            check(records.Count == 200_001 && records.All(record => record.Count == 7) && records[0][0] == "\uFEFFid" && records[1][5] == "say \"hi\", ok"
+                && Enumerable.Range(0, 200_000).All(i => records[i + 1][4] == (decoded[i][4] ?? "")), "the CSV parses (RFC 4180) to 200,000 rows of 7 fields, with NULL as an empty field");
+            var tsv = Encoding.UTF8.GetString(File.ReadAllBytes(paths["tsv"])).Split("\r\n");
+            check(tsv.Length == 200_002 && tsv[^1] == "" && tsv[1] == string.Join('\t', decoded[0].Select(value => value ?? "NULL")), "the tab-delimited text has a header, 200,000 lines and a final CRLF");
+            using (var document = JsonDocument.Parse(File.ReadAllBytes(paths["json"])))
+                check(document.RootElement.GetArrayLength() == 200_000 && document.RootElement[0].GetProperty("id").ValueKind == JsonValueKind.Number
+                    && document.RootElement[0].GetProperty("name").GetString() == decoded[0][1], "the JSON is an array of 200,000 objects with typed numbers");
+            var written = new System.Buffers.ArrayBufferWriter<byte>();
+            var writer = new ResultTextWriter(written, TextOptions.Export(TextFormat.Csv, true, "empty"), set.Columns);
+            int[] all = [.. Enumerable.Range(0, set.Columns.Count)];
+            writer.Begin();
+            writer.Header(all);
+            foreach (var page in store.Find(set.ResultId)!.PagesFor(0, int.MaxValue))
+            {
+                var view = PageView.Parse(page.Body, all.Length);
+                for (var row = 0; row < view.Rows; row++) writer.Row(view, row, all);
+            }
+            check(written.WrittenSpan.SequenceEqual(File.ReadAllBytes(paths["csv"])), "the exported file holds exactly ResultTextWriter's bytes over the stored pages");
+
+            // Copy 10,000 rows of 8 columns, against the pages decoded by the independent reader.
+            var copySource = await run("SELECT TOP (10000) a.object_id, a.name, a.type, a.type_desc, a.schema_id, a.is_ms_shipped, a.create_date, b.object_id AS other"
+                + " FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;", maxRows: 0);
+            var copySet = copySource.ResultSets[0];
+            var chunks = new List<byte[]>();
+            using var context = new RequestContext(1, "results.copy", RequestLane.Results, 0, 16 * 1024 * 1024, sendData: (owner, _, body) => { chunks.Add(body); owner.Grant((uint)body.Length); });
+            var copied = await Call<ResultsJobResult>("results.copy", new ResultsCopyArgs(copySet.ResultId, [new([[0, ResultJobs.MaxSafeInteger]], [[0, 7]])], false, "lf", ResultJobs.MaxCopyBytes), context);
+            var text = Encoding.UTF8.GetString([.. chunks.SelectMany(chunk => chunk)]);
+            var oracle = string.Join('\n', RowsOf(store, copySet).Select(row => string.Join('\t', row.Select(value => value ?? "NULL"))));
+            check(copied is { Rows: 10_000, Partial: false } && text == oracle, "results.copy of 10,000 rows of 8 columns is the decoded pages joined by tabs and line feeds (" + text.Length + " characters)");
+        }
+        finally { folder.Delete(true); }
+
+        // Release points: closing the session or disconnecting keeps results; the session's next query releases them.
+        var session = Guid.NewGuid().ToString();
+        var kept = await run("SELECT 1 AS kept;", sessionId: session);
+        await close(session);
+        check(store.Find(kept.ResultSets[0].ResultId) is not null, "results stay readable after their query session closes");
+        var next = await run("SELECT 2 AS next;", sessionId: session);
+        check(store.Find(kept.ResultSets[0].ResultId) is null && store.WasReleased(kept.ResultSets[0].ResultId) && store.Find(next.ResultSets[0].ResultId) is not null,
+            "the session's next query releases its earlier results");
+        await close(session);
+        var other = await Call<ConnectionInfo>("connections.connect", options);
+        var survivor = await run("SELECT 3 AS survivor;", sessionId: Guid.NewGuid().ToString(), connectionId: other.Id);
+        await Call<object>("connections.disconnect", new ConnectionArgs(other.Id));
+        check(store.Find(survivor.ResultSets[0].ResultId) is not null && RowsOf(store, survivor.ResultSets[0])[0][0] == "3", "results stay readable after their connection disconnects");
+        var closed = await Call<ResultsCloseResult>("results.close", new ResultsCloseArgs([next.ResultSets[0].ResultId, survivor.ResultSets[0].ResultId]));
+        check(closed.Closed == 2, "results.close releases them");
+    }
+
+    /// <summary>RFC 4180 records: quoted fields may hold commas, doubled quotes and line breaks.</summary>
+    private static List<List<string>> ParseCsv(string text)
+    {
+        var records = new List<List<string>>();
+        var record = new List<string>();
+        var field = new StringBuilder();
+        var quoted = false;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (quoted)
+            {
+                if (c != '"') field.Append(c);
+                else if (i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; }
+                else quoted = false;
+            }
+            else if (c == '"') quoted = true;
+            else if (c == ',') { record.Add(field.ToString()); field.Clear(); }
+            else if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+            {
+                record.Add(field.ToString());
+                field.Clear();
+                records.Add(record);
+                record = [];
+                i++;
+            }
+            else field.Append(c);
+        }
+        if (field.Length > 0 || record.Count > 0) { record.Add(field.ToString()); records.Add(record); }
+        return records;
     }
 
     /// <summary>Every sql-display.json case in one row (the server's version gates newer types), then a row of NULLs.</summary>

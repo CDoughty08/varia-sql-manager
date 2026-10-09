@@ -125,6 +125,9 @@ export class ResultsPortHost {
     }
   }
 
+  /** Whether this renderer may use the result: the current generation holds it for this renderer (copy and save). */
+  owns(generation: number, resultId: number): boolean { return generation === this.generation && this.owned.has(resultId) }
+
   queryEvent(queryId: string, event: QueryEvent): void {
     if (event.type === 'resultSet.opened') this.own([event.descriptor])
     this.post({ t: 'query', queryId, event })

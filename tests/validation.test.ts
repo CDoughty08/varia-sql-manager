@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { validateRequest } from '../src/main/validation'
-import { portRequestSchema, queryEventSchema } from '../src/shared/ipc/port-messages'
+import { requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest } from '../src/main/validation'
+import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
-import { methodPolicies } from '../src/shared/ipc/methods'
+import { mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 
 describe('IPC validation', () => {
   it('rejects arbitrary or inherited backend method names', () => {
@@ -75,9 +75,46 @@ describe('IPC validation', () => {
     ]) expect(portRequestSchema.safeParse(message).success, JSON.stringify(message)).toBe(false)
   })
   it('validates query events from the backend strictly', () => {
-    expect(queryEventSchema.safeParse({ type: 'messages', messages: ['a'] }).success).toBe(true)
-    expect(queryEventSchema.safeParse({ type: 'messages', messages: [] }).success).toBe(false)
+    expect(queryEventSchema.safeParse({ type: 'messages', messages: [{ text: 'a', kind: 'info' }, { text: 'Msg 8134, Level 16, State 1, Line 1\nDivide by zero error encountered.', kind: 'error' }] }).success).toBe(true)
+    for (const messages of [[], ['a'], [{ text: 'a', kind: 'warning' }], [{ text: 'a', kind: 'info', extra: 1 }], [{ text: 'x'.repeat(1_000_001), kind: 'info' }]])
+      expect(queryEventSchema.safeParse({ type: 'messages', messages }).success, JSON.stringify(messages).slice(0, 60)).toBe(false)
     expect(queryEventSchema.safeParse({ type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [], extra: true }).success).toBe(false)
     expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor: { resultId: 1, generation: 1 } }).success).toBe(false)
+  })
+  it('accepts a summary with message entries and its completion time, and nothing looser', () => {
+    const summary = {
+      resultSets: [], discardedResultSets: 0, messages: [{ text: '(1 row affected)', kind: 'info' }], recordsAffected: 1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
+      database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }, completedAt: '2026-10-09T12:34:56.1234567+02:00'
+    }
+    expect(queryResultSchema.safeParse(summary).success).toBe(true)
+    for (const patch of [{ completedAt: undefined }, { completedAt: 'x'.repeat(41) }, { messages: ['(1 row affected)'] }])
+      expect(queryResultSchema.safeParse({ ...summary, ...patch }).success, JSON.stringify(patch).slice(0, 60)).toBe(false)
+  })
+  it('validates copy and save requests strictly', () => {
+    const copy = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, headers: true, parts: [{ rows: [[0, 9], [20, Number.MAX_SAFE_INTEGER]], columns: [[0, 0], [2, 4095]] }] }
+    expect(resultsCopyRequestSchema.parse(copy)).toEqual(copy)
+    const part = copy.parts[0]
+    for (const patch of [
+      { jobId: 'x' }, { generation: 0 }, { resultId: 2 ** 32 }, { headers: 'yes' }, { parts: [] }, { parts: Array.from({ length: 65 }, () => part) }, { extra: 1 },
+      { parts: [{ ...part, rows: [[5, 4]] }] }, { parts: [{ ...part, rows: [[0, 9], [9, 12]] }] }, { parts: [{ ...part, rows: [[10, 12], [0, 2]] }] },
+      { parts: [{ ...part, rows: [[0, Number.MAX_SAFE_INTEGER + 1]] }] }, { parts: [{ ...part, columns: [[0, 4096]] }] }, { parts: [{ ...part, columns: [] }] },
+      { parts: [{ ...part, rows: Array.from({ length: 65 }, (_, i) => [2 * i, 2 * i]) }] }, { parts: [{ ...part, rows: [[0.5, 1]] }] }, { parts: [{ ...part, extra: 1 }] }
+    ]) expect(resultsCopyRequestSchema.safeParse({ ...copy, ...patch }).success, JSON.stringify(patch).slice(0, 80)).toBe(false)
+    const save = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, format: 'csv', suggestedName: 'Query1-Result1' }
+    expect(resultsSaveRequestSchema.parse(save)).toEqual(save)
+    expect(resultsSaveRequestSchema.safeParse({ ...save, format: undefined }).success).toBe(true)
+    for (const patch of [{ format: 'xlsx' }, { suggestedName: '' }, { suggestedName: 'x'.repeat(129) }, { path: '/tmp/x.csv' }, { generation: 2 ** 31 }])
+      expect(resultsSaveRequestSchema.safeParse({ ...save, ...patch }).success, JSON.stringify(patch)).toBe(false)
+    expect(jobProgressSchema.safeParse({ type: 'job.progress', rowsDone: 1, rowsTotal: 2, bytes: 3 }).success).toBe(true)
+    expect(jobProgressSchema.safeParse({ type: 'job.progress', rowsDone: -1, rowsTotal: 2, bytes: 3 }).success).toBe(false)
+  })
+  it('keeps the methods only main sends out of every renderer and port schema', () => {
+    for (const method of mainOnlyMethods) {
+      expect(Object.hasOwn(requestSchemas, method), method).toBe(false)
+      expect(() => validateRequest(method, {}), method).toThrow('Unsupported backend method')
+      expect(portRequestSchema.safeParse({ t: method, rid: 1 }).success).toBe(false)
+    }
+    expect(methodPolicies['results.copy']).toMatchObject({ kind: 'stream', lane: 'results', deadlineMs: 120_000 })
+    expect(methodPolicies['results.export']).toMatchObject({ kind: 'unary', lane: 'results', deadlineMs: 0 })
   })
 })

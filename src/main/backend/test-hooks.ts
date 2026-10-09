@@ -1,4 +1,4 @@
-import type { BackendState, ResultDescriptor } from '../../shared/contracts'
+import type { BackendState, ResultDescriptor, SyntheticShape } from '../../shared/contracts'
 import type { ResultsPortHost } from './results-port'
 import type { BackendSupervisor } from './supervisor'
 
@@ -11,7 +11,7 @@ export interface BackendTestHooks {
   kill(): number | undefined
   /** Stores synthetic rows (debug.results.synthesize; the backend needs VARIA_BACKEND_TEST_HOOKS=1) that the renderer
    *  may then read, as if a query had returned them. */
-  synthesize(shape: 'W1' | 'B1' | 'N1', rows: number): Promise<ResultDescriptor>
+  synthesize(shape: SyntheticShape, rows: number): Promise<ResultDescriptor>
 }
 
 /** Smoke-test controls on `globalThis.__variaTest`. Main installs them only for unpackaged smoke runs. */

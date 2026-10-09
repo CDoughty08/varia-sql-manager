@@ -33,8 +33,8 @@ internal static class StoreChecks
     {
         var low = false;
         var store = new ResultStore(1000, 600, () => (low ? 100 : 0, 50));
-        var a = store.BeginQuery("s1", "c1");
-        var b = store.BeginQuery("s2", "c1");
+        var a = store.BeginQuery("s1");
+        var b = store.BeginQuery("s2");
         check(store.TryReserve(a, 500, true, out _) && !store.TryReserve(a, 200, true, out var queryFull) && queryFull == TruncationReason.QueryBudget
             && store.TryReserve(b, 400, false, out _) && !store.TryReserve(b, 200, false, out var globalFull) && globalFull == TruncationReason.GlobalBudget,
             "reservations stop at the query's half of the budget first, then at the global budget");
@@ -47,7 +47,7 @@ internal static class StoreChecks
 
         // Sealing: the first page at 64 rows, then at 4,096 rows or 256 KiB, and the rest when the set completes.
         store = new ResultStore(1L << 30, 1L << 29);
-        var query = store.BeginQuery("s", "c");
+        var query = store.BeginQuery("s");
         var set = Open(store, query);
         Fill(set, 0, 63);
         var sealDelay = set.SealDelay;
@@ -79,7 +79,7 @@ internal static class StoreChecks
 
         // A full budget rolls back the row being written, stops the query, and later sets store nothing.
         store = new ResultStore(2L << 20, 3L << 19);
-        query = store.BeginQuery("s", "c");
+        query = store.BeginQuery("s");
         set = Open(store, query);
         Fill(set, 0, 20_000);
         set.Complete();
@@ -88,14 +88,14 @@ internal static class StoreChecks
         check(truncated.Truncated == "queryBudget" && truncated.RowsRead == 20_000 && truncated.RowsStored < 20_000 && truncated.RowsStored == StoredRows(set) && truncated.RowsAvailable == truncated.RowsStored
             && later is null && query.UsedBytes <= store.QueryBytes,
             "one query stores at most half the budget: whole rows only, later sets of the query are not kept, and the reason is reported (" + truncated.RowsStored + " rows kept)");
-        var other = Open(store, store.BeginQuery("s2", "c"));
+        var other = Open(store, store.BeginQuery("s2"));
         Fill(other, 0, 20_000);
         other.Complete();
         check(other.Describe() is { Truncated: "globalBudget", RowsStored: > 0 and < 20_000 } && store.UsedBytes <= store.GlobalBytes, "another query stops at the global budget");
 
         // Column metadata is reserved like rows: a set whose metadata does not fit is not kept, and its query stops.
         store = new ResultStore(64 * 1024, 64 * 1024);
-        query = store.BeginQuery("s", "c");
+        query = store.BeginQuery("s");
         IReadOnlyList<ResultColumn> wide = [.. Enumerable.Range(0, 4096).Select(i => new ResultColumn("column_" + i, "int", "text"))];
         var refused = store.Open(query, 0, 1, 1, "rows", wide, [.. wide.Select(_ => WireKind.Text)]);
         check(refused is null && query.Stopped == TruncationReason.QueryBudget && store.UsedBytes == 0 && store.Count == 0 && store.Open(query, 1, 1, 1, "rows", W1Columns, W1Wires) is null,
@@ -104,7 +104,7 @@ internal static class StoreChecks
         // Memory pressure is checked at each seal: the page just sealed is kept, nothing after it is stored.
         low = false;
         store = new ResultStore(1L << 30, 1L << 29, () => (low ? 100 : 0, 50));
-        query = store.BeginQuery("s", "c");
+        query = store.BeginQuery("s");
         set = Open(store, query);
         Fill(set, 0, 64);
         low = true;
@@ -112,17 +112,18 @@ internal static class StoreChecks
         set.Complete();
         check(set.Describe() is { Truncated: "systemMemory", RowsStored: < 9064 } && set.RowsAvailable == StoredRows(set) && set.RowsAvailable >= 64, "high memory load stops storing rows after the current page");
 
-        // Releases: re-executing on a session, closing it, disconnecting, and results.close all return the memory.
+        // Releases: re-executing on a session and results.close return the memory (closing a session or disconnecting does not
+        // release anything; SqlService no longer calls the store then).
         store = new ResultStore(1L << 30, 1L << 29);
-        var first1 = Open(store, store.BeginQuery("tab-1", "server-1"));
+        var first1 = Open(store, store.BeginQuery("tab-1"));
         Fill(first1, 0, 100);
         first1.Complete();
-        var first2 = Open(store, store.BeginQuery("tab-2", "server-1"));
+        var first2 = Open(store, store.BeginQuery("tab-2"));
         Fill(first2, 0, 100);
-        var third = Open(store, store.BeginQuery("tab-3", "server-2"));
+        var third = Open(store, store.BeginQuery("tab-3"));
         Fill(third, 0, 100);
         third.Complete();
-        var rerun = store.BeginQuery("tab-1", "server-1");
+        var rerun = store.BeginQuery("tab-1");
         check(store.Find(first1.ResultId) is null && first1.IsReleased && store.WasReleased(first1.ResultId) && !store.WasReleased(999), "a new query on a session releases the session's earlier results");
         Fill(first2, 100, 100);
         check(first2.Describe().RowsStored == 200 && store.ReleaseSession("tab-2") == 1 && first2.Describe().State == "released" && first2.PagesFor(0, int.MaxValue).Count == 0,
@@ -130,9 +131,10 @@ internal static class StoreChecks
         var fourth = Open(store, rerun);
         Fill(fourth, 0, 100);
         fourth.Complete();
-        check(store.ReleaseConnection("server-1") == 1 && store.Release(third.ResultId) && !store.Release(third.ResultId) && store.Count == 0 && store.UsedBytes == 0,
-            "disconnecting and closing results return every byte to the budget");
+        check(store.Count == 2 && store.Release(fourth.ResultId) && store.Release(third.ResultId) && !store.Release(third.ResultId) && store.Count == 0 && store.UsedBytes == 0,
+            "closing results returns every byte to the budget");
 
+        Leases(check);
         Collection(check);
         Events(check);
         HostReads(check);
@@ -142,7 +144,7 @@ internal static class StoreChecks
     private static void Collection(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 30);
-        var set = Open(store, store.BeginQuery("s", "c"));
+        var set = Open(store, store.BeginQuery("s"));
         Fill(set, 0, 600_000);
         set.Complete();
         var held = GC.GetTotalMemory(false);
@@ -161,7 +163,7 @@ internal static class StoreChecks
             List<ResultSetBuffer> sets = [];
             for (var i = 0; i < 4; i++)
             {
-                var small = Open(store, store.BeginQuery("s" + i, "c"));
+                var small = Open(store, store.BeginQuery("s" + i));
                 Fill(small, 0, 120_000);
                 small.Complete();
                 sets.Add(small);
@@ -181,10 +183,10 @@ internal static class StoreChecks
         // Only a compacting collection returns memory to the operating system. Closing a large result while a small one
         // remains compacts (it copies little), and so does closing the last one, although it releases less than 64 MiB.
         store = new ResultStore(1L << 30, 1L << 30);
-        var kept = Open(store, store.BeginQuery("kept", "c"));
+        var kept = Open(store, store.BeginQuery("kept"));
         Fill(kept, 0, 120_000);
         kept.Complete();
-        var large = Open(store, store.BeginQuery("large", "c"));
+        var large = Open(store, store.BeginQuery("large"));
         Fill(large, 0, 600_000);
         large.Complete();
         // The working set, not GC.GetGCMemoryInfo(), which describes the heap as of the last collection.
@@ -211,13 +213,13 @@ internal static class StoreChecks
     {
         var events = new List<(JsonElement Body, bool Droppable)>();
         var store = new ResultStore(1L << 30, 1L << 29);
-        var set = Open(store, store.BeginQuery("s", "c"));
+        var set = Open(store, store.BeginQuery("s"));
         var clock = Stopwatch.StartNew();
         using (var sink = new QueryEventSink((value, droppable) => { lock (events) events.Add((JsonSerializer.SerializeToElement(value, HostChecks.Json), droppable)); }))
         {
             sink.Opened(set);
             Fill(set, 0, PageBuilder.FirstPageRows);
-            sink.Sealed();
+            sink.Sealed(set);
             int immediate;
             lock (events) immediate = events.Count(item => Type(item.Body) == "progress");
             check(set.RowsAvailable == PageBuilder.FirstPageRows && immediate == 1, "the first sealed page is reported at once, not at the next progress tick");
@@ -226,14 +228,14 @@ internal static class StoreChecks
             {
                 Fill(set, i, 1);
                 sink.RowsChanged();
-                sink.Message("message " + i);
+                sink.Message(new("message " + i, i % 2 == 0 ? "info" : "error"));
                 Thread.Sleep(10);
             }
             set.Complete();
             sink.Closed(set);
             // The tick is still live until the sink is disposed and may report progress for the sets still open (none here).
             Thread.Sleep(130);
-            sink.Message("after close");
+            sink.Message(new("after close", "info"));
         }
         var elapsed = clock.ElapsedMilliseconds;
         var types = events.Select(item => Type(item.Body)).ToList();
@@ -243,15 +245,66 @@ internal static class StoreChecks
         check(types[0] == "resultSet.opened" && closed > 0 && types.LastIndexOf("resultSet.closed") == closed
             && events[closed].Body.GetProperty("descriptor").GetProperty("rowsAvailable").GetInt64() == set.RowsAvailable
             && events.Skip(closed + 1).Where(item => Type(item.Body) == "progress").All(item => item.Body.GetProperty("results").GetArrayLength() == 0)
-            && lastMessages > closed && events[lastMessages].Body.GetProperty("messages").EnumerateArray().Last().GetString() == "after close"
+            && lastMessages > closed && events[lastMessages].Body.GetProperty("messages").EnumerateArray().Last().GetProperty("text").GetString() == "after close"
+            && events.Where(item => Type(item.Body) == "messages").SelectMany(item => item.Body.GetProperty("messages").EnumerateArray()).Any(entry => entry.GetProperty("kind").GetString() == "error")
             && progress >= 1 && progress <= elapsed / 100 + 2 && events.All(item => item.Droppable == Type(item.Body) is "progress" or "messages"),
             "query events: opened first, progress coalesced to 10 a second (" + progress + " in " + elapsed + " ms), messages batched and droppable, closed once with the final descriptor and never reported by later progress");
         var count = events.Count;
         Thread.Sleep(250);
         check(events.Count == count, "nothing is emitted after the sink is disposed");
+
+        // Every set's first page is reported at once, within the 100 ms spacing too, so a script of one-row sets shows each
+        // set's row without waiting for a tick; a set's later pages still wait for the spacing.
+        var firstSeals = 0;
+        using (var sink = new QueryEventSink((value, _) => { if (JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("type").GetString() == "progress") Interlocked.Increment(ref firstSeals); }))
+        {
+            var query = store.BeginQuery("one-row sets");
+            for (var i = 0; i < 3; i++)
+            {
+                var single = Open(store, query, i);
+                sink.Opened(single);
+                Fill(single, 0, 1);
+                single.Seal();
+                sink.Sealed(single);
+                Fill(single, 1, 1);
+                single.Seal();
+                sink.Sealed(single);
+                single.Complete();
+                sink.Closed(single);
+            }
+            check(Volatile.Read(ref firstSeals) == 3, "each set's first sealed page is reported at once, bypassing the coalescing; its later pages are not (" + firstSeals + " progress events)");
+        }
     }
 
     private static string Type(JsonElement body) => body.GetProperty("type").GetString()!;
+
+    /// <summary>A copy or export leases its result: a release meanwhile stops reads and storage at once, but the pages and
+    /// budget stay until the last lease ends.</summary>
+    private static void Leases(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = Open(store, store.BeginQuery("tab"));
+        Fill(set, 0, 5000);
+        var used = store.UsedBytes;
+        check(set.TryLease() && set.TryLease() && set.Leases == 2, "a result can be leased more than once");
+        var released = store.Release(set.ResultId);
+        var pagesKept = set.PagesFor(0, int.MaxValue).Count;
+        check(released && set.IsReleased && store.Find(set.ResultId) is null && store.WasReleased(set.ResultId) && pagesKept > 0 && store.UsedBytes == used && !set.TryLease()
+            && set.BeginRow() is null, "releasing a leased result removes it from lookup and stops storing, but keeps its pages and budget (" + pagesKept + " pages)");
+        set.ReleaseLease();
+        check(store.UsedBytes == used && set.PagesFor(0, int.MaxValue).Count == pagesKept, "the pages stay while any lease remains");
+        set.ReleaseLease();
+        check(store.UsedBytes == 0 && set.PagesFor(0, int.MaxValue).Count == 0 && set.Leases == 0, "the last lease frees the pages and returns every byte");
+        var plain = Open(store, store.BeginQuery("other"));
+        Fill(plain, 0, 100);
+        plain.Complete();
+        check(plain.TryLease() && plain.IsComplete, "a complete result can be leased");
+        plain.ReleaseLease();
+        check(store.Release(plain.ResultId) && store.UsedBytes == 0, "a result whose leases ended is freed at once when released");
+        var threw = false;
+        try { plain.ReleaseLease(); } catch (InvalidOperationException) { threw = true; }
+        check(threw, "ending a lease that was never taken is a bug, not a silent no-op");
+    }
 
     /// <summary>results.read and results.close through ProtocolHost with the real service and synthetic results.</summary>
     private static void HostReads(Action<bool, string> check)
