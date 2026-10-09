@@ -47,9 +47,9 @@ describe('menu service', () => {
     expect(file.at(-1)).toMatchObject({ kind: 'command', id: 'window.close', title: 'Exit', keybinding: { text: 'Alt+F4' }, enabled: true })
     const connection = menus.resolve('query').find(item => item.key === 'query.connection')
     if (connection?.kind !== 'submenu') throw new Error('Query › Connection is missing')
-    expect(connection.items.map(item => item.kind === 'command' ? [item.title, item.enabled] : '-')).toEqual([['Connect…', false], ['Disconnect', false], ['Disconnect All Queries', false], '-', ['Change Connection…', true]])
+    expect(connection.items.map(item => item.kind === 'command' ? [item.title, item.enabled] : '-')).toEqual([['Connect…', false], ['Disconnect', false], ['Disconnect All Queries', false], ['Reconnect…', false], '-', ['Change Connection…', true]])
     fixture.api.push(readyBackend())
-    expect(menus.resolve('query').find(item => item.key === 'query.connection')).toMatchObject({ items: [{ title: 'Connect…', enabled: true }, {}, {}, {}, {}] })
+    expect(menus.resolve('query').find(item => item.key === 'query.connection')).toMatchObject({ items: [{ title: 'Connect…', enabled: true }, {}, {}, {}, {}, {}] })
   })
   it('closes, returns focus, and only then runs the chosen command', () => {
     const { menus, state, order } = setup()

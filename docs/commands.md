@@ -83,7 +83,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
-| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Object Explorer context menu › Reconnect… |
+| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
 | Remove Lost Connection… | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
@@ -217,6 +217,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_connect` | **C**onnect… | `connection.connect` | Always |
 | `1_connect` | **D**isconnect | `query.disconnect` | Always |
 | `1_connect` | Disconnect **A**ll Queries | `query.disconnectAll` | Always |
+| `1_connect` | **R**econnect… | `connection.reconnect` | Always |
 | `2_change` | C**h**ange Connection… | `query.changeConnection` | Always |
 
 #### Window (Alt+W)

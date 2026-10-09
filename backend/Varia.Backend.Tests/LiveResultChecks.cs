@@ -24,9 +24,9 @@ internal static class LiveResultChecks
     {
         var store = service.Results;
         var session = Guid.NewGuid().ToString();
-        async Task<QueryResult> Run(string sql, RequestContext? context = null, string? sessionId = null, string? connectionId = null, int maxRows = 1000) =>
+        async Task<QueryResult> Run(string sql, RequestContext? context = null, string? sessionId = null, string? connectionId = null, int maxRows = 1000, int maxResultSets = 10) =>
             (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
-                new QueryArgs(connectionId ?? info.Id, sessionId ?? session, "master", sql, Guid.NewGuid().ToString(), maxRows, 60), json), json, context);
+                new QueryArgs(connectionId ?? info.Id, sessionId ?? session, "master", sql, Guid.NewGuid().ToString(), maxRows, 60, MaxResultSets: maxResultSets), json), json, context);
         Task Close(string sessionId) => service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(sessionId), json), json);
         try
         {
@@ -98,9 +98,12 @@ internal static class LiveResultChecks
                 var cancelMs = watch.ElapsedMilliseconds;
                 check(stopped.Status == "cancelled" && cancelMs < 5000, "a cancel stops a script that is reading large xml cells (" + cancelMs + " ms)");
             }
+            await UnreadValues(check, store, (sql, context, maxRows, maxResultSets) => Run(sql, context, Guid.NewGuid().ToString(), maxRows: maxRows, maxResultSets: maxResultSets));
 
             // maxRows 0 stores rows up to the budget only.
-            await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId) => Run(sql, context, sessionId, maxRows: 0), Close);
+            await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close);
+            await SkipOffPool(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close,
+                () => service.DispatchAsync("system.health", JsonSerializer.SerializeToElement(new { }, json), json));
 
             var cancelled = await Cancelled(CancelReason.User);
             check(cancelled.Status == "cancelled" && cancelled.Error?.Code == "CANCELLED", "a user CANCEL frame cancels the script");
@@ -172,44 +175,198 @@ internal static class LiveResultChecks
         check(cases.Count >= 50 && failures.Count == 0, "live values show their SSMS display text (" + cases.Count + " types and NULLs)" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
     }
 
+    /// <summary>The unread rest of a huge value, and every long value of a row that is not stored, is read past in linear time
+    /// and bounded memory, and a cancel stops it. SqlClient's ReadAsync would skip them by buffering all of a value first, in
+    /// time quadratic in its size (about 20 s and 220 MB for 100,000,000 characters) and ignoring the token.</summary>
+    private static async Task UnreadValues(Action<bool, string> check, ResultStore store, Func<string, RequestContext?, int, int, Task<QueryResult>> run)
+    {
+        const string huge = "REPLICATE(CAST(N'x' AS nvarchar(max)), 100000000)";
+        async Task<(QueryResult Result, long Growth, long Ms)> Measure(string sql, int maxRows = 1000, int maxResultSets = 10, int cancelAfterMs = -1)
+        {
+            GC.Collect();
+            var before = Environment.WorkingSet;
+            var peak = before;
+            using var sampler = new Timer(_ => Interlocked.Exchange(ref peak, Math.Max(Interlocked.Read(ref peak), Environment.WorkingSet)), null, 0, 20);
+            using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0);
+            var watch = Stopwatch.StartNew();
+            var running = run(sql, context, maxRows, maxResultSets);
+            if (cancelAfterMs >= 0)
+            {
+                await Task.Delay(cancelAfterMs);
+                watch.Restart();
+                context.Cancel(CancelReason.User);
+            }
+            var result = await running;
+            var ms = watch.ElapsedMilliseconds;
+            sampler.Change(Timeout.Infinite, Timeout.Infinite);
+            return (result, Math.Max(Interlocked.Read(ref peak), Environment.WorkingSet) - before, ms);
+        }
+        string Measured(long growth, long ms) => "grew the working set by " + growth / 1048576 + " MB, " + ms + " ms";
+
+        var (result, growth, ms) = await Measure("SELECT 7 AS head, " + huge + " AS big;");
+        var row = CellsOf(store, result.ResultSets[0])[0];
+        check(result.Status == "completed" && row[0].Text == "7" && row[1].Text!.Length == ColumnPlan.TextCap && (row[1].Flags & PageReader.Truncated) != 0
+            && growth < 64L * 1024 * 1024 && ms < 15_000, "a truncated 100,000,000-character value in the last column is read past (" + Measured(growth, ms) + ")");
+        (result, growth, ms) = await Measure("SELECT " + huge + " AS big, 7 AS after FROM (VALUES (1), (2)) AS t(n);", maxRows: 1);
+        check(result.Status == "completed" && result.ResultSets[0] is { RowsRead: 2, RowsStored: 1, Truncated: "rowLimit" } && growth < 64L * 1024 * 1024 && ms < 15_000,
+            "a row past maxRows with a 100,000,000-character value is read past (" + Measured(growth, ms) + ")");
+        (result, growth, ms) = await Measure("SELECT 1 AS kept; SELECT " + huge + " AS big;", maxResultSets: 1);
+        check(result.Status == "completed" && result.ResultSets.Count == 1 && result.DiscardedResultSets == 1 && growth < 64L * 1024 * 1024 && ms < 15_000,
+            "a set past maxResultSets with a 100,000,000-character value is read past (" + Measured(growth, ms) + ")");
+        foreach (var maxRows in new[] { 1000, 1 })
+        {
+            (result, growth, ms) = await Measure("SELECT " + huge + " AS big FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) AS t(n);", maxRows: maxRows, cancelAfterMs: 1500);
+            check(result.Status == "cancelled" && ms < 5000 && growth < 64L * 1024 * 1024,
+                "a cancel stops a script " + (maxRows == 1 ? "skipping rows past maxRows" : "reading truncated cells") + " that hold 100,000,000-character values (" + Measured(growth, ms) + " after the cancel)");
+        }
+
+        // GetChars on text and ntext reads the whole value at once.
+        (result, growth, ms) = await Measure("DECLARE @t TABLE (id int IDENTITY PRIMARY KEY, n ntext, t text);"
+            + " INSERT @t (n, t) VALUES (REPLICATE(CAST(N'é' AS nvarchar(max)), 30000000), REPLICATE(CAST('é' AS varchar(max)), 30000000)), (N'héllo 😀', 'héllo'), (NULL, NULL);"
+            + " SELECT n, t, 7 AS after FROM @t ORDER BY id;");
+        var rows = CellsOf(store, result.ResultSets[0]);
+        check(result.Status == "completed" && rows[0][0].Text == new string('é', ColumnPlan.TextCap) && rows[0][1].Text == new string('é', ColumnPlan.TextCap) && rows[0][2].Text == "7"
+            && rows[1].Select(cell => cell.Text).SequenceEqual(["héllo 😀", "héllo", "7"]) && rows[2][0].Flags == PageReader.Null && rows[2][1].Flags == PageReader.Null && growth < 64L * 1024 * 1024,
+            "ntext and text values are streamed up to their cap, in their encodings (" + Measured(growth, ms) + ")");
+
+        // SqlClient has no streaming reader for xml under sequential access, so each value is read whole, outside the result
+        // budget. That garbage is collected once the reader moves on: left to the runtime, eight of these values peaked at
+        // about 480 MB of managed heap, six times one of them.
+        async Task<(QueryResult Result, long Peak)> HeapPeak(string sql)
+        {
+            var before = GC.GetTotalMemory(true);
+            var peak = before;
+            using var sampler = new Timer(_ => Interlocked.Exchange(ref peak, Math.Max(Interlocked.Read(ref peak), GC.GetTotalMemory(false))), null, 0, 10);
+            var result = await run(sql, null, 1000, 10);
+            sampler.Change(Timeout.Infinite, Timeout.Infinite);
+            return (result, Math.Max(Interlocked.Read(ref peak), GC.GetTotalMemory(false)) - before);
+        }
+        const string xml = "DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), 30000000) + '</a>' AS xml); ";
+        var (one, onePeak) = await HeapPeak(xml + "SELECT @x AS doc;");
+        var (eight, eightPeak) = await HeapPeak(xml + "SELECT @x AS doc FROM (SELECT TOP (8) 1 AS n FROM sys.all_objects) AS t;");
+        check(one.Status == "completed" && eight.Status == "completed" && eight.ResultSets[0].RowsStored == 8 && 2 * eightPeak < 5 * onePeak,
+            "eight 30,000,000-character xml values, each read whole, peak at " + eightPeak / 1048576 + " MB of managed heap, against " + onePeak / 1048576 + " MB for one");
+    }
+
     /// <summary>Rows that wait for a lock mid-statement are sealed after 200 ms, so they can be read before the statement
-    /// ends. A second session holds a row lock on a uniquely named global temporary table for that.</summary>
+    /// ends. A second session holds a row lock on a uniquely named global temporary table for that. Rows past maxRows in a
+    /// set with a long column are read past synchronously, so the rows stored before them are sealed first.</summary>
     private static async Task IdleSeal(Action<bool, string> check, ResultStore store, JsonSerializerOptions json, Func<string, Task<QueryResult>> run,
-        Func<string, RequestContext?, string?, Task<QueryResult>> runIn, Func<string, Task> close)
+        Func<string, RequestContext?, string?, int, Task<QueryResult>> runIn, Func<string, Task> close)
     {
         var table = "##varia_seal_" + Guid.NewGuid().ToString("N");
         await run("CREATE TABLE " + table + " (id int PRIMARY KEY); INSERT " + table + " SELECT TOP (3000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
         var locker = Guid.NewGuid().ToString();
         var reader = Guid.NewGuid().ToString();
-        var events = new List<JsonElement>();
-        using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) => { lock (events) events.Add(JsonSerializer.SerializeToElement(value, json)); });
-        long availableWhileBlocked = 0;
-        try
+        // Runs the query while the last row is locked, until `rows` are readable or 10 s pass, then releases the lock.
+        async Task<(bool Blocked, long Available, QueryResult Result, List<string?> Kinds)> WhileLocked(string sql, int maxRows, long rows)
         {
-            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 3000;", null, locker);
-            var running = runIn("SELECT id FROM " + table + " ORDER BY id;", context, reader);
+            var events = new List<JsonElement>();
+            using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) => { lock (events) events.Add(JsonSerializer.SerializeToElement(value, json)); });
+            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 3000;", null, locker, 0);
+            var running = runIn(sql, context, reader, maxRows);
+            long available = 0;
             var watch = Stopwatch.StartNew();
             while (watch.ElapsedMilliseconds < 10_000 && !running.IsCompleted)
             {
                 uint? id;
                 lock (events) id = events.Where(item => item.GetProperty("type").GetString() == "resultSet.opened").Select(item => (uint?)item.GetProperty("descriptor").GetProperty("resultId").GetUInt32()).FirstOrDefault();
-                availableWhileBlocked = id is { } resultId ? store.Find(resultId)?.RowsAvailable ?? 0 : 0;
-                if (availableWhileBlocked > PageBuilder.FirstPageRows) break;
+                available = id is { } resultId ? store.Find(resultId)?.RowsAvailable ?? 0 : 0;
+                if (available >= rows) break;
                 await Task.Delay(50);
             }
             var blocked = !running.IsCompleted;
-            await runIn("ROLLBACK;", null, locker);
+            await runIn("ROLLBACK;", null, locker, 0);
             var result = await running;
-            var kinds = events.Select(item => item.GetProperty("type").GetString()).ToList();
-            check(blocked && availableWhileBlocked > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
-                "rows read before a lock wait are sealed and readable while the statement waits (" + availableWhileBlocked + " rows)");
+            lock (events) return (blocked, available, result, [.. events.Select(item => item.GetProperty("type").GetString())]);
+        }
+        try
+        {
+            var (blocked, available, result, kinds) = await WhileLocked("SELECT id FROM " + table + " ORDER BY id;", 0, PageBuilder.FirstPageRows + 1);
+            check(blocked && available > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
+                "rows read before a lock wait are sealed and readable while the statement waits (" + available + " rows)");
             check(kinds.First() == "resultSet.opened" && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
                 "query events report the result set as it opens and closes: " + string.Join(", ", kinds.Distinct()));
+            (blocked, available, result, _) = await WhileLocked("SELECT id, CAST(N'x' AS nvarchar(max)) AS note FROM " + table + " ORDER BY id;", 100, 100);
+            check(blocked && available == 100 && result.Status == "completed" && result.ResultSets[0] is { RowsRead: 3000, RowsStored: 100 },
+                "rows stored before skipped rows with long values are readable while the statement waits (" + available + " rows)");
         }
         finally
         {
             await close(locker);
             await close(reader);
+            await run("DROP TABLE IF EXISTS " + table + ";");
+        }
+    }
+
+    /// <summary>A row that is not stored, in a set with a long column, is read past with a synchronous Read, which blocks
+    /// its thread while the server is slow to send the next row. Such queries waiting on a lock must leave the thread pool
+    /// free: on pool threads they delayed every other request, cancels included, by one to three seconds while the pool
+    /// slowly added threads.</summary>
+    private static async Task SkipOffPool(Action<bool, string> check, ResultStore store, JsonSerializerOptions json, Func<string, Task<QueryResult>> run,
+        Func<string, RequestContext?, string?, int, Task<QueryResult>> runIn, Func<string, Task> close, Func<Task<object>> health)
+    {
+        var table = "##varia_skip_" + Guid.NewGuid().ToString("N");
+        await run("CREATE TABLE " + table + " (id int PRIMARY KEY, doc nvarchar(max)); INSERT " + table + " SELECT TOP (1500) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'x' FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
+        var locker = Guid.NewGuid().ToString();
+        // More readers than the pool has threads, so that blocking them would need many new ones.
+        var readers = Enumerable.Range(0, ThreadPool.ThreadCount + 2 * Environment.ProcessorCount).Select(_ =>
+        {
+            var opened = new List<uint>();
+            var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) =>
+            {
+                var item = JsonSerializer.SerializeToElement(value, json);
+                if (item.GetProperty("type").GetString() == "resultSet.opened") lock (opened) opened.Add(item.GetProperty("descriptor").GetProperty("resultId").GetUInt32());
+            });
+            return (Session: Guid.NewGuid().ToString(), Context: context, Opened: opened);
+        }).ToList();
+        int Skipping() => readers.Count(reader => { lock (reader.Opened) return reader.Opened.Count > 0 && store.Find(reader.Opened[0])?.RowsRead > 100; });
+        var running = new List<Task<QueryResult>>();
+        try
+        {
+            // Sessions log in first, so the timed part is only the readers' queries.
+            foreach (var reader in readers) await runIn("SELECT 1;", null, reader.Session, 0);
+            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 1500;", null, locker, 0);
+            running.AddRange(readers.Select(reader => runIn("SELECT id, doc FROM " + table + " ORDER BY id;", reader.Context, reader.Session, 100)));
+            // Requests arrive as they do in the host, whose reader thread hands each one to the pool with Task.Run. The pool
+            // adds threads within seconds, so they are timed while the readers start skipping and for a second after.
+            var waits = new List<long>();
+            var skipping = 0;
+            long cancelWait = 0;
+            var sinceCancel = new Stopwatch();
+            await Task.Factory.StartNew(() =>
+            {
+                var watch = Stopwatch.StartNew();
+                var probe = new Stopwatch();
+                long settled = -1;
+                while (watch.ElapsedMilliseconds < 20_000 && (settled < 0 || watch.ElapsedMilliseconds - settled < 1000))
+                {
+                    probe.Restart();
+                    Task.Run(health).Wait();
+                    waits.Add(probe.ElapsedMilliseconds);
+                    if (settled < 0 && (skipping = Skipping()) == readers.Count) settled = watch.ElapsedMilliseconds;
+                    Thread.Sleep(50);
+                }
+                sinceCancel.Start();
+                Task.Run(() =>
+                {
+                    cancelWait = sinceCancel.ElapsedMilliseconds;
+                    foreach (var reader in readers) reader.Context.Cancel(CancelReason.User);
+                }).Wait();
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            var results = await Task.WhenAll(running);
+            var cancelMs = sinceCancel.ElapsedMilliseconds;
+            check(skipping == readers.Count && waits.Max() < 250 && cancelWait < 250 && cancelMs < 2000 && results.All(result => result.Status == "cancelled"),
+                readers.Count + " queries skipping rows with long values while they wait on a lock leave the thread pool free (" + skipping + " skipping; system.health at most "
+                + waits.Max() + " ms over " + waits.Count + " calls; cancel started after " + cancelWait + " ms, all cancelled after " + cancelMs + " ms)");
+        }
+        finally
+        {
+            await runIn("ROLLBACK;", null, locker, 0);
+            await Task.WhenAll(running.Select(task => task.ContinueWith(_ => { }, TaskScheduler.Default)));
+            foreach (var reader in readers) reader.Context.Dispose();
+            await close(locker);
+            foreach (var reader in readers) await close(reader.Session);
             await run("DROP TABLE IF EXISTS " + table + ";");
         }
     }

@@ -314,7 +314,11 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `connections.disconnect`, and process exit. A release fails the result's in-flight reads with `RESULT_RELEASED` after
   the current page. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
   or one at a time), triggers one gen2 collection shortly after (pages are large arrays that nothing else would
-  collect): non-compacting while results remain, aggressive (returning memory to the operating system) when none do.
+  collect), and so does a release that empties the store once 16 MiB were released since the last aggressive one. The
+  collection is aggressive (compacting, so it returns memory to the operating system) when what remains is no more than
+  what was released since the last aggressive one, and non-compacting otherwise, so its pause never copies much. Large
+  xml values, read whole outside the budget (see Display formats), count as released once the reader moves past their
+  row; a row that left more than 64 MiB is collected at once, before the next row is read.
 
 Notes appended to the summary's messages:
 
@@ -427,6 +431,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   lost, its results are dropped, and the next generation starts after 0 s, 1 s, then 2 s. The third unexpected loss
   within 120 s trips the breaker: `failed (crashLoop)` until the user restarts. 300 s of continuous readiness resets
   the delays and the breaker. Spawn failures (`ENOENT`, `EACCES`) and incompatible builds fail at once, without retry.
+  In development a missing `Varia.Backend.dll` is a spawn failure too: main checks for it before every launch, since
+  `dotnet` would start without it and exit, which reads as a crash loop.
 - **Silence.** Main sends PING every 5 s; any frame counts as liveness. After 15 s without one, the state is
   `unresponsive` and a warning banner offers **Restart now**; it returns to `ready` only when a frame arrives (not when
   main's own silence window restarts after a sleep or a stall). A silent backend
@@ -519,7 +525,13 @@ last 120 s, the protocol, runtime and OS, and the stderr lines described above.
 The backend formats every non-binary value into the text SSMS 2022 shows (`CellFormat.cs`), so the renderer never
 formats SQL types. Every sample is a case in `tests/fixtures/sql-display.json`, checked against `CellFormat` offline and
 against SQL Server by the live type matrix. Reads use `CommandBehavior.SequentialAccess`, call `IsDBNull` first, and read
-each column once, in order, with a reader chosen once per result set from the schema table.
+each column once, in order, with a reader chosen once per result set from the schema table. A long value is kept up to
+its cap and the rest is read past in 8,192-unit chunks (text and ntext through `GetTextReader`: `GetChars` reads their
+whole value). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
+kept) are read past with a synchronous `Read` when their set has a long column, on a dedicated thread: that `Read` also
+waits for the server's next row (a lock, a slow plan), and on thread-pool threads a few such queries delayed every other
+request, cancels included, by seconds. Either way, nothing near a huge value's size is held, and a cancel stops it: left
+unread, the next `ReadAsync` would buffer all of it, in time quadratic in its size.
 
 | SQL type | Display | Samples |
 | --- | --- | --- |
@@ -538,7 +550,7 @@ each column once, in order, with a reader chosen once per result set from the sc
 | datetimeoffset(n) | n fractional digits and the offset | `2026-10-08 12:34:56.1234567 +05:30`, `2026-10-08 12:34:56 -08:00` |
 | uniqueidentifier | uppercase | `6F9619FF-8B86-D011-B42D-00C04FC964FF` |
 | char, varchar, text, nchar, nvarchar, ntext, sysname | the text; lone surrogates become U+FFFD; truncation never splits a pair | `héllo 😀` |
-| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Read once with `GetSqlXml` (linear; held only while the cell is read): `GetChars` on xml is quadratic in a large text node, and `GetXmlReader` misreads a value that starts with text | `abc`, `é<a b="1" />` |
+| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Read whole with `GetSqlXml` (linear): `GetChars` on xml is quadratic in a large text node, `GetXmlReader` misreads a value that starts with text, and `GetStream` and `GetTextReader` reject xml. The whole value is held in transient memory outside the result budget, about 2 bytes per character (up to about 4 GB for a 2 GB value), until the reader moves past its row; a row that left more than 64 MiB is collected then, so large values never pile up. Such a row fills a page, and the memory-load check at every page seal stops storing (and reading whole) later rows when the computer runs low | `abc`, `é<a b="1" />` |
 | json (SQL Server 2025) | the text, role `json`, up to 2,097,152 characters | — |
 | vector (SQL Server 2025) | float32 values, shortest form, role `vector` | `[0.1,2,-3.5]` |
 | binary, varbinary, image | `0x` + uppercase hex, up to 32,766 bytes | `0x0001FF`, `0x` |

@@ -32,7 +32,7 @@ describe('menu model', () => {
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
-      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', '-', 'query.changeConnection'])
+      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
     }
     expect(buildMenuModel('file', 'win32').at(-1)).toMatchObject({ id: 'window.close', title: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
@@ -163,8 +163,8 @@ describe('mnemonics', () => {
 describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
     // The editor menu's Connection submenu is Query › Connection.
-    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'query.changeConnection',
-      'query.disconnect', 'query.disconnectAll'])
+    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.reconnect',
+      'query.changeConnection', 'query.disconnect', 'query.disconnectAll'])
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.float', 'pane.dock', 'pane.close'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
@@ -196,7 +196,7 @@ describe('context menu model', () => {
 
 const themeModel = { theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes: [] } } as const
 function template(platform: NodeJS.Platform, checked: readonly CommandId[] = []) {
-  const actions = { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(id => checked.includes(id)), setTheme: vi.fn(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() }
+  const actions = { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(id => checked.includes(id)), pageHasKeyFocus: () => true, sendActionToFirstResponder: vi.fn(), setTheme: vi.fn(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() }
   return { actions, items: applicationMenuTemplate({ theme: { ...themeModel.theme, themes: [] } }, actions, platform) }
 }
 function flatten(items: readonly MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {

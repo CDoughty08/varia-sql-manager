@@ -250,6 +250,14 @@ try {
   expect(recorded.filter(call => call.generation === 2).map(call => call.method)).not.toContain('query.execute')
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1])
   expect(JSON.stringify(recorded)).not.toContain('smoke-password-marker')
+  // The keyboard opens the lost row's own menu too, not the empty area's: Shift+F10 in the tree with the row selected.
+  const explorerMenu = page.getByRole('menu', { name: 'Object Explorer', exact: true })
+  await lostRow.locator('.oe-label').click()
+  await expect(lostRow).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Shift+F10')
+  await expect(explorerMenu.locator('.menu-item .menu-label')).toHaveText(['Connect…', 'Reconnect…', 'Remove'])
+  await page.keyboard.press('Escape')
+  await expect(explorerMenu).toHaveCount(0)
   await size(1024, 700)
   await bannerInViewport()
   await page.screenshot({ path: resolve('artifacts', 'backend-restart.png') })
@@ -273,7 +281,7 @@ try {
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])
   await banner().getByRole('button', { name: 'Dismiss', exact: true }).click()
   await expect(banner()).toHaveCount(0)
-  console.log('Crash during execute passed: BACKEND_LOST, lost Explorer row, Execute hint, restart with a new pid, nothing re-run, and Reconnect with the new-session line.')
+  console.log('Crash during execute passed: BACKEND_LOST, lost Explorer row and its menu, Execute hint, restart with a new pid, nothing re-run, and Reconnect with the new-session line.')
 
   // A manual restart asks first while servers are connected, and resets the breaker.
   step = 'manual restart'

@@ -14,7 +14,8 @@ export function backendSpawnSpec(o: { packaged: boolean; root: string; resources
     const [mode, argument] = fake.split(':', 2)
     return { command: node, args: ['--disable-warning=ExperimentalWarning', join(o.root, 'tests/fixtures/backend.mjs'), mode, ...argument === undefined ? [] : [argument]], cwd: o.root, packaged: false }
   }
-  return { command: 'dotnet', args: [join(o.root, 'backend/Varia.Backend/bin', o.smokeTest ? 'Release' : 'Debug', 'net10.0/Varia.Backend.dll')], cwd: o.root, env: o.smokeTest ? o.env : withoutTestHooks(o.env), packaged: false }
+  const dll = join(o.root, 'backend/Varia.Backend/bin', o.smokeTest ? 'Release' : 'Debug', 'net10.0/Varia.Backend.dll')
+  return { command: 'dotnet', args: [dll], cwd: o.root, env: o.smokeTest ? o.env : withoutTestHooks(o.env), packaged: false, requires: dll }
 }
 
 /** The backend honours its test hooks (synthetic results, a budget override) only when main passes them: in smoke runs. */

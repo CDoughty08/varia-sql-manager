@@ -47,7 +47,7 @@ describe('menu resolution', () => {
     const query = resolveMenu('query', resolved)
     const shape = (items: readonly ResolvedMenuItem[]): unknown[] => items.map(item => item.kind === 'command' ? [item.id, item.enabled, item.args] : item.kind === 'submenu' ? shape(item.items) : item.kind)
     expect(shape(query)).toEqual([
-      [['connection.connect', true, args], ['query.disconnect', true, args], ['query.disconnectAll', true, args], 'separator', ['query.changeConnection', true, args]],
+      [['connection.connect', true, args], ['query.disconnect', true, args], ['query.disconnectAll', true, args], ['connection.reconnect', true, args], 'separator', ['query.changeConnection', true, args]],
       ['query.changeDatabase', true, args], 'separator', ['query.execute', false, args], ['query.cancel', true, args]
     ])
     expect(resolved.commands.isEnabled).toHaveBeenCalledWith('query.execute', args)

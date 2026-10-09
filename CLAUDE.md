@@ -26,9 +26,11 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 267 checks instead of 195
-  (320 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer scratch-database checks),
-  and `connections-smoke.mjs` connects for real. Never print the password.
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 277 checks instead of 196
+  (330 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer scratch-database checks),
+  and `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
+  session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
+  (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
@@ -69,10 +71,13 @@ pages, limits, error codes, display formats, benchmarks).
   provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
   natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends
   back a bare id; it is the macOS menu bar and stays hidden elsewhere, where it still serves Electron's role keys. macOS
-  context menus (`src/main/context-menu.ts`) send back a token and an id. Menu targets
+  context menus (`src/main/context-menu.ts`) open only in the focused window or within 1 s of input there, and send
+  back a token and an id. Menu targets
   (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
-  `contextmenu` listener, only `.menu-layer` reaches z-index 30000, and the page cannot read the clipboard: main runs
-  Paste only just after a click, key press or tap in the focused window.
+  `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
+- The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
+  in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
 - Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
   gates); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
   `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
@@ -99,7 +104,8 @@ pages, limits, error codes, display formats, benchmarks).
 
 - TypeScript: no semicolons, single quotes, 2-space indent, long lines. C#: 4-space indent, nullable enabled, warnings
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
-- One `claude/<topic>` branch per PR off `main`; squash merges; imperative commit subjects.
+- One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
+  commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
 - CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
   every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
   manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS

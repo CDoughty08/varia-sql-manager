@@ -14,6 +14,8 @@ export interface SpawnSpec {
   readonly env?: NodeJS.ProcessEnv
   /** Packaged builds word setup failures as "reinstall" rather than "rebuild". */
   readonly packaged: boolean
+  /** A file the command needs (the development build's dll): when it is missing, the spawn fails as a missing command does. */
+  readonly requires?: string
 }
 
 export interface Clock {

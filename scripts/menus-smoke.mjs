@@ -23,6 +23,9 @@ const failures = []
 const watchdog = setTimeout(() => { console.error('Menus suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 540000)
 // The smoke window is hidden, so animation frames come once a second and Playwright's two-frame stability check costs
 // two seconds a click or hover. Nothing in the menus animates, so presses skip it; assertions still wait for each result.
+// Layout does wait for frames: after a zoom, a window resize, or a panel shown, hidden, floated, or docked, Dockview and
+// Monaco move things up to a second later, so the suite waits for that (`settle`, `rezoom`) before such a press, and
+// presses on a panel's tab, which Dockview moves, keep the checks.
 const fast = { force: true }
 
 const menubar = () => page.getByRole('menubar', { name: 'Application menu' })
@@ -59,6 +62,18 @@ async function choose(name, label, role = 'menuitem') {
   await menubarItem(name).click(fast)
   await menu(name).getByRole(role, { name: label, exact: true }).click(fast)
   await expect(openMenus()).toHaveCount(0)
+}
+/** Waits two animation frames, by which Dockview and Monaco have laid out a change of size. */
+const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+/**
+ * Makes a choice that zooms the page and waits until the page has seen the new zoom: its resize event comes up to a few
+ * hundred milliseconds after main reports the new level, closes any menu open by then, and moves every item.
+ */
+async function rezoom(name, label) {
+  await page.evaluate(() => { window.variaResized = new Promise(resolve => addEventListener('resize', () => resolve(), { once: true })) })
+  await choose(name, label)
+  await page.evaluate(() => window.variaResized)
+  await settle()
 }
 const exit = process.platform === 'win32' ? { label: 'Exit', key: 'Alt+F4' } : { label: 'Quit', key: 'Ctrl+Q' }
 /** The fake backend's requests of one method since the last `forgetCalls`, oldest first (their params). */
@@ -321,9 +336,9 @@ try {
   await expect(textbox()).toBeFocused()
   await choose('Edit', 'Paste')
   await expect.poll(editorText).toBe('abc')
-  await choose('View', 'Zoom In')
+  await rezoom('View', 'Zoom In')
   await expect.poll(zoomLevel).toBe(0.5)
-  await choose('View', 'Reset Zoom')
+  await rezoom('View', 'Reset Zoom')
   await expect.poll(zoomLevel).toBe(0)
   // Paste reads the system clipboard, so main runs it only just after a click or key press: the page cannot run it alone.
   await application.evaluate(({ clipboard }) => clipboard.writeText('from another app'))
@@ -428,6 +443,7 @@ try {
   await page.keyboard.press('Control+R')
   await expect(outputTab).toBeVisible()
   await page.keyboard.press('Control+Shift+R')
+  await settle()
   // Window › Show Results Pane is the same toggle, checked while the pane shows.
   await menubarItem('Window').click(fast)
   const showResults = menu('Window').getByRole('menuitemcheckbox', { name: 'Show Results Pane', exact: true })
@@ -441,6 +457,7 @@ try {
   expect(await page.evaluate(() => window.variaSentinel)).toBe(42)
   expect(await application.evaluate(() => globalThis.variaReloadPrompts)).toBe(0)
   await expect.poll(editorText).toContain('SELECT 2;')
+  await settle()
   // View › Reload Window shows no key.
   await menubarItem('View').click(fast)
   await expect(menu('View').getByRole('menuitem', { name: 'Reload Window', exact: true }).locator('.menu-keybinding')).toHaveText('')
@@ -482,9 +499,9 @@ try {
   await expect(editorMenu).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
-  // The page cannot read the clipboard: Paste is Electron's role and copies go through main.
+  // The page has no clipboard read of its own: Paste is Electron's role, gated in main, and copies go through main.
   expect(await page.evaluate(() => navigator.clipboard.readText().then(() => 'read', error => error.name))).toBe('NotAllowedError')
-  console.log('Menus checks: the editor context menu by mouse, Shift+F10, and the context-menu key, and no clipboard reads.')
+  console.log('Menus checks: the editor context menu by mouse, Shift+F10, and the context-menu key, and no navigator.clipboard reads.')
 
   // 8. Query tab menus act on the tab they were opened for: Close All But This, and the file items of a saved query.
   await application.evaluate(({ dialog, shell }, path) => {
@@ -526,9 +543,10 @@ try {
   await expect.poll(clipboard).toBe(savedPath)
   console.log('Menus checks: query tab menus close other queries, save, copy the path, and open the folder.')
 
-  // 9. Panel tab menus replace Dockview's: Float, then Dock, then Close, by mouse and keyboard.
-  const panelMenu = menu('Panel tab')
-  await outputTab.click({ button: 'right', force: true })
+  // 9. Panel tab menus replace Dockview's: Float, then Dock, then Close, by mouse and keyboard. Dockview moves the tab
+  // as it lays out each change, so right-clicks on it keep Playwright's checks: one without them can land on the editor.
+  const panelMenu = menu('Panel tab'), rightClickOutputTab = () => outputTab.click({ button: 'right' })
+  await rightClickOutputTab()
   await expect(panelMenu.locator('.menu-item .menu-label')).toHaveText(['Float', 'Close'])
   // The tab's outline shows on every side, although the output tab has splitters above it and to its left.
   expect(await page.locator('.dv-tab[data-menu-target]').evaluate(tab => {
@@ -539,10 +557,11 @@ try {
   })).toBe(true)
   await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click(fast)
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
-  await outputTab.click({ button: 'right', force: true })
+  await rightClickOutputTab()
   await expect(panelMenu.locator('.menu-item .menu-label')).toHaveText(['Dock', 'Close'])
   await panelMenu.getByRole('menuitem', { name: 'Dock', exact: true }).click(fast)
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
+  await settle()
   const outputDockTab = page.locator('.dv-tab').filter({ has: outputTab })
   await outputDockTab.focus()
   await page.keyboard.press('Shift+F10')
@@ -550,11 +569,12 @@ try {
   await expect(outputDockTab).toHaveAttribute('data-menu-target', '')
   await page.keyboard.press('Escape')
   await expect(outputDockTab).toBeFocused()
-  await outputTab.click({ button: 'right', force: true })
+  await rightClickOutputTab()
   await panelMenu.getByRole('menuitem', { name: 'Close', exact: true }).click(fast)
   await expect(outputTab).toHaveCount(0)
   await choose('Window', 'Query Output')
   await expect(outputTab).toBeVisible()
+  await settle()
   expect(await page.locator('.dv-context-menu').count()).toBe(0)
   console.log('Menus checks: panel tab menus float, dock, and close panels.')
 
@@ -634,6 +654,7 @@ try {
   await reopen()
   await setContentSize(1100, 740)
   await expect(openMenus()).toHaveCount(0)
+  await settle()
   await reopen()
   await page.evaluate(() => window.dispatchEvent(new Event('blur')))
   await expect(openMenus()).toHaveCount(0)
@@ -836,6 +857,13 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'menus-grid-dark.png') })
   await outputMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click(fast)
   await expect.poll(clipboard).toBe(['Id\t(No column name)', '1\ta', '2\tb', '3\tc'].join(eol))
+  // macOS reports Control+click as a left press with Control and opens the menu, so there it keeps the selection as a
+  // right-click does; elsewhere it is a left press.
+  await cell(0, 0).click(fast)
+  await cell(2, 1).click({ modifiers: ['Shift'], force: true })
+  await cell(1, 1).dispatchEvent('pointerdown', { button: 0, buttons: 1, ctrlKey: true, pointerType: 'mouse', isPrimary: true })
+  await cell(1, 1).dispatchEvent('pointerup', { button: 0, buttons: 0, ctrlKey: true, pointerType: 'mouse', isPrimary: true })
+  await expect(selected()).toHaveCount(process.platform === 'darwin' ? 6 : 1)
   // Ctrl+A and Ctrl+C in the focused grid, then Ctrl+Shift+C with headers.
   await expect(grid).toBeFocused()
   await page.keyboard.press('Control+A')
@@ -1139,8 +1167,14 @@ try {
     expect((await page.evaluate(request => window.varia.showContextMenu(request), { ...forged, ...change })).ok, JSON.stringify(change)).toBe(false)
   }
   for (const call of [() => window.varia.runRole('openExternal'), () => window.varia.revealSqlFile('x')]) expect((await page.evaluate(call)).ok).toBe(false)
+  // Nor does an idle page get one: main shows a menu only in the focused window (the hidden smoke window never is) or
+  // just after a click, tap, or key press in it, so a background page cannot put Paste where the user is working.
+  expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false)
+  await page.waitForTimeout(1500)
+  expect(await page.evaluate(request => window.varia.showContextMenu(request), { ...forged, menu: 'input.context', visible: ['edit.paste'] }))
+    .toEqual({ ok: false, error: 'A native context menu needs the focused window or a click, tap, or key press in it.' })
   expect((await popups()).length).toBe(8)
-  console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, and the fallback.')
+  console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, the fallback, and none for an idle page.')
 
   // 16. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
   // master, and the server's Refresh reloads its lists without an error.

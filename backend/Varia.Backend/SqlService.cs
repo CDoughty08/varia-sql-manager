@@ -401,11 +401,15 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
                     SqlDataReader? reader = null;
                     try
                     {
-                        // Sequential access streams each value once, in column order, so a huge value is never materialised.
+                        // Sequential access streams each value once, in column order, so a huge value is never materialised
+                        // (ColumnPlan reads past the rest of a truncated one).
                         reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, token);
                         do
                         {
                             ColumnPlan? plan = null;
+                            bool? hasLong = null;
+                            var skipped = false;
+                            long transient = 0;
                             if (reader.FieldCount > 0)
                             {
                                 if (sets.Count >= args.MaxResultSets) overflowSets++;
@@ -422,6 +426,19 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
                             }
                             while (true)
                             {
+                                // A row is not stored only for reasons that last for the rest of the set, so once one has been
+                                // skipped the rest of a set with a long column is read past in one go; rows already stored
+                                // become readable first.
+                                if (skipped && (hasLong ??= plan?.HasLong ?? ColumnPlan.HasLongColumns(reader)))
+                                {
+                                    if (currentSet?.SealDelay is not null)
+                                    {
+                                        currentSet.Seal();
+                                        events.Sealed();
+                                    }
+                                    await SkipRowsAsync(reader, command, currentSet, events, token);
+                                    break;
+                                }
                                 var read = reader.ReadAsync(token);
                                 // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
                                 // pages after 200 ms without a row, so a slow statement's rows become readable.
@@ -432,19 +449,26 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
                                     events.Sealed();
                                 }
                                 if (!await read) break;
+                                // The reader has let go of the previous row, so a large xml value read whole is garbage now.
+                                store.Discarded(transient);
+                                transient = 0;
+                                skipped = true;
                                 if (currentSet is null) continue;
                                 currentSet.CountRow();
                                 events.RowsChanged();
                                 if (args.MaxRows > 0 && storedRows >= args.MaxRows) { currentSet.Skip(TruncationReason.RowLimit); continue; }
                                 var builder = currentSet.BeginRow();
                                 if (builder is null) continue;
+                                skipped = false;
                                 int truncatedCells;
                                 try { truncatedCells = plan!.ReadRow(reader, builder, messages.Add, token); }
                                 catch { currentSet.AbortRow(); throw; }
+                                transient = plan.TransientBytes;
                                 var sealedBefore = currentSet.SealedPages;
                                 if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
                                 if (currentSet.SealedPages != sealedBefore) events.Sealed();
                             }
+                            store.Discarded(transient);
                             if (currentSet is not null)
                             {
                                 currentSet.Complete();
@@ -613,6 +637,25 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         reportedBand = band;
         publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
     }
+
+    /// <summary>Reads past the rest of a result set that stores no more rows and has a long column, counting its rows.
+    /// ReadAsync would skip each long value by buffering all of it, in time quadratic in its size and deaf to the token; a
+    /// synchronous Read skips it in linear time, and Cancel stops it. That Read also blocks while the server is slow to
+    /// send the next row (a lock, a slow plan, a remote server), so it runs on a thread of its own: on pool threads, a
+    /// few such queries delayed every other request, cancels included, by seconds.</summary>
+    private static Task SkipRowsAsync(SqlDataReader reader, SqlCommand command, ResultSetBuffer? set, QueryEventSink events, CancellationToken token) =>
+        Task.Factory.StartNew(() =>
+        {
+            using var cancel = token.Register(command.Cancel);
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!reader.Read()) return;
+                if (set is null) continue;
+                set.CountRow();
+                events.RowsChanged();
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private object Cancel(CancelArgs args)
     {

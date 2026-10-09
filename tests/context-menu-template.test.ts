@@ -31,7 +31,7 @@ describe('native context menu template', () => {
   it('shows the catalogue\'s labels and keys on macOS, with Electron roles for the clipboard and keys that never register', () => {
     const editor = contextMenuTemplate(request('editor.context', { disabled: ['query.execute', 'edit.cut'] }), 'darwin', () => {})
     expect(describeTemplate(editor)).toEqual([
-      'Connection >', '  Connect… (click)', '  Disconnect (click)', '  Disconnect All Queries (click)', '  ---', '  Change Connection… (click)', '---',
+      'Connection >', '  Connect… (click)', '  Disconnect (click)', '  Disconnect All Queries (click)', '  Reconnect… (click)', '  ---', '  Change Connection… (click)', '---',
       'Execute (click, F5, disabled)', 'Cancel Executing Query (click)', '---', 'Cut (role cut, Cmd+X, disabled)', 'Copy (role copy, Cmd+C)', 'Paste (role paste, Cmd+V)', '---',
       'Command Palette… (click, Cmd+Shift+P)'
     ])
@@ -86,8 +86,8 @@ describe('native context menu template', () => {
   })
 })
 
-/** A window and menus that record what the popups do. */
-function popups(style: 'native' | 'custom' = 'native', zoom = 1.25) {
+/** A window and menus that record what the popups do; `userCanAct` is main's focus and recent-input check. */
+function popups(style: 'native' | 'custom' = 'native', zoom = 1.25, userCanAct = () => true) {
   const sent: unknown[][] = [], shown: { menu: number; x: number; y: number; callback: () => void }[] = [], closed: number[] = []
   let destroyed = false, built = 0
   const window: PopupWindow = {
@@ -100,7 +100,7 @@ function popups(style: 'native' | 'custom' = 'native', zoom = 1.25) {
     templates.push(template)
     return { popup: options => { shown.push({ menu, x: options.x, y: options.y, callback: options.callback }) }, closePopup: () => { closed.push(menu) } }
   }
-  const service = new ContextMenuPopups<PopupWindow>({ style, platform: 'darwin', build })
+  const service = new ContextMenuPopups<PopupWindow>({ style, platform: 'darwin', userCanAct, build })
   return { service, window, sent, shown, closed, templates, destroy: () => { destroyed = true } }
 }
 const valid = { token: 7, menu: 'explorer.context', x: 100, y: 40, visible: ['explorer.copyName', 'explorer.refresh'], disabled: ['explorer.refresh'], checked: [] }
@@ -145,6 +145,18 @@ describe('context menu popups', () => {
     }
     expect([shown.length, closed]).toEqual([1, []])
   })
+  it('shows nothing while the user cannot be acting (no focused window and no click, tap, or key just now)', async () => {
+    let userCanAct = true
+    const { service, window, shown, closed, templates } = popups('native', 1.25, () => userCanAct)
+    void service.show(valid, window)
+    userCanAct = false
+    // Main refuses before building a menu, and the open one stays; the page then shows its own menu, inside its window.
+    await expect(service.show({ ...valid, token: 8 }, window)).rejects.toThrow('A native context menu needs the focused window or a click, tap, or key press in it.')
+    expect([templates.length, shown.length, closed]).toEqual([1, 1, []])
+    userCanAct = true
+    void service.show({ ...valid, token: 9 }, window)
+    expect([templates.length, shown.length, closed]).toEqual([2, 2, [1]])
+  })
   it('sends nothing to a closed window, and forgets a menu that could not pop up', async () => {
     const { service, window, sent, templates, closed, destroy } = popups()
     void service.show(valid, window)
@@ -152,7 +164,7 @@ describe('context menu popups', () => {
     ;(find(templates[0], 'explorer.copyName')?.click as () => void)()
     service.close()
     expect([sent, closed]).toEqual([[], []])
-    const failing = new ContextMenuPopups<PopupWindow>({ style: 'native', platform: 'darwin', build: () => ({ popup: () => { throw new Error('No popup.') }, closePopup: () => { closed.push(0) } }) })
+    const failing = new ContextMenuPopups<PopupWindow>({ style: 'native', platform: 'darwin', userCanAct: () => true, build: () => ({ popup: () => { throw new Error('No popup.') }, closePopup: () => { closed.push(0) } }) })
     await expect(failing.show(valid, popups().window)).rejects.toThrow('No popup.')
     failing.close()
     expect(closed).toEqual([])

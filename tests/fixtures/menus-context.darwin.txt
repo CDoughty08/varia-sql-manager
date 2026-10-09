@@ -4,6 +4,7 @@ editor.context, for the query editor
     &Connect…  ++++
     &Disconnect  -+--
     Disconnect &All Queries  -++-
+    &Reconnect…  ++++
     ---
     C&hange Connection…  ++--
   ---

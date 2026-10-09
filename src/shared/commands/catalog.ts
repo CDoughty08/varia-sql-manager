@@ -233,11 +233,14 @@ export const commandCatalog = {
       { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
-  // A lost server's menu reconnects that server.
+  // A lost server's menu reconnects that server; elsewhere, the active query's lost connection or one the user picks.
   'connection.reconnect': {
     title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && backendReady',
     unavailableHint: 'No connection was lost.',
-    menus: [{ menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' }]
+    menus: [
+      { menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'query.connection', group: '1_connect', order: 4, mnemonic: 'r' },
+      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' }
+    ]
   },
   // Takes a lost connection out of Object Explorer; its queries become disconnected.
   'connection.removeLost': {

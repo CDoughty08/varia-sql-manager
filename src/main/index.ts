@@ -55,9 +55,13 @@ let previewSeq = 0
 let rendererLoaded = false
 let rendererReady = false
 let rendererUnresponsive = false
-// Native context menus on macOS; smoke tests may choose either style on any platform.
+// Native context menus on macOS; smoke tests may choose either style on any platform. Either condition shows one: a
+// right-click on an inactive macOS window does not focus it but is input, and VoiceOver's VO+Shift+M is no input but
+// comes from the focused window. Hidden smoke windows are never focused, so their menus need a click or key: no bypass.
 const menuStyle = menuStyleFor(process.platform, process.env)
-const contextMenus = new ContextMenuPopups<BrowserWindow>({ style: menuStyle, platform: process.platform, build: template => Menu.buildFromTemplate(template) })
+const contextMenus = new ContextMenuPopups<BrowserWindow>({
+  style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent(), build: template => Menu.buildFromTemplate(template)
+})
 // Tests use their own profile so layout checks never modify the user's workspace preferences.
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // A second instance would overwrite this instance's layouts and connection library.
@@ -123,6 +127,8 @@ function rendererCanConfirm(window: BrowserWindow): boolean {
 const menuActions: ApplicationMenuActions = {
   command,
   isChecked: id => menuBridge.isChecked(id),
+  pageHasKeyFocus: () => !!mainWindow?.isFocused() && !mainWindow.webContents.isDevToolsFocused(),
+  sendActionToFirstResponder: action => Menu.sendActionToFirstResponder(action),
   // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
   setTheme: patch => { chooseTheme(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
   // The menu has no other way to report a failure, so it becomes the theme notice; the messages are fixed sentences.
@@ -209,8 +215,8 @@ function createWindow(): void {
   contents.on('will-navigate', event => event.preventDefault())
   const activation = userActivation = new UserActivation()
   contents.on('input-event', (_event, input) => activation.note(input.type))
-  // The page cannot read the clipboard (Paste is Electron's role, run just after a click or key; copies the renderer
-  // makes go through main); every other permission stays denied.
+  // The page may write the clipboard but has no permission to read it: it reads only through the Paste role, which runs
+  // within a second of a click or key, and its copies go through main. Every other permission stays denied.
   contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
     callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
   })

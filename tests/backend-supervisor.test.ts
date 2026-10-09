@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import type { BackendState, QueryEvent } from '../src/shared/contracts'
 import { FrameKind } from '../src/shared/ipc/wire/frames'
 import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
@@ -83,6 +83,27 @@ describe('BackendSupervisor over the fake backend process', () => {
       expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message })
       expect(value.current).toBeUndefined()
     }
+  })
+  it('explains a missing development build without starting dotnet, and starts once it is built', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'varia-no-build-'))
+    directories.push(root)
+    const spec = backendSpawnSpec({ packaged: false, root, resourcesPath: root, platform: process.platform, smokeTest: false })
+    // dotnet without the dll starts, prints to stdout and exits: before the check that read as three crashes.
+    const processes = fakeSpawn()
+    const value = new BackendSupervisor(spec, { spawn: processes.spawn })
+    supervisors.push(value)
+    const statuses: string[] = []
+    value.onState(state => statuses.push(state.status))
+    expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: sentences.spawnDevelopment })
+    expect(value.state).toMatchObject({ status: 'failed', reason: 'spawn', message: sentences.spawnDevelopment })
+    expect((value.state as { details: string }).details).toContain('Last loss: generation 1, spawn (ENOENT (Varia.Backend.dll))')
+    expect(statuses).toEqual(['failed'])
+    expect(processes.backends).toHaveLength(0)
+    await mkdir(dirname(spec.requires!), { recursive: true })
+    await writeFile(spec.requires!, '')
+    await value.restart('manual')
+    await expect.poll(() => value.state.status).toBe('ready')
+    expect(processes.backends).toHaveLength(1)
   })
   it('explains a backend from a different build without retrying', async () => {
     const value = supervisor('v1')
@@ -363,7 +384,7 @@ describe('smoke-test backends', () => {
     const env = { VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath }
     expect(backendSpawnSpec({ ...base, smokeTest: true, env })).toEqual({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', join(base.root, 'tests/fixtures/backend.mjs'), 'workbench'], cwd: base.root, packaged: false })
     expect(backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_BACKEND: 'crash-after:2' } }).args.slice(-2)).toEqual(['crash-after', '2'])
-    expect(backendSpawnSpec({ ...base, smokeTest: false, env }).command).toBe('dotnet')
+    expect(backendSpawnSpec({ ...base, smokeTest: false, env })).toMatchObject({ command: 'dotnet', requires: join(base.root, 'backend/Varia.Backend/bin/Debug/net10.0/Varia.Backend.dll') })
     expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], packaged: true })
     expect(() => backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_NODE: 'node' } })).toThrow('absolute VARIA_TEST_NODE')
   })

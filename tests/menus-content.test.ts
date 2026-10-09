@@ -50,9 +50,9 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
 /**
  * Every context menu for each kind of target, resolved in the same states: the editor, a saved and an unsaved query's
  * tab, a docked and a floating panel's tab, text fields that are editable, read-only, a password, or empty, every
- * kind of Object Explorer node (on server-a, which connects in the second state), and Query Output's views of a query
- * that ran before (on server-r, gone since): its grid with and without selected cells, and Messages and the XML plan
- * with and without selected text.
+ * kind of Object Explorer node (on server-a, which connects in the second state, and server-l, lost with a backend
+ * restart before the first state), and Query Output's views of a query that ran before (on server-r, gone since): its grid
+ * with and without selected cells, and Messages and the XML plan with and without selected text.
  */
 async function resolveContexts(platform: Platform): Promise<{ labels: string[]; snapshots: (readonly ResolvedMenuItem[])[][] }> {
   const fixture = workbenchFixture({ platform })

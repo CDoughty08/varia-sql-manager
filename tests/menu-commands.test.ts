@@ -437,6 +437,29 @@ describe('Object Explorer commands', () => {
     expect(await commands.execute('explorer.newQuery', server, 'menu')).toBe(false)
     expect(documents.getSnapshot().documents).toHaveLength(0)
   })
+  it('reconnect or remove a server lost with a backend restart from its node\'s menu, and reconnect a lost query from Query › Connection', async () => {
+    const { commands, documents, api, connections, host, menus, quickInput } = connected()
+    const tab = documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
+    connections.add(connectionInfo('server-b'), connectionOptions)
+    api.push({ status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 2, queries: 0 }, retryInMs: 0 })
+    api.push(readyBackend(2))
+    const lost = on({ kind: 'server' }, 'server-b', true)
+    const items = (resolved: ReturnType<typeof menus.resolve>) => resolved.map(item => item.kind === 'command' ? [item.title, item.enabled] : item.kind)
+    expect(items(menus.resolve('explorer.context', lost.target))).toEqual([['Connect…', true], ['Reconnect…', true], ['Remove', true]])
+    // A lost server's node acts on that server, not on the active query's lost one.
+    expect(await commands.execute('connection.reconnect', lost, 'menu')).toBe(true)
+    expect(await commands.execute('connection.removeLost', lost, 'menu')).toBe(true)
+    expect([vi.mocked(host.reconnect).mock.calls, vi.mocked(host.disconnect).mock.calls]).toEqual([[['server-b']], [['server-b']]])
+    const connection = menus.resolve('query').find(item => item.key === 'query.connection')
+    if (connection?.kind !== 'submenu') throw new Error('Query › Connection is missing')
+    expect(items(connection.items)).toEqual([['Connect…', true], ['Disconnect', false], ['Disconnect All Queries', false], ['Reconnect…', true], 'separator', ['Change Connection…', true]])
+    expect(await commands.execute('connection.reconnect', { tabId: tab.id }, 'menu')).toBe(true)
+    expect(vi.mocked(host.reconnect).mock.calls.at(-1)).toEqual(['server-a'])
+    expect(quickInput.getSnapshot()).toMatchObject({ visible: false })
+    // Once the server is reconnected or removed, its node can do neither.
+    connections.remove('server-b')
+    for (const id of ['connection.reconnect', 'connection.removeLost'] as const) expect(commands.isEnabled(id, lost), id).toBe(false)
+  })
 })
 
 describe('Query Output commands', () => {

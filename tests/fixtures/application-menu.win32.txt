@@ -73,6 +73,7 @@
     {"id":"connection.connect@query.connection","label":"Connect…","registerAccelerator":false,"type":"normal","click":[["command","connection.connect"]]}
     {"id":"query.disconnect","label":"Disconnect","registerAccelerator":false,"type":"normal","click":[["command","query.disconnect"]]}
     {"id":"query.disconnectAll","label":"Disconnect All Queries","registerAccelerator":false,"type":"normal","click":[["command","query.disconnectAll"]]}
+    {"id":"connection.reconnect@query.connection","label":"Reconnect…","registerAccelerator":false,"type":"normal","click":[["command","connection.reconnect"]]}
     {"type":"separator"}
     {"id":"query.changeConnection","label":"Change Connection…","registerAccelerator":false,"type":"normal","click":[["command","query.changeConnection"]]}
   {"accelerator":"Ctrl+U","id":"query.changeDatabase","label":"Change Database…","registerAccelerator":false,"type":"normal","click":[["command","query.changeDatabase"]]}

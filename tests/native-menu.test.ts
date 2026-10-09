@@ -42,8 +42,8 @@ describe('native menu requests', () => {
     const request = nativeMenuRequest(3, 'editor.context', items, { x: 10.6, y: -4 })
     expect(request).toEqual({
       token: 3, menu: 'editor.context', x: 11, y: 0,
-      visible: ['connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'query.execute', 'query.cancel', 'edit.cut', 'edit.copy', 'edit.paste', 'workbench.showCommands'],
-      disabled: ['connection.connect', 'query.cancel'], checked: []
+      visible: ['connection.connect', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect', 'query.changeConnection', 'query.execute', 'query.cancel', 'edit.cut', 'edit.copy', 'edit.paste', 'workbench.showCommands'],
+      disabled: ['connection.connect', 'connection.reconnect', 'query.cancel'], checked: []
     })
     expect(contextMenuRequestSchema.safeParse(request).success).toBe(true)
     expect(nativeMenuRequest(1, 'editor.context', items, { x: 40000, y: Number.NaN })).toMatchObject({ x: 32767, y: 0 })

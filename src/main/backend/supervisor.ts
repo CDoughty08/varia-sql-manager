@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { basename } from 'node:path'
 import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor } from '../../shared/ipc/methods'
@@ -44,7 +46,7 @@ const maxSessions = 4096
 
 const stamp = (descriptor: BackendResultDescriptor, generation: number): ResultDescriptor => ({ ...descriptor, generation })
 
-interface Retired { readonly generation: number; readonly reason: string; readonly loss?: Loss; readonly uptimeMs: number; readonly hello?: BackendHello; readonly connection: BackendConnection }
+interface Retired { readonly generation: number; readonly reason: string; readonly loss?: Loss; readonly uptimeMs: number; readonly hello?: BackendHello; readonly connection?: BackendConnection }
 interface Waiter { resolve(connection: BackendConnection): void; reject(error: BackendError): void }
 
 /**
@@ -247,6 +249,14 @@ export class BackendSupervisor {
   private launch(): void {
     this.clock.clearTimeout(this.restartTimer)
     const generation = ++this.generation
+    // Without the development build `dotnet` still starts, prints its error on stdout and exits: a "crash" three times
+    // over, where the user needs the setup sentence. Checked at every launch, so Restart works once it is built.
+    const requires = this.spec.requires
+    if (requires !== undefined && !existsSync(requires)) {
+      const loss: Loss = { reason: 'spawn', detail: `ENOENT (${basename(requires)})` }
+      this.retired = { generation, reason: loss.reason, loss, uptimeMs: 0 }
+      return this.fail('spawn', failureMessage(loss, this.spec.packaged)!)
+    }
     const connection = new BackendConnection(this.spec, generation, this.deps)
     this.connection = connection
     this.readySince = undefined
@@ -343,7 +353,7 @@ export class BackendSupervisor {
       `Runtime: ${retired?.hello?.runtime ?? 'unknown'}`,
       `OS: ${retired?.hello?.platform ?? `${process.platform} ${process.arch}`}`,
       'Backend diagnostics (stderr):',
-      ...(retired?.connection.stderr.length ? retired.connection.stderr.map(line => '  ' + line) : ['  none'])
+      ...(retired?.connection?.stderr.length ? retired.connection.stderr.map(line => '  ' + line) : ['  none'])
     ].join('\n')
   }
 
