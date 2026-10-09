@@ -509,7 +509,7 @@ internal sealed class SqlService : IRequestDispatcher
         if (overflowSets > 0) output.Add("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString(CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
         if (oversizeSets > 0) output.Add(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
         if (failure is not null && batchNumber > 0) output.Add("Stopped at batch " + batchNumber + ", repetition " + iteration + "; " + completed + " of " + totalBatches + " batch executions completed.");
-        if (context is not null) context.Unsent = () => { foreach (var set in descriptors) store.Release(set.ResultId); };
+        if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
             totalBatches, database, messages.Truncated, new ResultBudget(store.UsedBytes, store.GlobalBytes, store.QueryBytes));
     }
@@ -544,7 +544,7 @@ internal sealed class SqlService : IRequestDispatcher
     private ResultsCloseResult CloseResults(ResultsCloseArgs args)
     {
         if (args.ResultIds is not { Length: >= 1 and <= 1024 } || args.ResultIds.Contains(0u)) throw new RequestException("INVALID_PARAMS", "Between 1 and 1024 result IDs are required.");
-        var closed = args.ResultIds.Distinct().Count(store.Release);
+        var closed = store.Release(args.ResultIds);
         return new ResultsCloseResult(closed, store.UsedBytes);
     }
 

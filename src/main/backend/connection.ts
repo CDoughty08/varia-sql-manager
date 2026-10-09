@@ -202,6 +202,8 @@ export class BackendConnection {
   /** Scripts written to (or queued for) this generation that have not finished. */
   get runningQueries(): number { let count = 0; for (const request of this.pending.values()) if (request.method === 'query.execute') count++; return count }
   get info(): BackendHello | undefined { return this.hello }
+  /** Settles once the process has exited and its pipes have closed, so `stderr` then holds everything it wrote. */
+  get closed(): Promise<void> { return this.exited }
   /** The backend's last stderr lines, at most 32 of 512 characters, oldest first. */
   get stderr(): readonly string[] { return (this.stderrPartial ? [...this.stderrLines, this.stderrPartial] : this.stderrLines).slice(-stderrRing.lines) }
   /** Milliseconds since the backend last sent anything (any frame, including PONG, counts). */

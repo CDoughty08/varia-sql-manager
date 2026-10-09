@@ -238,6 +238,40 @@ describe('BackendSupervisor restarts', () => {
     expect(again).toBe(true)
     expect(value.state).toEqual({ status: 'stopped' })
   })
+  it('stop also waits for a generation that a restart is still closing, and kills it', async () => {
+    // Restart now is offered when a backend is wedged; quitting right after must not leave that backend running.
+    const { value, advance, backends } = simulated({ configure: (backend, index) => { backend.exitOnEnd = index !== 0 } })
+    await value.request('system.health', {})
+    const restarting = value.restart('manual')
+    await advance(0)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
+    let stopped = false
+    const stopping = value.stop().then(() => { stopped = true })
+    await advance(1999)
+    expect(backends[1].alive).toBe(false)
+    expect(backends[0].alive).toBe(true)
+    expect(stopped).toBe(false)
+    await advance(1)
+    await stopping
+    await restarting
+    expect(backends[0].signals).toEqual(['SIGKILL'])
+  })
+  it('Copy details includes a crash line that reaches stderr after the GOAWAY', async () => {
+    const { value, advance, last, states } = simulated()
+    await value.request('system.health', {})
+    for (const delay of [0, 1000]) { last().exit(1); await advance(delay) }
+    const backend = last()
+    // The backend writes the line before its GOAWAY, but on another pipe: main reads it only after the loss.
+    backend.stderr.pause()
+    backend.stderr.write('varia-backend: unhandled InvalidOperationException at SqlService.Run\n')
+    backend.send(FrameKind.GOAWAY, 0, 0, { code: 'BACKEND_CRASH', message: 'InvalidOperationException' })
+    backend.stderr.resume()
+    await settle()
+    expect(value.state).toMatchObject({ status: 'failed', reason: 'crashLoop', lost: { generation: 3, reason: 'crash' } })
+    const failed = states.filter(state => state.status === 'failed') as { details: string }[]
+    expect(failed[0].details).not.toContain('InvalidOperationException')
+    expect((value.state as { details: string }).details).toContain('  varia-backend: unhandled InvalidOperationException at SqlService.Run')
+  })
 })
 
 describe('BackendSupervisor liveness', () => {

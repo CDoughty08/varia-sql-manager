@@ -13,15 +13,20 @@ const lostHint = "This query's connection was lost when the SQL backend restarte
 const newSession = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted'
 await mkdir('artifacts', { recursive: true })
 const temporary = []
+// Backends a regression could leave running after their app exits; killed at the end whatever happens.
+const orphans = []
 let app
 let page
 const failures = []
 let step = 'start'
 const watchdog = setTimeout(() => { console.error(`Backend suite timed out during: ${step}.`); app?.process()?.kill(); process.exit(1) }, 300000)
 
-async function launch(extra = {}) {
-  const profile = await mkdtemp(resolve('artifacts', 'backend-profile-'))
-  temporary.push(profile)
+/** Starts the app on a new profile, or on `profile`, and returns the profile. */
+async function launch(extra = {}, profile = undefined) {
+  if (!profile) {
+    profile = await mkdtemp(resolve('artifacts', 'backend-profile-'))
+    temporary.push(profile)
+  }
   const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, ...extra }
   delete env.ELECTRON_RUN_AS_NODE
   // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
@@ -30,6 +35,7 @@ async function launch(extra = {}) {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  return profile
 }
 /** Quits without the unsaved-query prompts (they would wait for a hidden dialog), killing the app if it hangs. */
 async function close() {
@@ -320,16 +326,43 @@ try {
   expect(failures).toEqual([])
 
   step = 'quit'
-  // Quitting stops the backend before the app exits, killing one that cannot act on stdin EOF, and starts no other.
-  const wedged = await hooks()
-  await writeFile(join(control, 'ignore-eof'), '')
+  // Quitting stops every backend before the app exits, and starts no other. Restart now has just replaced a backend that
+  // cannot act on stdin EOF (as a wedged one cannot), and the app quits at once: it must still wait for main to kill it.
   const spawns = async () => (await readFile(join(control, 'spawns.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).pid)
-  const spawnedBefore = await spawns()
-  await close()
   const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
+  const wedged = await hooks()
+  orphans.push(wedged.pid)
+  await writeFile(join(control, `ignore-eof-${wedged.state.generation}`), '')
+  const spawnedBefore = await spawns()
+  await page.evaluate(() => { void window.varia.restartBackend() })
+  // The next generation (which exits on EOF) is running, so quitting now waits only for the replaced one.
+  await expect.poll(async () => (await spawns()).length).toBe(spawnedBefore.length + 1)
+  const spawnedAtQuit = await spawns()
+  await close()
   await expect.poll(() => alive(wedged.pid), { timeout: 3000 }).toBe(false)
-  expect(await spawns()).toEqual(spawnedBefore)
-  console.log('Quit passed: the wedged backend was killed before the app exited, and no backend was started while quitting.')
+  expect(await spawns()).toEqual(spawnedAtQuit)
+  console.log('Quit passed: the backend Restart now replaced was killed before the app exited, and no backend was started while quitting.')
+
+  step = 'relaunch while quitting'
+  // While the app waits to kill a backend that ignores EOF (2 s, then a kill) it has no window, so it gives up the
+  // single-instance lock: a relaunch then opens a window instead of being handed to the quitting app and dropped.
+  const quitControl = await mkdtemp(resolve('artifacts', 'backend-control-'))
+  temporary.push(quitControl)
+  await writeFile(join(quitControl, 'ignore-eof'), '')
+  const profile = await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: quitControl })
+  const stuck = await ready(1)
+  orphans.push(stuck.pid)
+  const quitting = app
+  app = undefined
+  await quitting.evaluate(({ app, dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); app.quit() })
+  const lock = () => quitting.evaluate(({ app }) => app.hasSingleInstanceLock() ? 'held' : 'released').catch(() => 'exited')
+  await expect.poll(lock, { timeout: 10000, intervals: [50] }).toBe('released')
+  await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }, profile)
+  await expect(statusBar()).toContainText('fake · Ready')
+  await expect.poll(() => alive(stuck.pid), { timeout: 5000 }).toBe(false)
+  await Promise.race([quitting.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))])
+  await close()
+  console.log('Relaunch while quitting passed: the quitting app released the single-instance lock, and the relaunch opened its window.')
 
   step = 'incompatible backend'
   // 4. A protocol 1 backend is detected from its JSON answer to the handshake, at once.
@@ -343,6 +376,7 @@ try {
   console.log('Backend restart checks passed: real readiness and reload, crash during execute with Reconnect, manual restart prompt, crash loop, unresponsive warning, and incompatible build.')
 } finally {
   await close()
+  for (const pid of orphans) { try { process.kill(pid, 'SIGKILL') } catch { /* Already gone, as it should be. */ } }
   clearTimeout(watchdog)
   for (const path of temporary) await rm(path, { recursive: true, force: true })
 }

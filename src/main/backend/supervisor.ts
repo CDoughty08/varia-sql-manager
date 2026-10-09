@@ -44,7 +44,7 @@ const maxSessions = 4096
 
 const stamp = (descriptor: BackendResultDescriptor, generation: number): ResultDescriptor => ({ ...descriptor, generation })
 
-interface Retired { readonly generation: number; readonly reason: string; readonly loss?: Loss; readonly uptimeMs: number; readonly hello?: BackendHello; readonly stderr: readonly string[] }
+interface Retired { readonly generation: number; readonly reason: string; readonly loss?: Loss; readonly uptimeMs: number; readonly hello?: BackendHello; readonly connection: BackendConnection }
 interface Waiter { resolve(connection: BackendConnection): void; reject(error: BackendError): void }
 
 /**
@@ -70,6 +70,8 @@ export class BackendSupervisor {
   /** Query session ids by the generation their last script ran on. */
   private readonly sessions = new Map<string, number>()
   private connection: BackendConnection | undefined
+  /** Closes of generations that a restart replaced; stop() waits for them too, so none outlives the app. */
+  private readonly retiring = new Set<Promise<void>>()
   private generation = 0
   private snapshot: BackendState = { status: 'stopped' }
   private started = false
@@ -168,7 +170,10 @@ export class BackendSupervisor {
     this.stopWatchdog()
     if (previous) this.setState({ status: 'restarting', generation: previous.generation, lost: this.retire(previous, reason), retryInMs: 0 })
     this.launch()
-    await previous?.close(undefined, reason === 'reload' ? new BackendError('BACKEND_LOST', sentences.reloaded) : undefined)
+    if (!previous) return
+    const closed = previous.close(undefined, reason === 'reload' ? new BackendError('BACKEND_LOST', sentences.reloaded) : undefined)
+    this.retiring.add(closed)
+    try { await closed } finally { this.retiring.delete(closed) }
   }
 
   /** Ends the backend for good; later calls wait for the same stop. */
@@ -185,7 +190,7 @@ export class BackendSupervisor {
     const error = new BackendError('BACKEND_UNAVAILABLE', sentences.closing)
     for (const waiter of this.waiting.splice(0)) waiter.reject(error)
     if (this.snapshot.status !== 'stopped') this.setState({ status: 'stopped' })
-    await previous?.close(undefined, error)
+    await Promise.all([previous?.close(undefined, error), ...this.retiring])
   }
 
   /** Requests that need no backend: cleanup of what a lost generation held, and refusals. */
@@ -295,7 +300,16 @@ export class BackendSupervisor {
   }
 
   private remember(connection: BackendConnection, reason: string, loss: Loss | undefined): void {
-    this.retired = { generation: connection.generation, reason, loss, uptimeMs: this.clock.now() - connection.startedAt, hello: connection.info, stderr: connection.stderr }
+    const retired: Retired = { generation: connection.generation, reason, loss, uptimeMs: this.clock.now() - connection.startedAt, hello: connection.info, connection }
+    this.retired = retired
+    // stderr is a separate pipe: a crash's diagnostic line can arrive after the GOAWAY that ended the generation, so
+    // failed details are rebuilt once the process has closed and its stderr is complete.
+    void connection.closed.then(() => {
+      const state = this.snapshot
+      if (this.retired !== retired || state.status !== 'failed') return
+      const details = this.details(`failed (${state.reason})`)
+      if (details !== state.details) this.setState({ ...state, details })
+    })
   }
 
   private markLost(id: string): void {
@@ -329,7 +343,7 @@ export class BackendSupervisor {
       `Runtime: ${retired?.hello?.runtime ?? 'unknown'}`,
       `OS: ${retired?.hello?.platform ?? `${process.platform} ${process.arch}`}`,
       'Backend diagnostics (stderr):',
-      ...(retired?.stderr.length ? retired.stderr.map(line => '  ' + line) : ['  none'])
+      ...(retired?.connection.stderr.length ? retired.connection.stderr.map(line => '  ' + line) : ['  none'])
     ].join('\n')
   }
 

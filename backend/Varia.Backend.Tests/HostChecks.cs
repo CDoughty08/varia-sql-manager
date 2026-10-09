@@ -184,7 +184,8 @@ internal static class HostChecks
         using (var host = new HostHarness(new HostOptions { HelloTimeout = TimeSpan.FromMilliseconds(200) }))
         {
             var goAway = host.Next(FrameKind.GoAway, 3000);
-            check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR" && host.Exits.TryPeek(out var code) && code == 64, "no HELLO in time is GOAWAY PROTOCOL_ERROR and exit 64");
+            check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR" && host.Exited.Wait(2000) && host.Exits.TryPeek(out var code) && code == 64,
+                "no HELLO in time is GOAWAY PROTOCOL_ERROR and exit 64");
         }
 
         using (var host = new HostHarness())
@@ -201,7 +202,7 @@ internal static class HostChecks
             host.Host.Crash(new InvalidOperationException("private detail"));
             var goAway = host.Next(FrameKind.GoAway);
             check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "BACKEND_CRASH" && Body(frame).GetProperty("message").GetString()!.Contains("InvalidOperationException")
-                && !Body(frame).GetProperty("message").GetString()!.Contains("private detail") && host.Exits.TryPeek(out var code) && code == 70,
+                && !Body(frame).GetProperty("message").GetString()!.Contains("private detail") && host.Exited.Wait(2000) && host.Exits.TryPeek(out var code) && code == 70,
                 "an unhandled exception is a GOAWAY BACKEND_CRASH naming only the exception type, and exit 70");
         }
 

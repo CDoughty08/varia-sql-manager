@@ -301,9 +301,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   'released', truncated?, incomplete }`. Result ids are u32 from 1 per generation and always paired with it.
 - **Released** by `results.close`, the next `query.execute` on the same session, `query.session.close`,
   `connections.disconnect`, and process exit. A release fails the result's in-flight reads with `RESULT_RELEASED` after
-  the current page. Releasing more than 64 MiB triggers one gen2 collection shortly after (pages are large arrays that
-  nothing else would collect): non-compacting while results remain, aggressive (returning memory to the operating
-  system) when none do.
+  the current page. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
+  or one at a time), triggers one gen2 collection shortly after (pages are large arrays that nothing else would
+  collect): non-compacting while results remain, aggressive (returning memory to the operating system) when none do.
 
 Notes appended to the summary's messages:
 
@@ -428,9 +428,10 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   one), closes the generation gracefully (stdin end, 2 s, then kill), starts the next at once, and resets the breaker.
   **Reload** of the workbench restarts the backend the same way, without a notice, so no session outlives the page that
   owned it.
-- **Quitting** waits for the backend to stop (stdin end, 2 s, then kill) before the app exits, so a backend that cannot
-  act on EOF never outlives the app with its sessions and locks. Closing the last window starts no new backend unless the
-  app keeps running (macOS).
+- **Quitting** waits for the backend to stop (stdin end, 2 s, then kill) before the app exits, and for any generation a
+  restart is still closing, so a backend that cannot act on EOF never outlives the app with its sessions and locks. While
+  it waits the app has no window and releases the single-instance lock, so relaunching starts a new instance at once.
+  Closing the last window starts no new backend unless the app keeps running (macOS).
 - **Reconnect.** A lost connection stays in Object Explorer as "{server} — connection lost" with **Reconnect…** and
   **Remove**. Only Reconnect (prefilled, without the password) replaces it, moving its query tabs to the new
   connection; their first execution starts with "This query opened a new SQL session. The previous session ended when
@@ -516,8 +517,8 @@ each column once, in order, with a reader chosen once per result set from the sc
 | decimal, numeric (precision ≤ 28) | the column's scale | `-123.4500`, `42`, `0.50` |
 | decimal, numeric (precision 29 – 38) | exact, via `SqlDecimal` | `12345678901234567890123456789012345678`, `1.5000000000` |
 | money, smallmoney | two to four decimals (`0.00##`) | `1.00`, `1431.50`, `123.4567`, `-922337203685477.5808` |
-| real | shortest round-trip | `0.1`, `3.4028235E+38`, `-1.5` |
-| float | shortest round-trip | `0.1`, `1E+20`, `1E-05`, `2`, `-1.7976931348623157E+308` |
+| real | 7 significant digits (`G7`) | `0.1`, `3.141593`, `3.402823E+38`, `-1.5` |
+| float | 15 significant digits (`G15`) | `0.1`, `0.3` (`0.1E0 + 0.2E0`), `3.14159265358979`, `1E+20`, `1E-05`, `2`, `-1.79769313486232E+308` |
 | date | `yyyy-MM-dd` | `2026-10-08` |
 | time(n) | n fractional digits | `12:34:56.1234567`, `00:00:00.0000000`, `12:34:56` |
 | smalldatetime | `yyyy-MM-dd HH:mm:ss` | `2026-10-08 12:34:00` |
@@ -535,8 +536,10 @@ each column once, in order, with a reader chosen once per result set from the sc
 | sql_variant | its base type's format; `SqlBinary` as `0x…` text. SqlClient reports neither the base type nor its scale, so date, time, datetime2 and datetimeoffset show 7 fractional digits (a date also shows `00:00:00.0000000`) and smalldatetime shows milliseconds | `2026-10-08 00:00:00.0000000`, `12:34:56.0000000`, `2026-10-08 12:34:00.000` |
 | NULL | `NULL`, styled with `resultsGrid.nullForeground` | — |
 
-The money and float samples (`1.00`, `123.4567`, `1E+20`) still await the owner's check against SSMS 2022 on Windows;
-a correction is one line in `CellFormat.cs` plus its fixture line. The SQL Server 2025 json and vector paths are checked
+SSMS runs on .NET Framework, whose default text for float and real has 15 and 7 significant digits, so SSMS shows
+`PI()` as `3.14159265358979`, not .NET's shortest round-trip `3.141592653589793`; negative zero shows as `0`. The money
+and float samples (`1.00`, `123.4567`, `1E+20`, `3.14159265358979`, `3.141593`) still await the owner's check against
+SSMS 2022 on Windows; a correction is one line in `CellFormat.cs` plus its fixture line. The SQL Server 2025 json and vector paths are checked
 only against a 2025 server; CI runs 2022 and reports that block as skipped.
 
 ## Security

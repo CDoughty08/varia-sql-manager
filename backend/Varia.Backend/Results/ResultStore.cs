@@ -31,6 +31,7 @@ internal sealed class ResultStore
     private readonly Func<(long Load, long Threshold)> memory;
     private uint nextId = 1;
     private long used;
+    private long freedSinceCollect;
     private int collecting;
 
     /// <param name="memory">The operating system's memory load and its high-load threshold, in bytes.</param>
@@ -140,7 +141,19 @@ internal sealed class ResultStore
         lock (gate) return resultId >= 1 && resultId < nextId && !sets.ContainsKey(resultId);
     }
 
-    public bool Release(uint resultId) => Release(set => set.ResultId == resultId) == 1;
+    public bool Release(uint resultId) => Release([resultId]) == 1;
+
+    /// <summary>Releases the given ids (unknown and repeated ids are skipped) and returns how many were released.</summary>
+    public int Release(IEnumerable<uint> resultIds)
+    {
+        List<ResultSetBuffer> released = [];
+        lock (gate)
+        {
+            foreach (var id in resultIds) if (sets.Remove(id, out var set)) released.Add(set);
+        }
+        return Free(released);
+    }
+
     public int ReleaseSession(string sessionId) => Release(set => set.Budget.SessionId == sessionId);
     public int ReleaseConnection(string connectionId) => Release(set => set.Budget.ConnectionId == connectionId);
     public int ReleaseAll() => Release(_ => true);
@@ -153,22 +166,29 @@ internal sealed class ResultStore
             released = [.. sets.Values.Where(match)];
             foreach (var set in released) sets.Remove(set.ResultId);
         }
+        return Free(released);
+    }
+
+    private int Free(List<ResultSetBuffer> released)
+    {
         long freed = 0;
         foreach (var set in released) freed += set.Release();
-        if (freed > CollectAfterRelease) Collect();
+        // Counted across calls: closing many small results, together or one at a time, frees as much as one large release.
+        if (freed > 0 && Interlocked.Add(ref freedSinceCollect, freed) > CollectAfterRelease) Collect();
         return released.Count;
     }
 
     /// <summary>Pages are large arrays, which only a gen2 collection frees, and nothing else in the backend allocates enough
     /// to trigger one: without it the process keeps its peak memory after results are closed and grows under store and
-    /// close churn. Releases that come together share one collection, off the caller's thread. Non-compacting while
-    /// results remain (a short pause); when the store is empty, an aggressive one also returns the freed memory to the
-    /// operating system.</summary>
+    /// close churn. One runs after every 64 MiB released, counted across releases; releases that come together share it,
+    /// off the caller's thread. Non-compacting while results remain (a short pause); when the store is empty, an
+    /// aggressive one also returns the freed memory to the operating system.</summary>
     private void Collect()
     {
         if (Interlocked.Exchange(ref collecting, 1) == 1) return;
         _ = Task.Delay(100).ContinueWith(_ =>
         {
+            Interlocked.Exchange(ref freedSinceCollect, 0);
             Volatile.Write(ref collecting, 0);
             if (UsedBytes == 0) GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
             else GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);

@@ -4,9 +4,9 @@ using System.Text;
 
 namespace Varia.Backend.Results;
 
-/// <summary>SSMS display text for SQL values (owner decision: bits as 1/0, money with 2–4 decimals, shortest round-trip
-/// floats, space-separated dates), written as UTF-8 straight into a page. tests/fixtures/sql-display.json holds the
-/// sample strings; docs/ipc.md has the table.</summary>
+/// <summary>SSMS display text for SQL values (owner decision: bits as 1/0, money with 2–4 decimals, floats with SSMS's
+/// significant digits, space-separated dates), written as UTF-8 straight into a page. tests/fixtures/sql-display.json
+/// holds the sample strings; docs/ipc.md has the table.</summary>
 internal static class CellFormat
 {
     /// <summary>Room for any fixed-size value (the longest, decimal(38) with sign and point, is 40 bytes).</summary>
@@ -34,11 +34,12 @@ internal static class CellFormat
 
     public static int WriteMoney(Span<byte> destination, decimal value) => Format(destination, value, "0.00##");
 
-    /// <summary>real: the shortest text that round-trips (0.1, 3.4028235E+38).</summary>
-    public static int WriteReal(Span<byte> destination, float value) => Format(destination, value, default);
+    /// <summary>real: 7 significant digits (3.141593, 3.402823E+38). SSMS runs on .NET Framework, whose default float text
+    /// has 7 and 15 significant digits, not .NET's shortest round-trip form (3.1415927); negative zero shows as 0 there.</summary>
+    public static int WriteReal(Span<byte> destination, float value) => Format(destination, value == 0 ? 0f : value, "G7");
 
-    /// <summary>float: the shortest text that round-trips (0.1, 1E+20, 1E-05).</summary>
-    public static int WriteFloat(Span<byte> destination, double value) => Format(destination, value, default);
+    /// <summary>float: 15 significant digits, as SSMS shows them (3.14159265358979, 0.3 for 0.1E0 + 0.2E0, 1E+20, 1E-05).</summary>
+    public static int WriteFloat(Span<byte> destination, double value) => Format(destination, value == 0 ? 0d : value, "G15");
 
     public static int WriteDate(Span<byte> destination, DateTime value) => Format(destination, value, "yyyy-MM-dd");
     public static int WriteSmallDateTime(Span<byte> destination, DateTime value) => Format(destination, value, "yyyy-MM-dd HH:mm:ss");

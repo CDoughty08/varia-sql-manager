@@ -8,7 +8,8 @@
 //   allow/audits        server.objects.list may list audits (otherwise it fails as a permission error would)
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   silent-<generation> that generation stops answering PING, as a hung backend would
-//   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it
+//   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
+//   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
 import { appendFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -37,7 +38,11 @@ if (mode === 'v1') {
 } else {
   process.stdin.on('data', chunk => { for (const frame of parser.push(chunk)) handle(frame) })
 }
-process.stdin.on('end', () => { if (!control('ignore-eof')) process.exit(0) })
+process.stdin.on('end', () => {
+  if (!control('ignore-eof') && !control(`ignore-eof-${generation}`)) process.exit(0)
+  // Nothing else keeps the event loop alive once stdin has ended, and a wedged backend does not exit by itself.
+  else setInterval(() => {}, 1 << 30)
+})
 if (controlDirectory) appendFileSync(join(controlDirectory, 'spawns.jsonl'), JSON.stringify({ pid: process.pid }) + '\n')
 
 function handle(frame) {

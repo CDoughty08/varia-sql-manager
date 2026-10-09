@@ -396,5 +396,7 @@ app.on('before-quit', event => {
 app.on('will-quit', event => {
   if (backendStopped || !backend) return
   event.preventDefault()
+  // Every window is closed: a relaunch during the wait must start a new instance, not be handed to this one and dropped.
+  app.releaseSingleInstanceLock()
   void backend.stop().finally(() => { backendStopped = true; app.exit(0) })
 })

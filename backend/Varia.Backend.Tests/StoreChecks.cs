@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -152,20 +153,45 @@ internal static class StoreChecks
         var after = GC.GetTotalMemory(false);
         check(stored > 64L * 1024 * 1024 && GC.CollectionCount(2) > collections && held - after > stored / 2,
             "releasing more than 64 MiB of results collects them (" + held / 1048576 + " MB held, " + after / 1048576 + " MB after)");
+
+        // results.close releases one id per call, and four results of about 25 MiB each are each below the threshold.
+        foreach (var together in new[] { false, true })
+        {
+            store = new ResultStore(1L << 30, 1L << 30);
+            List<ResultSetBuffer> sets = [];
+            for (var i = 0; i < 4; i++)
+            {
+                var small = Open(store, store.BeginQuery("s" + i, "c"));
+                Fill(small, 0, 120_000);
+                small.Complete();
+                sets.Add(small);
+            }
+            held = GC.GetTotalMemory(false);
+            collections = GC.CollectionCount(2);
+            stored = store.UsedBytes;
+            var largest = sets.Max(item => item.Describe().BytesStored);
+            var released = together ? store.Release(sets.Select(item => item.ResultId)) : sets.Count(item => store.Release(item.ResultId));
+            SpinWait.SpinUntil(() => GC.CollectionCount(2) > collections, 5000);
+            after = GC.GetTotalMemory(false);
+            check(largest < 64L * 1024 * 1024 && stored > 64L * 1024 * 1024 && released == 4 && store.UsedBytes == 0 && GC.CollectionCount(2) > collections && held - after > stored / 2,
+                "releasing more than 64 MiB in results under 64 MiB each, " + (together ? "in one call" : "one at a time") + ", collects them ("
+                + held / 1048576 + " MB held, " + after / 1048576 + " MB after)");
+        }
     }
 
     private static void Events(Action<bool, string> check)
     {
-        var events = new List<(string Type, bool Droppable)>();
+        var events = new List<(JsonElement Body, bool Droppable)>();
         var store = new ResultStore(1L << 30, 1L << 29);
         var set = Open(store, store.BeginQuery("s", "c"));
-        using (var sink = new QueryEventSink((value, droppable) => { lock (events) events.Add((JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("type").GetString()!, droppable)); }))
+        var clock = Stopwatch.StartNew();
+        using (var sink = new QueryEventSink((value, droppable) => { lock (events) events.Add((JsonSerializer.SerializeToElement(value, HostChecks.Json), droppable)); }))
         {
             sink.Opened(set);
             Fill(set, 0, PageBuilder.FirstPageRows);
             sink.Sealed();
             int immediate;
-            lock (events) immediate = events.Count(item => item.Type == "progress");
+            lock (events) immediate = events.Count(item => Type(item.Body) == "progress");
             check(set.RowsAvailable == PageBuilder.FirstPageRows && immediate == 1, "the first sealed page is reported at once, not at the next progress tick");
             sink.Progress(0, 1, 1, 1);
             for (var i = 0; i < 50; i++)
@@ -177,17 +203,27 @@ internal static class StoreChecks
             }
             set.Complete();
             sink.Closed(set);
+            // The tick is still live until the sink is disposed and may report progress for the sets still open (none here).
+            Thread.Sleep(130);
             sink.Message("after close");
         }
-        var types = events.Select(item => item.Type).ToList();
+        var elapsed = clock.ElapsedMilliseconds;
+        var types = events.Select(item => Type(item.Body)).ToList();
+        var closed = types.IndexOf("resultSet.closed");
         var progress = types.Count(type => type == "progress");
-        check(types[0] == "resultSet.opened" && types.IndexOf("resultSet.closed") > types.LastIndexOf("progress") && types.Last() == "messages"
-            && progress is >= 1 and <= 8 && events.All(item => item.Droppable == item.Type is "progress" or "messages"),
-            "query events: opened first, progress coalesced to 10 a second (" + progress + " in 0.5 s), messages batched and droppable, closed with the final descriptor");
+        var lastMessages = types.LastIndexOf("messages");
+        check(types[0] == "resultSet.opened" && closed > 0 && types.LastIndexOf("resultSet.closed") == closed
+            && events[closed].Body.GetProperty("descriptor").GetProperty("rowsAvailable").GetInt64() == set.RowsAvailable
+            && events.Skip(closed + 1).Where(item => Type(item.Body) == "progress").All(item => item.Body.GetProperty("results").GetArrayLength() == 0)
+            && lastMessages > closed && events[lastMessages].Body.GetProperty("messages").EnumerateArray().Last().GetString() == "after close"
+            && progress >= 1 && progress <= elapsed / 100 + 2 && events.All(item => item.Droppable == Type(item.Body) is "progress" or "messages"),
+            "query events: opened first, progress coalesced to 10 a second (" + progress + " in " + elapsed + " ms), messages batched and droppable, closed once with the final descriptor and never reported by later progress");
         var count = events.Count;
         Thread.Sleep(250);
         check(events.Count == count, "nothing is emitted after the sink is disposed");
     }
+
+    private static string Type(JsonElement body) => body.GetProperty("type").GetString()!;
 
     /// <summary>results.read and results.close through ProtocolHost with the real service and synthetic results.</summary>
     private static void HostReads(Action<bool, string> check)
