@@ -101,6 +101,8 @@ explorer.context, for a server whose connection was lost
   &Reconnect…  ++++
   Re&move  +++-
 explorer.context, for the Databases folder
+  F&ilter Settings…  -+++
+  ---
   Re&fresh  F5  -+++
 explorer.context, for a database
   New &Query  -++-
@@ -109,6 +111,15 @@ explorer.context, for a database
   ---
   Re&fresh  F5  -+++
 explorer.context, for a Tables folder
+  F&ilter Settings…  -+++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for a filtered Tables folder
+  F&ilter Settings…  -+++
+  Remo&ve Filter  -+++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for the Programmability folder
   Re&fresh  F5  -+++
 explorer.context, for a table
   Select Top 1000 Ro&ws  -++-

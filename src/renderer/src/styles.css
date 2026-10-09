@@ -170,6 +170,22 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-actions { display: flex; gap: 2px; margin-left: auto; padding-left: 4px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
 .oe-actions .codicon { font-size: 14px; }
+/* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
+.monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
+.filter-dialog { width: min(640px, calc(100vw - 40px)); }
+.filter-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.filter-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 7px 8px 3px 0; vertical-align: top; line-height: 20px; }
+.filter-grid thead th { width: 112px; padding: 0 8px 6px 0; }
+.filter-grid thead th:nth-child(2) { width: 176px; }
+.filter-grid thead th:last-child { width: auto; }
+.filter-grid td { padding: 3px 8px 3px 0; vertical-align: top; min-width: 0; }
+.filter-grid td:last-child { padding-right: 0; }
+.filter-grid input, .filter-grid select { width: 100%; min-width: 0; height: 28px; }
+.filter-dates { display: flex; gap: 6px; }
+.filter-dates input { flex: 1; }
+.filter-problem { margin-top: 4px; font-size: 11px; color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
+.filter-dialog .field-note { margin-top: 12px; }
+.filter-dialog .connect-error { margin: 12px 0 0; }
 .explorer-fault { padding: 18px; font-size: 12px; color: var(--varia-errorForeground); }
 .explorer-fault button { margin-top: 8px; border: 1px solid var(--varia-button-border); }
 .explorer-error { flex-shrink: 0; font-size: 11px; color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }

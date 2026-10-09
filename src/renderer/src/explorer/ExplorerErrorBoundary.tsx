@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
 import { onUnexpectedError } from '../core/errors'
 
 /**
@@ -16,4 +16,21 @@ export default class ExplorerErrorBoundary extends Component<{ readonly onReload
       <button onClick={() => { this.props.onReload(); this.setState({ failed: false }) }}>Reload Object Explorer</button>
     </div>
   }
+}
+
+/**
+ * Smoke builds only (main's test mode): `window.__variaTestExplorerFault()` makes the tree's next render throw, so the
+ * suite can check the boundary and its Reload. The fault is this component's state, which the boundary discards.
+ */
+export function FaultProbe(): null {
+  const [fault, setFault] = useState(false)
+  useEffect(() => {
+    if (!window.varia?.testMode) return
+    const trigger = () => setFault(true)
+    const host = window as unknown as { __variaTestExplorerFault?: () => void }
+    host.__variaTestExplorerFault = trigger
+    return () => { if (host.__variaTestExplorerFault === trigger) delete host.__variaTestExplorerFault }
+  }, [])
+  if (fault) throw new Error('Object Explorer test fault.')
+  return null
 }

@@ -1,4 +1,4 @@
-import { memo, type MouseEvent, type RefCallback } from 'react'
+import { memo, type DragEvent, type MouseEvent, type RefCallback } from 'react'
 import { explorerLimits, kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { useConnectionAccent } from '../core/WorkbenchContext'
@@ -12,6 +12,8 @@ export interface RowActions {
   toggle(rowId: number): void
   reconnect(rowId: number): void
   remove(rowId: number): void
+  /** Fills a drag's data with the row's insert text; false cancels the drag. */
+  dragStart(rowId: number, transfer: DataTransfer): boolean
 }
 export interface RowProps {
   readonly rowId: number
@@ -26,6 +28,8 @@ export interface RowProps {
   /** A synthetic row's text. */
   readonly text: string
   readonly selected: boolean
+  /** The row has a name to drag into a query. */
+  readonly draggable: boolean
   /** The server of the active query. */
   readonly active: boolean
   /** The connection's color, for a server row. */
@@ -79,7 +83,7 @@ function Accent({ color }: { color: string | undefined }) {
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text, selected, active, color, actions, menuTarget }: RowProps) {
+function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text, selected, draggable, active, color, actions, menuTarget }: RowProps) {
   const style = { transform: `translateY(${index * explorerLimits.rowHeight}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
@@ -98,8 +102,9 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} title={rowTooltip(node)} style={style}
-    onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}>
+    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} title={rowTooltip(node)} style={style} draggable={draggable || undefined}
+    onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}
+    onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
     {indent}
     <span className={`oe-twistie${expandable ? ` codicon codicon-chevron-${node.expanded ? 'down' : 'right'}` : ''}`} aria-hidden="true" onClick={toggle} />

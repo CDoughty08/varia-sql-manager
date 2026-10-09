@@ -89,7 +89,8 @@ export class ExplorerLoader implements Disposable {
   constructor(options: LoaderOptions) {
     this.api = options.api
     this.timers = options.timers ?? browserTimers
-    this.schedule = options.schedule ?? queueMicrotask
+    // Called through a wrapper: the browser's queueMicrotask throws "Illegal invocation" when called as this.schedule().
+    this.schedule = options.schedule ?? (callback => queueMicrotask(callback))
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.limits = { ...explorerLimits, ...options.limits }
     this.onPendingChange = options.onPendingChange

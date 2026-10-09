@@ -3,7 +3,7 @@ import { insertTextFor } from '../../../shared/explorer/refs.ts'
 import { selectTopRowsScript } from '../../../shared/sql/identifiers'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
+import { explorerNodeOf, filterable, type ExplorerMenuNode } from '../menus/targets'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const frame = (callback: () => void) => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(callback); else callback() }
@@ -32,10 +32,16 @@ export function explorerContribution({ commands, documents, queries, connections
     if (node.kind === 'server') return connections.get(node.connectionId)?.server
     return node.kind === 'folder' ? explorer.insertText(node.id) : insertTextFor(node.ref)
   }
+  const filterNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && filterable(node) ? node : undefined }
   const script = async (name: TableName) => unwrap(await api.scriptTable(name.connectionId, name.database, name.schema, name.name)).sql
   const registrations = [
     commands.register('explorer.refresh', { run: args => explorer.refresh(nodeOf(args)?.id) }),
     commands.register('explorer.stop', { run: () => explorer.stop() }),
+    commands.register('explorer.filter', { when: args => !!filterNode(args), run: args => { const node = filterNode(args); if (node) explorer.openFilter(node.id) } }),
+    commands.register('explorer.removeFilter', {
+      when: args => !!filterNode(args)?.filtered,
+      run: args => { const node = filterNode(args); if (node) explorer.setFilter(node.id, undefined) }
+    }),
     commands.register('explorer.collapseAll', { run: () => explorer.collapseAll() }),
     commands.register('explorer.newQuery', {
       when: args => !!queryNode(args),

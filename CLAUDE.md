@@ -11,7 +11,7 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the seven Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the eight Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file

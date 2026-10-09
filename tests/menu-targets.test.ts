@@ -15,7 +15,7 @@ describe('menu targets', () => {
       { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'output', floating: true }, input
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, outputView: '', paneFloating: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, outputView: '', paneFloating: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, { ...none, outputView: 'messages' }, { ...none, paneFloating: true }, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -23,6 +23,11 @@ describe('menu targets', () => {
     const lost = { id: 1, lost: true, kind: 'server', connectionId: 'c', label: 'c', ref: { type: 'object', object: { kind: 'server' } } } as const
     expect(targetKeys({ kind: 'explorer', node: lost })).toEqual({ ...none, explorerNode: 'server', explorerServerLost: true })
     expect(targetKeys({ kind: 'dockTab', pane: 'editor', floating: false }).paneFloating).toBe(false)
+    // Folders Filter Settings can narrow, with or without a filter; folders that list nothing to filter.
+    const folder = (id: 'tables' | 'programmability', filtered?: boolean) => ({ id: 2, lost: false, kind: 'folder', folder: id, connectionId: 'c', label: id, ref: { type: 'folder', owner: { kind: 'database', name: 'd' }, folder: id }, ...(filtered ? { filtered } : {}) } as const)
+    expect(targetKeys({ kind: 'explorer', node: folder('tables') })).toEqual({ ...none, explorerNode: 'folder', explorerFolderFilterable: true })
+    expect(targetKeys({ kind: 'explorer', node: folder('tables', true) })).toEqual({ ...none, explorerNode: 'folder', explorerFolderFilterable: true, explorerFolderFiltered: true })
+    expect(targetKeys({ kind: 'explorer', node: folder('programmability') })).toEqual({ ...none, explorerNode: 'folder' })
     // File commands act on the tab the menu is for.
     expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't2', 't3', undefined, undefined])
     expect(argsFor(targets[4])).toEqual({ target: targets[4] })

@@ -58,6 +58,8 @@ export interface TreeNode {
   lost: boolean
   /** The first page took longer than the loading-row delay. */
   showLoading: boolean
+  /** Taken out of the tree (refreshed, filtered, evicted or removed) and waiting to be deleted. */
+  detached?: boolean
   generation: number
   rev: number
   lastUsed: number
@@ -321,19 +323,24 @@ export function needsQuery(node: Pick<TreeNode, 'kind' | 'folder' | 'subtype'>):
   return !!node.subtype && !!kindSpecs[node.kind].historyLookup?.includes(node.subtype)
 }
 /**
- * What `*` does for a node: every collapsed expandable sibling (itself included) is expanded. Those already loaded or
- * served without SQL go in `expand`; at most `cap` that need a query go in `load`; the rest are `skipped`.
+ * What `*` does for a node: every collapsed expandable sibling (itself included) is expanded. Those already loaded, and
+ * those served without SQL, go in `expand`; those that need a query go in `load`. At most `cap` of them may need a
+ * request, SQL or not, so `*` on one of 10,000 tables sends 50 requests rather than flooding the queue; the rest are
+ * `skipped`.
  */
 export function siblingPlan(nodes: NodeTable, roots: readonly number[], id: number, cap: number = explorerLimits.siblingLoads): { expand: number[]; load: number[]; skipped: number } {
   const plan = { expand: [] as number[], load: [] as number[], skipped: 0 }
   const node = nodes.get(id)
   if (!node) return plan
   const siblings = node.parent ? nodes.get(node.parent)?.children ?? [] : roots.map(root => nodes.get(root))
+  let requests = 0
   for (const value of siblings) {
     if (!expandable(value) || value.expanded) continue
-    if (value.load === 'loaded' || !needsQuery(value)) plan.expand.push(value.id)
-    else if (plan.load.length < cap) plan.load.push(value.id)
-    else plan.skipped++
+    if (value.load === 'loaded') { plan.expand.push(value.id); continue }
+    if (requests >= cap) { plan.skipped++; continue }
+    requests++
+    if (needsQuery(value)) plan.load.push(value.id)
+    else plan.expand.push(value.id)
   }
   return plan
 }

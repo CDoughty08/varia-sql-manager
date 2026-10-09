@@ -54,7 +54,7 @@ export interface ExplorerServiceOptions {
 type PageMode = 'keep' | 'replace' | 'more'
 interface Running { readonly task: LoadTask; readonly mode: PageMode }
 /** What the service remembers about a node beyond what rows show. */
-interface NodeState { pendingMode?: 'keep' | 'replace'; retryMode?: 'keep' | 'replace'; budgetExempt?: boolean; detached?: boolean; loadingTimer?: unknown }
+interface NodeState { pendingMode?: 'keep' | 'replace'; retryMode?: 'keep' | 'replace'; budgetExempt?: boolean; loadingTimer?: unknown }
 
 const serverRef: ExplorerNodeRef = { type: 'object', object: { kind: 'server' } }
 const numbers = new Intl.NumberFormat('en-US')
@@ -111,6 +111,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private scheduled = false
   private disposed = false
   private readonly contextStore = new (class extends SnapshotStore<ExplorerContextState> { set(value: ExplorerContextState) { this.publish(value) } clear() { this.clearListeners() } })(noExplorerContext)
+  private readonly dialogStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
   private readonly unsubscribe: () => void
   /** The selected node's context keys; it publishes only when one changes, and synchronously on `select`. */
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
@@ -259,7 +260,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
     const node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
-    return node && this.attached(node) ? { ...targetOf(node), id: node.id, lost: node.lost } : undefined
+    return node && this.attached(node) ? { ...targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}) } : undefined
   }
   /** The server and database a new query for the row should use (the database is the node's, if it has one). */
   queryTarget(id: number | undefined = this.selected): { connectionId: string; database?: string } | undefined {
@@ -280,6 +281,11 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const text = node.children!.map(column => insertTextFor(column.ref)).filter(value => value !== undefined).join(', ')
     return text && text.length <= 1_000_000 ? text : undefined
   }
+  /** Whether a row can be dragged into a query: objects with a name to insert, and a Columns folder once fully loaded. */
+  canInsert(id: number): boolean {
+    const node = id > 0 ? this.nodes.get(id) : undefined
+    return !!node && this.insertable(node)
+  }
   /** What Copy Name copies: the insert text, or a server's name as connected to. */
   copyText(id: number): string | undefined {
     const node = id > 0 ? this.nodes.get(id) : undefined
@@ -287,6 +293,15 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     return this.insertText(id)
   }
 
+  /** The folder whose Filter Settings dialog is open. */
+  get filterDialog(): ExternalStore<number | undefined> { return this.dialogStore }
+  /** Opens Filter Settings for a folder that can be filtered. */
+  openFilter(folderNodeId: number): void {
+    const node = this.nodes.get(folderNodeId)
+    if (!node?.folder || !folderSpecs[node.folder].filter?.length || !this.attached(node)) throw new Error('Select a folder that can be filtered.')
+    this.dialogStore.set(folderNodeId)
+  }
+  closeFilter(): void { this.dialogStore.set(undefined) }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
     const node = this.nodes.get(folderNodeId)
@@ -356,8 +371,11 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = []
     this.rootByConnection.clear()
     this.selected = undefined
+    this.dialogStore.set(undefined)
     this.syncConnections()
-    this.invalidate()
+    // At once rather than next frame: the tree remounts right after this and must not show the old rows meanwhile.
+    this.dirty = true
+    this.flush()
   }
   dispose(): void {
     if (this.disposed) return
@@ -368,6 +386,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.running.clear()
     this.clearListeners()
     this.contextStore.clear()
+    this.dialogStore.clear()
   }
 
   // Connections
@@ -588,7 +607,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node: TreeNode = {
       id: this.nextId++, parent, connectionId, ref, kind, folder, level: level + 1, label, lower: label.toLocaleLowerCase(), sublabel: undefined, detail: undefined, icon,
       subtype: undefined, status: undefined, created: undefined, hasChildren: false, expanded: false, children: undefined, staticCount: 0, total: undefined, cursor: undefined,
-      load: 'none', more: 'none', error: undefined, connectionError: undefined, filtered: false, lost: false, showLoading: false, generation: 0, rev: 0, lastUsed: 0, descendants: 0
+      load: 'none', more: 'none', error: undefined, connectionError: undefined, filtered: false, lost: false, showLoading: false, detached: false, generation: 0, rev: 0, lastUsed: 0,
+      descendants: 0
     }
     this.nodes.set(node.id, node)
     return node
@@ -660,7 +680,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** In the tree: not removed, evicted or replaced, below a current server. */
   private attached(node: TreeNode): boolean {
     for (let current: TreeNode | undefined = node; current; current = current.parent ? this.nodes.get(current.parent) : undefined) {
-      if (this.states.get(current.id)?.detached) return false
+      if (current.detached) return false
       if (!current.parent) return this.rootByConnection.get(current.connectionId) === current.id
     }
     return false
@@ -681,6 +701,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   private columnsLoaded(node: TreeNode): boolean {
     return node.load === 'loaded' && node.more === 'none' && !node.cursor && !!node.children?.length
+  }
+  private insertable(node: TreeNode): boolean {
+    return node.kind === 'folder' ? node.folder === 'columns' && this.columnsLoaded(node) : kindSpecs[node.kind].insert !== 'none'
   }
 
   private refreshNode(node: TreeNode | undefined): void {
@@ -730,27 +753,39 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.rev++
   }
 
-  /** Takes `children` of `node` out of the tree now and deletes their subtrees in slices. */
+  /**
+   * Takes `children` of `node` out of the tree now and deletes their subtrees in slices. A flag on each child (no set,
+   * no per-child state) keeps a refresh of a 100,000-row folder within one frame.
+   */
   private detach(node: TreeNode, children: readonly TreeNode[]): void {
     if (!children.length) return
-    const gone = new Set<number>()
     let removed = 0
     for (const child of children) {
-      gone.add(child.id)
       removed += 1 + child.descendants
-      this.state(child).detached = true
+      child.detached = true
     }
-    this.abortWithin(gone, 'detach')
-    if (node.children) node.children = node.children.filter(child => !gone.has(child.id))
+    this.abortDetached()
+    if (node.children) node.children = node.children.length === children.length ? [] : node.children.filter(child => !child.detached)
     this.addDescendants(node, -removed)
-    if (this.selected !== undefined && this.inSet(rowOwner(this.selected), gone)) this.selected = node.id
+    const selected = this.selected === undefined ? undefined : this.nodes.get(rowOwner(this.selected))
+    if (selected && !this.attached(selected) && this.within(selected.id, node.id)) this.selected = node.id
     this.graveyard.push({ list: children, next: 0 })
     this.sweep()
+  }
+  /** Aborts the loads of nodes that are no longer in the tree. */
+  private abortDetached(): void {
+    for (const [id, running] of [...this.running]) {
+      const node = this.nodes.get(id)
+      if (node && this.attached(node)) continue
+      this.running.delete(id)
+      this.loader.abort(running.task)
+      this.reverted(id, running, 'detach')
+    }
   }
   private bury(rootId: number): void {
     const root = this.nodes.get(rootId)
     if (!root) return
-    this.state(root).detached = true
+    root.detached = true
     this.graveyard.push({ list: [root], next: 0 })
     this.sweep()
   }
@@ -833,7 +868,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       explorerSelectionFolder: node?.folder ?? '',
       explorerSelectionFilterable: !!node && !!folder?.filter?.length,
       explorerSelectionFiltered: !!node?.filtered,
-      explorerSelectionInsertable: !!node && (node.kind === 'server' || (node.kind === 'folder' ? node.folder === 'columns' && this.columnsLoaded(node) : kindSpecs[node.kind].insert !== 'none')),
+      explorerSelectionInsertable: !!node && (node.kind === 'server' || this.insertable(node)),
       explorerSelectionScriptable: !!node && node.kind !== 'folder' && kindSpecs[node.kind].scriptable,
       explorerLoading: this.loader.pending > 0
     }

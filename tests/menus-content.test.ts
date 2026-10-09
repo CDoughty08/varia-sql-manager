@@ -73,12 +73,12 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   // Server-l's connection was lost with an earlier backend generation.
   fixture.connections.add(connectionInfo('server-l', 0), connectionOptions)
   let ids = 0
-  const at = (ref: ExplorerNodeRef, label: string, connectionId = 'server-a', lost = false): MenuTarget => {
-    const node: ExplorerMenuNode = { id: ++ids, lost, connectionId, ref, label, kind: ref.type === 'folder' ? 'folder' : ref.object.kind, ...(ref.type === 'folder' ? { folder: ref.folder } : {}) }
+  const at = (ref: ExplorerNodeRef, label: string, connectionId = 'server-a', lost = false, filtered = false): MenuTarget => {
+    const node: ExplorerMenuNode = { id: ++ids, lost, connectionId, ref, label, kind: ref.type === 'folder' ? 'folder' : ref.object.kind, ...(ref.type === 'folder' ? { folder: ref.folder } : {}), ...(filtered ? { filtered } : {}) }
     return { kind: 'explorer', node }
   }
   const object = (value: ObjectRef, label: string) => at({ type: 'object', object: value }, label)
-  const folder = (owner: ObjectRef, id: FolderId, label: string) => at({ type: 'folder', owner, folder: id }, label)
+  const folder = (owner: ObjectRef, id: FolderId, label: string, filtered = false) => at({ type: 'folder', owner, folder: id }, label, 'server-a', false, filtered)
   const server: ObjectRef = { kind: 'server' }, appData: ObjectRef = { kind: 'database', name: 'AppData' }, orders: ObjectRef = { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }
   const field = (facts: Partial<InputTarget>): MenuTarget => ({ kind: 'input', element: {} as HTMLElement, readOnly: false, secret: false, hasSelection: true, empty: false, canUndo: true, canRedo: false, ...facts })
   const targets: [string, MenuTarget][] = [
@@ -88,7 +88,8 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ['an empty text field', field({ empty: true, hasSelection: false, canUndo: false })],
     ['Object Explorer\'s empty area', { kind: 'explorer' }], ['a server', object(server, 'server-a.example')],
     ['a server whose connection was lost', at({ type: 'object', object: server }, 'server-l.example', 'server-l', true)], ['the Databases folder', folder(server, 'databases', 'Databases')],
-    ['a database', object(appData, 'AppData')], ['a Tables folder', folder(appData, 'tables', 'Tables')], ['a table', object(orders, 'dbo.Orders')],
+    ['a database', object(appData, 'AppData')], ['a Tables folder', folder(appData, 'tables', 'Tables')], ['a filtered Tables folder', folder(appData, 'tables', 'Tables', true)],
+    ['the Programmability folder', folder(appData, 'programmability', 'Programmability')], ['a table', object(orders, 'dbo.Orders')],
     ['a column', object({ kind: 'column', database: 'AppData', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'Id' }, 'Id')],
     ['a return value', object({ kind: 'returnValue', database: 'AppData', parent: { kind: 'function', schema: 'dbo', name: 'Total' } }, 'Returns int')],
     ['a login', object({ kind: 'login', name: 'sa' }, 'sa')],

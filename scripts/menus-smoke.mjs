@@ -707,11 +707,11 @@ try {
   await expect.poll(() => readFile(scriptFile, 'utf8').catch(() => null)).toBe(createScript)
   expect(await application.evaluate(() => globalThis.variaSaveDialogs.map(path => path.split(/[\\/]/).at(-1)))).toEqual(['dbo.Orders.sql'])
   await expect(tabs()).toHaveCount(tabCount)
-  // Refresh on Tables reloads that folder only.
+  // Refresh on Tables reloads that folder only. Tables can be filtered (explorer-smoke.mjs covers Filter Settings).
   const tables = await row(...ordersPath.slice(0, -1)), stale = await (await row(...ordersPath)).getAttribute('id')
   const listed = { tables: await loads('tables'), databases: await loads('databases') }
   await tables.click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['Refresh'])
+  expect(await labels()).toEqual(['Filter Settings…', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
   await expect.poll(() => loads('tables')).toBe(listed.tables + 1)
   expect(await loads('databases')).toBe(listed.databases)

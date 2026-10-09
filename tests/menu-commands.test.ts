@@ -7,7 +7,7 @@ import type { Platform } from '../src/shared/commands/keybindings'
 import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import type { CommandArgs } from '../src/renderer/src/core/types'
 import { selectAll, type GridSelection } from '../src/renderer/src/grid/selection'
-import type { InputTarget, OutputView } from '../src/renderer/src/menus/targets'
+import type { ExplorerMenuNode, InputTarget, OutputView } from '../src/renderer/src/menus/targets'
 import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
@@ -354,6 +354,30 @@ describe('Object Explorer commands', () => {
     await commands.execute('explorer.refresh', undefined, 'keybinding')
     const root = explorer.rootIds[0]
     expect(refresh.mock.calls).toEqual([[(tables.target as { node: { id: number } }).node.id], [undefined], [root]])
+  })
+  it('open Filter Settings for a folder that can be filtered, and remove a folder\'s filter', async () => {
+    const fixture = connected(), { commands, explorer } = fixture
+    const filtered: CommandArgs = { target: { kind: 'explorer', node: { ...(tables.target as { node: ExplorerMenuNode }).node, filtered: true } } }
+    // From the menu's node (this one is not in the tree, so it fails with a message); the server, a database and the
+    // empty area cannot be filtered.
+    expect(await commands.execute('explorer.filter', tables, 'menu')).toBe(false)
+    expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Filter Settings…”: Select a folder that can be filtered.')
+    for (const args of [server, appData, background, on({ kind: 'server' }, 'server-a', true)]) expect(commands.isEnabled('explorer.filter', args)).toBe(false)
+    expect(commands.isEnabled('explorer.removeFilter', tables)).toBe(false)
+    expect(commands.isEnabled('explorer.removeFilter', filtered)).toBe(true)
+    // From the selection: the toolbar, the palette, and the capped row's Enter.
+    expect(commands.isEnabled('explorer.filter')).toBe(false)
+    explorer.expand(await find(fixture, 'Databases'))
+    const databases = await find(fixture, 'Databases')
+    explorer.select(databases)
+    expect(await commands.execute('explorer.filter', undefined, 'toolbar')).toBe(true)
+    expect(explorer.filterDialog.getSnapshot()).toBe(databases)
+    explorer.closeFilter()
+    explorer.setFilter(databases, { name: { op: 'contains', value: 'App' } })
+    expect(commands.isEnabled('explorer.removeFilter')).toBe(true)
+    expect(await commands.execute('explorer.removeFilter', undefined, 'palette')).toBe(true)
+    expect(explorer.filter(databases)).toBeUndefined()
+    expect(commands.isEnabled('explorer.removeFilter')).toBe(false)
   })
   it('stop every load and collapse everything below the servers', async () => {
     const { commands, explorer } = connected()

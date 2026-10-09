@@ -9,6 +9,7 @@ import type { CommandArgs, CommandId } from './core/types'
 import QueryEditor from './QueryEditor'
 import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
+import FilterDialog from './explorer/FilterDialog'
 import BackendBanner from './BackendBanner'
 import QueryOutput from './QueryOutput'
 import TitleBar from './TitleBar'
@@ -51,6 +52,7 @@ export default function App() {
   const { state: backendState } = useServiceSnapshot(workbench.backend)
   const [health, setHealth] = useState<BackendHealth>()
   const databaseLists = useServiceSnapshot(workbench.databaseList)
+  const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(connectionDefaults)
@@ -206,6 +208,7 @@ export default function App() {
       </main>} output={<QueryOutput tabId={active.id} result={active.result} error={active.error} running={!!activeRunning} rowsRead={activeRunning?.rowsRead} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
     <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}<span className="status-divider">|</span>1,000 row display limit</span></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined) }} />}
+    {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     <QuickInput />
     <MenuLayer />
   </div>

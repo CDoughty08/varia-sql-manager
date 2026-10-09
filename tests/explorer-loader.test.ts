@@ -112,6 +112,33 @@ describe('ExplorerLoader', () => {
     expect(f.outcomes.size).toBe(0)
     expect(f.loader.inFlight).toBe(0)
   })
+  it('flushes cancels on a microtask by default, calling queueMicrotask as the browser requires', async () => {
+    // Chromium's queueMicrotask throws "Illegal invocation" unless called on the global object.
+    const real = globalThis.queueMicrotask
+    vi.stubGlobal('queueMicrotask', function (this: unknown, callback: () => void) {
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation')
+      real(callback)
+    })
+    try {
+      const api = {
+        explorerChildren: vi.fn<VariaApi['explorerChildren']>(() => new Promise(() => {})),
+        explorerCancel: vi.fn<VariaApi['explorerCancel']>(async ids => ({ ok: true, value: { cancelled: ids.length } }))
+      }
+      let ids = 0
+      const loader = new ExplorerLoader({ api, timers: manualTimers().timers, newId: () => `req-${++ids}` })
+      const request = { connectionId: 'a', generation: 0, params: { node: { type: 'object', object: { kind: 'server' } } } } as const
+      const first = loader.enqueue({ ...request, nodeId: 1 }, 'user', () => {}), second = loader.enqueue({ ...request, nodeId: 2 }, 'user', () => {})
+      loader.abort(first)
+      loader.abort(second)
+      await settle()
+      expect(api.explorerCancel.mock.calls).toEqual([[['req-1', 'req-2']]])
+      // The next abort is sent too: a failed schedule would have left the batch closed for good.
+      loader.abort(loader.enqueue({ ...request, nodeId: 3 }, 'user', () => {}))
+      await settle()
+      expect(api.explorerCancel.mock.calls).toEqual([[['req-1', 'req-2']], [['req-3']]])
+      loader.dispose()
+    } finally { vi.unstubAllGlobals() }
+  })
   it('times a load out after 60 seconds: it is cancelled, settles as TIMEOUT and frees its slot', async () => {
     const f = fixture({ inFlightTotal: 1 })
     const slow = f.enqueue('a', 1), next = f.enqueue('a', 2)

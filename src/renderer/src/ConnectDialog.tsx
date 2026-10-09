@@ -3,6 +3,7 @@ import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOp
 import { advancedDefaults, connectionDefaults, connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../../shared/connections'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
+import { trapFocus } from './trap-focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
@@ -23,13 +24,6 @@ const sections: { title: string; fields: Field[] }[] = [
   { title: 'Source', fields: [{ key: 'attachDbFilename', label: 'Attach DB filename', maxLength: 1024 }, { key: 'failoverPartner', label: 'Failover partner', maxLength: 256 }, { key: 'failoverPartnerSpn', label: 'Failover partner SPN', maxLength: 512 }, { key: 'multiSubnetFailover', label: 'Multi subnet failover', boolean: true }, { key: 'serverSpn', label: 'Server SPN', maxLength: 512 }, { key: 'userInstance', label: 'User instance', boolean: true }] }
 ]
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
-function trapFocus(event: KeyboardEvent<HTMLFormElement>) {
-  if (event.key !== 'Tab') return
-  const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary')].filter(item => item.getClientRects().length)
-  const first = items[0], last = items.at(-1)
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-}
 
 function AdvancedProperties({ value, onSave, onClose }: { value: Partial<AdvancedConnectionOptions>; onSave(value: AdvancedConnectionOptions): void; onClose(): void }) {
   const [draft, setDraft] = useState({ ...advancedDefaults, ...value })

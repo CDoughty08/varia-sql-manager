@@ -608,6 +608,22 @@ describe('ExplorerService: connections', () => {
   })
 })
 
+describe('ExplorerService: reset', () => {
+  it('publishes the rebuilt tree at once, so the old rows never show again', () => {
+    const backend = fakeBackend(), connections = new ConnectionService(), queued: (() => void)[] = []
+    const explorer = new ExplorerService({ api: backend.api, connections, events: new EventBus(), schedule: callback => { queued.push(callback) } })
+    disposals.push(() => explorer.dispose())
+    connections.add(info('server-a'), connectionOptions)
+    queued.splice(0).forEach(callback => callback())
+    const before = explorer.getSnapshot().rows.ids[0]
+    explorer.reset()
+    const after = explorer.getSnapshot().rows
+    expect([after.count, after.nodes[0]?.label]).toEqual([1, 'server-a.example'])
+    expect(after.ids[0]).not.toBe(before)
+    expect(explorer.getSnapshot().selected).toBe(after.ids[0])
+  })
+})
+
 describe('ExplorerService: filters', () => {
   it('sends the filter, marks the folder, reloads only its rows, and removes it', async () => {
     const f = fixture()
@@ -739,6 +755,49 @@ describe('ExplorerService: selection, targets and context', () => {
     f.explorer.select(columns)
     expect(f.explorer.context.getSnapshot().explorerSelectionInsertable).toBe(true)
   })
+  it('lets objects with a name, and a Columns folder only once fully loaded, be dragged', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Databases', 'AppData', 'Tables', 'dbo.T0')
+    const columns = f.find('Columns')
+    expect([f.explorer.canInsert(f.find('dbo.T0')), f.explorer.canInsert(f.find('AppData')), f.explorer.canInsert(columns)]).toEqual([true, true, false])
+    // Servers, other folders and synthetic rows carry nothing to a query.
+    for (const id of [f.find('server-a.example'), f.find('Tables'), f.find('Keys'), syntheticId(columns, RowKind.Loading)]) expect(f.explorer.canInsert(id), String(id)).toBe(false)
+    f.hold(isFolder('columns'))
+    f.explorer.expand(columns)
+    await settle()
+    expect(f.explorer.canInsert(columns)).toBe(false)
+    f.release()
+    await settle()
+    expect(f.explorer.canInsert(columns)).toBe(true)
+    expect(f.explorer.insertText(columns)).toBe('[Id], [Name]')
+    // While a refresh reloads it, its list may be stale.
+    f.hold(isFolder('columns'))
+    f.explorer.refresh(columns)
+    expect(f.explorer.canInsert(columns)).toBe(false)
+  })
+  it('opens Filter Settings only for a folder that can be filtered, and marks a filtered folder\'s menu node', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const seen: (number | undefined)[] = []
+    f.explorer.filterDialog.subscribe(() => seen.push(f.explorer.filterDialog.getSnapshot()))
+    expect(() => f.explorer.openFilter(f.find('server-a.example'))).toThrow('Select a folder that can be filtered.')
+    expect(() => f.explorer.openFilter(f.find('Security'))).toThrow('Select a folder that can be filtered.')
+    f.explorer.openFilter(tables)
+    f.explorer.openFilter(tables)
+    expect(f.explorer.filterDialog.getSnapshot()).toBe(tables)
+    f.explorer.closeFilter()
+    expect(seen).toEqual([tables, undefined])
+    expect(f.explorer.menuNode(tables)).not.toHaveProperty('filtered')
+    f.explorer.setFilter(tables, { name: { op: 'contains', value: 'T1' } })
+    expect(f.explorer.menuNode(tables)).toMatchObject({ id: tables, filtered: true })
+    f.explorer.openFilter(tables)
+    f.explorer.reset()
+    expect(f.explorer.filterDialog.getSnapshot()).toBeUndefined()
+  })
   it('collapses a node with the selection inside onto itself, and collapses everything below the servers', async () => {
     const f = fixture()
     f.connect()
@@ -753,7 +812,7 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(f.explorer.getSnapshot().selected).toBe(f.find('Databases'))
     expect(databases).toBeGreaterThan(0)
   })
-  it('expands every sibling with *, loading at most the cap that need a query', async () => {
+  it('expands every sibling with *, sending at most the cap of requests', async () => {
     const f = fixture({ siblingLoads: 1 })
     f.connect()
     await settle()
@@ -762,8 +821,10 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(result).toEqual({ expanded: 0, queued: 1, skipped: 3 })
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Expanded 1 of 4 items')
     await settle()
+    // Static folders need a request too (no SQL), so they count against the cap.
     const top = f.explorer.expandSiblings(f.find('Security'))
-    expect(top).toEqual({ expanded: 2, queued: 0, skipped: 0 })
+    expect(top).toEqual({ expanded: 1, queued: 0, skipped: 1 })
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Expanded 1 of 2 items')
   })
 })
 
@@ -798,6 +859,31 @@ describe('ExplorerService: memory and speed', () => {
     expect(f.explorer.node(tables)!.children).toHaveLength(2001)
     expect(f.rows().count).toBeGreaterThan(2000)
     expect(best).toBeLessThan(25)
+  })
+  it('refreshes a folder of 100,000 rows to 2,000 within the budget, deleting the old rows later', async () => {
+    const f = fixture()
+    const names = (count: number) => Array.from({ length: count }, (_, index) => `dbo.Table${index}`)
+    f.state.tables = names(100_000)
+    f.state.pageSize = 100_000
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const durations: number[] = []
+    for (let run = 0; run < 3; run++) {
+      f.state.tables = names(2000)
+      f.explorer.refresh(tables)
+      const start = performance.now()
+      await settle()
+      durations.push(performance.now() - start)
+      expect(f.explorer.node(tables)!.children).toHaveLength(2001)
+      expect(f.explorer.size).toBeLessThan(3000)
+      while (f.clock.step()) { /* the old rows' deletion slices */ }
+      f.state.tables = names(100_000)
+      f.explorer.refresh(tables)
+      await settle()
+    }
+    // Best of three runs: a garbage collection can land in any of them.
+    expect(Math.min(...durations)).toBeLessThan(25)
   })
   it('deletes a 100,000-node subtree in slices of 10,000 that each stay within the budget', async () => {
     const f = fixture()

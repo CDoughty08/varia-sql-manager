@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react'
 import { explorerLimits } from '../../../shared/explorer/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import { useMenuTarget } from '../menus/useMenuTarget'
+import { explorerDragType, maxDropText } from './drop'
 import ExplorerRow, { type RowActions } from './ExplorerRow'
 import { computeWindow, renderedIndices, rowIndex, RowKind, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction } from './tree-model'
 
@@ -68,7 +69,16 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     select: rowId => { explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
     toggle: rowId => explorer.toggle(rowId),
     reconnect: rowId => run('connection.reconnect', rowId),
-    remove: rowId => run('connection.removeLost', rowId)
+    remove: rowId => run('connection.removeLost', rowId),
+    // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type.
+    dragStart: (rowId, transfer) => {
+      const text = explorer.insertText(rowId)
+      if (text === undefined || text.length > maxDropText) return false
+      transfer.effectAllowed = 'copy'
+      transfer.setData('text/plain', text)
+      transfer.setData(explorerDragType, JSON.stringify({ v: 1, text }))
+      return true
+    }
   }), [explorer, run])
   // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
@@ -86,6 +96,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       case 'expandSiblings': explorer.expandSiblings(action.id); return
       case 'retry': explorer.retry(action.id); return
       case 'continue': explorer.continueLoading(action.id); return
+      case 'filter': run('explorer.filter', action.id); return
       default: return
     }
   }
@@ -111,16 +122,27 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     } catch (error) { onUnexpectedError(error) }
   }
 
+  // Ctrl+C, ⌘C and Edit › Copy reach the focused tree as a copy event: the selected node's name, as Copy Name copies it.
+  const onCopy = (event: ClipboardEvent<HTMLDivElement>) => {
+    try {
+      const { selected: id } = explorer.getSnapshot()
+      const text = id === undefined ? undefined : explorer.copyText(id)
+      if (text === undefined) return
+      event.preventDefault()
+      event.clipboardData.setData('text/plain', text)
+    } catch (error) { onUnexpectedError(error) }
+  }
+
   const accents = useMemo(() => new Map(servers.map(server => [server.id, server.color])), [servers])
   const indices = renderedIndices(computeWindow(view.top, view.height, rows.count), selectedIndex)
   const active = selected !== undefined && selectedIndex >= 0 ? `oe-${selected}` : undefined
   return <><div ref={element} className="explorer-tree" role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
-    aria-busy={explorerLoading} onKeyDown={onKeyDown}>
+    aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}>
     <div className="explorer-spacer" style={{ height: rows.count * rowHeight }}>
       {indices.map(index => {
         const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
         return <ExplorerRow key={rowId} rowId={rowId} kind={kind} index={index} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
-          node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected}
+          node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
           active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined}
           actions={actions} menuTarget={rowTarget} />
       })}

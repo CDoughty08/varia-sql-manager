@@ -3,7 +3,7 @@ import { useCommandEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
-import ExplorerErrorBoundary from './ExplorerErrorBoundary'
+import ExplorerErrorBoundary, { FaultProbe } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
 
 function ToolbarButton({ id, icon, label, args }: { id: CommandId; icon: string; label: string; args?: CommandArgs }) {
@@ -16,12 +16,14 @@ function ToolbarButton({ id, icon, label, args }: { id: CommandId; icon: string;
 }
 
 /**
- * Object Explorer: SSMS's toolbar (Connect, Disconnect, Stop, Refresh, Collapse All) over the tree of connected servers,
- * or a prompt to connect. Disconnect acts on the selected node's server; with nothing selected it asks which.
+ * Object Explorer: SSMS's toolbar (Connect, Disconnect, Stop, Filter, Refresh, Collapse All) over the tree of connected
+ * servers, or a prompt to connect. Disconnect acts on the selected node's server; with nothing selected it asks which.
+ * Filter shows a filled funnel while the selected folder has a filter.
  */
 export default function ExplorerPane({ error, activeConnectionId }: { readonly error?: string; readonly activeConnectionId?: string }) {
   const { explorer, connections, commands } = useWorkbench()
   const { selected } = useServiceSnapshot(explorer)
+  const { explorerSelectionFiltered: filtered } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
   const connect = useCommandEnabled('connection.connect')
   const selectedServer = explorer.menuNode(selected)?.connectionId
@@ -35,11 +37,12 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
       <ToolbarButton id="connection.connect" icon="plug" label="Connect Object Explorer" />
       <ToolbarButton id="connection.disconnect" icon="debug-disconnect" label="Disconnect" args={disconnectArgs} />
       <ToolbarButton id="explorer.stop" icon="debug-stop" label="Stop" />
+      <ToolbarButton id="explorer.filter" icon={filtered ? 'filter-filled' : 'filter'} label="Filter Settings" />
       <ToolbarButton id="explorer.refresh" icon="refresh" label="Refresh" />
       <ToolbarButton id="explorer.collapseAll" icon="collapse-all" label="Collapse All" />
     </div>
     <div className="explorer-body" ref={background}>
-      {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()}><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
+      {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()}><FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
         : <div className="explorer-empty"><Icon name="server" /><p>Connect to SQL Server to browse databases and objects.</p><button disabled={!connect} onClick={() => void commands.execute('connection.connect', undefined, 'toolbar')}>Connect to server</button></div>}
       {error && <p className="explorer-error" role="alert">{error}</p>}
     </div>

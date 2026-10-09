@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useWorkbench } from './core/WorkbenchContext'
 import { editorFontFamily } from './fonts'
+import { bindExplorerDrop } from './explorer/drop'
 
 export default function QueryEditor() {
   const workbench = useWorkbench(), container = useRef<HTMLDivElement>(null)
@@ -10,7 +11,9 @@ export default function QueryEditor() {
       contextmenu: false })
     const binding = workbench.documents.bindEditor(instance)
     const options = workbench.editorOptions.bindEditor(instance)
-    return () => { options.dispose(); binding.dispose(); instance.dispose() }
+    // Object Explorer rows dropped on the editor insert their names.
+    const drop = bindExplorerDrop(instance)
+    return () => { drop.dispose(); options.dispose(); binding.dispose(); instance.dispose() }
   }, [workbench])
   return <div ref={container} style={{ width: '100%', height: '100%' }} />
 }

@@ -324,6 +324,18 @@ describe('* (expand siblings)', () => {
     expect(siblingPlan(t.nodes, t.roots, server.id)).toEqual({ expand: [], load: [], skipped: 0 })
     expect(siblingPlan(t.nodes, t.roots, 999)).toEqual({ expand: [], load: [], skipped: 0 })
   })
+  it('caps the requests * sends, SQL or not, so a folder of 10,000 tables sends 50', () => {
+    const t = table()
+    const server = t.add(0, 'server-a', { kind: 'server', expanded: true })
+    const tables = t.add(server.id, 'Tables', { folder: 'tables', hasChildren: true, expanded: true })
+    const rows = Array.from({ length: 10_000 }, (_, index) => t.add(tables.id, `dbo.T${index}`, { kind: 'table', hasChildren: true }))
+    rows[7].load = 'loaded'
+    const plan = siblingPlan(t.nodes, t.roots, rows[0].id)
+    expect(plan.expand).toHaveLength(51)
+    expect(plan.expand).toContain(rows[7].id)
+    expect(plan.load).toEqual([])
+    expect(plan.skipped).toBe(10_000 - 51)
+  })
   it('knows which expansions run SQL', () => {
     expect(needsQuery({ kind: 'folder', folder: 'tables', subtype: undefined })).toBe(true)
     expect(needsQuery({ kind: 'folder', folder: 'programmability', subtype: undefined })).toBe(false)

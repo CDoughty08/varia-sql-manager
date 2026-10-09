@@ -1,5 +1,6 @@
 import type { TargetKeys } from '../../../shared/commands/context-keys'
 import type { ContextMenuId } from '../../../shared/commands/menus'
+import { folderSpecs } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
@@ -7,9 +8,10 @@ import type { CommandArgs } from '../core/types'
 
 /**
  * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`), its
- * node id in `ExplorerService`, and whether it is a server whose connection was lost with its backend generation.
+ * node id in `ExplorerService`, whether it is a server whose connection was lost with its backend generation, and
+ * whether it is a folder with a filter.
  */
-export interface ExplorerMenuNode extends ExplorerTarget { readonly id: number; readonly lost: boolean }
+export interface ExplorerMenuNode extends ExplorerTarget { readonly id: number; readonly lost: boolean; readonly filtered?: boolean }
 /** A text field's state when its menu opened: what Cut, Copy, Paste, Delete, Select All, Undo, and Redo can do. */
 export interface InputTarget {
   readonly kind: 'input'
@@ -53,11 +55,15 @@ export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'dockTab.context': 'Panel tab', 'input.context': 'Text field'
 }
 
+/** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
+export const filterable = (node: Pick<ExplorerTarget, 'folder'> | undefined): boolean => !!node?.folder && !!folderSpecs[node.folder].filter?.length
 /** The target keys placement `when` clauses read; each describes one kind of target and is '' or false for the others. */
 export function targetKeys(target: MenuTarget | undefined): TargetKeys {
   return {
     explorerNode: target?.kind === 'explorer' ? target.node?.kind ?? 'background' : '',
     explorerServerLost: target?.kind === 'explorer' && !!target.node?.lost,
+    explorerFolderFilterable: target?.kind === 'explorer' && filterable(target.node),
+    explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,
     outputView: target?.kind === 'output' ? target.view : '',
     paneFloating: target?.kind === 'dockTab' && target.floating
   }
