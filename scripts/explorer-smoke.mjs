@@ -90,6 +90,15 @@ const longTasks = () => page.evaluate(() => {
   return entries.map(([start, ms]) => ({ phase: phases.filter(([, at]) => at <= start).at(-1)[0], ms }))
 })
 const renderedRows = () => page.locator('.explorer-tree [role="treeitem"]').count()
+/** Rendered rows that show inside the tree's scrolled view. */
+const rowsInView = () => page.evaluate(() => {
+  const tree = document.querySelector('[data-explorer-tree]'), box = tree.getBoundingClientRect()
+  return [...tree.querySelectorAll('[role="treeitem"]')].filter(row => { const rect = row.getBoundingClientRect(); return rect.bottom > box.top && rect.top < box.bottom }).length
+})
+const liveRegion = () => page.locator('[data-explorer-tree] + [role="status"]')
+/** The enabled toolbar buttons' names, in order, and the focused one's. */
+const enabledTools = () => page.evaluate(() => [...document.querySelectorAll('.explorer-toolbar button:not(:disabled)')].map(button => button.getAttribute('aria-label')))
+const focusedTool = () => page.evaluate(() => document.activeElement?.closest('.explorer-toolbar') ? document.activeElement.getAttribute('aria-label') : null)
 /** Waits until Object Explorer has nothing loading or queued (the tree's aria-busy). */
 const idle = (timeout = 30000) => expect(tree()).toHaveAttribute('aria-busy', 'false', { timeout })
 /** Reloads a selected folder from its first page: F5 when it is expanded, else expanding it (F5 on a collapsed folder only forgets its rows). */
@@ -155,10 +164,21 @@ try {
   const auditsError = 'You do not have permission to view Audits. Press Enter to retry.'
   await expect(await explorerRow(page, 'server-a', 'Security', 'Audits', auditsError)).toBeVisible()
   await press('ArrowDown', auditsError)
+  // The live region says why; a retry that fails again says it again, as a new node, so screen readers repeat it.
+  const auditsSentence = 'Could not load Audits: You do not have permission to view Audits.'
+  await expect(liveRegion()).toHaveText(auditsSentence)
+  await page.evaluate(() => {
+    window.__variaLiveChanges = 0
+    new MutationObserver(records => { window.__variaLiveChanges += records.length }).observe(document.querySelector('[data-explorer-tree] + [role="status"]'), { childList: true, subtree: true, characterData: true })
+  })
+  await press('Enter')
+  await expect.poll(() => page.evaluate(() => window.__variaLiveChanges)).toBeGreaterThan(0)
+  await expect(liveRegion()).toHaveText(auditsSentence)
+  await select('server-a', 'Security', 'Audits', auditsError)
   await setStub({ auditsOk: true })
   await press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Audits', 'LoginAudit')).toBeVisible()
-  console.log('Object Explorer checks: arrows, Home, End, Page Up and Down, Numpad plus and minus, type-ahead with cycling, *, and Enter on an error row.')
+  console.log('Object Explorer checks: arrows, Home, End, Page Up and Down, Numpad plus and minus, type-ahead with cycling, *, and Enter on an error row, announced again when it fails again.')
 
   // 3. Lazy loading and cancellation: collapsing a folder whose load is running cancels it in the backend.
   await select('server-a', 'Server Objects', 'Linked Servers')
@@ -219,8 +239,11 @@ try {
   // 5. Speed: stream 120,000 tables, scroll, End and Home, type-ahead, `*` over 10,000 views, and refresh 2,000 tables.
   const perf = { limitMs: longTaskLimit, attempts: [] }
   async function speedSegment() {
+    // A hidden window draws about once a second, so scrolling would never re-window the tree: show it, without focus.
+    // It stays shown: hiding it again would stop the frames later screenshots wait for.
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
     await startLongTasks()
-    let rows = 0
+    let rows = 0, jumps = []
     await setStub({ tables: 120_000 })
     await tree().focus()
     await press('Home', 'server-a')
@@ -231,9 +254,18 @@ try {
     await idle(60000)
     await expect.poll(async () => (await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')).getAttribute('aria-expanded')).toBe('true')
     await phase('scroll')
-    await page.evaluate(async () => {
-      const element = document.querySelector('[data-explorer-tree]')
-      for (let jump = 1; jump <= 20; jump++) { element.scrollTop = element.scrollHeight * ((jump * 7919) % 20) / 20; await new Promise(resolve => setTimeout(resolve, 60)) }
+    // Each jump waits for the rows in view, so the re-windowing happens while long tasks are observed.
+    jumps = await page.evaluate(async () => {
+      const element = document.querySelector('[data-explorer-tree]'), counts = []
+      const inView = () => { const box = element.getBoundingClientRect(); return [...element.querySelectorAll('[role="treeitem"]')].filter(row => { const rect = row.getBoundingClientRect(); return rect.bottom > box.top && rect.top < box.bottom }).length }
+      for (let jump = 1; jump <= 20; jump++) {
+        element.scrollTop = element.scrollHeight * ((jump * 7919) % 20) / 20
+        const deadline = performance.now() + 3000
+        do await new Promise(resolve => requestAnimationFrame(() => resolve()))
+        while (inView() < 5 && performance.now() < deadline)
+        counts.push(inView())
+      }
+      return counts
     })
     rows = Math.max(rows, await renderedRows())
     // Enter on the capped row opens Filter Settings for its folder.
@@ -254,8 +286,10 @@ try {
     await press('End')
     await expect.poll(async () => (await active())?.label).toBe('Server Objects')
     expect((await active()).level).toBe(2)
+    await expect.poll(rowsInView).toBeGreaterThan(5)
     rows = Math.max(rows, await renderedRows())
     await press('Home', 'server-a')
+    await expect.poll(rowsInView).toBeGreaterThan(5)
     await phase('type-ahead')
     await page.keyboard.type('table119')
     await expect.poll(async () => (await active())?.label).toBe('dbo.table119')
@@ -293,7 +327,7 @@ try {
     await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table5')).toBeVisible()
     rows = Math.max(rows, await renderedRows())
     const tasks = await longTasks()
-    return { maxLongTaskMs: Math.max(0, ...tasks.map(task => task.ms)), longTasks: tasks, maxRenderedRows: rows }
+    return { maxLongTaskMs: Math.max(0, ...tasks.map(task => task.ms)), longTasks: tasks, maxRenderedRows: rows, rowsInViewPerJump: jumps }
   }
   perf.attempts.push(await speedSegment())
   // A shared runner can stall one task (garbage collection, another process); the segment runs again once.
@@ -302,6 +336,8 @@ try {
   const last = perf.attempts.at(-1)
   expect(last.maxLongTaskMs, `renderer long tasks: ${perf.attempts.map(attempt => attempt.longTasks.map(task => `${task.ms} ms (${task.phase})`).join(', ') || 'none').join(' / ')}`).toBeLessThan(longTaskLimit)
   for (const attempt of perf.attempts) expect(attempt.maxRenderedRows).toBeLessThanOrEqual(80)
+  // Every scroll jump drew rows where it landed, so the long-task limit covered real re-windowing.
+  for (const attempt of perf.attempts) expect(Math.min(...attempt.rowsInViewPerJump), JSON.stringify(attempt.rowsInViewPerJump)).toBeGreaterThanOrEqual(5)
   console.log(`Object Explorer checks: 120,000 tables capped at 100,000, 20 scroll jumps, End, Home, type-ahead, * over 10,000 views (50 requests), and a 2,000-table refresh with the longest task ${last.maxLongTaskMs} ms and at most ${Math.max(...perf.attempts.map(attempt => attempt.maxRenderedRows))} rows in the DOM.`)
 
   // 6. Filter Settings from the toolbar narrows a folder; Remove Filter from its menu restores it.
@@ -390,10 +426,15 @@ try {
   await page.keyboard.press('Control+C')
   await expect.poll(clipboard).toBe('[Id]')
   // A fully loaded Columns folder copies (and drags) its column list.
-  await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders', 'Columns')
+  const columnsFolder = await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders', 'Columns')
   await page.keyboard.press('Control+C')
   await expect.poll(clipboard).toBe('[Id], [CustomerName]')
-  console.log('Object Explorer checks: Ctrl+C copies a column\'s quoted name and a loaded Columns folder\'s list.')
+  // So does Copy Name in its menu.
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await columnsFolder.click({ button: 'right' })
+  await menu('Object Explorer').getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
+  await expect.poll(clipboard).toBe('[Id], [CustomerName]')
+  console.log('Object Explorer checks: Ctrl+C copies a column\'s quoted name, and Ctrl+C and Copy Name a loaded Columns folder\'s list.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')
@@ -421,15 +462,57 @@ try {
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
   }
-  console.log('Object Explorer checks: Ctrl+N on a database, F8, and Filter Settings in the palette.')
+  // The toolbar is one tab stop: Shift+Tab from the tree reaches it, the arrows, Home and End move between its enabled
+  // buttons (wrapping), Tab goes on to the tree, and the toolbar remembers the button last used.
+  await tree().focus()
+  await page.keyboard.press('Shift+Tab')
+  const tools = await enabledTools(), first = tools.indexOf(await focusedTool())
+  expect(first).toBeGreaterThanOrEqual(0)
+  expect(await page.locator('.explorer-toolbar button[tabindex="0"]').count()).toBe(1)
+  await page.keyboard.press('ArrowRight')
+  expect(await focusedTool()).toBe(tools[(first + 1) % tools.length])
+  await page.keyboard.press('Home')
+  expect(await focusedTool()).toBe(tools[0])
+  await page.keyboard.press('ArrowLeft')
+  expect(await focusedTool()).toBe(tools.at(-1))
+  await page.keyboard.press('Home')
+  await page.keyboard.press('End')
+  expect(await focusedTool()).toBe(tools.at(-1))
+  await page.keyboard.press('Tab')
+  await expect(tree()).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  expect(await focusedTool()).toBe(tools.at(-1))
+  await page.keyboard.press('Tab')
+  await expect(tree()).toBeFocused()
+  console.log('Object Explorer checks: Ctrl+N on a database, F8, Filter Settings in the palette, and the toolbar\'s arrow keys.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
-  await setStub({ tables: 120_000, pageDelayMs: 150 })
+  await setStub({ tables: 120_000, pageDelayMs: 250 })
   await select('server-a', 'Databases', 'AppData')
   await press('ArrowRight', 'AppData')
   await reload('server-a', 'Databases', 'AppData', 'Tables')
   await expect(tree()).toHaveAttribute('aria-busy', 'true')
   await expect.poll(async () => (await stubCalls()).at(-1)?.cursor ?? '').toMatch(/^v1\.tables\./)
+  // While Tables streams above them, keys keep the selected row in view, though each page that lands moves the rows
+  // below it. The key goes to the tree and the check runs before the next frame, when a page waits to be drawn.
+  await expect(tree()).toBeFocused()
+  await press('End')
+  const outOfView = []
+  for (let step = 0; step < 20; step++) {
+    await page.waitForTimeout(160)
+    const shown = await page.evaluate(async () => {
+      const tree = document.querySelector('[data-explorer-tree]')
+      tree.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', code: 'ArrowUp', bubbles: true, cancelable: true }))
+      // React renders the selection in a microtask after the event.
+      for (let turn = 0; turn < 10; turn++) await Promise.resolve()
+      const row = document.getElementById(tree.getAttribute('aria-activedescendant')), box = tree.getBoundingClientRect(), rect = row.getBoundingClientRect()
+      return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1 ? '' : `${row.textContent} at ${Math.round(rect.top - box.top)} px`
+    })
+    if (shown) outOfView.push(shown)
+  }
+  expect(outOfView).toEqual([])
+  await expect(tree()).toHaveAttribute('aria-busy', 'true')
+  await press('Home', 'server-a')
   const cancelledBefore = (await cancels()).length
   await toolbarButton('Disconnect').click()
   await expect(page.locator('.explorer-row.server')).toHaveCount(1)
@@ -443,10 +526,16 @@ try {
   for (let round = 0; round < 100; round++) { await page.keyboard.press('NumpadAdd'); await page.keyboard.press('NumpadSubtract') }
   await press('NumpadAdd', 'Databases')
   await expect(await explorerRow(page, 'server-b', 'Databases', 'AppData')).toBeVisible()
+  await expect(tree()).toBeFocused()
   await page.evaluate(() => window.__variaTestExplorerFault())
   await expect(page.getByText('Object Explorer stopped because of a rendering error.')).toBeVisible()
-  await page.getByRole('button', { name: 'Reload Object Explorer', exact: true }).click()
+  // Focus went with the tree to the Reload button, and after Reload to the new tree, which repeats no old announcement.
+  await expect(page.getByRole('button', { name: 'Reload Object Explorer', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-b')).toHaveAttribute('aria-expanded', 'true')
+  await expect(tree()).toBeFocused()
+  await page.waitForTimeout(900)
+  await expect(liveRegion()).toHaveText('')
   await setStub({ tables: 3 })
   await expandExplorerPath(page, 'server-b', 'Databases', 'AppData', 'Tables', 'dbo.Orders', 'Columns')
   await select('server-b', 'Databases', 'AppData', 'Tables', 'dbo.Orders', 'Columns', 'Id')
@@ -456,6 +545,16 @@ try {
     await page.screenshot({ path: resolve('artifacts', `explorer-${mode}.png`) })
   }
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
+  // Forced colors (Windows contrast themes): the focused selection's outline and chevron take the system's selection
+  // text colour, so focus shows on any Highlight colour.
+  await tree().focus()
+  await page.emulateMedia({ forcedColors: 'active' })
+  const forced = await page.evaluate(() => {
+    const row = document.querySelector('.explorer-tree .explorer-row[aria-selected="true"]'), style = getComputedStyle(row)
+    return { text: style.color, outline: style.outlineColor, width: style.outlineWidth, twistie: getComputedStyle(row.querySelector('.oe-twistie')).color, icon: getComputedStyle(row.querySelector('.oe-icon')).color }
+  })
+  await page.emulateMedia({ forcedColors: null })
+  expect(forced).toEqual({ text: forced.text, outline: forced.text, width: '2px', twistie: forced.text, icon: forced.text })
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1024, 768) })
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const layout = await page.evaluate(() => {
@@ -481,8 +580,17 @@ try {
   expect(layout.clipped).toEqual([])
   for (const name of ['Connect Object Explorer', 'Disconnect', 'Stop', 'Filter Settings', 'Refresh', 'Collapse All']) await expect(toolbarButton(name)).toBeInViewport()
   await page.screenshot({ path: resolve('artifacts', 'explorer-1024.png') })
+  // Disconnecting the last server from its menu by keyboard leaves focus in the pane, on the empty state's Connect button.
+  await select('server-b')
+  await page.keyboard.press('Shift+F10')
+  const serverMenu = menu('Object Explorer')
+  await expect(serverMenu.getByRole('menuitem', { name: 'Connect…', exact: true })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(serverMenu.getByRole('menuitem', { name: 'Disconnect', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('button', { name: 'Connect to server', exact: true })).toBeFocused()
   expect(failures).toEqual([])
-  console.log('Object Explorer checks: 200 quick toggles, a rendering fault reloaded, Dark and Light screenshots, and the toolbar and rows at 1024×768.')
+  console.log('Object Explorer checks: 200 quick toggles, a rendering fault reloaded with focus kept, Dark and Light screenshots, the toolbar and rows at 1024×768, and focus after the last server goes.')
 
   // 13. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {

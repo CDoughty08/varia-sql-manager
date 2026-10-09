@@ -286,7 +286,7 @@ export const commandCatalog = {
   },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
-    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]
   },
   'query.changeConnection': {
     title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && !queryRunning && !documentBusy',

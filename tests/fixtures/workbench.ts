@@ -57,7 +57,8 @@ export function backendApi(initial: BackendState = { status: 'starting', generat
 }
 /**
  * Object Explorer's answers in the fixture: a server's three folders; Databases with its two subfolders and AppData;
- * AppData's Tables; Tables with dbo.Orders; Security with Logins, which lists sa. Anything else is empty.
+ * AppData's Tables; Tables with dbo.Orders, which has Columns (Id, CustomerName); Security with Logins, which lists sa.
+ * Anything else is empty.
  */
 export function explorerAnswer(params: ExplorerChildrenParams): ExplorerChildrenResult {
   const folder = (owner: ObjectRef, id: FolderId): WireNode => ({ ref: { type: 'folder', owner, folder: id }, label: folderSpecs[id].label, icon: 'folder', hasChildren: true })
@@ -65,11 +66,12 @@ export function explorerAnswer(params: ExplorerChildrenParams): ExplorerChildren
   const owner = params.node.type === 'object' ? params.node.object : params.node.owner
   const nodes: WireNode[] = params.node.type === 'object'
     ? params.node.object.kind === 'server' ? [folder(owner, 'databases'), folder(owner, 'serverSecurity'), folder(owner, 'serverObjects')]
-      : params.node.object.kind === 'database' ? [folder(owner, 'tables')] : []
+      : params.node.object.kind === 'database' ? [folder(owner, 'tables')] : params.node.object.kind === 'table' ? [folder(owner, 'columns')] : []
     : params.node.folder === 'databases' ? [folder(owner, 'systemDatabases'), folder(owner, 'databaseSnapshots'), object({ kind: 'database', name: 'AppData' }, 'AppData', true)]
       : params.node.folder === 'tables' ? [object({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, 'dbo.Orders', true)]
         : params.node.folder === 'serverSecurity' ? [folder(owner, 'logins')]
-          : params.node.folder === 'logins' ? [object({ kind: 'login', name: 'sa' }, 'sa', false)] : []
+          : params.node.folder === 'logins' ? [object({ kind: 'login', name: 'sa' }, 'sa', false)]
+            : params.node.folder === 'columns' ? ['Id', 'CustomerName'].map(name => object({ kind: 'column', database: owner.database, parent: { kind: 'table', schema: owner.schema!, name: owner.name! }, name }, name, false)) : []
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 export const queryOutput: DisplayQueryResult = { status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false }

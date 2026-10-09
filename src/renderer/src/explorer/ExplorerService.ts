@@ -272,7 +272,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
     const node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
-    return node && this.attached(node) ? { ...targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}) } : undefined
+    return node && this.attached(node) ? { ...targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) } : undefined
   }
   /** The server and database a new query for the row should use (the database is the node's, if it has one). */
   queryTarget(id: number | undefined = this.selected): { connectionId: string; database?: string } | undefined {

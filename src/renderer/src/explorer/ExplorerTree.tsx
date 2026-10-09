@@ -4,6 +4,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
+import type { Announcement } from './ExplorerService'
 import ExplorerRow, { type RowActions } from './ExplorerRow'
 import { computeWindow, renderedIndices, rowIndex, RowKind, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction } from './tree-model'
 
@@ -23,7 +24,11 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   const servers = useServiceSnapshot(connections)
   const element = useRef<HTMLDivElement | null>(null)
   const [view, setView] = useState({ top: 0, height: 0 })
-  const [announcement, setAnnouncement] = useState('')
+  const [announcement, setAnnouncement] = useState<Announcement | undefined>(undefined)
+  // A sentence from before this tree mounted (a server since removed, or before a Reload) is not news.
+  const heard = useRef(snapshot.announcement?.id)
+  /** A row a key selected, scrolled into view once the rows it is among have rendered. */
+  const reveal = useRef<number | undefined>(undefined)
   const typing = useMemo(() => new TypeAheadBuffer(), [])
   const { rows, selected } = snapshot
   const selectedIndex = rowIndex(rows, selected)
@@ -49,8 +54,9 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     return () => { tree.removeEventListener('scroll', schedule); observer.disconnect() }
   }, [])
   useEffect(() => {
-    if (!snapshot.announcement) return
-    const text = snapshot.announcement.text, timer = setTimeout(() => setAnnouncement(text), announceDelayMs)
+    const next = snapshot.announcement
+    if (!next || next.id === heard.current) return
+    const timer = setTimeout(() => { heard.current = next.id; setAnnouncement(next) }, announceDelayMs)
     return () => clearTimeout(timer)
   }, [snapshot.announcement])
 
@@ -61,6 +67,13 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     if (top < tree.scrollTop) tree.scrollTop = top
     else if (bottom > tree.scrollTop + tree.clientHeight) tree.scrollTop = bottom - tree.clientHeight
   }, [])
+  // Selecting can publish rows that arrived since the last render, which moves the row: its index is read from them.
+  useLayoutEffect(() => {
+    const id = reveal.current
+    if (id === undefined) return
+    reveal.current = undefined
+    ensureVisible(rowIndex(rows, id))
+  })
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
     if (node) void commands.execute(id, { target: { kind: 'explorer', node } }, 'toolbar')
@@ -89,7 +102,12 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   const act = (action: TreeAction) => {
     const { rows: current } = latest.current
     switch (action.type) {
-      case 'select': explorer.select(current.ids[action.index]); ensureVisible(action.index); return
+      case 'select': {
+        const id = current.ids[action.index]
+        if (explorer.getSnapshot().selected === id) ensureVisible(rowIndex(explorer.getSnapshot().rows, id))
+        else { reveal.current = id; explorer.select(id) }
+        return
+      }
       case 'expand': explorer.expand(action.id); return
       case 'collapse': explorer.collapse(action.id); return
       case 'toggle': explorer.toggle(action.id); return
@@ -148,5 +166,6 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       })}
     </div>
   </div>
-  <div className="visually-hidden" role="status">{announcement}</div></>
+  {/* Keyed by the announcement, so the same sentence again is a new node, which screen readers speak again. */}
+  <div className="visually-hidden" role="status">{announcement && <span key={announcement.id}>{announcement.text}</span>}</div></>
 }

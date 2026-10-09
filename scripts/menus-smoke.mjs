@@ -64,6 +64,15 @@ const exit = process.platform === 'win32' ? { label: 'Exit', key: 'Alt+F4' } : {
 /** The fake backend's requests of one method since the last `forgetCalls`, oldest first (their params). */
 const calls = async method => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method).map(call => call.params)
 const forgetCalls = () => writeFile(join(control, 'calls.jsonl'), '')
+/** Makes Object Explorer's tree three rows tall and scrolls it to the top, as a mouse wheel would, so its selected row is out of view. */
+async function scrollSelectionAway() {
+  await page.evaluate(() => { const tree = document.querySelector('[data-explorer-tree]'); tree.style.flex = '0 0 66px'; tree.scrollTop = 0 })
+  await expect.poll(() => page.evaluate(() => {
+    const tree = document.querySelector('[data-explorer-tree]'), row = document.getElementById(tree.getAttribute('aria-activedescendant'))
+    return tree.scrollTop === 0 && row.getBoundingClientRect().top >= tree.getBoundingClientRect().bottom
+  })).toBe(true)
+}
+const restoreTree = () => page.evaluate(() => { document.querySelector('[data-explorer-tree]').style.flex = '' })
 
 try {
   application = await electron.launch(launchOptions)
@@ -734,6 +743,21 @@ try {
   await page.keyboard.press('ContextMenu')
   await expect(explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
+  // The selected row scrolled out of the tree's view (as a mouse wheel leaves it): Shift+F10 scrolls it back into view
+  // and opens its menu below it, inside the window; the tree's own scroll does not close the menu.
+  await scrollSelectionAway()
+  await page.keyboard.press('Shift+F10')
+  await expect(explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true })).toBeFocused()
+  const view = await tree.boundingBox(), revealed = await table.boundingBox(), placed = await explorerMenu.boundingBox(), viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+  expect(revealed.y).toBeGreaterThanOrEqual(view.y - 1)
+  expect(revealed.y + revealed.height).toBeLessThanOrEqual(view.y + view.height + 1)
+  expect(placed.y).toBeGreaterThanOrEqual(revealed.y + revealed.height - 1)
+  expect(placed.y + placed.height).toBeLessThanOrEqual(viewport.height)
+  await page.waitForTimeout(300)
+  await expect(explorerMenu).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(tree).toBeFocused()
+  await restoreTree()
   // Left moves to Tables, and F5 reloads it; the tree keeps focus.
   await page.keyboard.press('ArrowLeft')
   await expect(tables).toHaveAttribute('aria-selected', 'true')
@@ -1089,6 +1113,17 @@ try {
   expect(keyboardPopup.x).toBeGreaterThanOrEqual(nodeBox.x - 30)
   await application.evaluate(() => globalThis.variaPopups.at(-1).options.callback())
   await expect(nativeTree).toBeFocused()
+  // Scrolled out of view, the node comes back into view and the menu opens below it, inside the tree.
+  await scrollSelectionAway()
+  await page.keyboard.press('Shift+F10')
+  await expect.poll(async () => (await popups()).length).toBe(7)
+  const treeBox = await nativeTree.boundingBox(), shownBox = await nativeTable.boundingBox(), awayPopup = (await popups())[6]
+  expect(shownBox.y).toBeGreaterThanOrEqual(treeBox.y - 1)
+  expect(awayPopup.y).toBeGreaterThanOrEqual(shownBox.y + shownBox.height - 1)
+  expect(awayPopup.y).toBeLessThanOrEqual(treeBox.y + treeBox.height + 1)
+  await application.evaluate(() => globalThis.variaPopups.at(-1).options.callback())
+  await expect(nativeTree).toBeFocused()
+  await restoreTree()
   // When main cannot show a menu, the workbench shows the same one itself.
   await popupMode('fail')
   await nativeTable.click({ button: 'right' })
@@ -1103,7 +1138,7 @@ try {
     expect((await page.evaluate(request => window.varia.showContextMenu(request), { ...forged, ...change })).ok, JSON.stringify(change)).toBe(false)
   }
   for (const call of [() => window.varia.runRole('openExternal'), () => window.varia.revealSqlFile('x')]) expect((await page.evaluate(call)).ok).toBe(false)
-  expect((await popups()).length).toBe(7)
+  expect((await popups()).length).toBe(8)
   console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, and the fallback.')
 
   // 16. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on

@@ -860,6 +860,10 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(f.explorer.insertText(syntheticId(columns, RowKind.Error))).toBeUndefined()
     f.explorer.select(columns)
     expect(f.explorer.context.getSnapshot().explorerSelectionInsertable).toBe(true)
+    // Its context menu offers Copy Name too; Keys, with nothing to copy, does not.
+    expect(f.explorer.menuNode(columns)).toMatchObject({ kind: 'folder', folder: 'columns', insertable: true })
+    expect(f.explorer.menuNode(f.find('Keys'))).not.toHaveProperty('insertable')
+    expect(f.explorer.menuNode(table)).not.toHaveProperty('insertable')
   })
   it('lets objects with a name, and a Columns folder only once fully loaded, be dragged', async () => {
     const f = fixture()

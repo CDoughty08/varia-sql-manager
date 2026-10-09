@@ -165,7 +165,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-objectExplorer-sublabelForeground); }
 .oe-filtered, .explorer-row.progress .oe-text { color: var(--varia-objectExplorer-countForeground); }
 .explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button { color: inherit; }
-.oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.synthetic .oe-icon { color: var(--varia-icon-foreground); }
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
 .oe-actions { display: flex; gap: 2px; margin-left: auto; padding-left: 4px; flex: none; }
@@ -192,7 +192,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-error { flex-shrink: 0; font-size: 11px; color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
-  .explorer-row[aria-selected="true"] .oe-sublabel, .explorer-row[aria-selected="true"] .oe-icon { color: HighlightText; }
+  .explorer-row[aria-selected="true"] .oe-sublabel, .explorer-row[aria-selected="true"] .oe-icon, .explorer-row[aria-selected="true"] .oe-twistie { color: HighlightText; }
+  .explorer-row[aria-selected="true"] .oe-icon .oe-badge { color: HighlightText; background: Highlight; }
+  /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
+  .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .query-tabs { display: flex; flex-shrink: 0; height: 38px; background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }

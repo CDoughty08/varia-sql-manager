@@ -73,13 +73,16 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   // Server-l's connection was lost with an earlier backend generation.
   fixture.connections.add(connectionInfo('server-l', 0), connectionOptions)
   let ids = 0
-  const at = (ref: ExplorerNodeRef, label: string, connectionId = 'server-a', lost = false, filtered = false): MenuTarget => {
-    const node: ExplorerMenuNode = { id: ++ids, lost, connectionId, ref, label, kind: ref.type === 'folder' ? 'folder' : ref.object.kind, ...(ref.type === 'folder' ? { folder: ref.folder } : {}), ...(filtered ? { filtered } : {}) }
+  const at = (ref: ExplorerNodeRef, label: string, connectionId = 'server-a', lost = false, filtered = false, insertable = false): MenuTarget => {
+    const node: ExplorerMenuNode = { id: ++ids, lost, connectionId, ref, label, kind: ref.type === 'folder' ? 'folder' : ref.object.kind, ...(ref.type === 'folder' ? { folder: ref.folder } : {}), ...(filtered ? { filtered } : {}),
+      ...(insertable ? { insertable } : {}) }
     return { kind: 'explorer', node }
   }
   const object = (value: ObjectRef, label: string) => at({ type: 'object', object: value }, label)
-  const folder = (owner: ObjectRef, id: FolderId, label: string, filtered = false) => at({ type: 'folder', owner, folder: id }, label, 'server-a', false, filtered)
+  const folder = (owner: ObjectRef, id: FolderId, label: string, filtered = false, insertable = false) => at({ type: 'folder', owner, folder: id }, label, 'server-a', false, filtered, insertable)
   const server: ObjectRef = { kind: 'server' }, appData: ObjectRef = { kind: 'database', name: 'AppData' }, orders: ObjectRef = { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }
+  // Once server-a connects, this is its real Columns folder, loaded, so Copy Name can copy the list.
+  const loadedColumns = folder(orders, 'columns', 'Columns', false, true), loadedNode = (loadedColumns as { node: { id: number } }).node
   const field = (facts: Partial<InputTarget>): MenuTarget => ({ kind: 'input', element: {} as HTMLElement, readOnly: false, secret: false, hasSelection: true, empty: false, canUndo: true, canRedo: false, ...facts })
   const targets: [string, MenuTarget][] = [
     ['the query editor', { kind: 'editor', tabId: saved.id }], ['a saved query\'s tab', { kind: 'documentTab', tabId: saved.id }], ['an unsaved query\'s tab', { kind: 'documentTab', tabId: unsaved.id }],
@@ -90,6 +93,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ['a server whose connection was lost', at({ type: 'object', object: server }, 'server-l.example', 'server-l', true)], ['the Databases folder', folder(server, 'databases', 'Databases')],
     ['a database', object(appData, 'AppData')], ['a Tables folder', folder(appData, 'tables', 'Tables')], ['a filtered Tables folder', folder(appData, 'tables', 'Tables', true)],
     ['the Programmability folder', folder(appData, 'programmability', 'Programmability')], ['a table', object(orders, 'dbo.Orders')],
+    ['a Columns folder still loading', folder(orders, 'columns', 'Columns')], ['a fully loaded Columns folder', loadedColumns],
     ['a column', object({ kind: 'column', database: 'AppData', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'Id' }, 'Id')],
     ['a return value', object({ kind: 'returnValue', database: 'AppData', parent: { kind: 'function', schema: 'dbo', name: 'Total' } }, 'Returns int')],
     ['a login', object({ kind: 'login', name: 'sa' }, 'sa')],
@@ -101,6 +105,11 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   capture()
   fixture.connections.add(connectionInfo('server-a'), connectionOptions)
   fixture.targets.update(saved.id, { connectionId: 'server-a' })
+  for (const label of ['Databases', 'AppData', 'Tables', 'dbo.Orders', 'Columns']) {
+    await vi.waitFor(() => { loadedNode.id = fixture.explorer.getSnapshot().rows.nodes.find(node => node?.label === label)?.id ?? 0; expect(loadedNode.id, label).toBeGreaterThan(0) })
+    fixture.explorer.expand(loadedNode.id)
+  }
+  await vi.waitFor(() => expect(fixture.explorer.canInsert(loadedNode.id)).toBe(true))
   capture()
   const running = fixture.startQuery()
   capture()

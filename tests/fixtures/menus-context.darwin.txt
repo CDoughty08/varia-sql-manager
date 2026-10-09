@@ -133,6 +133,12 @@ explorer.context, for a table
   Copy &Name  -+++
   ---
   Re&fresh  F5  -+++
+explorer.context, for a Columns folder still loading
+  Re&fresh  F5  -+++
+explorer.context, for a fully loaded Columns folder
+  Copy &Name  -+++
+  ---
+  Re&fresh  F5  -+++
 explorer.context, for a column
   Copy &Name  -+++
   ---

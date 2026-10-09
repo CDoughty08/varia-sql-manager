@@ -435,6 +435,8 @@ describe('context menus', () => {
     const row = new FakeElement(doc, 'div', { attributes: { id: `oe-${root}`, 'data-row-id': String(root) } }), other = new FakeElement(doc, 'div')
     row.rect = { left: 10, top: 100, right: 260, bottom: 122 }
     const tree = new FakeElement(doc, 'div', { attributes: { tabindex: '0', 'aria-activedescendant': `oe-${root}` } }).append(row)
+    tree.rect = { left: 0, top: 50, right: 300, bottom: 400 }
+    const view = Object.assign(tree, { scrollTop: 0, clientTop: 0, clientHeight: 350 })
     targets.register(row.dom, element => { const node = fixture.explorer.menuNode(Number(element.getAttribute('data-row-id'))); return node ? { kind: 'explorer', node } : null })
     targets.register(tree.dom, () => ({ kind: 'explorer' }))
     doc.activeElement = tree
@@ -442,7 +444,20 @@ describe('context menus', () => {
     expect(level(menus)).toMatchObject({ label: 'Object Explorer', active: 0, anchor: { kind: 'below', rect: { left: 18, top: 100, right: 260, bottom: 122 } } })
     expect(titles(level(menus).items)).toEqual(['Connect…', 'Disconnect', '-', 'New Query', '-', 'Copy Name', '-', 'Refresh'])
     expect([row.hasAttribute('data-menu-target'), tree.hasAttribute('data-menu-target'), doc.activeElement]).toEqual([true, false, tree])
+    expect(view.scrollTop).toBe(0)
     menus.close('escape')
+    // A row scrolled out of the tree's view: the tree scrolls it back into view, and the menu stays within the tree.
+    row.rect = { left: 10, top: 500, right: 260, bottom: 522 }
+    expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
+    expect(view.scrollTop).toBe(122)
+    expect(level(menus)).toMatchObject({ label: 'Object Explorer', anchor: { kind: 'below', rect: { left: 18, top: 400, right: 260, bottom: 400 } } })
+    menus.close('escape')
+    row.rect = { left: 10, top: -40, right: 260, bottom: -18 }
+    expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
+    expect(view.scrollTop).toBe(32)
+    expect(level(menus)).toMatchObject({ anchor: { kind: 'below', rect: { left: 18, top: 50, right: 260, bottom: 50 } } })
+    menus.close('escape')
+    row.rect = { left: 10, top: 100, right: 260, bottom: 122 }
     // An active descendant outside the tree, or none, leaves the tree's own menu: the empty area's.
     tree.setAttribute('aria-activedescendant', 'elsewhere')
     doc.ids.set('elsewhere', other)

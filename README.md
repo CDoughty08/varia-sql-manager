@@ -150,9 +150,9 @@ The tree is one tab stop, with the keys of the Windows tree that SSMS uses:
 | F8 (anywhere) | Show Object Explorer and focus the tree |
 | Ctrl+N (⌘N) | New query on the selected node's server and database |
 | Ctrl+C (⌘C) | Copy the selected node's name |
-| Shift+F10, context-menu key | The selected node's menu, below its row |
+| Shift+F10, context-menu key | The selected node's menu, below its row (scrolled into view first) |
 
-The toolbar above the tree has **Connect**, **Disconnect** (the selected node's server), **Stop**, **Filter Settings** (filled while the selected folder has a filter), **Refresh**, and **Collapse All**. With no server connected, the pane offers Connect instead.
+The toolbar above the tree has **Connect**, **Disconnect** (the selected node's server), **Stop**, **Filter Settings** (filled while the selected folder has a filter), **Refresh**, and **Collapse All**. It is one tab stop: the arrow keys, **Home**, and **End** move between its buttons. With no server connected, the pane offers Connect instead, and focus moves to it when the last server is disconnected.
 
 **Filter Settings…** (toolbar, a folder's menu, or the palette) narrows the objects a folder lists, as in SSMS: Name, Schema, and Owner match with Contains, Equals, or Does not contain, and Creation Date with Equals, Less than, Greater than, their "or equal" forms, Between, or Not between. Each folder offers only the properties that apply to it; the fields combine with AND, and the folder reads "(filtered)". **Clear Filter** in the dialog or **Remove Filter** in the folder's menu shows everything again. Filters last until the server is disconnected (at most 64 at a time).
 

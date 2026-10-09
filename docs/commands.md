@@ -267,7 +267,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `2_script` | **S**cript Table as › | Submenu: Object Explorer context menu › Script Table as | `explorerNode == 'table'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remo**v**e Filter | `explorer.removeFilter` | `explorerFolderFiltered` |
-| `5_copy` | Copy **N**ame | `explorer.copyName` | `explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost` |
+| `5_copy` | Copy **N**ame | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
 | `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 
 #### Object Explorer context menu › Script Table as
@@ -333,7 +333,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (37)
+## Context keys (38)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -377,6 +377,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
+| `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
 | `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
 

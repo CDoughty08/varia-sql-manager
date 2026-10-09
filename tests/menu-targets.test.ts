@@ -15,7 +15,7 @@ describe('menu targets', () => {
       { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'output', floating: true }, input
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, outputView: '', paneFloating: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolderInsertable: false, outputView: '', paneFloating: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, { ...none, outputView: 'messages' }, { ...none, paneFloating: true }, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -28,6 +28,9 @@ describe('menu targets', () => {
     expect(targetKeys({ kind: 'explorer', node: folder('tables') })).toEqual({ ...none, explorerNode: 'folder', explorerFolderFilterable: true })
     expect(targetKeys({ kind: 'explorer', node: folder('tables', true) })).toEqual({ ...none, explorerNode: 'folder', explorerFolderFilterable: true, explorerFolderFiltered: true })
     expect(targetKeys({ kind: 'explorer', node: folder('programmability') })).toEqual({ ...none, explorerNode: 'folder' })
+    // A fully loaded Columns folder has names to copy.
+    const columns = { id: 3, lost: false, kind: 'folder', folder: 'columns', connectionId: 'c', label: 'Columns', ref: { type: 'folder', owner: { kind: 'table', database: 'd', schema: 's', name: 'n' }, folder: 'columns' }, insertable: true } as const
+    expect(targetKeys({ kind: 'explorer', node: columns })).toEqual({ ...none, explorerNode: 'folder', explorerFolderInsertable: true })
     // File commands act on the tab the menu is for.
     expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't2', 't3', undefined, undefined])
     expect(argsFor(targets[4])).toEqual({ target: targets[4] })

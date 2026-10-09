@@ -8,10 +8,10 @@ import type { CommandArgs } from '../core/types'
 
 /**
  * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`), its
- * node id in `ExplorerService`, whether it is a server whose connection was lost with its backend generation, and
- * whether it is a folder with a filter.
+ * node id in `ExplorerService`, whether it is a server whose connection was lost with its backend generation, whether it
+ * is a folder with a filter, and whether it is a folder with names to copy (a fully loaded Columns folder).
  */
-export interface ExplorerMenuNode extends ExplorerTarget { readonly id: number; readonly lost: boolean; readonly filtered?: boolean }
+export interface ExplorerMenuNode extends ExplorerTarget { readonly id: number; readonly lost: boolean; readonly filtered?: boolean; readonly insertable?: boolean }
 /** A text field's state when its menu opened: what Cut, Copy, Paste, Delete, Select All, Undo, and Redo can do. */
 export interface InputTarget {
   readonly kind: 'input'
@@ -64,6 +64,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerServerLost: target?.kind === 'explorer' && !!target.node?.lost,
     explorerFolderFilterable: target?.kind === 'explorer' && filterable(target.node),
     explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,
+    explorerFolderInsertable: target?.kind === 'explorer' && target.node?.kind === 'folder' && !!target.node.insertable,
     outputView: target?.kind === 'output' ? target.view : '',
     paneFloating: target?.kind === 'dockTab' && target.floating
   }

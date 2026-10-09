@@ -1,18 +1,48 @@
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type Ref } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import { useCommandEnabled, useKeybindingLabel } from '../core/useCommand'
+import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
-import ExplorerErrorBoundary, { FaultProbe } from './ExplorerErrorBoundary'
+import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
 
-function ToolbarButton({ id, icon, label, args }: { id: CommandId; icon: string; label: string; args?: CommandArgs }) {
+interface Tool { readonly id: CommandId; readonly icon: string; readonly label: string; readonly args?: CommandArgs }
+
+function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus }: { tool: Tool; enabled: boolean; tabbable: boolean; buttonRef: Ref<HTMLButtonElement>; onFocus: () => void }) {
   const { commands } = useWorkbench()
-  const enabled = useCommandEnabled(id, args), key = useKeybindingLabel(id)
-  const title = key ? `${label} (${key.text})` : label
-  return <button className="icon-button" aria-label={label} title={title} disabled={!enabled} onClick={() => void commands.execute(id, args, 'toolbar')}>
-    <span className={`codicon codicon-${icon}`} aria-hidden="true" />
+  const key = useKeybindingLabel(tool.id)
+  const title = key ? `${tool.label} (${key.text})` : tool.label
+  return <button ref={buttonRef} className="icon-button" aria-label={tool.label} title={title} disabled={!enabled} tabIndex={tabbable ? 0 : -1} onFocus={onFocus}
+    onClick={() => void commands.execute(tool.id, tool.args, 'toolbar')}>
+    <span className={`codicon codicon-${tool.icon}`} aria-hidden="true" />
   </button>
+}
+
+/**
+ * SSMS's toolbar as an ARIA toolbar: one tab stop (the button used last, or the first enabled one), and the arrow keys,
+ * Home and End move between the enabled buttons.
+ */
+function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
+  const enabled = useCommandsEnabled(tools)
+  const buttons = useRef<(HTMLButtonElement | null)[]>([])
+  const [current, setCurrent] = useState(0)
+  const stop = enabled[current] ? current : enabled.indexOf(true)
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const order = tools.map((_, index) => index).filter(index => enabled[index])
+    const at = order.indexOf(buttons.current.findIndex(button => button === document.activeElement))
+    if (at < 0 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    const next = event.key === 'ArrowRight' ? order[(at + 1) % order.length] : event.key === 'ArrowLeft' ? order[(at - 1 + order.length) % order.length]
+      : event.key === 'Home' ? order[0] : event.key === 'End' ? order[order.length - 1] : undefined
+    if (next === undefined) return
+    event.preventDefault()
+    setCurrent(next)
+    buttons.current[next]?.focus()
+  }
+  return <div className="explorer-toolbar" role="toolbar" aria-label="Object Explorer toolbar" onKeyDown={onKeyDown}>
+    {tools.map((tool, index) => <ToolbarButton key={tool.id} tool={tool} enabled={enabled[index]} tabbable={index === stop}
+      buttonRef={button => { buttons.current[index] = button }} onFocus={() => setCurrent(index)} />)}
+  </div>
 }
 
 /**
@@ -32,18 +62,26 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
   // The empty area below the servers: Connect… and Refresh. Rows register their own menus.
   const background = useMenuTarget<HTMLDivElement>(() => ({ kind: 'explorer' }))
   const live = servers.filter(value => !value.lost).length
+  const tools: Tool[] = [
+    { id: 'connection.connect', icon: 'plug', label: 'Connect Object Explorer' },
+    { id: 'connection.disconnect', icon: 'debug-disconnect', label: 'Disconnect', ...(disconnectArgs ? { args: disconnectArgs } : {}) },
+    { id: 'explorer.stop', icon: 'debug-stop', label: 'Stop' },
+    { id: 'explorer.filter', icon: filtered ? 'filter-filled' : 'filter', label: 'Filter Settings' },
+    { id: 'explorer.refresh', icon: 'refresh', label: 'Refresh' },
+    { id: 'explorer.collapseAll', icon: 'collapse-all', label: 'Collapse All' }
+  ]
+  // When the last server goes, focus the tree held moves to the empty state's Connect button rather than the page.
+  const empty = !servers.length, connectButton = useRef<HTMLButtonElement>(null), wasEmpty = useRef(empty)
+  useLayoutEffect(() => {
+    if (empty && !wasEmpty.current && focusLost()) connectButton.current?.focus()
+    wasEmpty.current = empty
+  }, [empty])
   return <>
-    <div className="explorer-toolbar" role="toolbar" aria-label="Object Explorer toolbar">
-      <ToolbarButton id="connection.connect" icon="plug" label="Connect Object Explorer" />
-      <ToolbarButton id="connection.disconnect" icon="debug-disconnect" label="Disconnect" args={disconnectArgs} />
-      <ToolbarButton id="explorer.stop" icon="debug-stop" label="Stop" />
-      <ToolbarButton id="explorer.filter" icon={filtered ? 'filter-filled' : 'filter'} label="Filter Settings" />
-      <ToolbarButton id="explorer.refresh" icon="refresh" label="Refresh" />
-      <ToolbarButton id="explorer.collapseAll" icon="collapse-all" label="Collapse All" />
-    </div>
+    <ExplorerToolbar tools={tools} />
     <div className="explorer-body" ref={background}>
-      {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()}><FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
-        : <div className="explorer-empty"><Icon name="server" /><p>Connect to SQL Server to browse databases and objects.</p><button disabled={!connect} onClick={() => void commands.execute('connection.connect', undefined, 'toolbar')}>Connect to server</button></div>}
+      {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()}>
+        <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
+        : <div className="explorer-empty"><Icon name="server" /><p>Connect to SQL Server to browse databases and objects.</p><button ref={connectButton} disabled={!connect} onClick={() => void commands.execute('connection.connect', undefined, 'toolbar')}>Connect to server</button></div>}
       {error && <p className="explorer-error" role="alert">{error}</p>}
     </div>
     <div className="explorer-footer">{live ? `${live} connected server${live === 1 ? '' : 's'}` : servers.length ? 'No connected servers' : 'Windows & SQL authentication'}</div>
