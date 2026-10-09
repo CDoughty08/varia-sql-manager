@@ -1,5 +1,5 @@
 import { _electron as electron, expect } from '@playwright/test'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 await mkdir('artifacts', { recursive: true })
@@ -59,6 +59,21 @@ const colorOf = key => page.evaluate(name => {
   probe.remove()
   return color
 }, '--varia-' + key.replaceAll('.', '-'))
+// CI keeps screenshots only as artifacts, so a failure also logs the themes folder, the published theme state, and the
+// native menu's theme items.
+async function diagnostics() {
+  const state = await themeState().catch(reason => ({ error: String(reason) }))
+  const menuIds = await application?.evaluate(({ Menu }) => {
+    const ids = []
+    const visit = menu => { for (const item of menu?.items ?? []) { if (item.id?.startsWith('theme.')) ids.push(`${item.id}${item.checked ? ' [checked]' : ''}${item.enabled ? '' : ' [disabled]'}`); visit(item.submenu) } }
+    visit(Menu.getApplicationMenu())
+    return ids
+  }).catch(reason => String(reason))
+  return {
+    files: await readdir(themesFolder).catch(reason => String(reason)), preference: state?.preference, revision: state?.revision, notice: state?.notice,
+    themes: state?.themes?.map(theme => `${theme.id} (${theme.source}, ${theme.types?.join('/')}${theme.usable ? '' : ', unusable'})`), problems: state?.problems, error: state?.error, menu: menuIds
+  }
+}
 // expect.poll does not retry a callback that throws, and appearance.json appears only after the first choice.
 const appearance = () => readFile(appearanceFile, 'utf8').then(JSON.parse, () => null)
 const lightKeys = ['editor.background', 'foreground', 'button.background', 'titleBar.activeBackground', 'connection.red']
@@ -225,6 +240,7 @@ try {
   console.log('Theme checks passed: fresh-profile Dark, floating groups, live Light switch with native chrome, custom and injected themes, fallback after restart, Create Custom Theme, and Follow System.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'theme-failure.png') }).catch(() => {})
+  console.log(await diagnostics().catch(reason => 'Diagnostics failed: ' + reason))
   throw error
 } finally {
   clearTimeout(watchdog)
