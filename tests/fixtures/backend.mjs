@@ -12,6 +12,7 @@
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
 import { appendFileSync, existsSync, rmSync } from 'node:fs'
+import { access, appendFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
 import { decodeControl, encodeControl } from '../../src/shared/ipc/wire/msgpack.ts'
@@ -48,7 +49,7 @@ if (controlDirectory) appendFileSync(join(controlDirectory, 'spawns.jsonl'), JSO
 
 function handle(frame) {
   if (frame.kind === FrameKind.HELLO) return hello(decodeControl(frame.body))
-  if (frame.kind === FrameKind.PING) { if (mode !== 'unresponsive' && !control(`silent-${generation}`)) write(FrameKind.PONG, 0, frame.arg); return }
+  if (frame.kind === FrameKind.PING) { if (mode !== 'unresponsive' && !silent) write(FrameKind.PONG, 0, frame.arg); return }
   if (frame.kind === FrameKind.CANCEL) {
     cancels.push({ id: frame.id, reason: frame.arg })
     if (mode === 'echo' && streams.has(frame.id)) { streams.delete(frame.id); fail(frame.id, 'CANCELLED', 'The operation was cancelled.') }
@@ -132,7 +133,7 @@ function stream(id, credit, { pages = 4, bytes = 40 * 1024 } = {}) {
   pump()
 }
 
-/** Whether a control file exists; `consume` also removes it. */
+/** Whether a control file exists; `consume` also removes it. Only for startup and exit: see `controlled`. */
 function control(name, consume = false) {
   if (!controlDirectory) return false
   const path = join(controlDirectory, name)
@@ -140,6 +141,25 @@ function control(name, consume = false) {
   if (consume) rmSync(path, { force: true })
   return true
 }
+/**
+ * `control` for the frame loop. A synchronous check there would hold every frame behind a slow disk, PONGs included
+ * (opening a file takes seconds at times on Windows runners), and main would count the backend as hung.
+ */
+async function controlled(name, consume = false) {
+  if (!controlDirectory) return false
+  const path = join(controlDirectory, name)
+  try { await access(path) } catch { return false }
+  if (consume) await rm(path, { force: true })
+  return true
+}
+// PING is answered from memory; silent-<generation> is looked for every 50 ms.
+let silent = false
+if (controlDirectory) {
+  const look = () => { void controlled(`silent-${generation}`).then(value => { silent = value }, () => {}).finally(() => setTimeout(look, 50).unref()) }
+  look()
+}
+// calls.jsonl lines are written in request order, each before its request is handled.
+let logged = Promise.resolve()
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const workbenchConnections = new Map()
@@ -168,11 +188,11 @@ const explorerRows = {
   serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')]
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
-function explorerChildren({ node, subtype }) {
+async function explorerChildren({ node, subtype }) {
   const owner = node.type === 'object' ? node.object : node.owner
   const statics = staticChildren(node.type === 'object' ? { kind: node.object.kind, subtype } : { folder: node.folder }, explorerProfile)
     .map(folder => ({ ref: { type: 'folder', owner, folder }, label: folderSpecs[folder].label, icon: 'folder', hasChildren: true }))
-  if (node.type === 'folder' && node.folder === 'audits' && !control(join('allow', 'audits'))) {
+  if (node.type === 'folder' && node.folder === 'audits' && !await controlled(join('allow', 'audits'))) {
     return { nodes: statics, elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } }
   }
   const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : [])]
@@ -246,8 +266,13 @@ const fixtures = {
 }
 
 async function workbench(id, method, params, credit) {
-  if (controlDirectory) appendFileSync(join(controlDirectory, 'calls.jsonl'), JSON.stringify({ generation, method, params: params?.password === undefined ? params : { ...params, password: '<redacted>' } }) + '\n')
-  while (control(join('hold', method))) await sleep(25)
+  if (controlDirectory) {
+    const line = JSON.stringify({ generation, method, params: params?.password === undefined ? params : { ...params, password: '<redacted>' } }) + '\n'
+    const entry = logged.then(() => appendFile(join(controlDirectory, 'calls.jsonl'), line))
+    logged = entry.catch(() => {})
+    await entry
+  }
+  while (await controlled(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
@@ -279,10 +304,10 @@ async function workbench(id, method, params, credit) {
     case 'databases.list': return respond(id, workbenchDatabases)
     case 'tables.script': return respond(id, { sql: 'CREATE TABLE dbo.Orders (Id int);' })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
-    case 'explorer.children': return respond(id, explorerChildren(params))
+    case 'explorer.children': return respond(id, await explorerChildren(params))
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
-      if (control('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)
+      if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)
       if (params.sql.includes('WAIT_FOR_CANCEL')) { waitingScripts.set(params.queryId, { id, database: params.database }); return }
       const fixture = Object.keys(fixtures).find(name => params.sql.includes(name))
       if (fixture) return respond(id, fixtures[fixture](id, params))
