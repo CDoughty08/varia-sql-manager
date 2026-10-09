@@ -1,4 +1,4 @@
-import { _electron as electron, expect } from '@playwright/test'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 

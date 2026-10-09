@@ -29,7 +29,9 @@ README.md documents user-facing behaviour, limits, and the protocol.
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
   Every `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
-  `--no-sandbox`); only root, as in cloud sessions, runs without it.
+  `--no-sandbox`); only root, as in cloud sessions, runs without it. Suites import `electron` and `expect` from
+  `scripts/fixtures/smoke.mjs`: assertions wait 15 s on Windows, whose runners can take seconds to write a file, and
+  closing the app logs main's file operations that took 500 ms or more.
 
 ## Architecture invariants
 
