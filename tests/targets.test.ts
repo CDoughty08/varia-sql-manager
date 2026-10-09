@@ -11,10 +11,11 @@ async function fixture() {
   value.connections.add({ ...connectionInfo('server-a'), database: 'Sales' }, connectionOptions)
   value.connections.add(connectionInfo('server-b'), connectionOptions)
   const tab = value.documents.create('query.sql', 'SELECT 1', 'AppData', 'server-a')
-  // A finished query leaves results that a target change must clear.
+  // A finished query leaves results, which a target change keeps (SSMS).
   value.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, database: 'AppData' } })
   await value.queries.execute()
-  expect(value.queries.getSnapshot()[tab.id]?.result).toBeDefined()
+  expect(value.queries.getSnapshot()[tab.id]?.summary).toBeDefined()
+  expect(value.results.getSnapshot()[tab.id]?.status).toBe('completed')
   return { ...value, tab }
 }
 
@@ -25,13 +26,14 @@ describe('query targets', () => {
     targets.update(tab.id, { connectionId: 'server-a', database: 'AppData' })
     targets.changeDatabase(tab.id, 'AppData')
     expect(update).not.toHaveBeenCalled()
-    expect(queries.getSnapshot()[tab.id]?.result).toBeDefined()
+    expect(queries.getSnapshot()[tab.id]?.summary).toBeDefined()
   })
-  it('clear results when the database changes', async () => {
-    const { targets, documents, queries, tab } = await fixture()
+  it('keep results when the database changes', async () => {
+    const { targets, documents, queries, results, tab } = await fixture()
     targets.changeDatabase(tab.id, 'master')
     expect(documents.get(tab.id)).toMatchObject({ connectionId: 'server-a', database: 'master' })
-    expect(queries.getSnapshot()[tab.id]).toBeUndefined()
+    expect(queries.getSnapshot()[tab.id]?.summary).toBeDefined()
+    expect(results.getSnapshot()[tab.id]?.status).toBe('completed')
   })
   it('keep a running query\'s state when its target changes', async () => {
     const { targets, queries, tab, startQuery } = await fixture()
@@ -40,8 +42,8 @@ describe('query targets', () => {
     expect(queries.isRunning(tab.id)).toBe(true)
     await running.finish()
   })
-  it('end the session before moving a query to another server, under the document lock', async () => {
-    const { targets, documents, api, queries, tab } = await fixture()
+  it('end the session before moving a query to another server, under the document lock, keeping its results', async () => {
+    const { targets, documents, api, queries, results, tab } = await fixture()
     const closing = deferred<ApiResult<{ closed: boolean }>>()
     api.closeQuerySession.mockReturnValueOnce(closing.promise)
     const change = targets.changeConnection(tab.id, 'server-b')
@@ -55,14 +57,15 @@ describe('query targets', () => {
     await change
     expect(documents.get(tab.id)).toMatchObject({ connectionId: 'server-b', database: 'master' })
     expect(documents.getSnapshot().busy).toBe(false)
-    expect(queries.getSnapshot()[tab.id]).toBeUndefined()
+    expect(queries.getSnapshot()[tab.id]?.summary).toBeDefined()
+    expect(results.getSnapshot()[tab.id]?.status).toBe('completed')
   })
   it('keep the session, database, and results when the current server is chosen again', async () => {
     const { targets, documents, api, queries, tab } = await fixture()
     await targets.changeConnection(tab.id, 'server-a')
     expect(api.closeQuerySession).not.toHaveBeenCalled()
     expect(documents.get(tab.id)).toMatchObject({ connectionId: 'server-a', database: 'AppData' })
-    expect(queries.getSnapshot()[tab.id]?.result).toBeDefined()
+    expect(queries.getSnapshot()[tab.id]?.summary).toBeDefined()
     await targets.changeConnection(tab.id, undefined)
     api.closeQuerySession.mockClear()
     await targets.changeConnection(tab.id, undefined)

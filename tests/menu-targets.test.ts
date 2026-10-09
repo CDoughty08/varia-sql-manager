@@ -137,25 +137,26 @@ describe('menu target service', () => {
       expect(report).toHaveBeenCalledOnce()
     } finally { report.mockRestore() }
   })
-  it('resolves Query Output\'s views: the grid below its active cell, and Messages and the plan with their selected text', () => {
+  it('resolves Query Output\'s views: the grid below its active cell, and Messages with their selected text', () => {
     const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
     const view = (kind: string, attributes: Record<string, string> = {}) => make('div', { attributes: { 'data-output-view': kind, 'data-tab-id': 't1', 'data-result-index': '2', ...attributes } })
-    const number = make('td', { className: 'row-number', attributes: { 'data-row': '0' } }), first = make('td', { attributes: { 'data-row': '0', 'data-col': '0' } })
-    const active = make('td', { className: 'active-cell', attributes: { 'data-row': '1', 'data-col': '1' } })
-    const grid = view('grid', { 'data-result-grid': '' }).append(make('table').append(make('tr').append(number, first), make('tr').append(active)))
+    const number = make('div', { className: 'rg-rh' }), first = make('div', { className: 'rg-c' })
+    const active = make('div', { className: 'rg-c is-act' })
+    const grid = view('grid', { 'data-result-grid': '' }).append(make('div', { className: 'rg-scroll' }).append(make('div', { className: 'rg-row' }).append(number, first), make('div', { className: 'rg-row' }).append(active)))
     const text = make('pre', { textContent: 'hello' }), messages = view('messages', { 'data-result-index': '0' }).append(text), plan = view('plan').append(make('pre'))
     make('body').append(grid, messages, plan)
     const service = new MenuTargetService()
     const output = { kind: 'output', tabId: 't1', resultIndex: 2, selectedText: '' }
     expect(service.targetFor(dom(number))).toEqual({ target: { ...output, view: 'grid', element: grid }, element: grid, focus: grid, anchor: active })
-    active.classes.delete('active-cell')
+    active.classes.delete('is-act')
     expect(service.targetFor(dom(active))?.anchor).toBe(first)
     // Selected text counts only inside the view.
     doc.selection = 'hello'
     expect(service.targetFor(dom(text))?.target).toEqual({ ...output, resultIndex: 0, view: 'messages', element: messages })
     doc.selectionIn = text
     expect(service.targetFor(dom(text))).toEqual({ target: { ...output, resultIndex: 0, view: 'messages', selectedText: 'hello', element: messages }, element: messages, focus: messages })
-    expect(service.targetFor(dom(plan))?.target).toMatchObject({ view: 'plan', selectedText: '' })
+    // Execution plans open as documents now; there is no plan view.
+    expect(service.targetFor(dom(plan))).toBeUndefined()
     // The grid's cells are selected, not its text.
     doc.selectionIn = first
     expect(service.targetFor(dom(first))?.target).toMatchObject({ view: 'grid', selectedText: '' })

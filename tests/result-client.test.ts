@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ResultClient, type PortMessageEvent, type WindowLike, type WorkerLike } from '../src/renderer/src/results/ResultClient'
+import { ResultClient, WindowCache, type PortMessageEvent, type RowWindow, type WindowLike, type WorkerLike } from '../src/renderer/src/results/ResultClient'
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
 import type { ApiResult, QueryResult, ResultDescriptor } from '../src/shared/contracts'
@@ -231,7 +231,7 @@ describe('ResultClient', () => {
   it('bounds the text of the windows a result remembers', async () => {
     const workers: FakeWorker[] = []
     const window = new FakeWindow()
-    const client = new ResultClient({ api: { openResultsPort: async () => ({ ok: true, value: undefined }) }, window, createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker }, windowCacheCharacters: 12 })
+    const client = new ResultClient({ api: { openResultsPort: async () => ({ ok: true, value: undefined }) }, window, createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker }, windowCache: { units: 12 } })
     window.dispatch({ source: window, data: { type: 'varia:results-port' }, ports: [new MessageChannel().port1] })
     await client.ready()
     const handle = client.open(descriptor())
@@ -268,5 +268,87 @@ describe('ResultClient', () => {
     const client = new ResultClient({ api: { openResultsPort: async () => ({ ok: false, error: 'The results connection was reopened too often. Reload the workbench.' }) }, window, createWorker: () => new FakeWorker() })
     await expect(client.ready()).rejects.toMatchObject({ code: 'PORT_CLOSED', message: 'The results connection was reopened too often. Reload the workbench.' })
     await expect(client.open(descriptor()).getWindow(0, 1)).rejects.toMatchObject({ code: 'PORT_CLOSED' })
+  })
+  it('shares one window cache, keyed by everything that shapes a window and bounded by windows and units', () => {
+    const window = (characters: number): RowWindow => ({ first: 0, count: 1, colStart: 0, colEnd: 1, text: ['x'.repeat(characters)], flags: new Uint8Array(1) })
+    const cache = new WindowCache(3, 100)
+    const key = (result: string, first: number, display = true) => WindowCache.key(result, first, 128, 0, 32, 512, display)
+    expect(key('1:3', 0)).not.toBe(key('1:3', 0, false))
+    expect(key('1:3', 0)).not.toBe(WindowCache.key('1:3', 0, 128, 0, 32, 1024, true))
+    cache.set(key('1:3', 0), '1:3', window(10))
+    cache.set(key('1:3', 128), '1:3', window(10))
+    cache.set(key('1:4', 0), '1:4', window(10))
+    // A peek makes a window the most recently used, so the oldest other one goes first.
+    expect(cache.get(key('1:3', 0))).toBeDefined()
+    cache.set(key('1:4', 128), '1:4', window(10))
+    expect([cache.get(key('1:3', 128)), cache.size, cache.units]).toEqual([undefined, 3, 30])
+    cache.set(key('1:5', 0), '1:5', window(90))
+    expect([cache.size, cache.units]).toEqual([2, 100])
+    cache.set(key('1:5', 0), '1:5', window(200))
+    expect([cache.size, cache.units]).toEqual([1, 200])
+    cache.set(key('1:4', 0), '1:4', window(5))
+    cache.dropResult('1:5')
+    expect([cache.size, cache.units]).toEqual([1, 5])
+    cache.clear()
+    expect([cache.size, cache.units]).toEqual([0, 0])
+  })
+
+  it('opens one handle per result until it is disposed, which forgets its windows', async () => {
+    const { client, handOver, serve } = fixture()
+    handOver()
+    const handle = client.open(descriptor())
+    expect(client.open(descriptor())).toBe(handle)
+    const pending = handle.getWindow(0, 4, { display: true })
+    await settle()
+    serve()
+    await pending
+    expect(handle.peekWindow(0, 4, { display: true })).toBeDefined()
+    expect(handle.peekWindow(0, 4)).toBeUndefined()
+    expect(client.windows.size).toBe(1)
+    handle.dispose()
+    expect(handle.peekWindow(0, 4, { display: true })).toBeUndefined()
+    expect(client.windows.size).toBe(0)
+    expect(client.open(descriptor())).not.toBe(handle)
+  })
+
+  it('queues closes while the results port is down and sends them once one is attached', async () => {
+    const { client, worker, handOver } = fixture()
+    const handle = client.open(descriptor())
+    await client.release([handle.key, { generation: 1, resultId: 9 }, handle.key])
+    expect(handle.getSnapshot().state).toBe('released')
+    expect(client.queuedCloses).toBe(2)
+    expect(worker().received).toEqual([])
+    handOver()
+    await settle()
+    expect(client.queuedCloses).toBe(0)
+    expect(worker().fromWorker).toEqual([{ t: 'close', rid: 1, generation: 1, resultIds: [3, 9] }])
+    // A close the worker never answered, because it stopped, waits for the next port.
+    worker().crash()
+    await settle()
+    expect(client.queuedCloses).toBe(2)
+    // Results of an earlier backend generation are gone with it.
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 2, status: 'ready' })
+    await settle()
+    expect(client.queuedCloses).toBe(0)
+  })
+
+  it('measures display columns in the worker, and reports its counters', async () => {
+    const { client, handOver, serve, worker } = fixture()
+    handOver()
+    const handle = client.open(descriptor())
+    const measuring = handle.measure(0, 10, 0, 1)
+    await settle()
+    serve()
+    expect(await measuring).toEqual({ rows: 10, widths: Uint16Array.of(1) })
+    expect(worker().received.at(-1)).toMatchObject({ type: 'measure', first: 0, count: 10, colStart: 0, colEnd: 1 })
+    const window = handle.getWindow(0, 4)
+    await settle()
+    serve()
+    await window
+    const stats = client.stats()
+    await settle()
+    expect(await stats).toEqual({ workerBytes: worker().core.cachedBytes, workerPages: 3, uiWindows: 1, uiUnits: 4, inflight: 0 })
   })
 })

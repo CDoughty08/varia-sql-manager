@@ -1,4 +1,4 @@
-import type { DisplayQueryResult, SqlFile } from '../../shared/contracts'
+import type { SqlFile } from '../../shared/contracts'
 
 export interface QueryDocument {
   readonly id: string
@@ -12,8 +12,8 @@ export interface QueryDocument {
   readonly sessionNotice?: boolean
 }
 
-// Presentation projection; results are owned by QueryService.
-export interface QueryTab extends QueryDocument { result?: DisplayQueryResult; error?: string }
+// Presentation projection; results are owned by ResultsService.
+export type QueryTab = QueryDocument
 
 export function afterClose<T extends { id: string }>(tabs: readonly T[], activeId: string, closingId: string): { tabs: T[]; activeId: string } {
   const index = tabs.findIndex(tab => tab.id === closingId)

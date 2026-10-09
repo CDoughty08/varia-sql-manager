@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { platforms, type Platform } from '../src/shared/commands/keybindings'
-import type { DisplayResultSet } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { openEnd } from '../src/renderer/src/grid/constants'
 import { gridKeyAction } from '../src/renderer/src/grid/keyboard'
 import {
-  blockRange, cellText, columnTitle, contains, copyPlan, covered, describeRange, describeSelection, dragSelection, inRange, isEmptyRange, maxCopyLength, navigate, pressButton,
-  pressSelection, rangeOf, resolveBlocks, select, selectAll, toTsv, windowRanges, type BlockKind, type GridHit, type GridSelection
+  blockRange, columnTitle, contains, copyPlan, covered, describeRange, describeSelection, dragSelection, inRange, isEmptyRange, navigate, pressButton,
+  pressSelection, rangeOf, resolveBlocks, select, selectAll, windowRanges, type BlockKind, type GridHit, type GridSelection
 } from '../src/renderer/src/grid/selection'
 import { ResultSelectionService } from '../src/renderer/src/services/result-selection'
+import { ResultsService } from '../src/renderer/src/results/ResultsService'
+import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 
 /** One block from `anchor` to `focus`, the active cell at its focus, as a press and a Shift+press make it. */
 const block = (kind: BlockKind, anchor: [number, number], focus: [number, number] = anchor, resultIndex = 0): GridSelection =>
@@ -18,11 +19,6 @@ const cells = (anchor: [number, number], focus: [number, number], resultIndex = 
 const added = (hits: readonly GridHit[], resultIndex = 0): GridSelection =>
   hits.reduce<GridSelection | undefined>((current, hit, index) => select(current, hit, { resultIndex, extend: false, add: index > 0 }), undefined)!
 const cell = (row: number, column: number): GridHit => ({ kind: 'cell', row, column })
-/** Three rows by three columns, the second column unnamed, with a NULL and values that need cleaning. */
-const set: Pick<DisplayResultSet, 'columns' | 'rows'> = {
-  columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }, { name: 'Note', dataType: 'nvarchar' }],
-  rows: [['1', 'a', null], ['2', 'b\tx', 'line\r\nbreak'], ['3', 'c', '1']]
-}
 
 describe('grid selection', () => {
   it('spans a rectangle from its anchor in either direction, clamped to the result', () => {
@@ -40,30 +36,10 @@ describe('grid selection', () => {
     expect(inRange({ top: 0, left: 1, bottom: 2, right: 2 }, { row: 1, column: 1 })).toBe(true)
     expect(inRange({ top: 0, left: 1, bottom: 2, right: 2 }, { row: 1, column: 0 })).toBe(false)
   })
-  it('copies cells as one field each: NULL, and line breaks and tabs as spaces', () => {
-    expect([null, undefined, 0, false, 'a\tb', 'a\r\nb', 'a\rb\nc', '', 1.5].map(cellText)).toEqual(['NULL', 'NULL', '0', 'false', 'a b', 'a b', 'a b c', '', '1.5'])
+  it('names a column as its header shows it: (No column name) for a computed one, on one line', () => {
     expect(columnTitle('')).toBe('(No column name)')
     expect(columnTitle('Order\tId')).toBe('Order Id')
-  })
-  it('writes tab-separated text with optional headers and the platform\'s line breaks, without a final one', () => {
-    expect(toTsv(set, cells([0, 0], [0, 0]), { headers: false, eol: '\n' })).toBe('1')
-    expect(toTsv(set, cells([2, 2], [0, 1]), { headers: false, eol: '\n' })).toBe('a\tNULL\nb x\tline break\nc\t1')
-    expect(toTsv(set, cells([0, 0], [1, 1]), { headers: true, eol: '\r\n' })).toBe('Id\t(No column name)\r\n1\ta\r\n2\tb x')
-    expect(toTsv(set, selectAll(0), { headers: true, eol: '\n' })).toBe('Id\t(No column name)\tNote\n1\ta\tNULL\n2\tb x\tline break\n3\tc\t1')
-    expect(toTsv(set, block('columns', [1, 2]), { headers: false, eol: '\n' })).toBe('NULL\nline break\n1')
-    expect(toTsv({ columns: set.columns, rows: [] }, selectAll(0), { headers: true, eol: '\n' })).toBe('Id\t(No column name)\tNote')
-    expect(toTsv({ columns: [], rows: [] }, selectAll(0), { headers: true, eol: '\n' })).toBe('')
-    // The PR3 table copies the last block only.
-    expect(toTsv(set, added([cell(0, 0), cell(2, 2)]), { headers: false, eol: '\n' })).toBe('1')
-  })
-  it('refuses to build text longer than the copy limit', () => {
-    const big = 'x'.repeat(3_000_000), wide = { columns: [{ name: 'a', dataType: 'nvarchar' }], rows: [[big], [big], [big]] }
-    expect(() => toTsv(wide, selectAll(0), { headers: false, eol: '\n' })).toThrow(new RangeError('The selection is too large to copy.'))
-    // Two rows fit: 6,000,001 characters.
-    expect(toTsv(wide, cells([0, 0], [1, 0]), { headers: false, eol: '\n' })).toHaveLength(6_000_001)
-    const edge = { columns: [{ name: 'a', dataType: 'nvarchar' }], rows: [['y'.repeat(maxCopyLength)]] }
-    expect(toTsv(edge, selectAll(0), { headers: false, eol: '\n' })).toHaveLength(maxCopyLength)
-    expect(() => toTsv(edge, selectAll(0), { headers: true, eol: '\n' })).toThrow(RangeError)
+    expect(columnTitle('a\r\nb\rc')).toBe('a b c')
   })
   it('selects what a press lands on, extends with Shift, and drags the far corner', () => {
     const press = (current: GridSelection | undefined, hit: GridHit, options: { shift?: boolean; right?: boolean; resultIndex?: number } = {}) =>
@@ -273,39 +249,49 @@ describe('copy plan', () => {
 })
 
 describe('result selection service', () => {
-  it('keeps one selection per query, only for the result set it was made in', () => {
-    const events = new EventBus(), service = new ResultSelectionService(events)
-    const listener = { calls: 0 }
-    service.subscribe(() => { listener.calls++ })
+  /** Two tabs that have run, with two result sets in t1 and one in t2, and the adapter over their grids' view state. */
+  function selections() {
+    const events = new EventBus(), client = fakeResultClient()
+    const results = new ResultsService({ client, api: { copyResults: async () => ({ ok: false, error: 'unused' }), cancelResultsJob: async () => ({ ok: true, value: { cancelled: false } }), onResultsJob: () => () => {} }, events, frame: callback => callback() })
+    for (const [tabId, sets] of [['t1', [descriptor(1), descriptor(2, { index: 1 })]], ['t2', [descriptor(3, { index: 0 })]]] as const) {
+      results.begin(tabId, 'q-' + tabId)
+      results.finish(tabId, 'q-' + tabId, { summary: summaryOf([...sets]) })
+    }
+    return { events, results, service: new ResultSelectionService(results) }
+  }
+  it('keeps one selection per result set of a query, read through the grids\' view state', () => {
+    const { results, service } = selections()
     const selection = cells([0, 0], [1, 1], 1)
     service.set('t1', selection)
-    service.set('t1', selection)
-    expect(listener.calls).toBe(1)
-    expect(service.get('t1')).toBe(selection)
     expect(service.get('t1', 1)).toBe(selection)
+    expect(results.gridState('t1', 1).selection).toBe(selection)
     expect(service.get('t1', 0)).toBeUndefined()
     expect(service.get('t2')).toBeUndefined()
     expect(service.get('__proto__')).toBeUndefined()
+    // Without a result index, the grid that last had focus.
+    results.viewState('t1').focusedIndex = 1
+    expect(service.get('t1')).toBe(selection)
     service.selectAll('t2', 0)
     expect(service.get('t2', 0)).toEqual(selectAll(0))
-    service.dispose()
-    expect(service.getSnapshot()).toEqual({})
-  })
-  it('forgets a query\'s selection when it runs, finishes, or closes', () => {
-    const events = new EventBus(), service = new ResultSelectionService(events)
-    for (const event of [{ type: 'query.started', tabId: 't1', queryId: 'q' }, { type: 'query.finished', tabId: 't1', queryId: 'q' }, { type: 'documents.closed', tabId: 't1' }] as const) {
-      service.set('t1', cells([0, 0], [0, 0]))
-      service.set('t2', cells([1, 1], [1, 1]))
-      events.emit(event)
-      expect(service.get('t1'), event.type).toBeUndefined()
-      expect(service.get('t2'), event.type).toBeDefined()
-    }
-    events.emit({ type: 'documents.activated', tabId: 't2' })
-    expect(service.get('t2')).toBeDefined()
+    // A result set the run does not have takes no selection.
+    service.set('t2', cells([0, 0], [0, 0], 5))
+    expect(service.get('t2', 5)).toBeUndefined()
+    service.clear('t1')
+    expect(service.get('t1', 1)).toBeUndefined()
     service.clear('missing')
-    service.dispose()
-    service.set('t3', selectAll(0))
-    events.emit({ type: 'documents.closed', tabId: 't3' })
-    expect(service.get('t3')).toBeDefined()
+  })
+  it('forgets a query\'s selections when it runs again or closes, and keeps them when it finishes', () => {
+    const { events, results, service } = selections()
+    service.set('t1', cells([0, 0], [0, 0]))
+    service.set('t2', cells([1, 1], [1, 1]))
+    results.begin('t1', 'q-again')
+    expect(service.get('t1', 0)).toBeUndefined()
+    expect(service.get('t2', 0)).toBeDefined()
+    results.finish('t1', 'q-again', { summary: summaryOf([descriptor(4, { index: 0 })]) })
+    service.set('t1', cells([0, 0], [0, 0]))
+    expect(service.get('t1', 0)).toBeDefined()
+    events.emit({ type: 'documents.closed', tabId: 't1' })
+    expect(service.get('t1', 0)).toBeUndefined()
+    expect(service.get('t2', 0)).toBeDefined()
   })
 })

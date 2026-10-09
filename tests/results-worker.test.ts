@@ -67,7 +67,7 @@ describe('results worker core', () => {
     if (result?.type !== 'window') throw new Error('No window')
     // Row 0: '0', 'nam' (the cell cap), '0x' (no whole byte fits in 3 characters); row 1: '1', then the budget is spent.
     expect(result.text).toEqual(['0', 'nam', '0x', '1', '', ''])
-    expect([...result.flags]).toEqual([0, 2, 2, 0, 8, 8])
+    expect([...result.flags]).toEqual([0, 16, 16, 0, 8, 8])
   })
 
   it('gives the same text and flags whether cells are decoded in runs or one by one', () => {
@@ -91,7 +91,7 @@ describe('results worker core', () => {
     // A small cell cap: the short ASCII column is one run; the long column is decoded cell by cell, only up to the cap.
     expect(window(2, 8, 1_000_000)).toEqual({
       text: ['r0', 'é0', 'long 0', '0x00AB', 'r1', 'é1', 'xxxxxxxx', '0x01AB', 'r2', 'é2', 'long 2', '0x02AB'],
-      flags: [0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0]
+      flags: [0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0]
     })
     // A cap the long cell fits: that column is a run too.
     expect(window(3, 10_000, 1_000_000).text[6]).toBe('x'.repeat(5000))
@@ -236,5 +236,42 @@ describe('results worker core', () => {
     const { core, reads: wideReads } = fixture()
     core.handle({ type: 'window', id: 1, key, wires: wide, first: 0, count: 4096, colStart: 0, colEnd: 200, maxCellChars: 10, textBudget: 10 })
     expect(wideReads()[0].maxRows).toBe(Math.floor(262_144 / 200))
+  })
+  it('gives grid text in display mode: one space for each line break or tab, U+FFFD for other control characters', () => {
+    const posted: WorkerResponse[] = []
+    const core = new ResultsWorkerCore({ post: message => { posted.push(message) } })
+    core.attach({ postMessage: () => {} })
+    core.receive({ t: 'backend', generation: 1, status: 'ready' })
+    const texts = ['a\r\nb\rc\nd\te', 'bell\x07del\x7f', 'line para ', 'plain', 'x'.repeat(20)]
+    const body = encodePage({ resultId: 5, firstRow: 0, columns: [{ wire: 'text' }], rows: texts.map(text => [text]) })
+    for (const [id, display] of [[1, true], [2, false]] as const) {
+      core.handle({ type: 'window', id, key, wires: ['text'], first: 0, count: 5, colStart: 0, colEnd: 1, maxCellChars: 10, textBudget: 1000, display })
+      if (id === 1) {
+        core.receive({ t: 'page', rid: 1, seq: 1, body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer })
+        core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 5, rowsAvailable: 5, complete: true, pages: 1, rows: 5 } })
+      }
+    }
+    const [shown, raw] = [1, 2].map(id => posted.find(message => 'id' in message && message.id === id)) as Extract<WorkerResponse, { type: 'window' }>[]
+    expect(shown.text).toEqual(['a b c d e', 'bell�del�', 'line�para�', 'plain', 'x'.repeat(10)])
+    // Cut at maxCellChars is its own flag (16); 2 means the backend stored a prefix.
+    expect([...shown.flags]).toEqual([0, 0, 0, 0, 16])
+    expect(raw.text[0]).toBe('a\r\nb\rc\nd\te')
+  })
+
+  it('measures the widest display text of each column, NULL as its 4 letters and wide characters as 2', () => {
+    const posted: WorkerResponse[] = []
+    const core = new ResultsWorkerCore({ post: message => { posted.push(message) } })
+    core.attach({ postMessage: () => {} })
+    core.receive({ t: 'backend', generation: 1, status: 'ready' })
+    const mixed: WireKind[] = ['text', 'text', 'binary']
+    const rows: PageCell[][] = [['ab', '日本', null], [null, 'é', new Uint8Array([1, 2])], ['x'.repeat(600), null, null]]
+    core.handle({ type: 'measure', id: 7, key, wires: mixed, first: 0, count: 3, colStart: 0, colEnd: 3 })
+    const body = encodePage({ resultId: 5, firstRow: 0, columns: mixed.map(wire => ({ wire })), rows })
+    core.receive({ t: 'page', rid: 1, seq: 1, body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 3, rowsAvailable: 3, complete: true, pages: 1, rows: 3 } })
+    const answer = posted.find(message => message.type === 'measure')
+    expect(answer).toEqual({ type: 'measure', id: 7, rows: 3, widths: Uint16Array.of(512, 4, 6) })
+    core.handle({ type: 'stats', id: 8 })
+    expect(posted.at(-1)).toEqual({ type: 'stats', id: 8, bytes: core.cachedBytes, pages: 1 })
   })
 })

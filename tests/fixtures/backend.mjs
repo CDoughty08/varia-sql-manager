@@ -360,7 +360,9 @@ async function runDirective(id, params, directive) {
 
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
-    messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2.")], elapsedMs: 3, status: 'failed',
+    // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form.
+    messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2."),
+      { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }], elapsedMs: 3, status: 'failed',
     error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 1, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.

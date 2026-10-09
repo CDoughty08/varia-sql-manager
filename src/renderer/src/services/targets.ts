@@ -13,17 +13,16 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 export class TargetService {
   constructor(
     private readonly documents: DocumentService,
-    private readonly queries: Pick<QueryService, 'clear' | 'isRunning'>,
+    private readonly queries: Pick<QueryService, 'isRunning'>,
     private readonly connections: Pick<ConnectionService, 'get'>,
     private readonly files: Pick<FileService, 'clearError' | 'reportError'>,
     private readonly api: Pick<VariaApi, 'closeQuerySession'>
   ) {}
   update(tabId: string, patch: TargetPatch): void {
     const current = this.documents.get(tabId)
-    // Re-selecting the current target keeps the query's results.
     if (current && Object.entries(patch).every(([key, value]) => current[key as keyof TargetPatch] === value)) return
+    // The query's results stay, as in SSMS: they live until it runs again, closes, or the user closes them.
     this.documents.update(tabId, patch)
-    this.queries.clear(tabId)
   }
   /**
    * Moves a query to another server (or disconnects it), ending its session first so no transaction follows it.

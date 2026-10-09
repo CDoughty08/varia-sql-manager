@@ -6,7 +6,7 @@ export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Obje
 export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'debug-restart', 'refresh',
   'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
   'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table', 'collapse-all', 'filter',
-  'filter-filled', 'clear-all'] as const
+  'filter-filled', 'clear-all', 'warning'] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
@@ -178,6 +178,11 @@ export const commandCatalog = {
   'view.toggleResultsPane': {
     title: 'Toggle Results Pane', category: 'View', icon: 'output', keywords: ['results', 'output', 'hide', 'show'], toggled: 'outputPaneVisible',
     keybindings: [{ key: 'mod+r' }], menus: [{ menu: 'window', group: '1_panes', order: 4, title: 'Show Results Pane', mnemonic: 'h' }]
+  },
+  // SSMS's F6: between the query editor and its results (the grid that last had focus, else the first, else Messages).
+  'window.switchPane': {
+    title: 'Switch Between Query and Results', category: 'View', icon: 'output', keywords: ['results', 'editor', 'focus'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ key: 'f6' }, { key: 'shift+f6' }]
   },
   'layout.save': {
     title: 'Save Layout…', category: 'View', icon: 'layout',

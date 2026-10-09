@@ -168,7 +168,3 @@ output.context, for Messages without
   &Copy  Ctrl+C  ----
   ---
   Select &All  Ctrl+A  ++++
-output.context, for the XML plan
-  &Copy  Ctrl+C  ----
-  ---
-  Select &All  Ctrl+A  ++++

@@ -1,4 +1,4 @@
-import type { DisplayQueryResult } from '../../../shared/contracts'
+import type { QueryResult } from '../../../shared/contracts'
 import type { ThemePreferencePatch } from '../../../shared/theme/types'
 import type { MenuTarget } from '../menus/targets'
 
@@ -19,7 +19,7 @@ export type WorkbenchEvent =
   | { type: 'documents.activated'; tabId: string }
   | { type: 'documents.closed'; tabId: string }
   | { type: 'query.started'; tabId: string; queryId: string }
-  | { type: 'query.finished'; tabId: string; queryId: string; result?: DisplayQueryResult; error?: string }
+  | { type: 'query.finished'; tabId: string; queryId: string; summary?: QueryResult; error?: string }
   /** Object Explorer reloaded a server, a databases folder, or another node of the connection. */
   | { type: 'explorer.refreshed'; connectionId: string; scope: 'server' | 'databases' | 'other' }
 export interface ExternalStore<T> { getSnapshot(): T; subscribe(listener: () => void): () => void }

@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (74)
+## Commands (75)
 
 ### File
 
@@ -49,6 +49,7 @@ keys it uses are listed below.
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
+| Switch Between Query and Results | `window.switchPane` | F6, Shift+F6 | F6, Shift+F6 | F6, ⇧F6 | `hasActiveDocument` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
@@ -379,7 +380,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
-| `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
+| `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
 | `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
 
 ## Reserved keys

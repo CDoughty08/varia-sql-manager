@@ -14,6 +14,8 @@ export const gridLimits = {
   uiCacheWindows: 256, uiCacheUnits: 16_777_216,
   fetchesPerGrid: 4, fetchesPerClient: 16, abortAfterFrames: 2, frontierPerSecond: 10,
   fastScrollViewports: 3, settleMs: 50, prefetchIdleFrames: 2, prefetchViewports: 2,
+  /** A read refused because main's results port is full (many grids reading at once) is tried again after this. */
+  busyRetryMs: 250,
   scrollCap: 15_000_000, scrollCapPhysical: 30_000_000, rebaseRows: 4096,
   splitter: 5, stackMinRows: 4, stackBorder: 2, mountedGrids: 12, mountsPerFrame: 2,
   selectionBlocks: 64, dragThreshold: 4, resizeZoneLeft: 4, resizeZoneRight: 3,

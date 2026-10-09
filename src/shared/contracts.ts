@@ -138,17 +138,6 @@ export interface QueryResult {
   budget: { usedBytes: number; globalBytes: number; queryBytes: number }
   completedAt: string
 }
-/** A result set materialised for the PR6 results table (results/legacy.ts): display text, null for NULL. */
-export interface DisplayResultSet {
-  columns: { name: string; dataType: string }[]
-  rows: (string | null)[][]
-  truncated: boolean
-  incomplete?: boolean
-  batchNumber?: number
-  iteration?: number
-  kind?: 'rows' | 'executionPlan'
-}
-export interface DisplayQueryResult extends Omit<QueryResult, 'resultSets' | 'budget' | 'discardedResultSets' | 'messages' | 'completedAt'> { resultSets: DisplayResultSet[]; messages: string[]; completedAt?: string }
 /** Rows read so far for one result set of a running script. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */

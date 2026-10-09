@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { BackendState, ConnectionInfo, ConnectionOptions, DisplayQueryResult, ExplorerChildrenResult, ExplorerNode as WireNode, VariaApi } from '../../src/shared/contracts'
+import type { BackendState, ConnectionInfo, ConnectionOptions, ExplorerChildrenResult, ExplorerNode as WireNode, QueryResult, VariaApi } from '../../src/shared/contracts'
 import { folderSpecs, kindSpecs, type FolderId } from '../../src/shared/explorer/catalog'
 import type { ExplorerChildrenParams, ObjectRef } from '../../src/shared/explorer/refs'
 import type { Platform } from '../../src/shared/commands/keybindings'
@@ -17,6 +17,8 @@ import { PaneService } from '../../src/renderer/src/services/panes'
 import { ExplorerService } from '../../src/renderer/src/explorer/ExplorerService'
 import { DatabaseListService } from '../../src/renderer/src/services/database-list'
 import { ResultSelectionService } from '../../src/renderer/src/services/result-selection'
+import { ResultsService } from '../../src/renderer/src/results/ResultsService'
+import { browserTimers } from '../../src/renderer/src/core/timers'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
 import { outputContribution } from '../../src/renderer/src/contributions/output'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
@@ -36,6 +38,7 @@ import { QuickInputService, type FocusAdapter } from '../../src/renderer/src/qui
 import { defaultThemePreference } from '../../src/shared/theme/format'
 import { resolveBuiltin } from '../../src/shared/theme/resolve'
 import { deferred, documentFixture } from './documents'
+import { fakeResultClient, summaryOf } from './results'
 
 export const connectionInfo = (id: string, generation = 1): ConnectionInfo => ({ id, server: `${id}.example`, database: 'master', serverVersion: '17.0', generation })
 /** What the Connect dialog passes with a connection, password included: the connection service must drop it. */
@@ -74,7 +77,7 @@ export function explorerAnswer(params: ExplorerChildrenParams): ExplorerChildren
             : params.node.folder === 'columns' ? ['Id', 'CustomerName'].map(name => object({ kind: 'column', database: owner.database, parent: { kind: 'table', schema: owner.schema!, name: owner.name! }, name }, name, false)) : []
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
-export const queryOutput: DisplayQueryResult = { status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false }
+export const queryOutput: QueryResult = summaryOf([], { recordsAffected: 0, elapsedMs: 1 })
 
 /** Storage backed by a Map, for the command history. */
 export function memoryStorage(initial: Record<string, string> = {}): HistoryStorage & { readonly values: Map<string, string> } {
@@ -115,6 +118,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const api = {
     ...doc.api,
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
+    copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 0, bytes: 0, truncatedCells: 0, partial: false } })),
+    cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
+    onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
@@ -138,9 +144,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const explorer = new ExplorerService({ api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
-  const queries = new QueryService(documents, api, id => connections.get(id), events)
+  const resultClient = fakeResultClient()
+  const results = new ResultsService({ client: resultClient, api, events, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
+  const queries = new QueryService(documents, api, id => connections.get(id), events, results)
   const files = new FileService(documents, queries, api)
-  const resultSelection = new ResultSelectionService(events)
+  const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, api)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
@@ -163,7 +171,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
-  const workbench = { platform, commands, context, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, databaseList, menuTargets, resultSelection }
+  const workbench = { platform, commands, context, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, databaseList, menuTargets, resultSelection, results }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
     menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers), backendContribution(workbench)]
@@ -177,8 +185,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
-    menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose()
+    menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose(); results.dispose()
     explorer.dispose(); databaseList.dispose(); documents.dispose(); backend.dispose()
   }
-  return { ...doc, api, connections, backend, editorOptions, panes, explorer, databaseList, resultSelection, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, focused, history, host, theme, startQuery, connect, dispose }
+  return { ...doc, api, connections, backend, editorOptions, panes, explorer, databaseList, resultSelection, results, resultClient, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, focused, history, host, theme, startQuery, connect, dispose }
 }

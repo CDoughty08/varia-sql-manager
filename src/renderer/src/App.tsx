@@ -11,7 +11,8 @@ import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
 import BackendBanner from './BackendBanner'
-import QueryOutput from './QueryOutput'
+import OutputPane from './results/OutputPane'
+import MemoryIndicator from './results/MemoryIndicator'
 import TitleBar from './TitleBar'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
@@ -67,7 +68,7 @@ export default function App() {
   }
   const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), execute: useKeybindingLabel('query.execute') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
-  const active: QueryTab = { ...(tabs.find(tab => tab.id === activeId) ?? emptyTab), result: queryState[activeId]?.result, error: queryState[activeId]?.error }
+  const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
@@ -124,8 +125,8 @@ export default function App() {
   }, [workbench, shellHost])
   useEffect(() => {
     const subscription = workbench.events.subscribe(event => {
-      // Failures without a result also need the output panel; background tabs must not steal the editor.
-      if (event.type === 'query.finished' && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.reveal('output')
+      // As in SSMS, executing shows the results (even when Ctrl+R hid them); background tabs must not steal the editor.
+      if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.reveal('output')
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
     })
     return () => subscription.dispose()
@@ -205,8 +206,8 @@ export default function App() {
           <div className="query-context" style={{ borderBottom: accent ? `3px solid ${accent}` : undefined }}><span>{connection?.displayName || connection?.server || 'Disconnected'}{connection?.lost ? ' (connection lost)' : ''} <span className="breadcrumb">/</span> {active.database}</span><span>Transact-SQL · {activeRunning ? 'Executing…' : connection?.lost ? 'Connection lost' : 'Ready'}</span></div>
           <div className="editor-container"><QueryEditor /></div>
         </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
-      </main>} output={<QueryOutput tabId={active.id} result={active.result} error={active.error} running={!!activeRunning} rowsRead={activeRunning?.rowsRead} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}<span className="status-divider">|</span>1,000 row display limit</span></footer>
+      </main>} output={<OutputPane tabId={active.id} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
+    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}</span><MemoryIndicator /></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     <QuickInput />

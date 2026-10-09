@@ -18,7 +18,7 @@ const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConfl
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    expect(commandIds).toHaveLength(74)
+    expect(commandIds).toHaveLength(75)
   })
   it('has a handler for every command once all contributions have run', () => {
     const fixture = workbenchFixture()

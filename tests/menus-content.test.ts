@@ -10,6 +10,7 @@ import { menuForTarget, type ExplorerMenuNode, type InputTarget, type MenuTarget
 import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import type { FolderId } from '../src/shared/explorer/catalog'
 import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { descriptor } from './fixtures/results'
 import { deferred } from './fixtures/documents'
 
 const cleanups: (() => void)[] = []
@@ -52,7 +53,7 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
  * tab, a docked and a floating panel's tab, text fields that are editable, read-only, a password, or empty, every
  * kind of Object Explorer node (on server-a, which connects in the second state, and server-l, lost with a backend
  * restart before the first state), and Query Output's views of a query that ran before (on server-r, gone since): its grid
- * with and without selected cells, and Messages and the XML plan with and without selected text.
+ * with and without selected cells, and Messages with and without selected text.
  */
 async function resolveContexts(platform: Platform): Promise<{ labels: string[]; snapshots: (readonly ResolvedMenuItem[])[][] }> {
   const fixture = workbenchFixture({ platform })
@@ -60,9 +61,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   fixture.api.push(readyBackend())
   const ran = fixture.documents.create('ran.sql', 'SELECT 3', 'master', 'server-r')
   fixture.connections.add(connectionInfo('server-r'), connectionOptions)
-  fixture.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, resultSets: [
-    { columns: [{ name: 'Id', dataType: 'int' }], rows: [['1']], truncated: false }, { columns: [{ name: 'Id', dataType: 'int' }], rows: [['2']], truncated: false }
-  ] } })
+  fixture.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, resultSets: [descriptor(1, { rowsRead: 1, rowsStored: 1, rowsAvailable: 1 }), descriptor(2, { index: 1, rowsRead: 1, rowsStored: 1, rowsAvailable: 1 })] } })
   await fixture.queries.execute()
   fixture.connections.remove('server-r')
   fixture.resultSelection.set(ran.id, { resultIndex: 1, blocks: [{ kind: 'cells', anchor: { row: 0, column: 0 }, focus: { row: 0, column: 0 } }], active: { row: 0, column: 0 } })
@@ -98,7 +97,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ['a return value', object({ kind: 'returnValue', database: 'AppData', parent: { kind: 'function', schema: 'dbo', name: 'Total' } }, 'Returns int')],
     ['a login', object({ kind: 'login', name: 'sa' }, 'sa')],
     ['a results grid with selected cells', output('grid', 1)], ['a results grid without', output('grid', 0)],
-    ['Messages with selected text', output('messages', 0, 'Completed.')], ['Messages without', output('messages', 0)], ['the XML plan', output('plan', 0)]
+    ['Messages with selected text', output('messages', 0, 'Completed.')], ['Messages without', output('messages', 0)]
   ]
   const snapshots: (readonly ResolvedMenuItem[])[][] = []
   const capture = () => { snapshots.push(targets.map(([, target]) => fixture.menus.resolve(menuForTarget[target.kind], target))) }

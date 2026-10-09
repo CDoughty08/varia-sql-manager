@@ -74,6 +74,16 @@ export function shellContribution({ commands, documents, files, quickInput, conn
       host.closePane('output')
       if (documents.getSnapshot().documents.length) documents.boundEditor?.focus()
     } }),
+    // SSMS's F6: from Query Output back to the editor; from anywhere else to the results (DockWorkspace focuses the grid
+    // that last had focus, else the first grid, else Messages).
+    commands.register('window.switchPane', { run: () => {
+      if (typeof document !== 'undefined' && document.activeElement?.closest('[data-pane="output"]')) {
+        host.reveal('editor')
+        documents.boundEditor?.focus()
+        return
+      }
+      host.reveal('output', { focus: true })
+    } }),
     commands.register('layout.save', { run: () => host.manageLayouts('save') }),
     commands.register('layout.load', { run: () => host.manageLayouts('load') }),
     commands.register('layout.reset', { run: () => host.resetLayout() }),

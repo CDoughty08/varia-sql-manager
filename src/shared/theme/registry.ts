@@ -17,7 +17,7 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const tree = 'the Object Explorer tree', grid = 'the results grid', toasts = 'notifications'
+const tree = 'the Object Explorer tree', toasts = 'notifications'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -33,7 +33,7 @@ const groups = {
     'icon.foreground': ['V', '$icon', 'Default glyph color.', 'css monaco'],
     'widget.shadow': ['V', '$shadow', 'Shadow of dialogs, floating dock groups, and editor widgets.', 'css monaco'],
     'widget.border': ['V', '@editorWidget.border', 'Border of floating dock groups and widgets.', 'css monaco'],
-    'textPreformat.foreground': ['V', '$textSecondary', 'Preformatted text such as execution plan XML.', 'css monaco'],
+    'textPreformat.foreground': ['V', '$textSecondary', 'Preformatted text in the editor.', 'monaco'],
     'sash.hoverBorder': ['V', '$focus', 'Dock splitter while it is hovered or dragged.', 'css'],
     'scrollbarSlider.background': ['V', '$textMuted/40', 'Scrollbar thumb.', 'css monaco'],
     'scrollbarSlider.hoverBackground': ['V', '$textMuted/55', 'Scrollbar thumb when hovered.', 'monaco'],
@@ -170,21 +170,26 @@ const groups = {
     'panelTitle.activeBorder': ['V', '$accent', 'Underline of the active output tab.', 'css'],
     'badge.background': ['V', '$active', 'Count badges on output tabs.', 'css'],
     'badge.foreground': ['V', '$textSecondary', 'Count badge text.', 'css'],
-    'resultsGrid.background': ['X', '@panel.background', 'Results grid.', '', { reserved: grid }],
-    'resultsGrid.foreground': ['X', '@foreground', 'Results grid cells.', '', { reserved: grid }],
+    'resultsGrid.background': ['X', '@panel.background', 'Results grid.', 'css'],
+    'resultsGrid.foreground': ['X', '@foreground', 'Results grid cells.', 'css'],
     'resultsGrid.headerBackground': ['X', '$raised', 'Column headers.', 'css'],
     'resultsGrid.headerForeground': ['X', '$textSecondary', 'Column names.', 'css'],
-    'resultsGrid.headerDescriptionForeground': ['X', '$textMuted', 'Column data types below the names.', 'css'],
+    'resultsGrid.headerDescriptionForeground': ['X', '$textMuted', 'The (No column name) placeholder.', 'css'],
     'resultsGrid.gridlines': ['X', '$borderSubtle', 'Cell borders.', 'css'],
     'resultsGrid.alternateRowBackground': ['X', '$text/3', 'Tint of every other row.', 'css'],
     'resultsGrid.rowNumberForeground': ['X', '$textMuted', 'Row numbers.', 'css'],
     'resultsGrid.nullForeground': ['X', pair('$warning/70', '$warning'), 'NULL values.', 'css'],
-    'resultsGrid.truncationForeground': ['X', '@warningForeground', 'Notice that results were truncated.', 'css'],
+    'resultsGrid.nullBackground': ['X', pair('$warning/8', '$warning/12'), 'NULL cells, tinted as in SSMS.', 'css'],
+    'resultsGrid.truncationForeground': ['X', '@warningForeground', 'Truncation notices and the marker on truncated values.', 'css'],
     'resultsGrid.selectionBackground': ['X', '@list.activeSelectionBackground', 'Selected cells.', 'css'],
     'resultsGrid.selectionForeground': ['X', '@list.activeSelectionForeground', 'Text of selected cells.', 'css'],
     'resultsGrid.inactiveSelectionBackground': ['X', '@list.inactiveSelectionBackground', 'Selected cells while the grid is not focused; their text keeps its color.', 'css'],
     'resultsGrid.activeCellBorder': ['X', '@focusBorder', 'Outline of the active cell while the grid is focused.', 'css'],
-    'resultsGrid.hoverBackground': ['X', '@list.hoverBackground', 'Hovered row.', '', { reserved: grid }],
+    'resultsGrid.hoverBackground': ['X', '@list.hoverBackground', 'Hovered column or row header.', 'css'],
+    'resultsGrid.headerSelectionBackground': ['X', '$selection', 'Column and row headers of selected cells.', 'css'],
+    'resultsGrid.headerSelectionForeground': ['X', '$textAccent', 'Text of the headers of selected cells.', 'css'],
+    'resultsGrid.linkForeground': ['X', '$accent', 'XML, JSON and plan values that open in a new tab.', 'css'],
+    'resultsGrid.splitterBackground': ['X', pair('$textMuted/60', '$controlBorder'), 'Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder.', 'css'],
     'resultsMessages.foreground': ['X', pair('$accentMuted', '$text'), 'Text of the Messages tab.', 'css']
   },
   'Status bar': {

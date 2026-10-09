@@ -62,7 +62,7 @@ export const contextKeys = {
   explorerFolderFilterable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that Filter Settings can filter.' },
   explorerFolderFiltered: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that has a filter.' },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
-  outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', 'plan', ''], description: 'The Query Output view the menu is for: a results grid, the messages, or an execution plan.' },
+  outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel whose tab the menu is for is floating.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 

@@ -60,9 +60,10 @@ panelTitle.inactiveForeground #8a9cb3 #525e72|panelTitle.activeBorder #8fb7ff #0
 badge.foreground #c3cddd #2f3a49|resultsGrid.background #141a23 #fafbfc|resultsGrid.foreground #d9e1ec #1f2733
 resultsGrid.headerBackground #202a39 #e1e7ee|resultsGrid.headerForeground #c3cddd #2f3a49|resultsGrid.headerDescriptionForeground #8a9cb3 #525e72
 resultsGrid.gridlines #252f3d #e3e7ed|resultsGrid.alternateRowBackground #d9e1ec08 #1f273308|resultsGrid.rowNumberForeground #8a9cb3 #525e72
-resultsGrid.nullForeground #dfbd82b3 #8a5300|resultsGrid.truncationForeground #dfbd82 #8a5300|resultsGrid.selectionBackground #2e4058 #c4daf4
+resultsGrid.nullForeground #dfbd82b3 #8a5300|resultsGrid.nullBackground #dfbd8214 #8a53001f|resultsGrid.truncationForeground #dfbd82 #8a5300|resultsGrid.selectionBackground #2e4058 #c4daf4
 resultsGrid.selectionForeground #d9e1ec #1f2733|resultsGrid.inactiveSelectionBackground #24324a #d6e3f3|resultsGrid.activeCellBorder #76acff #005fb8
-resultsGrid.hoverBackground #263041 #d0d8e3|resultsMessages.foreground #a3bbdc #1f2733|statusBar.background #1d2b40 #e3ebf5
+resultsGrid.hoverBackground #263041 #d0d8e3|resultsGrid.headerSelectionBackground #24324a #d6e3f3
+resultsGrid.headerSelectionForeground #bcd4fa #0b4f99|resultsGrid.linkForeground #8fb7ff #005fb8|resultsGrid.splitterBackground #8a9cb399 #8792a2|resultsMessages.foreground #a3bbdc #1f2733|statusBar.background #1d2b40 #e3ebf5
 statusBar.foreground #a3bbdc #2a4f7f|statusBar.separatorForeground #8a9cb3 #525e72|statusBar.onlineIndicator #8addac #146c38
 statusBar.idleIndicator #8a9cb3 #525e72|statusBar.executingBackground #1d2b40 #e3ebf5|statusBar.executingForeground #a3bbdc #2a4f7f
 statusBar.disconnectedBackground #1d2b40 #e3ebf5|statusBar.disconnectedForeground #a3bbdc #2a4f7f|statusBar.errorBackground #48242d #fbe4e6
@@ -102,10 +103,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 61 slots, 191 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 61 slots, 196 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(61)
-    expect(colorKeys).toHaveLength(191)
-    expect(new Set(colorKeys).size).toBe(191)
+    expect(colorKeys).toHaveLength(196)
+    expect(new Set(colorKeys).size).toBe(196)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -121,7 +122,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(191)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(196)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -217,7 +218,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(191)
+      expect(Object.keys(theme.colors)).toHaveLength(196)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

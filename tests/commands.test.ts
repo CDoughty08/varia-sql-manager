@@ -157,7 +157,7 @@ describe('context keys', () => {
     const base = { platform: 'win32' as const, queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendStatus: 'starting' as const }
     expect(computeContextKeys({ ...base, documents: snapshot() })).toMatchObject({ isWindows: true, hasActiveDocument: false, multipleDocuments: false, documentBusy: false, hasConnection: false, activeDocumentConnected: false, queryRunning: false, editorFocus: false, activePanel: '' })
     const documents = snapshot({ documents: [doc('a', 'server-a'), doc('b', 'gone')], activeId: 'a', busy: true })
-    const running = { a: { running: { queryId: 'q', connectionId: 'server-a' } } }
+    const running = { a: { running: { queryId: 'q', connectionId: 'server-a', startedAt: 0 } } }
     expect(computeContextKeys({ ...base, documents, queries: running, connections: [connectionInfo('server-a')], quickInputVisible: true, wordWrap: true, backendStatus: 'ready' })).toMatchObject({
       hasActiveDocument: true, multipleDocuments: true, documentBusy: true, hasConnection: true, activeDocumentConnected: true, queryRunning: true, quickInputVisible: true, editorWordWrap: true, backendReady: true
     })

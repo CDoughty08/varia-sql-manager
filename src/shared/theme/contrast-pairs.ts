@@ -91,8 +91,12 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['emptyState.foreground', 'emptyState.titleForeground'], panel),
   ...text(['panelTitle.activeForeground', 'panelTitle.inactiveForeground'], panelTitle),
   ...text(['panelTitle.activeForeground'], widget),
-  ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground'], ['resultsGrid.headerBackground']),
+  ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground', 'resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground']),
+  ...text(['resultsGrid.headerSelectionForeground'], ['resultsGrid.headerBackground', 'resultsGrid.headerSelectionBackground']),
   ...text(['resultsGrid.rowNumberForeground', 'resultsGrid.nullForeground'], panel, striped),
+  // NULL cells are tinted, over the grid and over a striped row.
+  ...text(['resultsGrid.nullForeground'], [...panel, 'resultsGrid.nullBackground'], [...striped, 'resultsGrid.nullBackground']),
+  ...text(['resultsGrid.linkForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
 
@@ -109,6 +113,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['tab.activeBorderTop', 'documentTabs.modifiedIndicator', 'documentTabs.closeForeground'], strip),
   ...graphic(['panelTitle.activeBorder'], panelTitle, widget),
   ...graphic(['resultsGrid.activeCellBorder'], panel, ['resultsGrid.background', 'resultsGrid.selectionBackground']),
+  ...graphic(['resultsGrid.truncationForeground', 'resultsGrid.splitterBackground'], panel),
   ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
   ...graphic(['button.background'], widget),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),

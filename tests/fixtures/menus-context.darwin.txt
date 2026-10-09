@@ -168,7 +168,3 @@ output.context, for Messages without
   &Copy  ⌘C  ----
   ---
   Select &All  ⌘A  ++++
-output.context, for the XML plan
-  &Copy  ⌘C  ----
-  ---
-  Select &All  ⌘A  ++++

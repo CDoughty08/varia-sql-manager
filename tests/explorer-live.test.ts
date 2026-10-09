@@ -5,12 +5,10 @@ import { BackendSupervisor } from '../src/main/backend/supervisor'
 import { ResultsPortHost, supervisorResults, type PortMainLike } from '../src/main/backend/results-port'
 import { ResultClient, type PortMessageEvent, type WindowLike, type WorkerLike } from '../src/renderer/src/results/ResultClient'
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
-import { legacyExecute } from '../src/renderer/src/results/legacy'
-import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
-import type { ConnectionOptions, DisplayQueryResult, QueryOptions } from '../src/shared/contracts'
+import { FLAG_NULL, type WorkerRequest, type WorkerResponse } from '../src/renderer/src/results/worker-protocol'
+import type { ConnectionOptions, QueryOptions, QueryResult } from '../src/shared/contracts'
 import type { PortMessage } from '../src/shared/ipc/port-messages'
 import { quoteName, selectTopRowsScript } from '../src/shared/sql/identifiers'
-import { selectAll, toTsv } from '../src/renderer/src/grid/selection'
 
 const server = process.env.VARIA_TEST_SQL_SERVER, user = process.env.VARIA_TEST_SQL_USER
 // Permanent objects (graph tables cannot be temporary) go in a scratch database, created and dropped only when allowed.
@@ -41,10 +39,12 @@ class InlineWorker implements WorkerLike {
   terminate(): void { this.port?.close() }
 }
 
+/** A script's outcome and every row of its result sets, as the grid reads them: SSMS display text, null for NULL. */
+interface ReadResult { status: QueryResult['status']; resultSets: { columns: { name: string }[]; rows: (string | null)[][] }[] }
+
 /**
- * The Release backend behind main's real pipeline (BackendSupervisor, ResultsPortHost) and the renderer's (ResultClient,
- * the results worker, the legacy table adapter), connected to the live SQL Server the .NET checks use. Rows reach the
- * test as the results grid shows and copies them: SSMS display text, null for NULL.
+ * The Release backend behind main's real pipeline (BackendSupervisor, ResultsPortHost) and the renderer's (ResultClient
+ * and the results worker), connected to the live SQL Server the .NET checks use.
  */
 async function connect() {
   const supervisor = new BackendSupervisor({ command: 'dotnet', args: [resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')], cwd: process.cwd(), packaged: false })
@@ -76,10 +76,23 @@ async function connect() {
     host.own(summary.resultSets)
     return { ok: true as const, value: summary }
   }
-  const run = async (sql: string, database = 'master'): Promise<DisplayQueryResult> => {
-    const result = await legacyExecute({ execute }, results, { connectionId: connection.id, sessionId, database, sql, queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 30 })
-    if (!result.ok) throw new Error(result.error)
-    return result.value
+  const run = async (sql: string, database = 'master'): Promise<ReadResult> => {
+    const { value: summary } = await execute({ connectionId: connection.id, sessionId, database, sql, queryId: crypto.randomUUID(), maxRows: 0, maxResultSets: 1000, timeoutSeconds: 30 })
+    results.applySummary(summary)
+    const resultSets: ReadResult['resultSets'] = []
+    for (const descriptor of summary.resultSets) {
+      const handle = results.open(descriptor), width = descriptor.columns.length, rows: (string | null)[][] = []
+      for (let first = 0; first < descriptor.rowsAvailable;) {
+        const window = await handle.getWindow(first, 4096)
+        if (window.count === 0) break
+        for (let row = 0; row < window.count; row++) rows.push(Array.from({ length: width }, (_, column) => window.flags[row * width + column] & FLAG_NULL ? null : window.text[row * width + column]))
+        first += window.count
+      }
+      resultSets.push({ columns: descriptor.columns, rows })
+      handle.dispose()
+    }
+    if (summary.resultSets.length > 0) await results.release(summary.resultSets)
+    return { status: summary.status, resultSets }
   }
   cleanups.push(async () => {
     await supervisor.request('query.session.close', { sessionId })
@@ -102,8 +115,6 @@ describe.runIf(server)('Select Top 1000 Rows against SQL Server', () => {
     expect(result.resultSets).toHaveLength(1)
     expect(result.resultSets[0].columns.map(column => column.name)).toEqual(['id', 'na]me'])
     expect(result.resultSets[0].rows).toEqual([['1', 'a'], ['2', null]])
-    // What Copy with Headers puts on the clipboard for the whole grid.
-    expect(toTsv(result.resultSets[0], selectAll(0), { headers: true, eol: '\n' })).toBe('id\tna]me\n1\ta\n2\tNULL')
   }, 90_000)
   it('lists a catalogue view\'s columns in order, and selects them by name', async () => {
     const { supervisor, connection, run } = await connect()

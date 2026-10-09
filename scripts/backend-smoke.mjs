@@ -63,9 +63,12 @@ async function typeSql(sql) {
 }
 const execute = () => page.locator('.toolbar').getByRole('button', { name: /Execute/ })
 async function messages() {
-  await page.getByRole('button', { name: /^Messages/ }).click()
+  await page.getByRole('tab', { name: /^Messages/ }).click()
   return page.locator('.messages')
 }
+/** A data cell of the first results grid, by row and column. */
+const gridCell = (row, column) => page.locator(`[data-result-grid] .rg-row[aria-rowindex="${row + 2}"] .rg-c[aria-colindex="${column + 2}"]`).first()
+const running = () => expect(page.locator('.output-status')).toContainText('Executing query…')
 async function connectDialog() {
   await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -169,13 +172,15 @@ try {
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
     await typeSql("CREATE TABLE #varia_session_marker (id int); SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
     await execute().click()
-    await expect(page.locator('.results-grid tbody td').nth(1)).not.toHaveText('NULL', { timeout: 30000 })
+    await expect(gridCell(0, 0)).not.toHaveText('NULL', { timeout: 30000 })
+    await expect(gridCell(0, 0)).not.toHaveText('', { timeout: 30000 })
     await typeSql("WAITFOR DELAY '00:00:30';")
     await execute().click()
-    await expect(page.getByText('Your query is running…')).toBeVisible()
+    await running()
     const before = await hooks()
     await app.evaluate(() => globalThis.__variaTest.kill())
-    await expect(page.locator('.query-error')).toContainText(lostQuery, { timeout: 30000 })
+    await expect(page.locator('.messages .msg.error')).toContainText(lostQuery, { timeout: 30000 })
+    await expect(page.locator('.output-status')).toHaveText('The SQL backend stopped while this query was running.')
     const after = await ready(before.state.generation + 1)
     expect(after.pid).not.toBe(before.pid)
     await expect(banner()).toContainText('1 connection was lost and 1 running script was stopped; nothing was re-run.')
@@ -191,7 +196,7 @@ try {
     // SPIDs can be reused, so the old session's temporary table shows whether the session is new.
     await typeSql("SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
     await execute().click()
-    await expect(page.locator('.results-grid tbody td').nth(1)).toHaveText('NULL', { timeout: 30000 })
+    await expect(gridCell(0, 0)).toHaveText('NULL', { timeout: 30000 })
     await expect(await messages()).toContainText(newSession)
     console.log('Live session loss passed: the killed backend did not re-run the script, and Reconnect opened a new session.')
   }
@@ -214,12 +219,12 @@ try {
   // The script is running when the backend crashes.
   await writeFile(join(control, 'hold', 'query.execute'), '')
   await execute().click()
-  await expect(page.getByText('Your query is running…')).toBeVisible()
+  await running()
   await expect.poll(async () => (await calls()).some(call => call.method === 'query.execute')).toBe(true)
   const crashed = await hooks()
   await writeFile(join(control, 'crash-next'), '')
   await rm(join(control, 'hold', 'query.execute'))
-  await expect(page.locator('.query-error')).toContainText(lostQuery)
+  await expect(page.locator('.messages .msg.error')).toContainText(lostQuery)
   const restarted = await ready(2)
   expect(restarted.pid).not.toBe(crashed.pid)
   const history = await states()
@@ -274,8 +279,8 @@ try {
   await expect(page.locator('.query-context')).not.toContainText('connection lost')
   await expect(execute()).toBeEnabled()
   await execute().click()
-  await expect(page.locator('.results-grid tbody tr')).toHaveCount(1)
-  await expect(page.locator('.results-grid tbody td').nth(2)).toHaveText('2')
+  await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
+  await expect(gridCell(0, 1)).toHaveText('2')
   await expect(await messages()).toContainText(newSession)
   recorded = await calls()
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])

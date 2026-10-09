@@ -1,7 +1,7 @@
-import type { ApiResult, DisplayResultSet, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { isEmptyRange, maxCopyLength, rangeOf, tooLargeToCopy, toTsv, type GridSelection } from '../grid/selection'
+import { resolveBlocks } from '../grid/selection'
 import { outputOf, type MenuTargetService, type OutputTarget } from '../menus/targets'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
@@ -13,51 +13,51 @@ export function focusedOutput(menuTargets: Pick<MenuTargetService, 'targetFor'>)
 }
 
 /**
- * Copy, Copy with Headers, and Select All in Query Output. The grid copies its selected cells as tab-separated text
- * (SSMS's format, with Windows line breaks on Windows); Messages and the XML plan copy the text selected in them. The
- * commands act on the menu's target, else on the view that has focus (Ctrl+Shift+C).
+ * Copy, Copy with Headers, and Select All in Query Output. A grid copies its selected cells through the backend
+ * (ResultsService.copy: SSMS's tab-separated text, with Windows line breaks on Windows); Messages copy the text selected
+ * in them. The commands act on the menu's target, else on the view that has focus (Ctrl+C, Ctrl+Shift+C, Edit › Copy).
  */
-export function outputContribution({ commands, queries, menuTargets, resultSelection, platform }: Pick<Workbench, 'commands' | 'queries' | 'menuTargets' | 'resultSelection' | 'platform'>,
-  api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
-  const eol = platform === 'win32' ? '\r\n' : '\n'
+export function outputContribution({ commands, results, menuTargets }: Pick<Workbench, 'commands' | 'results' | 'menuTargets'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
-  /** The grid's result set and its selection, when that result is still showing for a query that still has it. */
-  const grid = (target: OutputTarget | undefined): { set: DisplayResultSet; selection?: GridSelection } | undefined => {
+  /** The grid's result set, while its results are still readable. */
+  const grid = (target: OutputTarget | undefined) => {
     if (target?.view !== 'grid') return undefined
-    const set = queries.getSnapshot()[target.tabId]?.result?.resultSets[target.resultIndex]
-    return set && set.kind !== 'executionPlan' ? { set, selection: resultSelection.get(target.tabId, target.resultIndex) } : undefined
+    const set = results.getSnapshot()[target.tabId]?.sets[target.resultIndex]
+    const state = set?.handle.getSnapshot()
+    return set && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
   }
   const selected = (target: OutputTarget | undefined) => {
     const shown = grid(target)
-    return shown?.selection && !isEmptyRange(rangeOf(shown.selection, shown.set.rows.length, shown.set.columns.length)) ? { set: shown.set, selection: shown.selection } : undefined
-  }
-  const write = async (text: string) => {
-    if (text.length > maxCopyLength) throw new RangeError(tooLargeToCopy)
-    unwrap(await api.writeClipboardText(text))
+    const selection = shown && results.selection(target!.tabId, target!.resultIndex)
+    return shown && selection && resolveBlocks(selection, shown.rows, shown.columns).length > 0 ? target : undefined
   }
   const registrations = [
     commands.register('output.copy', {
       when: args => { const target = targetOf(args); return !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
       run: async args => {
         const target = targetOf(args), cells = selected(target)
-        if (cells) await write(toTsv(cells.set, cells.selection, { headers: false, eol }))
-        else if (target && target.view !== 'grid' && target.selectedText) await write(target.selectedText)
+        if (cells) { const failure = await results.copy(cells.tabId, cells.resultIndex, false); if (failure) commands.reportError(failure) }
+        else if (target && target.view !== 'grid' && target.selectedText) unwrap(await api.writeClipboardText(target.selectedText))
       }
     }),
     commands.register('output.copyWithHeaders', {
       when: args => !!selected(targetOf(args)),
-      run: async args => { const cells = selected(targetOf(args)); if (cells) await write(toTsv(cells.set, cells.selection, { headers: true, eol })) }
+      run: async args => {
+        const cells = selected(targetOf(args))
+        const failure = cells && await results.copy(cells.tabId, cells.resultIndex, true)
+        if (failure) commands.reportError(failure)
+      }
     }),
     commands.register('output.selectAll', {
       when: args => {
         const target = targetOf(args)
-        if (target?.view === 'grid') { const shown = grid(target); return !!shown && shown.set.rows.length > 0 && shown.set.columns.length > 0 }
+        if (target?.view === 'grid') { const shown = grid(target); return !!shown && shown.rows > 0 && shown.columns > 0 }
         return !!target?.element.textContent
       },
       run: args => {
         const target = targetOf(args)
-        if (target?.view === 'grid') { if (grid(target)) resultSelection.selectAll(target.tabId, target.resultIndex) }
-        // Messages and the plan keep text selection; Chromium's Select All would select the whole window.
+        if (target?.view === 'grid') { if (grid(target)) results.selectAll(target.tabId, target.resultIndex) }
+        // Messages keep text selection; Chromium's Select All would select the whole window.
         else if (target) target.element.ownerDocument.getSelection()?.selectAllChildren(target.element)
       }
     })

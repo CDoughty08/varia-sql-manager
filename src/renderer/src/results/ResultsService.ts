@@ -1,0 +1,413 @@
+import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
+import type { MessageEntry, QueryEvent, QueryResult, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
+import type { EventBus } from '../core/events'
+import { SnapshotStore } from '../core/store'
+import { browserTimers, type Timers } from '../core/timers'
+import type { Disposable } from '../core/types'
+import { gridLimits as g } from '../grid/constants'
+import { copyPlan, selectAll, type GridSelection } from '../grid/selection'
+import type { ResultClient, ResultHandle } from './ResultClient'
+import { completionSentence, formatCount, plural } from './status'
+
+export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'timedOut' | 'lost' | 'closed'
+/** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
+export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle }
+/** A copy (or, later, a save) of one result set. Its strip shows once it has run for 300 ms (`visible`). */
+export interface ResultJob {
+  readonly jobId: string; readonly kind: 'copy' | 'save'; readonly index: number; readonly label: string
+  readonly rowsDone: number; readonly rowsTotal: number; readonly startedAt: number; readonly visible: boolean
+}
+/** What the output pane shows for one query tab. */
+export interface TabResults {
+  readonly queryId: string; readonly startedAt: number; readonly status: RunStatus; readonly sets: readonly ResultSetEntry[]
+  readonly messages: readonly MessageEntry[]; readonly messagesTruncated: boolean; readonly rowsRead: number
+  readonly completedBatches: number; readonly totalBatches: number; readonly summary?: QueryResult; readonly error?: string
+  readonly view: 'results' | 'messages'; readonly manualView: boolean; readonly jobs: readonly ResultJob[]; readonly announcement: string
+}
+/** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
+export interface GridViewState {
+  topRow: number; virtualTop: number; scrollLeft: number; widths?: Float64Array
+  userSized?: Set<number>; sized: boolean; selection?: GridSelection
+}
+export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState> }
+/** A mounted grid, for the commands that act on it. */
+export interface GridController { selectAll(): void; repaint(): void }
+/** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
+export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string }
+
+interface Run {
+  readonly queryId: string
+  readonly startedAt: number
+  status: RunStatus
+  sets: ResultSetEntry[]
+  /** The sets' keys, so a thousand sets open in linear time. */
+  readonly setKeys: Set<string>
+  /** `sets` is held by a published snapshot, so the next change copies it first. */
+  setsPublished: boolean
+  readonly rowsRead: Map<number, number>
+  messages: MessageEntry[]
+  notices: MessageEntry[]
+  messagesTruncated: boolean
+  completedBatches: number
+  totalBatches: number
+  summary?: QueryResult
+  error?: string
+  view: 'results' | 'messages'
+  manualView: boolean
+  jobs: ResultJob[]
+  announcement: string
+  subscription?: Disposable
+}
+interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
+
+/** Result sets a run keeps (the backend keeps the same number) and the Messages entries it shows. */
+export const resultLimits = { sets: 1000, messages: 1001 } as const
+const unavailable = 'These results are no longer available because the SQL backend restarted.'
+const closedResults = 'These results were closed. Execute the query again to see them.'
+const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
+const runStatus = (summary: QueryResult): RunStatus => summary.status
+
+/**
+ * Each query tab's results: the run's result sets (handles from ResultClient, opened as the backend announces them),
+ * its streaming Messages, progress, and copy jobs. Events are applied as they arrive and published at most once per
+ * frame; the summary is authoritative when the run ends. Results are released when the tab runs again, closes, or the
+ * user closes them; changing the connection or database keeps them, as SSMS does.
+ */
+export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
+  private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>
+  private readonly api: Pick<VariaApi, 'copyResults' | 'cancelResultsJob' | 'onResultsJob'>
+  private readonly frame: (callback: () => void) => void
+  private readonly timers: Timers
+  private readonly now: () => number
+  private readonly newId: () => string
+  private readonly runs = new Map<string, Run>()
+  private readonly views = new Map<string, TabViewState>()
+  private readonly controllers = new Map<string, GridController>()
+  private readonly dirty = new Set<string>()
+  private readonly announcements = new Map<string, unknown>()
+  private readonly subscriptions: (() => void)[] = []
+  private copying: RunningJob | undefined
+  private scheduled = false
+  private disposed = false
+
+  constructor(o: {
+    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>; api: Pick<VariaApi, 'copyResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
+    frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string
+  }) {
+    super({})
+    this.client = o.client
+    this.api = o.api
+    this.frame = o.frame ?? (callback => { requestAnimationFrame(() => callback()) })
+    this.timers = o.timers ?? browserTimers
+    this.now = o.now ?? (() => Date.now())
+    this.newId = o.newId ?? (() => crypto.randomUUID())
+    const events = o.events.subscribe(event => { if (event.type === 'documents.closed') this.release(event.tabId) })
+    this.subscriptions.push(() => events.dispose(), this.api.onResultsJob(progress => this.progress(progress)))
+  }
+
+  /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
+   *  run's events are followed from now on (before the script is sent). */
+  begin(tabId: string, queryId: string): void {
+    if (this.disposed) return
+    this.disposeRun(tabId)
+    this.views.set(tabId, { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
+    const run: Run = {
+      queryId, startedAt: this.now(), status: 'running', sets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
+      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, jobs: [], announcement: ''
+    }
+    run.subscription = this.client.onQueryEvent(queryId, event => this.event(tabId, run, event))
+    this.runs.set(tabId, run)
+    this.publishNow(tabId)
+  }
+
+  /** The run ended. The summary settles every set (opening any whose events were dropped) and replaces the streamed
+   *  messages when they differ; events that arrive later are ignored. */
+  finish(tabId: string, queryId: string, end: RunEnd): void {
+    const run = this.runs.get(tabId)
+    if (!run || run.queryId !== queryId || run.status !== 'running') return
+    run.subscription?.dispose()
+    run.subscription = undefined
+    const { summary } = end
+    if (summary) {
+      this.client.applySummary(summary)
+      for (const descriptor of summary.resultSets) {
+        this.opened(run, descriptor)
+        run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
+      }
+      if (!sameMessages(run.messages, summary.messages)) run.messages = summary.messages.slice(0, resultLimits.messages)
+      run.messagesTruncated = summary.messagesTruncated
+      run.completedBatches = summary.completedBatches
+      run.totalBatches = summary.totalBatches
+      run.summary = summary
+      run.status = runStatus(summary)
+    } else {
+      run.status = end.code === 'BACKEND_LOST' ? 'lost' : 'failed'
+      run.error = end.error ?? 'The query failed.'
+      run.messages = [...run.messages, { text: run.error, kind: 'error' as const }].slice(-resultLimits.messages)
+    }
+    if (end.notice) run.notices = [{ text: end.notice, kind: 'info' }]
+    if (!run.manualView) run.view = run.sets.length === 0 || run.status !== 'completed' ? 'messages' : 'results'
+    this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run)))
+    this.publishNow(tabId)
+  }
+
+  /** The tab closed: its results are released and forgotten. */
+  release(tabId: string): void {
+    this.disposeRun(tabId)
+    this.views.delete(tabId)
+    const timer = this.announcements.get(tabId)
+    if (timer !== undefined) this.timers.clearTimeout(timer)
+    this.announcements.delete(tabId)
+    if (!Object.hasOwn(this.getSnapshot(), tabId)) return
+    const next = { ...this.getSnapshot() }
+    delete next[tabId]
+    this.publish(next)
+  }
+
+  /** Close Results: the memory is freed now; Messages stay. */
+  closeResults(tabId: string): void {
+    const run = this.runs.get(tabId)
+    if (!run || run.status === 'running') return
+    this.closeHandles(run)
+    run.sets = []
+    run.setKeys.clear()
+    run.status = 'closed'
+    run.view = 'results'
+    this.views.set(tabId, { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
+    this.publishNow(tabId)
+  }
+
+  /** The tab's view state, created on first use. */
+  viewState(tabId: string): TabViewState {
+    let view = this.views.get(tabId)
+    if (!view) this.views.set(tabId, view = { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
+    return view
+  }
+  /** One grid's state: scroll, widths and selection. */
+  gridState(tabId: string, index: number): GridViewState {
+    const grids = this.viewState(tabId).grids
+    let state = grids.get(index)
+    if (!state) grids.set(index, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
+    return state
+  }
+
+  /** The user picked Results or Messages: automatic switching stops until the next run. */
+  setView(tabId: string, view: 'results' | 'messages'): void {
+    const run = this.runs.get(tabId)
+    if (!run || (run.view === view && run.manualView)) return
+    run.view = view
+    run.manualView = true
+    this.publishNow(tabId)
+  }
+
+  /** The grid a command acts on registers while it is mounted. */
+  registerGrid(tabId: string, index: number, controller: GridController): Disposable {
+    const key = tabId + ':' + index
+    this.controllers.set(key, controller)
+    return { dispose: () => { if (this.controllers.get(key) === controller) this.controllers.delete(key) } }
+  }
+  selection(tabId: string, index: number): GridSelection | undefined {
+    const selection = this.views.get(tabId)?.grids.get(index)?.selection
+    return selection?.resultIndex === index ? selection : undefined
+  }
+  setSelection(tabId: string, index: number, selection: GridSelection | undefined): void {
+    if (!this.runs.get(tabId)?.sets[index]) return
+    this.gridState(tabId, index).selection = selection
+    this.controllers.get(tabId + ':' + index)?.repaint()
+  }
+  /** Select All: an open-ended block that grows as rows stream in. */
+  selectAll(tabId: string, index: number): void {
+    const controller = this.controllers.get(tabId + ':' + index)
+    if (controller) controller.selectAll()
+    else this.setSelection(tabId, index, selectAll(index, this.selection(tabId, index)?.active))
+  }
+  clearSelections(tabId: string): void {
+    for (const [index, state] of this.views.get(tabId)?.grids ?? []) {
+      state.selection = undefined
+      this.controllers.get(tabId + ':' + index)?.repaint()
+    }
+  }
+
+  /**
+   * Copies the grid's selection: the backend formats it (Copy's TSV, with headers on request) and main writes the
+   * clipboard. One copy runs per window, so a new one cancels the last. Resolves to the sentence the error banner shows
+   * when it fails; a cancelled copy is silent.
+   */
+  async copy(tabId: string, index: number, headers: boolean): Promise<string | undefined> {
+    const run = this.runs.get(tabId), set = run?.sets[index], selection = this.selection(tabId, index)
+    if (!run || !set || !selection) return undefined
+    const state = set.handle.getSnapshot().state
+    if (state === 'lost' || state === 'released') return state === 'lost' ? unavailable : closedResults
+    const parts = copyPlan(selection, set.descriptor.columns.length)
+    if (parts.length === 0) return undefined
+    this.cancelRunning(this.copying)
+    const jobId = this.newId()
+    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', index, label: `Result ${index + 1}`, rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false } }
+    this.copying = running
+    run.jobs = [...run.jobs, running.job]
+    this.schedule(tabId)
+    running.timer = this.timers.setTimeout(() => { running.timer = undefined; this.updateJob(running, { visible: true }) }, g.copyStripDelayMs)
+    let result
+    try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts }) }
+    finally { this.endJob(running) }
+    if (result.ok) {
+      const rows = result.value.rows
+      this.announce(tabId, `Copied ${formatCount(rows)} ${plural(rows, 'row')}${result.value.partial ? '; the query is still running.' : '.'}`)
+      return undefined
+    }
+    if (result.code === 'CANCELLED') return undefined
+    return result.code === 'TOO_LARGE' ? result.error : 'Could not copy the results: ' + result.error
+  }
+
+  /** Cancels a copy or save by its job id (Cancel on its strip). */
+  cancelJob(jobId: string): void {
+    if (this.copying?.job.jobId === jobId) this.cancelRunning(this.copying)
+  }
+  /** Escape in a grid: cancels the tab's running copy or save; false when there is none. */
+  cancelTabJob(tabId: string): boolean {
+    if (this.copying?.tabId !== tabId) return false
+    this.cancelRunning(this.copying)
+    return true
+  }
+
+  /** The live region's sentence, after the 300 ms debounce. */
+  announce(tabId: string, text: string): void {
+    const previous = this.announcements.get(tabId)
+    if (previous !== undefined) this.timers.clearTimeout(previous)
+    this.announcements.set(tabId, this.timers.setTimeout(() => {
+      this.announcements.delete(tabId)
+      const run = this.runs.get(tabId)
+      if (!run) return
+      // The same sentence again must still be read out: a zero-width space makes it a change.
+      run.announcement = run.announcement === text ? text + '\u200b' : text
+      this.publishNow(tabId)
+    }, g.liveRegionMs))
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    for (const unsubscribe of this.subscriptions) unsubscribe()
+    for (const tabId of [...this.runs.keys()]) this.disposeRun(tabId)
+    for (const timer of this.announcements.values()) this.timers.clearTimeout(timer)
+    this.announcements.clear()
+    this.controllers.clear()
+    this.clearListeners()
+  }
+
+  private event(tabId: string, run: Run, event: QueryEvent): void {
+    if (this.runs.get(tabId) !== run || run.status !== 'running') return
+    switch (event.type) {
+      case 'resultSet.opened': case 'resultSet.closed':
+        this.opened(run, event.descriptor)
+        run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
+        if (!run.manualView && run.sets.length > 0) run.view = 'results'
+        break
+      case 'progress':
+        run.completedBatches = event.completedBatches
+        run.totalBatches = event.totalBatches
+        for (const item of event.results) if (run.rowsRead.has(item.resultId)) run.rowsRead.set(item.resultId, item.rowsRead)
+        break
+      case 'messages':
+        if (run.messages.length + event.messages.length > resultLimits.messages) run.messagesTruncated = true
+        run.messages = [...run.messages, ...event.messages].slice(0, resultLimits.messages)
+        break
+    }
+    this.schedule(tabId)
+  }
+
+  /** Opens a set's handle once, keeping the sets in the backend's order; sets past the limit are not kept. */
+  private opened(run: Run, descriptor: ResultDescriptor): void {
+    const key = `${descriptor.generation}:${descriptor.resultId}`
+    if (run.setKeys.has(key) || run.sets.length >= resultLimits.sets) return
+    run.setKeys.add(key)
+    const handle = this.client.open(descriptor)
+    if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
+    // Sets arrive in order, so the place is almost always the end.
+    let at = run.sets.length
+    while (at > 0 && (run.sets[at - 1].descriptor.index - descriptor.index || run.sets[at - 1].descriptor.resultId - descriptor.resultId) > 0) at--
+    run.sets.splice(at, 0, { index: at, descriptor, handle })
+    for (let index = at + 1; index < run.sets.length; index++) run.sets[index] = { ...run.sets[index], index }
+  }
+
+  private totalRows(run: Run): number {
+    let rows = 0
+    for (const value of run.rowsRead.values()) rows += value
+    return rows
+  }
+
+  private progress(progress: ResultsJobProgress): void {
+    if (this.copying?.job.jobId === progress.jobId) this.updateJob(this.copying, { rowsDone: progress.rowsDone, rowsTotal: progress.rowsTotal })
+  }
+
+  private updateJob(running: RunningJob, patch: Partial<ResultJob>): void {
+    const run = this.runs.get(running.tabId)
+    const next = { ...running.job, ...patch }
+    if (run) run.jobs = run.jobs.map(job => job === running.job ? next : job)
+    running.job = next
+    this.schedule(running.tabId)
+  }
+
+  private endJob(running: RunningJob): void {
+    if (running.timer !== undefined) this.timers.clearTimeout(running.timer)
+    running.timer = undefined
+    if (this.copying === running) this.copying = undefined
+    const run = this.runs.get(running.tabId)
+    if (run && run.jobs.includes(running.job)) { run.jobs = run.jobs.filter(job => job !== running.job); this.schedule(running.tabId) }
+  }
+
+  private cancelRunning(running: RunningJob | undefined): void {
+    if (!running) return
+    void this.api.cancelResultsJob(running.job.jobId).catch(() => {})
+  }
+
+  private closeHandles(run: Run): void {
+    if (this.copying && this.runs.get(this.copying.tabId) === run) this.cancelRunning(this.copying)
+    for (const set of run.sets) {
+      void set.handle.close().catch(() => {})
+      set.handle.dispose()
+    }
+  }
+
+  private disposeRun(tabId: string): void {
+    const run = this.runs.get(tabId)
+    if (!run) return
+    run.subscription?.dispose()
+    this.closeHandles(run)
+    this.runs.delete(tabId)
+    for (const key of [...this.controllers.keys()]) if (key.startsWith(tabId + ':')) this.controllers.delete(key)
+  }
+
+  private schedule(tabId: string): void {
+    this.dirty.add(tabId)
+    if (this.scheduled || this.disposed) return
+    this.scheduled = true
+    this.frame(() => {
+      this.scheduled = false
+      if (this.disposed || this.dirty.size === 0) return
+      const next = { ...this.getSnapshot() }
+      for (const id of this.dirty) {
+        const run = this.runs.get(id)
+        if (run) next[id] = this.snapshotOf(run)
+      }
+      this.dirty.clear()
+      this.publish(next)
+    })
+  }
+
+  private publishNow(tabId: string): void {
+    const run = this.runs.get(tabId)
+    if (!run || this.disposed) return
+    this.dirty.delete(tabId)
+    this.publish({ ...this.getSnapshot(), [tabId]: this.snapshotOf(run) })
+  }
+
+  private snapshotOf(run: Run): TabResults {
+    run.setsPublished = true
+    return {
+      queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages,
+      messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
+      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, jobs: run.jobs, announcement: run.announcement
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import type { Platform } from '../../../shared/commands/keybindings'
-import type { ColumnRange, CopyPart, DisplayResultSet, RowRange } from '../../../shared/contracts'
+import type { ColumnRange, CopyPart, RowRange } from '../../../shared/contracts'
 import { gridLimits, openEnd } from './constants'
 import type { GridAction, GridMove } from './keyboard'
 
@@ -24,9 +24,6 @@ export interface CellRange { readonly top: number; readonly left: number; readon
 export type GridHit = { readonly kind: 'cell'; readonly row: number; readonly column: number } | { readonly kind: 'row'; readonly row: number } | { readonly kind: 'column'; readonly column: number } | { readonly kind: 'corner' }
 
 export const noColumnName = '(No column name)'
-/** The longest text a copy writes; results are capped far below it, so reaching it means something is wrong. */
-export const maxCopyLength = 8_388_608
-export const tooLargeToCopy = 'The selection is too large to copy.'
 
 const origin: Cell = { row: 0, column: 0 }
 const emptyRange: CellRange = { top: 0, left: 0, bottom: -1, right: -1 }
@@ -45,7 +42,7 @@ export const inRange = (range: CellRange, cell: Cell): boolean => cell.row >= ra
 export function resolveBlocks(selection: GridSelection, rows: number, columns: number): CellRange[] {
   return selection.blocks.map(block => blockRange(block, rows, columns)).filter(range => !isEmptyRange(range))
 }
-/** The last block's rectangle: the one Shift extends, and the one the PR3 results table copies. */
+/** The last block's rectangle: the one Shift extends. */
 export function rangeOf(selection: GridSelection, rows: number, columns: number): CellRange {
   const last = selection.blocks.at(-1)
   return last ? blockRange(last, rows, columns) : emptyRange
@@ -74,32 +71,8 @@ export function contains(selection: GridSelection, row: number, column: number, 
   return selection.blocks.some(block => inRange(blockRange(block, rows, columns), { row, column }))
 }
 
-/** A cell as copied: NULL for null, and line breaks and tabs as spaces, so each cell stays one TSV field. */
-export function cellText(value: unknown): string {
-  return value === null || value === undefined ? 'NULL' : String(value).replace(/\r\n|[\r\n\t]/g, ' ')
-}
-/** A column header as shown and copied; SQL Server names computed columns with nothing. */
-export const columnTitle = (name: string): string => name ? cellText(name) : noColumnName
-
-/**
- * The last block's cells as tab-separated text, one line per row with no line break after the last, optionally after
- * a line of column headers. Throws a RangeError rather than build text over `maxCopyLength`.
- */
-export function toTsv(set: Pick<DisplayResultSet, 'columns' | 'rows'>, selection: GridSelection, options: { readonly headers: boolean; readonly eol: '\r\n' | '\n' }): string {
-  const range = rangeOf(selection, set.rows.length, set.columns.length)
-  if (range.right < range.left) return ''
-  const columns = Array.from({ length: range.right - range.left + 1 }, (_, index) => range.left + index)
-  const lines: string[] = []
-  let length = 0
-  const add = (line: string) => {
-    length += line.length + (lines.length ? options.eol.length : 0)
-    if (length > maxCopyLength) throw new RangeError(tooLargeToCopy)
-    lines.push(line)
-  }
-  if (options.headers) add(columns.map(column => columnTitle(set.columns[column].name)).join('\t'))
-  for (let row = range.top; row <= range.bottom; row++) { const values = set.rows[row]; add(columns.map(column => cellText(values[column])).join('\t')) }
-  return lines.join(options.eol)
-}
+/** A column header as shown; SQL Server names computed columns with nothing, and a header stays one line. */
+export const columnTitle = (name: string): string => name ? name.replace(/\r\n|[\r\n\t]/g, ' ') : noColumnName
 
 const single = (resultIndex: number, kind: BlockKind, cell: Cell): GridSelection => ({ resultIndex, blocks: [{ kind, anchor: cell, focus: cell }], active: cell })
 /** Everything, as one open-ended block; the active cell stays where it was. */

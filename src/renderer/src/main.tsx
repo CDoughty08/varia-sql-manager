@@ -25,8 +25,19 @@ async function start() {
   // React renders only after a theme is applied, so the first frame already has its colors.
   const theme = await ThemeService.create(window.varia, domThemeTarget(monaco))
   const workbench = createWorkbench(window.varia, monaco, theme)
-  // Smoke tests drive the results API directly (backend-smoke.mjs); main enables test mode only in unpackaged smoke runs.
-  if (window.varia.testMode) Object.assign(window, { __variaResults: workbench.results })
+  // Smoke tests drive the results API directly (backend-smoke.mjs) and read the grids' counters (results-smoke.mjs); main
+  // enables test mode only in unpackaged smoke runs.
+  if (window.varia.testMode) {
+    const stats = workbench.gridStats
+    Object.assign(window, {
+      __variaResults: workbench.resultClient,
+      __variaGrid: {
+        stats: async () => ({ ...stats?.snapshot(), client: await workbench.resultClient.stats() }),
+        reset: () => stats?.reset(),
+        setScrollCap: (px?: number) => stats?.setScrollCap(px)
+      }
+    })
+  }
   const root = createRoot(document.getElementById('root')!)
   root.render(<React.StrictMode><WorkbenchProvider workbench={workbench}><App /></WorkbenchProvider></React.StrictMode>)
   // Workbench lifetime is outside React effects, including StrictMode's effect replay.
