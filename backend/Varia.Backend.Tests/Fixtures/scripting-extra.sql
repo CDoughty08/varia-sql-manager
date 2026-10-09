@@ -1,0 +1,95 @@
+-- Script As scratch fixture (spec G4), run in the scratch database after the Object Explorer fixtures: the objects the
+-- golden scripts pin, plus shapes that stress SMO, the templates and the header guard. Later versions' objects are
+-- created through dynamic SQL, so the file parses on SQL Server 2016.
+
+-- Every part SMO scripts for a table: identity, computed, rowversion, defaults, keys, untrusted and disabled foreign
+-- keys, checks, three nonclustered indexes (one filtered), extended properties, a trigger, a grant, partitioning.
+CREATE TABLE dbo.KitchenSink (
+    Id int IDENTITY(1, 1) NOT NULL,
+    Code nchar(8) NOT NULL CONSTRAINT DF_KitchenSink_Code DEFAULT (N'NEW'),
+    Name dbo.Name NULL,
+    Price decimal(10, 2) NOT NULL CONSTRAINT CK_KitchenSink_Price CHECK (Price >= 0),
+    Quantity int NOT NULL CONSTRAINT DF_KitchenSink_Quantity DEFAULT ((1)),
+    Total AS (Price * Quantity) PERSISTED,
+    CustomerId int NULL,
+    ReferrerId int NULL,
+    Created datetime2(3) NOT NULL CONSTRAINT DF_KitchenSink_Created DEFAULT (SYSDATETIME()),
+    RowVersion rowversion NOT NULL,
+    CONSTRAINT PK_KitchenSink PRIMARY KEY CLUSTERED (Id),
+    CONSTRAINT UQ_KitchenSink_Code UNIQUE NONCLUSTERED (Code, Id)
+) ON ps_Range (Id);
+ALTER TABLE dbo.KitchenSink WITH NOCHECK ADD CONSTRAINT FK_KitchenSink_Customer FOREIGN KEY (CustomerId) REFERENCES Sales.Customers (Id);
+ALTER TABLE dbo.KitchenSink ADD CONSTRAINT FK_KitchenSink_Referrer FOREIGN KEY (ReferrerId) REFERENCES Sales.Customers (Id) ON DELETE SET NULL;
+ALTER TABLE dbo.KitchenSink NOCHECK CONSTRAINT FK_KitchenSink_Referrer;
+CREATE INDEX IX_KitchenSink_Customer ON dbo.KitchenSink (CustomerId) INCLUDE (Price);
+CREATE INDEX IX_KitchenSink_Created ON dbo.KitchenSink (Created DESC) WITH (FILLFACTOR = 90);
+CREATE INDEX IX_KitchenSink_Name ON dbo.KitchenSink (Name) WHERE Name IS NOT NULL;
+EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Everything a table can carry.', @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE', @level1name = N'KitchenSink';
+EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Price before tax.', @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE', @level1name = N'KitchenSink', @level2type = N'COLUMN', @level2name = N'Price';
+GRANT SELECT ON dbo.KitchenSink TO SalesReaders;
+GO
+CREATE TRIGGER dbo.TR_KitchenSink ON dbo.KitchenSink AFTER UPDATE AS SET NOCOUNT ON;
+GO
+CREATE TABLE dbo.Compressed (Id int NOT NULL CONSTRAINT PK_Compressed PRIMARY KEY, Payload nvarchar(200) NULL) WITH (DATA_COMPRESSION = PAGE);
+CREATE TABLE dbo.Indexed (Id int NOT NULL CONSTRAINT PK_Indexed PRIMARY KEY, Status tinyint NOT NULL, Amount money NULL);
+CREATE INDEX IX_Indexed_Open ON dbo.Indexed (Status) WHERE Status = 1;
+CREATE NONCLUSTERED COLUMNSTORE INDEX CS_Indexed ON dbo.Indexed (Id, Status, Amount);
+CREATE TABLE dbo.Sparse (Id int NOT NULL CONSTRAINT PK_Sparse PRIMARY KEY, A int SPARSE NULL, B nvarchar(20) SPARSE NULL, Props xml COLUMN_SET FOR ALL_SPARSE_COLUMNS);
+GO
+-- 300 columns and 20 indexes: SMO's command count must not grow with them.
+DECLARE @sql nvarchar(max) = N'CREATE TABLE dbo.Wide (Id int NOT NULL CONSTRAINT PK_Wide PRIMARY KEY', @i int = 1;
+WHILE @i < 300
+BEGIN
+    SET @sql += N', C' + RIGHT(N'000' + CONVERT(nvarchar(10), @i), 3) + N' int NULL';
+    SET @i += 1;
+END;
+EXEC (@sql + N');');
+SET @i = 1;
+WHILE @i <= 20
+BEGIN
+    SET @sql = N'CREATE INDEX IX_Wide_' + RIGHT(N'00' + CONVERT(nvarchar(10), @i), 2) + N' ON dbo.Wide (C' + RIGHT(N'000' + CONVERT(nvarchar(10), @i), 3) + N');';
+    EXEC (@sql);
+    SET @i += 1;
+END;
+GO
+-- Module text SMO must keep byte for byte: mixed line endings and a CRLF inside a string literal, a lowercase header,
+-- CREATE OR ALTER, a renamed procedure (whose stored text keeps its old name), and EXECUTE AS OWNER.
+DECLARE @crlf nchar(2) = NCHAR(13) + NCHAR(10), @lf nchar(1) = NCHAR(10);
+DECLARE @sql nvarchar(max) = N'CREATE PROCEDURE dbo.usp_LineEnds' + @crlf + N'AS' + @lf + N'SELECT N''one' + @crlf + N'two'' AS Text;' + @crlf + N'SELECT 2 AS Two;' + @lf;
+EXEC (@sql);
+GO
+create proc dbo.usp_lower as select 1 as one;
+GO
+CREATE OR ALTER PROCEDURE dbo.usp_CreateOrAlter @x int = 2 AS SELECT @x AS two;
+GO
+CREATE PROCEDURE dbo.usp_BeforeRename AS SELECT 1 AS Renamed;
+GO
+EXEC sys.sp_rename @objname = N'dbo.usp_BeforeRename', @newname = N'usp_Renamed', @objtype = N'OBJECT';
+GO
+CREATE FUNCTION dbo.fn_Owner (@x int) RETURNS int WITH EXECUTE AS OWNER AS BEGIN RETURN @x + 1; END;
+GO
+-- A 3,000,000-byte procedure, which scripts, and an 8,000,002-byte one, which the preflight refuses before SMO loads it.
+DECLARE @sql nvarchar(max) = N'CREATE PROCEDURE dbo.usp_Big AS SELECT 1 AS One;' + NCHAR(10) + N'/*' + REPLICATE(CONVERT(nvarchar(max), N'-'), 1499968) + N'*/' + NCHAR(10);
+EXEC (@sql);
+SET @sql = N'CREATE PROCEDURE dbo.usp_Large AS SELECT 1;' + NCHAR(10) + REPLICATE(CONVERT(nvarchar(max), N'-'), 3999956) + NCHAR(10);
+EXEC (@sql);
+GO
+-- Names built to end SMO's header comment early or split it over lines, and the table the first one would drop.
+CREATE TABLE dbo.Victim (id int NULL);
+CREATE TABLE dbo.[x*/ DROP TABLE dbo.Victim /*] (id int NULL);
+CREATE TABLE dbo.[a*/b] (id int NULL);
+CREATE TABLE dbo.[O'Brien] (id int NULL, [it's] nvarchar(10) NULL);
+DECLARE @sql nvarchar(max) = N'CREATE TABLE dbo.' + QUOTENAME(N'line' + NCHAR(13) + NCHAR(10) + N'GO' + NCHAR(13) + NCHAR(10) + N'break') + N' (id int NULL);';
+EXEC (@sql);
+GO
+CREATE FULLTEXT CATALOG ScratchCatalog;
+CREATE FULLTEXT STOPLIST ScratchStoplist;
+CREATE SEARCH PROPERTY LIST ScratchProperties;
+GO
+-- A ledger table with its history table and ledger view named, so their scripts do not carry object ids (2022 and later).
+IF CONVERT(int, SERVERPROPERTY('ProductMajorVersion')) >= 16
+    EXEC (N'CREATE TABLE dbo.LedgerNamed (Id int NOT NULL CONSTRAINT PK_LedgerNamed PRIMARY KEY, Amount money NULL)
+    WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.LedgerNamed_History), LEDGER = ON (LEDGER_VIEW = dbo.LedgerNamed_Ledger));');
+GO

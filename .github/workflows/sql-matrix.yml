@@ -1,10 +1,18 @@
 name: SQL Server matrix
 
-# The .NET checks (offline, live, and the Object Explorer scratch database) against every SQL Server version that has a
-# Linux image. Manual runs only, so it costs no scheduled minutes; ci.yml already covers SQL Server 2022 on every pull
-# request. SQL Server 2016 has no Linux image: the offline checks render and lint its band, and the owner checks it in SSMS.
+# The .NET checks (offline, live, and the Object Explorer and Script As scratch databases) against every SQL Server
+# version that has a Linux image. Manual runs only, so it costs no scheduled minutes; ci.yml already covers SQL Server
+# 2022 on every pull request. SQL Server 2016 has no Linux image: the offline checks render and lint its band, the
+# target-130 goldens script for it, and the owner checks it in SSMS. Script As compares each case with
+# tests/fixtures/scripting/golden/16, or with the overlay golden/14 (2017), 15 (2019) or 17 (2025) where that version
+# scripts differently; "Rewrite script goldens" regenerates the varia goldens and uploads them for review.
 on:
   workflow_dispatch:
+    inputs:
+      update-goldens:
+        description: Rewrite script goldens (VARIA_UPDATE_SCRIPT_GOLDENS) and upload them
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,6 +52,7 @@ jobs:
       VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
       # The container is disposable, so the Object Explorer checks may create and drop their marked scratch databases.
       VARIA_TEST_SQL_SCRATCH: '1'
+      VARIA_UPDATE_SCRIPT_GOLDENS: ${{ inputs.update-goldens && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,3 +67,18 @@ jobs:
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - name: .NET checks (offline, live, and scratch database)
         run: npm run backend:test
+      - name: Upload Script As performance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scripting-perf-${{ matrix.version }}
+          path: artifacts/scripting-perf.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Upload rewritten script goldens
+        if: always() && inputs.update-goldens
+        uses: actions/upload-artifact@v7
+        with:
+          name: scripting-goldens-${{ matrix.version }}
+          path: tests/fixtures/scripting/golden/
+          retention-days: 7

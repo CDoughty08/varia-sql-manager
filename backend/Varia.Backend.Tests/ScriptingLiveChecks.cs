@@ -44,9 +44,20 @@ internal static partial class ScriptingLiveChecks
 
     private static bool Ok(ScriptResult result) => result.Error is null && result.Text is { Length: > 0 };
 
-    /// <summary>A script's batches as SqlScript.Parse splits them, which must be one per GO the formatter wrote.</summary>
-    private static bool Framed(string text) =>
-        SqlScript.Parse(text).Count == Regex.Matches(text, "^GO\r?$", RegexOptions.Multiline).Count && text.EndsWith("GO" + NL + NL, StringComparison.Ordinal);
+    /// <summary>A script's batches as SqlScript.Parse splits them, which must be one per GO the formatter wrote, less the
+    /// batches that hold only SMO's header (a script the query window could not run is not framed).</summary>
+    private static bool Framed(string text)
+    {
+        try
+        {
+            return SqlScript.Parse(text).Count + HeaderOnly().Matches(text).Count == Regex.Matches(text, "^GO\r?$", RegexOptions.Multiline).Count
+                && text.EndsWith("GO" + NL + NL, StringComparison.Ordinal);
+        }
+        catch (RequestException) { return false; }
+    }
+
+    [GeneratedRegex(@"^/\*{6} Object:[^\r\n]*\*{6}/\r?\nGO\r?$", RegexOptions.Multiline)]
+    private static partial Regex HeaderOnly();
 
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
@@ -83,8 +94,21 @@ internal static partial class ScriptingLiveChecks
             && !plain.Text.Contains("/******", StringComparison.Ordinal) && plain.Text.Contains("CREATE TABLE [sysjobs](", StringComparison.Ordinal), "the USE, GO, header and schema options turn their parts off");
         var exists = await client.Script(sysjobs, "create", client.Options with { CheckExistence = true });
         check(Ok(exists) && exists.Text!.Contains("IF NOT EXISTS", StringComparison.Ordinal), "Check for object existence guards the CREATE");
-        foreach (var verb in new[] { "select", "insert", "update", "delete" })
-            check((await client.Script(sysjobs, verb)).Error is { Code: "NOT_SUPPORTED", Retryable: false }, "the " + verb + " template is refused until the templates exist");
+        // SSMS's templates (spec B9): one preflight round trip after the prologue, no SMO.
+        var select = await client.Script(sysjobs, "select");
+        check(Ok(select) && select.Text!.StartsWith("USE [msdb]" + NL + "GO" + NL + NL + "SELECT [job_id]" + NL + "      ,[originating_server_id]" + NL, StringComparison.Ordinal)
+            && select.Text.EndsWith(NL + "  FROM [dbo].[sysjobs]" + NL + "GO" + NL + NL, StringComparison.Ordinal) && select.Commands == 2 && Framed(select.Text),
+            "Script Table as SELECT lists sysjobs' columns after USE, in two commands (" + select.Commands + ")");
+        var insert = await client.Script(sysjobs, "insert");
+        check(Ok(insert) && insert.Text!.Contains("INSERT INTO [dbo].[sysjobs]" + NL + "           ([job_id]" + NL, StringComparison.Ordinal)
+            && insert.Text.Contains("     VALUES" + NL + "           (<job_id, uniqueidentifier,>" + NL + "           ,<originating_server_id, int,>" + NL + "           ,<name, sysname,>", StringComparison.Ordinal)
+            && Framed(insert.Text), "Script Table as INSERT lists columns and typed placeholders");
+        var update = await client.Script(sysjobs, "update");
+        check(Ok(update) && update.Text!.Contains("UPDATE [dbo].[sysjobs]" + NL + "   SET [job_id] = <job_id, uniqueidentifier,>" + NL + "      ,[originating_server_id] = <originating_server_id, int,>", StringComparison.Ordinal)
+            && update.Text.Contains(NL + " WHERE <Search Conditions,,>" + NL + "GO" + NL, StringComparison.Ordinal), "Script Table as UPDATE sets every column to a placeholder");
+        var delete = await client.Script(sysjobs, "delete");
+        check(Ok(delete) && delete.Text == "USE [msdb]" + NL + "GO" + NL + NL + "DELETE FROM [dbo].[sysjobs]" + NL + "      WHERE <Search Conditions,,>" + NL + "GO" + NL + NL,
+            "Script Table as DELETE");
 
         var view = new ObjectRefDto("view", "msdb", "dbo", "sysjobs_view");
         var definition = (await Sql("SELECT definition FROM sys.sql_modules WHERE object_id = OBJECT_ID(N'dbo.sysjobs_view');", "msdb")).Scalar!;
@@ -99,12 +123,27 @@ internal static partial class ScriptingLiveChecks
         var procedure = new ObjectRefDto("procedure", "msdb", "dbo", "sp_add_job");
         var procedureDefinition = (await Sql("SELECT definition FROM sys.sql_modules WHERE object_id = OBJECT_ID(N'dbo.sp_add_job');", "msdb")).Scalar!;
         var procedureCreate = await client.Script(procedure, "create");
-        check(Ok(procedureCreate) && procedureCreate.Text!.Contains("CREATE   PROCEDURE [dbo].[sp_add_job]" + Body(procedureDefinition, "sp_add_job"), StringComparison.Ordinal),
+        // msdb's own header differs by version (2022 writes CREATE OR ALTER, which SMO turns into "CREATE   ").
+        check(Ok(procedureCreate) && Regex.IsMatch(procedureCreate.Text!, @"CREATE\s+PROCEDURE \[dbo\]\.\[sp_add_job\]") && procedureCreate.Text!.Contains("[dbo].[sp_add_job]" + Body(procedureDefinition, "sp_add_job"), StringComparison.Ordinal),
             "a procedure's CREATE keeps its stored text, with only the name schema-qualified");
-        check((await client.Script(procedure, "execute")).Error?.Code == "NOT_SUPPORTED", "EXECUTE is refused until the templates exist");
+        var execute = await client.Script(procedure, "execute");
+        check(Ok(execute) && execute.Text!.StartsWith("USE [msdb]" + NL + "GO" + NL + NL + "DECLARE @RC int" + NL + "DECLARE @job_name sysname" + NL, StringComparison.Ordinal)
+            && execute.Text.Contains(NL + NL + "-- TODO: Set parameter values here." + NL + NL + "EXECUTE @RC = [dbo].[sp_add_job] " + NL + "   @job_name" + NL + "  ,@enabled" + NL, StringComparison.Ordinal)
+            && execute.Text.Contains(NL + "  ,@job_id OUTPUT" + NL + "  ,@originating_server" + NL + "GO" + NL, StringComparison.Ordinal) && execute.Commands == 2, "Script Stored Procedure as EXECUTE declares and passes every parameter");
         var function = new ObjectRefDto("function", "msdb", "dbo", "agent_datetime");
         var functionDrop = await client.Script(function, "drop");
         check(Ok(functionDrop) && functionDrop.Text!.Contains("DROP FUNCTION [dbo].[agent_datetime]", StringComparison.Ordinal), "a scalar function's DROP");
+        var functionSelect = await client.Script(function, "select");
+        check(Ok(functionSelect) && functionSelect.Text!.Contains("SELECT [dbo].[agent_datetime] (" + NL + "   <@date, int,>" + NL + "  ,<@time, int,>)" + NL + "GO", StringComparison.Ordinal),
+            "Script Function as SELECT selects a scalar function's value with a placeholder per parameter");
+        var functionExecute = await client.Script(function, "execute");
+        check(Ok(functionExecute) && functionExecute.Text!.Contains("DECLARE @RC datetime" + NL + "DECLARE @date int" + NL + "DECLARE @time int" + NL + NL, StringComparison.Ordinal)
+            && functionExecute.Text.Contains("EXECUTE @RC = [dbo].[agent_datetime] " + NL + "   @date" + NL + "  ,@time" + NL + "GO", StringComparison.Ordinal),
+            "Script Function as EXECUTE declares the return code with the function's return type");
+        var viewSelect = await client.Script(view, "select", client.Options with { ScriptUseDatabase = false, SchemaQualify = false });
+        check(Ok(viewSelect) && viewSelect.Text!.StartsWith("SELECT [job_id]" + NL, StringComparison.Ordinal) && viewSelect.Text.Contains(NL + "  FROM [sysjobs_view]" + NL, StringComparison.Ordinal),
+            "a view's SELECT follows the USE and schema options");
+        check((await client.Script(new ObjectRefDto("table", "msdb", "dbo", "VariaNoSuchTable"), "insert")).Error?.Code == "NOT_FOUND", "a template for a missing object is NOT_FOUND");
 
         // Databases and server objects use master (spec C1).
         var master = await client.Script(new ObjectRefDto("database", Name: "master"), "create");
@@ -155,7 +194,7 @@ internal static partial class ScriptingLiveChecks
             Console.WriteLine("Scripting scratch-database checks skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named database on a disposable development server.");
             return;
         }
-        await ScratchAsync(check, service, client, json, Sql);
+        await ScratchAsync(check, service, client, json, Sql, live);
     }
 
     private static async Task<bool> Stops(Task task)
@@ -227,9 +266,27 @@ internal static partial class ScriptingLiveChecks
         check(Ok(await client.Script(table, "create")), "the scripting pool serves the next request after cancellations");
     }
 
-    private static async Task ScratchAsync(Action<bool, string> check, SqlService service, Client client, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql)
+    private static async Task ScratchAsync(Action<bool, string> check, SqlService service, Client client, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql,
+        Func<string, ConnectOptions> live)
     {
-        await using var scratch = await ScratchDatabase.CreateAsync(sql, Path.Combine(AppContext.BaseDirectory, "Fixtures"));
+        var fixtures = Path.Combine(AppContext.BaseDirectory, "Fixtures");
+        await using var scratch = await ScratchDatabase.CreateAsync(sql, fixtures);
+        var db = scratch.Name;
+        await SweepServerObjectsAsync(sql);
+        var extra = await sql(File.ReadAllText(Path.Combine(fixtures, "scripting-extra.sql")), db);
+        if (extra.Status != "completed") throw new InvalidOperationException("The scripting fixture failed: " + extra.Error);
+        try
+        {
+            var server = await sql(File.ReadAllText(Path.Combine(fixtures, "scripting-server.sql")).Replace("{{scratch}}", db, StringComparison.Ordinal), "master");
+            if (server.Status != "completed") throw new InvalidOperationException("The scripting server fixture failed: " + server.Error);
+            await ScratchChecksAsync(check, service, client, json, sql, live, scratch);
+        }
+        finally { await DropServerObjectsAsync(sql, db); }
+    }
+
+    private static async Task ScratchChecksAsync(Action<bool, string> check, SqlService service, Client client, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql,
+        Func<string, ConnectOptions> live, ScratchDatabase scratch)
+    {
         var db = scratch.Name;
         ObjectRefDto Schema(string kind, string schema, string name) => new(kind, db, schema, name);
         ObjectRefDto Named(string kind, string name) => new(kind, db, Name: name);
@@ -294,24 +351,20 @@ internal static partial class ScriptingLiveChecks
             && encrypted.Commands == 2, "an encrypted module is refused before SMO runs");
         check((await client.Script(secret, "alter")).Error?.Code == "ENCRYPTED" && Ok(await client.Script(secret, "drop")), "an encrypted module still scripts DROP");
 
-        var large = await sql("DECLARE @body nvarchar(max) = REPLICATE(CONVERT(nvarchar(max), N'-'), 3999956);\n"
-            + "DECLARE @sql nvarchar(max) = N'CREATE PROCEDURE dbo.usp_Large AS SELECT 1;' + NCHAR(10) + @body + NCHAR(10);\nEXEC (@sql);", db);
         var bytes = (await sql("SELECT DATALENGTH(definition) FROM sys.sql_modules WHERE object_id = OBJECT_ID(N'dbo.usp_Large');", db)).Scalar;
         var tooLarge = await client.Script(Schema("procedure", "dbo", "usp_Large"), "create");
-        check(large.Status == "completed" && long.Parse(bytes!, CultureInfo.InvariantCulture) > 8_000_000 && tooLarge.Error is { Code: "TOO_LARGE" }
+        check(long.Parse(bytes!, CultureInfo.InvariantCulture) > 8_000_000 && tooLarge.Error is { Code: "TOO_LARGE" }
             && tooLarge.Error.Message == "The definition of dbo.usp_Large is larger than 8 MB, which Varia cannot open." && tooLarge.Commands <= 2,
             "a module over 8,000,000 bytes is refused before SMO loads it (" + bytes + " bytes, " + tooLarge.Commands + " commands)");
 
-        // Names that would end SMO's header comment early, or split it over lines.
-        var setup = await sql("CREATE TABLE dbo.Victim (id int NULL);\nCREATE TABLE dbo.[x*/ DROP TABLE dbo.Victim /*] (id int NULL);\nCREATE TABLE dbo.[a*/b] (id int NULL);\n"
-            + "DECLARE @sql nvarchar(max) = N'CREATE TABLE dbo.' + QUOTENAME(N'line' + NCHAR(13) + NCHAR(10) + N'GO' + NCHAR(13) + NCHAR(10) + N'break') + N' (id int NULL);';\nEXEC (@sql);", db);
+        // Names that would end SMO's header comment early, or split it over lines (scripting-extra.sql).
         var safe = await client.Script(Schema("table", "dbo", "b"), "create");
         var batches = SqlScript.Parse(safe.Text!).Count;
         foreach (var name in new[] { "x*/ DROP TABLE dbo.Victim /*", "a*/b" })
         {
             // SMO 181 writes "?" for such a name in its header; the guard passes that, and would catch an SMO that did not.
             var guarded = await client.Script(Schema("table", "dbo", name), "create");
-            check(setup.Status == "completed" && Ok(guarded) && HeaderGuard.Safe(guarded.Text!) && guarded.Text!.Contains("/****** Object:  Table ?", StringComparison.Ordinal)
+            check(Ok(guarded) && HeaderGuard.Safe(guarded.Text!) && guarded.Text!.Contains("/****** Object:  Table ?", StringComparison.Ordinal)
                 && SqlScript.Parse(guarded.Text).Count == batches, "a table named " + name + " keeps a header that cannot end early");
         }
         var broken = await client.Script(Schema("table", "dbo", "line\r\nGO\r\nbreak"), "create");
@@ -337,9 +390,17 @@ internal static partial class ScriptingLiveChecks
             context.Cancel(CancelReason.User);
             check(await Stops(pending) && cancelWatch.ElapsedMilliseconds < 2000, "a CANCEL stops a blocked script within 2 s");
             check(SpinWait.SpinUntil(() => service.Scripting.ActiveJobs == 0, 2000), "the attention frees the blocked job's gates");
+            var other = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live("master"), json), json);
+            var orphan = client.Script(locked, "create", connectionId: other.Id);
+            await Task.Delay(500);
+            var dropped = Stopwatch.StartNew();
+            await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(other.Id), json), json);
+            check(await Stops(orphan) && dropped.ElapsedMilliseconds < 2000 && SpinWait.SpinUntil(() => service.Scripting.ActiveJobs == 0, 2000),
+                "disconnecting cancels a blocked script and frees its gates");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json); }
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
+        await GoldenAsync(check, service, client, scratch, sql, live, json);
     }
 
     /// <summary>A module's stored text after its name; for a view, after its AS, since SMO writes a view's header up to it.</summary>

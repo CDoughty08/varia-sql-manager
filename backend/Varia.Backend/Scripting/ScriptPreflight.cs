@@ -10,7 +10,8 @@ namespace Varia.Backend.Scripting;
 /// derived itself, the catalogue row that subtype selects, and for modules whether SMO could read the definition.</summary>
 internal sealed record ResolvedTarget(ObjectRefDto Ref, string Database, string Kind, string Subtype, ScriptTargetRow Row, ScriptSubject Subject,
     string? ParentUrnType = null, string? Column = null, bool SqlModule = false, bool? Encrypted = null, bool DefinitionVisible = true, long? DefinitionBytes = null,
-    bool? CanViewDefinition = null);
+    bool? CanViewDefinition = null, string? ObjectType = null, IReadOnlyList<ColumnRow>? Columns = null, IReadOnlyList<ParameterRow>? Parameters = null,
+    string? Identity = null, string? Provider = null);
 
 /// <summary>What the preflight concluded: the target, or an error value with no SMO call made.</summary>
 internal sealed record PreflightResult(ResolvedTarget? Target, ScriptError? Error, IReadOnlyList<string> Warnings);
@@ -45,9 +46,19 @@ internal static partial class ScriptPreflight
     private static string Schemed(string alias) => string.Format(CultureInfo.InvariantCulture, Schema, alias);
     private static string Types(IEnumerable<string> types) => string.Join(", ", types.Select(type => "'" + type + "'"));
 
-    /// <summary>The preflight statement of a kind for a version band. Every statement returns at most one row whose
-    /// columns are read by name (<see cref="Row"/>).</summary>
-    public static string Statement(string kind, int band, ScriptingCatalog catalog, string? parentKind = null)
+    /// <summary>The preflight statement of a kind for a version band and verb class. Every statement returns at most one
+    /// row whose columns are read by name (<see cref="Row"/>); a template verb's statement then returns the rows its
+    /// template lists (<see cref="Rowset"/>).</summary>
+    /// <param name="vector">The server has sys.all_columns.vector_dimensions (ServerProfile.VectorDimensions).</param>
+    public static string Statement(string kind, int band, ScriptingCatalog catalog, string? parentKind = null, VerbClass verbs = VerbClass.Ddl, bool vector = false) =>
+        Lookup(kind, band, catalog, parentKind) + (Rowset(kind, verbs) switch
+        {
+            RowsetKind.Columns => "\n" + ObjectId(kind, catalog) + ColumnRows(new SqlRender(band, vector)),
+            RowsetKind.Parameters => "\n" + ObjectId(kind, catalog) + ParameterRows,
+            _ => ""
+        });
+
+    private static string Lookup(string kind, int band, ScriptingCatalog catalog, string? parentKind)
     {
         var render = new SqlRender(band);
         return kind switch
@@ -91,7 +102,9 @@ internal static partial class ScriptPreflight
                 + "CONVERT(bit, CASE WHEN d.database_id <= 4 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS is_system FROM sys.databases AS d WHERE d.name = @name;",
             "login" => "SELECT sp.principal_id AS object_id FROM sys.server_principals AS sp WHERE sp.name = @name AND sp.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X');",
             "serverRole" => "SELECT sp.principal_id AS object_id FROM sys.server_principals AS sp WHERE sp.name = @name AND sp.type = 'R';",
-            "credential" => "SELECT cr.credential_id AS object_id FROM sys.credentials AS cr WHERE cr.name = @name;",
+            // SMO cannot script credentials; SmoScriptRunner writes them from these columns (no catalog view holds the secret).
+            "credential" => "SELECT cr.credential_id AS object_id, cr.credential_identity AS credential_identity, cp.name AS provider_name FROM sys.credentials AS cr "
+                + "LEFT JOIN sys.cryptographic_providers AS cp ON cp.provider_id = cr.target_id WHERE cr.name = @name;",
             "linkedServer" => "SELECT sv.server_id AS object_id FROM sys.servers AS sv WHERE sv.is_linked = 1 AND sv.name = @name;",
             "backupDevice" => "SELECT CONVERT(int, 0) AS object_id FROM sys.backup_devices AS bd WHERE bd.name = @name;",
             // Server triggers have no OBJECTPROPERTY: a hidden definition is encrypted or not visible, which one is unknown.
@@ -103,6 +116,49 @@ internal static partial class ScriptPreflight
             _ => throw new InvalidOperationException("No preflight for " + kind)
         };
     }
+
+    /// <summary>The rows a template verb's preflight also reads: a table's or view's columns for SELECT, INSERT, UPDATE and
+    /// DELETE; a procedure's or function's parameters for EXECUTE and a function's SELECT.</summary>
+    public enum RowsetKind { None, Columns, Parameters }
+
+    public static RowsetKind Rowset(string kind, VerbClass verbs) => (kind, verbs) switch
+    {
+        (_, VerbClass.Ddl) => RowsetKind.None,
+        ("table" or "view", VerbClass.Dml) => RowsetKind.Columns,
+        ("procedure" or "function", _) => RowsetKind.Parameters,
+        _ => RowsetKind.None
+    };
+
+    /// <summary>The object the rowset belongs to, found as its lookup row found it.</summary>
+    private static string ObjectId(string kind, ScriptingCatalog catalog) => "DECLARE @id int = (SELECT o.object_id FROM sys.all_objects AS o " + Schemed("o")
+        + " AND o.type IN (" + Types(kind == "table" ? ["U", "ET"] : ObjectTypes(kind, catalog)) + "));\n";
+
+    // Aliases avoid the band-gated column names (the lint looks for them) and reserved words such as precision.
+    private static string ColumnRows(SqlRender render) => "SELECT TOP (@take) c.column_id AS column_id, c.name AS column_name, ty.name AS type_name, tys.name AS type_schema, "
+        + "ty.is_user_defined AS is_user_defined, c.max_length AS max_length, c.precision AS type_precision, c.scale AS type_scale, c.is_identity AS is_identity, "
+        + "c.is_computed AS is_computed, c.is_sparse AS is_sparse, c.is_column_set AS is_column_set, c.system_type_id AS system_type_id, "
+        + render.Col(13, "c.generated_always_type", "CONVERT(tinyint, 0)") + " AS generated_code, " + render.Col(13, "c.is_hidden", "CONVERT(bit, 0)") + " AS hidden_flag, "
+        + render.Col(14, "c.graph_type", "CONVERT(int, NULL)") + " AS graph_code, " + render.Col(16, "c.is_dropped_ledger_column", "CONVERT(bit, 0)") + " AS dropped_flag, "
+        + (render.VectorDimensions ? "c.vector_dimensions" : "CONVERT(int, NULL)") + " AS vector_size, xss.name AS xml_schema, xs.name AS xml_collection "
+        + "FROM sys.all_columns AS c JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id JOIN sys.schemas AS tys ON tys.schema_id = ty.schema_id "
+        + "LEFT JOIN sys.xml_schema_collections AS xs ON c.xml_collection_id <> 0 AND xs.xml_collection_id = c.xml_collection_id "
+        + "LEFT JOIN sys.schemas AS xss ON xss.schema_id = xs.schema_id WHERE c.object_id = @id ORDER BY c.column_id;";
+
+    private const string ParameterRows = "SELECT TOP (@take) p.parameter_id AS parameter_id, p.name AS parameter_name, p.is_output AS is_output, p.is_readonly AS is_readonly, "
+        + "p.is_cursor_ref AS is_cursor_ref, ty.name AS type_name, tys.name AS type_schema, ty.is_user_defined AS is_user_defined, p.max_length AS max_length, "
+        + "p.precision AS type_precision, p.scale AS type_scale, xss.name AS xml_schema, xs.name AS xml_collection "
+        + "FROM sys.all_parameters AS p JOIN sys.types AS ty ON ty.user_type_id = p.user_type_id JOIN sys.schemas AS tys ON tys.schema_id = ty.schema_id "
+        + "LEFT JOIN sys.xml_schema_collections AS xs ON p.xml_collection_id <> 0 AND xs.xml_collection_id = p.xml_collection_id "
+        + "LEFT JOIN sys.schemas AS xss ON xss.schema_id = xs.schema_id WHERE p.object_id = @id ORDER BY p.parameter_id;";
+
+    /// <summary>The rows a rowset reads at most: one past its limit, which then means TOO_LARGE. Parameters also hold a
+    /// scalar function's return value.</summary>
+    public static int Take(RowsetKind rowset, ScriptingCatalog catalog) => rowset switch
+    {
+        RowsetKind.Columns => (int)catalog.Limit("maxColumns") + 1,
+        RowsetKind.Parameters => (int)catalog.Limit("maxParameters") + 2,
+        _ => 0
+    };
 
     /// <summary>A statement that finds nothing, for a kind a server's band cannot have.</summary>
     private const string None = "SELECT CONVERT(int, NULL) AS object_id WHERE 1 = 0 AND @name IS NOT NULL;";
@@ -145,9 +201,10 @@ internal static partial class ScriptPreflight
 
     /// <summary>Problems with one rendered statement (empty when it passes): Object Explorer's metadata-function ban,
     /// except OBJECTPROPERTY(…, N'IsEncrypted'), which nothing else answers; band gates; literals beyond the allowlist.</summary>
-    public static List<string> Lint(string text, int band, bool serverScope)
+    public static List<string> Lint(string text, int band, bool serverScope, bool vector = false)
     {
         var problems = new List<string>();
+        if (!vector && text.Contains("vector_dimensions", StringComparison.Ordinal)) problems.Add("uses vector_dimensions without the probe flag");
         var stripped = EncryptedCall().Replace(text, "");
         foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
         if (!serverScope && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
@@ -165,14 +222,15 @@ internal static partial class ScriptPreflight
     /// <param name="perDatabase">The connection is already in the object's database (cloud editions): no scope wrapper.</param>
     /// <param name="delay">ScriptingOptions.PreflightDelay: the cancellation checks hold the statement in WAITFOR.</param>
     public static async Task<PreflightResult> RunAsync(SqlConnection connection, ScriptingCatalog catalog, ObjectRefDto target, ScriptVerbRow verb, int band, bool perDatabase,
-        TimeSpan? delay, CancellationToken token)
+        TimeSpan? delay, CancellationToken token, bool vector = false)
     {
         var kind = target.Kind;
         var server = ServerScope(kind);
         var database = server ? "master" : target.Database!;
         var subject = Subject(catalog, target, verb, database);
+        var rowset = Rowset(kind, verb.Class);
         var statement = (delay is { } wait ? "WAITFOR DELAY '" + wait.ToString(@"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture) + "';\n" : "")
-            + Statement(kind, band, catalog, target.Parent?.Kind);
+            + Statement(kind, band, catalog, target.Parent?.Kind, verb.Class, vector);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = 30;
         var wrapped = !server && !perDatabase;
@@ -188,24 +246,40 @@ internal static partial class ScriptPreflight
         Add(command, "@name", SqlDbType.NVarChar, 128, target.Name);
         Add(command, "@parent_schema", SqlDbType.NVarChar, 128, target.Parent?.Schema);
         Add(command, "@parent_name", SqlDbType.NVarChar, 128, target.Parent?.Name);
-        Add(command, "@take", SqlDbType.Int, 0, 0);
-        Dictionary<string, object?>? row = null;
+        Add(command, "@take", SqlDbType.Int, 0, Take(rowset, catalog));
+        Row? row = null;
+        var rows = new List<Row>();
         try
         {
             await using var reader = await command.ExecuteReaderAsync(token);
-            if (await reader.ReadAsync(token))
-            {
-                row = new(StringComparer.Ordinal);
-                for (var i = 0; i < reader.FieldCount; i++) row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
-            }
+            if (await reader.ReadAsync(token)) row = Read(reader);
+            if (rowset != RowsetKind.None && await reader.NextResultAsync(token))
+                while (await reader.ReadAsync(token)) rows.Add(Read(reader));
         }
         // Inside EXEC [db].sys.sp_executesql, a missing procedure can only be the wrapper's: the database is gone.
         catch (SqlException error) when (wrapped && error.Number is 2812 or 911 && !token.IsCancellationRequested)
         {
             return new(null, ScriptingErrors.Create(catalog, "NOT_FOUND", subject), []);
         }
-        return Decide(catalog, target, verb, subject, database, row is null ? null : new Row(row));
+        return Decide(catalog, target, verb, subject, database, row, rowset, rows);
     }
+
+    private static Row Read(SqlDataReader reader)
+    {
+        var values = new Dictionary<string, object?>(reader.FieldCount, StringComparer.Ordinal);
+        for (var i = 0; i < reader.FieldCount; i++) values[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+        return new Row(values);
+    }
+
+    private static TypeRow TypeOf(Row row) => new(row.Text("type_name") ?? "", row.Text("type_schema"), row.Bool("is_user_defined"), row.Int("max_length"), row.Int("type_precision"),
+        row.Int("type_scale"), row.Text("xml_schema"), row.Text("xml_collection"), row.Long("vector_size") is { } size ? (int)size : null, row.Bool("is_cursor_ref"));
+
+    /// <summary>A column of the rowset; names keep their spaces (Text trims, which a name must not lose).</summary>
+    public static ColumnRow Column(Row row) => new(row.Name("column_name"), TypeOf(row), row.Bool("is_identity"), row.Bool("is_computed"), row.Bool("is_sparse"),
+        row.Bool("is_column_set"), row.Int("generated_code"), row.Bool("hidden_flag"), row.Long("graph_code") is { } graph ? (int)graph : null, row.Bool("dropped_flag"),
+        row.Int("system_type_id"));
+
+    public static ParameterRow Parameter(Row row) => new(row.Int("parameter_id"), row.Name("parameter_name"), TypeOf(row), row.Bool("is_output"), row.Bool("is_readonly"));
 
     public static ScriptSubject Subject(ScriptingCatalog catalog, ObjectRefDto target, ScriptVerbRow verb, string? database)
     {
@@ -222,6 +296,8 @@ internal static partial class ScriptPreflight
         public bool Bool(string name) => values.TryGetValue(name, out var value) && value is not null && Convert.ToBoolean(value, CultureInfo.InvariantCulture);
         public bool? NullableBool(string name) => values.TryGetValue(name, out var value) && value is not null ? Convert.ToBoolean(value, CultureInfo.InvariantCulture) : null;
         public string? Text(string name) => values.TryGetValue(name, out var value) && value is not null ? Convert.ToString(value, CultureInfo.InvariantCulture)?.Trim() : null;
+        /// <summary>An identifier exactly as stored ('' when absent).</summary>
+        public string Name(string name) => values.TryGetValue(name, out var value) && value is string text ? text : "";
         public bool Has(string name) => values.ContainsKey(name);
     }
 
@@ -246,7 +322,8 @@ internal static partial class ScriptPreflight
         _ => ""
     };
 
-    private static PreflightResult Decide(ScriptingCatalog catalog, ObjectRefDto target, ScriptVerbRow verb, ScriptSubject subject, string database, Row? row)
+    private static PreflightResult Decide(ScriptingCatalog catalog, ObjectRefDto target, ScriptVerbRow verb, ScriptSubject subject, string database, Row? row,
+        RowsetKind rowset = RowsetKind.None, IReadOnlyList<Row>? rows = null)
     {
         if (row is null) return new(null, ScriptingErrors.Create(catalog, "NOT_FOUND", subject), []);
         var kind = target.Kind;
@@ -264,8 +341,12 @@ internal static partial class ScriptPreflight
         var encrypted = row.NullableBool("is_encrypted");
         var visible = !sqlModule || row.Bool("has_definition");
         var bytes = row.Long("definition_bytes");
+        // A rowset that reached its TOP read one row past its limit.
+        if (rowset != RowsetKind.None && rows!.Count >= Take(rowset, catalog)) return new(null, ScriptingErrors.Create(catalog, "TOO_LARGE", subject), []);
         var resolved = new ResolvedTarget(target, database, kind, subtype, catalogRow, subject, target.Parent?.Kind switch { "table" => "Table", "view" => "View", _ => null },
-            row.Text("column_name"), sqlModule, encrypted, visible, bytes, row.Has("can_view_definition") ? row.Bool("can_view_definition") : null);
+            row.Text("column_name"), sqlModule, encrypted, visible, bytes, row.Has("can_view_definition") ? row.Bool("can_view_definition") : null, row.Text("object_type"),
+            rowset == RowsetKind.Columns ? [.. rows!.Select(Column)] : null, rowset == RowsetKind.Parameters ? [.. rows!.Select(Parameter)] : null,
+            row.Has("credential_identity") ? row.Name("credential_identity") : null, row.Has("provider_name") ? row.Text("provider_name") : null);
         // SMO reads a module's definition for every verb that writes its body.
         if (sqlModule && verb.Verb is ScriptVerb.Create or ScriptVerb.Alter or ScriptVerb.CreateOrAlter or ScriptVerb.DropAndCreate)
         {

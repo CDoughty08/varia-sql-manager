@@ -1,0 +1,6 @@
+USE [master]
+GO
+
+DROP SERVER AUDIT SPECIFICATION [<scratch>_sas]
+GO
+

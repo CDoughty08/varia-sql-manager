@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "comment": "Inputs and outputs of normalize.json, checked by both tests/scripting-goldens.test.ts and ScriptingChecks (C#), so the two implementations agree.",
+  "cases": [
+    {"name": "line endings", "input": "SET ANSI_NULLS ON\r\nGO\r\n\r\nSELECT N'a\rb'\n", "output": "SET ANSI_NULLS ON\nGO\n\nSELECT N'a\rb'\n"},
+    {"name": "header date, en-US", "input": "/****** Object:  Table [dbo].[T]    Script Date: 10/9/2026 7:52:05 PM ******/\n", "output": "/****** Object:  Table [dbo].[T]    Script Date: <date> ******/\n"},
+    {"name": "header date, ja-JP", "input": "/****** Object:  View [dbo].[v]    Script Date: 2026/10/09 19:52:05 ******/", "output": "/****** Object:  View [dbo].[v]    Script Date: <date> ******/"},
+    {"name": "scratch names", "input": "USE [VariaScratch_20261009211833_4aeeb410]\nDROP SERVER AUDIT [VariaScratch_20261009211833_4aeeb410_audit]", "output": "USE [<scratch>]\nDROP SERVER AUDIT [<scratch>_audit]"},
+    {"name": "passwords", "input": "CREATE LOGIN [x] WITH PASSWORD=N'a''b=c', DEFAULT_DATABASE=[master]\nCREATE APPLICATION ROLE [r] WITH DEFAULT_SCHEMA = [dbo], PASSWORD = N'xyz'", "output": "CREATE LOGIN [x] WITH PASSWORD=N'<password>', DEFAULT_DATABASE=[master]\nCREATE APPLICATION ROLE [r] WITH DEFAULT_SCHEMA = [dbo], PASSWORD=N'<password>'"},
+    {"name": "files", "input": "( NAME = N'x', FILENAME = N'/var/opt/mssql/data/x.mdf' , SIZE = 8192KB , MAXSIZE = UNLIMITED, FILEGROWTH = 65536KB )", "output": "( NAME = N'x', FILENAME = N'<path>' , SIZE = <n>KB , MAXSIZE = UNLIMITED, FILEGROWTH = <n>KB )"},
+    {"name": "backup device", "input": "EXEC master.dbo.sp_addumpdevice  @devtype = N'disk', @logicalname = N'd', @physicalname = N'C:\\Backup\\it''s.bak'", "output": "EXEC master.dbo.sp_addumpdevice  @devtype = N'disk', @logicalname = N'd', @physicalname = N'<path>'"},
+    {"name": "audit", "input": "TO FILE \n(\tFILEPATH = N'/var/opt/mssql/log/'\n\t,MAXSIZE = 0 MB\n) WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE, AUDIT_GUID = 'b734055a-cb1c-4674-ae00-ead288ff586f')", "output": "TO FILE \n(\tFILEPATH = N'<path>'\n\t,MAXSIZE = 0 MB\n) WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE, AUDIT_GUID = '<guid>')"},
+    {"name": "graph ids", "input": "SELECT [$node_id_83091532E6634BF0AB1E635274FD827E]\n      ,[$from_id_77D15B8522E743FA818542B90230588C]\n/****** Object:  Index [GRAPH_UNIQUE_INDEX_25AEA546FC6B41F0A44F318F721E7088] ******/", "output": "SELECT [$node_id_<id>]\n      ,[$from_id_<id>]\n/****** Object:  Index [GRAPH_UNIQUE_INDEX_<id>] ******/"},
+    {"name": "kept as is", "input": "EXECUTE @RC = [dbo].[p] \n   @a\nSIZE = 8192 KB, FILENAME_X\n", "output": "EXECUTE @RC = [dbo].[p] \n   @a\nSIZE = 8192 KB, FILENAME_X\n"}
+  ]
+}

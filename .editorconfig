@@ -10,3 +10,7 @@ trim_trailing_whitespace = true
 
 [*.cs]
 indent_size = 4
+
+# Golden scripts are compared byte for byte; EXECUTE templates end a line with a space, as SSMS writes them.
+[tests/fixtures/scripting/golden/**.sql]
+trim_trailing_whitespace = false

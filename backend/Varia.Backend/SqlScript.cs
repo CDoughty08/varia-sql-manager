@@ -75,6 +75,13 @@ internal static class SqlScript
                 if (hasSql) Add(sql[batchOffset..(offset + first)], batchLine, count);
                 batchOffset = offset + last;
                 batchLine = lineNumber;
+                // A GO line with nothing after it ends with its line break, as in SSMS and sqlcmd: the next batch starts on
+                // the next line, so a module created from a script does not store the break as a leading blank line.
+                if (sql.AsSpan(batchOffset, end - batchOffset).IsWhiteSpace())
+                {
+                    batchOffset = end < sql.Length && sql[end] == '\r' && end + 1 < sql.Length && sql[end + 1] == '\n' ? end + 2 : Math.Min(end + 1, sql.Length);
+                    batchLine = lineNumber + 1;
+                }
                 hasSql = false;
             }
             else if (!trimmed.IsEmpty) hasSql = true;

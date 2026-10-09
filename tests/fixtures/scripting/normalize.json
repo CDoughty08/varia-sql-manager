@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "comment": "Spec G5: what a script may differ in between runs and servers, in order (plus the ids SQL Server generates for audits and graph columns). GoldenText.cs and scripts/compare-ssms-scripts.mjs both apply exactly these rules; trailing spaces are kept (EXECUTE templates end a line with one).",
+  "rules": [
+    { "name": "line endings", "pattern": "\\r\\n", "replacement": "\n" },
+    { "name": "header date", "pattern": "Script Date: [^\\n]*? \\*{6}/", "replacement": "Script Date: <date> ******/" },
+    { "name": "scratch name", "pattern": "VariaScratch_\\d{14}_[0-9a-f]{8}", "replacement": "<scratch>" },
+    { "name": "passwords", "pattern": "PASSWORD\\s*=\\s*N'(?:[^']|'')*'", "replacement": "PASSWORD=N'<password>'" },
+    { "name": "file names", "pattern": "FILENAME\\s*=\\s*N'(?:[^']|'')*'", "replacement": "FILENAME = N'<path>'" },
+    { "name": "file sizes", "pattern": "\\b(SIZE|MAXSIZE|FILEGROWTH)\\s*=\\s*\\d+KB", "replacement": "$1 = <n>KB" },
+    { "name": "backup device path", "pattern": "@physicalname\\s*=\\s*N'(?:[^']|'')*'", "replacement": "@physicalname = N'<path>'" },
+    { "name": "audit path", "pattern": "FILEPATH\\s*=\\s*N'(?:[^']|'')*'", "replacement": "FILEPATH = N'<path>'" },
+    { "name": "audit id", "pattern": "AUDIT_GUID\\s*=\\s*'[0-9A-Fa-f-]{36}'", "replacement": "AUDIT_GUID = '<guid>'" },
+    { "name": "graph column and index ids", "pattern": "(\\$node_id|\\$edge_id|\\$from_id|\\$to_id|graph_id|from_obj_id|from_id|to_obj_id|to_id|GRAPH_UNIQUE_INDEX)_[0-9A-F]{32}\\b", "replacement": "$1_<id>" }
+  ]
+}

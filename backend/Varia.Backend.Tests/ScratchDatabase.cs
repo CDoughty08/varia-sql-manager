@@ -32,6 +32,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Offline => Name + "_off";
     public string SingleUser => Name + "_su";
     public string Snapshot => Name + "_snap";
+    /// <summary>Where the Script As round trip runs scripts (created on demand).</summary>
+    public string RoundTrip => Name + "_rt";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
     /// <summary>Held in memory only, never printed.</summary>
@@ -39,7 +41,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public bool HasSnapshot { get; private set; }
     public int Major { get; private set; }
 
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap)?$")]
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -145,6 +147,15 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         HasSnapshot = snapshot.Status == "completed";
         if (HasSnapshot) created.Insert(0, Snapshot);
         else Console.WriteLine("Database snapshot checks skipped: this server could not create a snapshot.");
+    }
+
+    /// <summary>Creates the empty, marked round-trip database with the scratch database's collation.</summary>
+    public async Task<string> CreateRoundTripAsync()
+    {
+        created.Add(RoundTrip);
+        await Exec("CREATE DATABASE " + Bracket(RoundTrip) + " COLLATE Latin1_General_100_CS_AS_SC;\nALTER DATABASE " + Bracket(RoundTrip) + " SET RECOVERY SIMPLE;");
+        await Exec("EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;", RoundTrip);
+        return RoundTrip;
     }
 
     /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>

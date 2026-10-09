@@ -33,34 +33,43 @@ internal sealed class StringScriptSink(long max) : IScriptSink
     public override string ToString() => text.ToString();
 }
 
-/// <summary>What one job scripts: resolved targets, one verb, the request's options. Prefetch is for many objects (the
-/// Generate Scripts wizard); for one object it would read every object of its type in the database.</summary>
+/// <summary>What one job scripts: resolved targets, one verb, the request's options. Prefetch is for the Generate Scripts
+/// wizard's many objects; one object prefetches only its own children (SmoScriptRunner.PrefetchKinds).</summary>
 internal sealed record ScriptJob(string ConnectionId, IReadOnlyList<ResolvedTarget> Targets, ScriptVerbRow Verb, ScriptingOptionsDto Options, bool Prefetch = false);
 
 /// <summary>The open connection a job runs on, the server it reached, and whether that is a cloud edition (one database
 /// per connection, so no USE).</summary>
 internal sealed record ScriptSession(SqlConnection Connection, ServerProfile Profile, bool Cloud);
 
-/// <summary>Scripts each target in order into a sink: SMO's batches for DDL verbs, framed as SSMS frames them. Runs on a
-/// dedicated thread (SMO blocks), checking the token between batches; the tracker cancels the statement in flight.</summary>
+/// <summary>Scripts each target in order into a sink, framed as SSMS frames scripts: SMO's batches for DDL verbs, which
+/// run on a dedicated thread (SMO blocks) with the token checked between batches and the tracker cancelling the
+/// statement in flight; for the other verbs, the template over the preflight's rows, after a USE batch whenever the
+/// database changes.</summary>
 internal static class ScriptPipeline
 {
+    /// <param name="cloud">A cloud database, reached one per connection: no USE.</param>
     /// <returns>The warnings the job produced (header guard, version mapping).</returns>
-    public static IReadOnlyList<string> Run(ScriptJob job, SmoScriptRunner runner, IScriptSink sink, CancellationToken token)
+    public static IReadOnlyList<string> Run(ScriptJob job, SmoScriptRunner runner, IScriptSink sink, CancellationToken token, bool cloud = false)
     {
         var warnings = new List<string>();
+        string? context = null;
         for (var index = 0; index < job.Targets.Count; index++)
         {
             token.ThrowIfCancellationRequested();
             var target = job.Targets[index];
-            if (job.Verb.Class != VerbClass.Ddl) throw new TemplateUnavailableException();
-            var text = runner.Script(target, job.Verb.Verb, job.Options, sink.Remaining, warnings);
+            string text;
+            if (job.Verb.Class == VerbClass.Ddl) text = runner.Script(target, job.Verb.Verb, job.Options, sink.Remaining, warnings);
+            else
+            {
+                var delimit = job.Options.DelimitStatements;
+                var use = job.Options.ScriptUseDatabase && !cloud && target.Database != context;
+                context = target.Database;
+                text = (use ? ScriptFormatter.Frame(ScriptFormatter.Use(target.Database), delimit) : "")
+                    + ScriptFormatter.Frame(DmlTemplates.Batch(target, job.Verb.Verb, job.Options.SchemaQualify), delimit);
+            }
             if (!sink.Append(text)) throw new ScriptTooLargeException();
             sink.Progress(index + 1, job.Targets.Count);
         }
         return warnings;
     }
 }
-
-/// <summary>SELECT, INSERT, UPDATE, DELETE and EXECUTE come from SSMS's templates, which this build does not have yet.</summary>
-internal sealed class TemplateUnavailableException() : Exception("Templates are not available.");

@@ -108,7 +108,6 @@ internal static class ScriptingErrors
         if (chain.OfType<ScriptTooLargeException>().Any()) return Create(catalog, "TOO_LARGE", subject);
         if (chain.OfType<EmptyScriptException>().Any()) return Create(catalog, "EMPTY", subject);
         if (chain.OfType<SmoObjectMissingException>().Any()) return Create(catalog, "NOT_FOUND", subject);
-        if (chain.OfType<TemplateUnavailableException>().Any()) return Create(catalog, "NOT_SUPPORTED", subject);
         if (chain.OfType<SqlException>().FirstOrDefault() is { } sql)
         {
             var first = sql.Errors.Cast<SqlError>().FirstOrDefault(item => item.Class > 10) ?? (sql.Errors.Count > 0 ? sql.Errors[0] : null);

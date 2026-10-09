@@ -34,6 +34,7 @@ internal static class ScriptingChecks
         Errors(check);
         Culture(check);
         Registry(check);
+        ScriptingTemplateChecks.Run(check);
         await ServiceAsync(check);
     }
 
@@ -68,12 +69,25 @@ internal static class ScriptingChecks
         var rendered = 0;
         foreach (var (kind, parent) in ScriptableKinds())
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
-            {
-                var text = ScriptPreflight.Statement(kind, band, Catalog, parent);
-                rendered++;
-                foreach (var problem in ScriptPreflight.Lint(text, band, ScriptPreflight.ServerScope(kind))) problems.Add(kind + "/" + parent + " band " + band + " " + problem);
-            }
-        check(problems.Count == 0 && rendered > 200, "every preflight statement passes the lint at every band (" + rendered + " rendered): " + string.Join("; ", problems.Take(5)));
+                foreach (var verbs in Enum.GetValues<VerbClass>())
+                    foreach (var vector in new[] { false, true })
+                    {
+                        var text = ScriptPreflight.Statement(kind, band, Catalog, parent, verbs, vector);
+                        rendered++;
+                        foreach (var problem in ScriptPreflight.Lint(text, band, ScriptPreflight.ServerScope(kind), vector))
+                            problems.Add(kind + "/" + parent + " band " + band + " " + verbs + (vector ? " vector " : " ") + problem);
+                    }
+        check(problems.Count == 0 && rendered > 1200, "every preflight statement passes the lint at every band, verb class and probe flag (" + rendered + " rendered): " + string.Join("; ", problems.Take(5)));
+        check(ScriptPreflight.Rowset("table", VerbClass.Dml) == ScriptPreflight.RowsetKind.Columns && ScriptPreflight.Rowset("view", VerbClass.Dml) == ScriptPreflight.RowsetKind.Columns
+            && ScriptPreflight.Rowset("function", VerbClass.Dml) == ScriptPreflight.RowsetKind.Parameters && ScriptPreflight.Rowset("procedure", VerbClass.Execute) == ScriptPreflight.RowsetKind.Parameters
+            && ScriptPreflight.Rowset("table", VerbClass.Ddl) == ScriptPreflight.RowsetKind.None && ScriptPreflight.Rowset("login", VerbClass.Dml) == ScriptPreflight.RowsetKind.None
+            && ScriptPreflight.Statement("table", 16, Catalog, verbs: VerbClass.Dml).Contains("TOP (@take)", StringComparison.Ordinal)
+            && !ScriptPreflight.Statement("table", 16, Catalog, verbs: VerbClass.Ddl).Contains("sys.all_columns", StringComparison.Ordinal)
+            && ScriptPreflight.Statement("table", 16, Catalog, verbs: VerbClass.Dml, vector: true).Contains("c.vector_dimensions", StringComparison.Ordinal)
+            && !ScriptPreflight.Statement("table", 16, Catalog, verbs: VerbClass.Dml).Contains("vector_dimensions", StringComparison.Ordinal)
+            && ScriptPreflight.Lint("SELECT c.vector_dimensions FROM c WHERE n = @name", 17, false).Any(problem => problem.Contains("probe flag"))
+            && ScriptPreflight.Take(ScriptPreflight.RowsetKind.Columns, Catalog) == 30_001 && ScriptPreflight.Take(ScriptPreflight.RowsetKind.Parameters, Catalog) == 2_102,
+            "template verbs read the columns or parameters in the same statement, at most one row past the catalogue's limit, and vector sizes only where the probe found them");
         check(ScriptPreflight.Lint("SELECT OBJECTPROPERTY(o.object_id, N'IsMsShipped') FROM x WHERE n = @name", 16, false).Any(problem => problem.Contains("OBJECTPROPERTY"))
             && ScriptPreflight.Lint("SELECT OBJECTPROPERTY(o.object_id, N'IsEncrypted') FROM x WHERE n = @name", 16, false).Count == 0
             && ScriptPreflight.Lint("SELECT 'x' FROM t WHERE n = @name", 16, false).Any(problem => problem.Contains("literal"))
@@ -304,7 +318,7 @@ internal static class ScriptingChecks
         check(codes.All(item => ScriptingErrors.SqlCode(item.Number, item.Severity) == item.Code), "SQL Server errors map to scripting codes (spec C9)");
         check(Classify(new ScriptTooLargeException())?.Code == "TOO_LARGE" && Classify(new EmptyScriptException()) is { Code: "EMPTY", Message: "SQL Server Management Objects produced no CREATE script for dbo.Orders." }
             && Classify(new SmoObjectMissingException())?.Code == "NOT_FOUND" && Classify(new FailedOperationException("Script failed.", new MissingObjectException("gone")))?.Code == "NOT_FOUND"
-            && Classify(new TemplateUnavailableException()) is { Code: "NOT_SUPPORTED", Message: "CREATE scripts are not available for Table dbo.Orders. Refresh Object Explorer and try again." },
+            && ScriptingErrors.Create(Catalog, "NOT_SUPPORTED", subject).Message == "CREATE scripts are not available for Table dbo.Orders. Refresh Object Explorer and try again.",
             "the pipeline's own failures and SMO's missing objects map to their codes");
         check(Classify(new FailedOperationException("Script failed.", new UnsupportedVersionException("Ledger tables need SQL Server 2022.")), target: SqlServerVersion.Version150) is
             { Code: "NOT_SUPPORTED", Retryable: false, Message: "dbo.Orders cannot be scripted for SQL Server 2019: Ledger tables need SQL Server 2022." }

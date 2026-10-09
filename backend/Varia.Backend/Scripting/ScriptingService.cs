@@ -169,7 +169,7 @@ internal sealed class ScriptingService : IDisposable
                 prologue.CommandTimeout = 30;
                 await prologue.ExecuteNonQueryAsync(token);
             }
-            var preflight = await ScriptPreflight.RunAsync(connection, catalog, target, verb, served.Band, perDatabase, Options.PreflightDelay, token);
+            var preflight = await ScriptPreflight.RunAsync(connection, catalog, target, verb, served.Band, perDatabase, Options.PreflightDelay, token, profile.VectorDimensions);
             if (preflight.Error is { } refused) return Result(null, preflight.Warnings, refused);
             resolved = preflight.Target!;
             var session = new ScriptSession(connection, profile, served.Cloud);
@@ -177,7 +177,9 @@ internal sealed class ScriptingService : IDisposable
             var sink = new StringScriptSink(catalog.Limit("maxScriptChars"));
             var smo = runner = new SmoScriptRunner(session, token);
             // SMO blocks for whole round trips, so it gets a thread of its own; the tracker on this flow follows it there.
-            var warnings = await Task.Factory.StartNew(() => ScriptPipeline.Run(job, smo, sink, token), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            // Templates only format the preflight's rows.
+            var warnings = verb.Class != VerbClass.Ddl ? ScriptPipeline.Run(job, smo, sink, token, served.Cloud)
+                : await Task.Factory.StartNew(() => ScriptPipeline.Run(job, smo, sink, token, served.Cloud), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             var text = sink.ToString();
             if (ScriptingErrors.UnpairedSurrogate(text) >= 0) return Result(null, [], ScriptingErrors.Create(catalog, "UNREPRESENTABLE", subject));
             return Result(text, [.. preflight.Warnings, .. warnings]);
