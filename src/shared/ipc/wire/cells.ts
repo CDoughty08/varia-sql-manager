@@ -36,6 +36,32 @@ export function cellText(view: PageView, column: number, row: number, maxChars =
   return { text: '0x' + hex(span.subarray(0, bytes)), truncated: stored || !fits }
 }
 
+/** Rows of one text column decoded together; see textRun. */
+export interface TextRun { readonly text: string; readonly start: number }
+
+/**
+ * Rows [from, to) of a text column decoded with one decoder call, which for small cells is several times faster than
+ * one call per cell. Only when every byte decodes to exactly one UTF-16 unit (ASCII, or an invalid byte as U+FFFD):
+ * then no token spans two cells and each cell's text is the run's slice at its byte offsets, as runText returns it.
+ * Undefined for binary columns and any other text.
+ */
+export function textRun(view: PageView, column: number, from: number, to: number): TextRun | undefined {
+  const chunk = view.columns[column]
+  if (chunk.wire !== 'text' || to <= from) return undefined
+  const start = chunk.offsets[from], end = chunk.offsets[to]
+  const text = lenient.decode(chunk.data.subarray(start, end))
+  return text.length === end - start ? { text, start } : undefined
+}
+
+/** cellText for a cell of `run`'s rows; a run holds no surrogate pairs, so any cut is safe. */
+export function runText(run: TextRun, view: PageView, column: number, row: number, maxChars = Number.POSITIVE_INFINITY): { text: string; truncated: boolean } {
+  const chunk = view.columns[column]
+  const at = chunk.offsets[row] - run.start
+  const length = chunk.offsets[row + 1] - chunk.offsets[row]
+  const fits = length <= maxChars
+  return { text: run.text.slice(at, at + (fits ? length : Math.max(0, maxChars))), truncated: bit(chunk.truncated, row) || !fits }
+}
+
 /** Uppercase hexadecimal, without a prefix. */
 export function hex(bytes: Uint8Array): string {
   let text = ''

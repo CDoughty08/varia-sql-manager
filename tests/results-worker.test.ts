@@ -70,6 +70,38 @@ describe('results worker core', () => {
     expect([...result.flags]).toEqual([0, 2, 2, 0, 8, 8])
   })
 
+  it('gives the same text and flags whether cells are decoded in runs or one by one', () => {
+    const mixed: WireKind[] = ['text', 'text', 'text', 'binary']
+    const rows: PageCell[][] = [0, 1, 2].map(row => ['r' + row, 'é' + row, row === 1 ? 'x'.repeat(5000) : 'long ' + row, new Uint8Array([row, 0xab])])
+    const posted: WorkerResponse[] = []
+    const core = new ResultsWorkerCore({ post: message => { posted.push(message) } })
+    core.attach({ postMessage: () => {} })
+    core.receive({ t: 'backend', generation: 1, status: 'ready' })
+    const window = (id: number, maxCellChars: number, textBudget: number) => {
+      core.handle({ type: 'window', id, key, wires: mixed, first: 0, count: 3, colStart: 0, colEnd: 4, maxCellChars, textBudget })
+      const answer = posted.find(message => 'id' in message && message.id === id)
+      if (answer?.type !== 'window') throw new Error('No window: ' + JSON.stringify(answer))
+      return { text: answer.text, flags: [...answer.flags] }
+    }
+    // The first window reads the page; the others are answered from the cache.
+    core.handle({ type: 'window', id: 1, key, wires: mixed, first: 0, count: 3, colStart: 0, colEnd: 4, maxCellChars: 8, textBudget: 1_000_000 })
+    const bytes = encodePage({ resultId: 5, firstRow: 0, columns: mixed.map(wire => ({ wire })), rows })
+    core.receive({ t: 'page', rid: 1, seq: 1, body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 3, rowsAvailable: 3, complete: true, pages: 1, rows: 3 } })
+    // A small cell cap: the short ASCII column is one run; the long column is decoded cell by cell, only up to the cap.
+    expect(window(2, 8, 1_000_000)).toEqual({
+      text: ['r0', 'é0', 'long 0', '0x00AB', 'r1', 'é1', 'xxxxxxxx', '0x01AB', 'r2', 'é2', 'long 2', '0x02AB'],
+      flags: [0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0]
+    })
+    // A cap the long cell fits: that column is a run too.
+    expect(window(3, 10_000, 1_000_000).text[6]).toBe('x'.repeat(5000))
+    // The window's text budget runs out in row order, as before.
+    expect(window(4, 10_000, 12)).toEqual({
+      text: ['r0', 'é0', 'long 0', '0x', '', '', '', '', '', '', '', ''],
+      flags: [0, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8, 8]
+    })
+  })
+
   it('shares reads between windows and cancels a read only when nobody waits for it', () => {
     const { window, reads, sent, core, serve, answer } = fixture()
     const first = window(0, 64)

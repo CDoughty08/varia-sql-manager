@@ -1,0 +1,26 @@
+{
+  "comment": "IPC benchmark targets and floors (docs/ipc.md, Benchmarks). scripts/check-bench.mjs --enforce fails when a measured value is worse than its floor; CI enforces floors on Linux only. Floors sit at about half of what a shared container measured with only 2 CPUs (as a private repository's Linux runner has), so slow runners never fail them; a null floor is reported only. Megabytes are 10^6 bytes.",
+  "metrics": {
+    "node.control.opsPerSecond": { "title": "Control encode + decode, 1 KiB map", "unit": "ops/s", "better": "higher", "target": 100000, "floor": 15000 },
+    "node.frames.mbPerSecond": { "title": "Frame parse, 64 KiB chunks, mixed sizes", "unit": "MB/s", "better": "higher", "target": 1000, "floor": 250 },
+    "node.page.mbPerSecond": { "title": "decodePage and the text of every cell, W1 page", "unit": "MB/s", "better": "higher", "target": 300, "floor": 75 },
+    "node.health.p50Ms": { "title": "main ↔ backend system.health round trip, p50", "unit": "ms", "better": "lower", "target": 0.3, "floor": 2 },
+    "node.health.p99Ms": { "title": "main ↔ backend system.health round trip, p99", "unit": "ms", "better": "lower", "target": 2, "floor": null },
+    "node.health.concurrent256Ms": { "title": "256 concurrent system.health requests", "unit": "ms", "better": "lower", "target": 150, "floor": 1000 },
+    "node.w1.rowsPerSecond": { "title": "W1, 500,000 rows: store → main → port → worker, every cell decoded", "unit": "rows/s", "better": "higher", "target": 1000000, "floor": 250000 },
+    "node.w1.mbPerSecond": { "title": "W1 through the same path", "unit": "MB/s", "better": "higher", "target": 200, "floor": 50 },
+    "node.b1.mbPerSecond": { "title": "B1 through the same path", "unit": "MB/s", "better": "higher", "target": 400, "floor": 100 },
+    "node.w1.eventLoopP99Ms": { "title": "Main event-loop delay during W1, p99", "unit": "ms", "better": "lower", "target": 20, "floor": 100 },
+    "node.storedPerWire": { "title": "Stored bytes ÷ page bytes", "unit": "×", "better": "lower", "target": 1.15, "floor": 1.5 },
+    "e2e.invoke.p50Ms": { "title": "Renderer invoke → backend → renderer, p50", "unit": "ms", "better": "lower", "target": 1, "floor": 5 },
+    "e2e.invoke.p99Ms": { "title": "Renderer invoke → backend → renderer, p99", "unit": "ms", "better": "lower", "target": 5, "floor": null },
+    "e2e.w1.rowsPerSecond": { "title": "W1, 500,000 rows into the results worker and UI windows", "unit": "rows/s", "better": "higher", "target": 500000, "floor": 100000 },
+    "e2e.w1.mbPerSecond": { "title": "W1 into the results worker", "unit": "MB/s", "better": "higher", "target": 100, "floor": 20 },
+    "e2e.b1.mbPerSecond": { "title": "B1 into the results worker", "unit": "MB/s", "better": "higher", "target": 200, "floor": 40 },
+    "e2e.firstWindowMs": { "title": "First 100-row window of a stored result", "unit": "ms", "better": "lower", "target": 50, "floor": 250 },
+    "e2e.w1.longTasks": { "title": "UI long tasks over 50 ms during W1", "unit": "tasks", "better": "lower", "target": 0, "floor": 5 },
+    "e2e.w1.maxFrameGapMs": { "title": "Largest animation-frame gap during W1", "unit": "ms", "better": "lower", "target": 50, "floor": 400 },
+    "e2e.live.rowsPerSecond": { "title": "Live: 1,000,000 W1-like rows ingested and stored (maxRows 0)", "unit": "rows/s", "better": "higher", "target": 300000, "floor": 75000, "live": true },
+    "e2e.live.firstWindowMs": { "title": "Live: first 100-row window after resultSet.opened", "unit": "ms", "better": "lower", "target": 50, "floor": 250, "live": true }
+  }
+}

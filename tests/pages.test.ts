@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { PageFormatError, decodePage, encodePage, type PageCell, type WireKind } from '../src/shared/ipc/wire/pages.ts'
-import { CELL_ERROR, CELL_NULL, CELL_TRUNCATED, cellFlags, cellText, hex, utf8Prefix } from '../src/shared/ipc/wire/cells.ts'
+import { PageFormatError, decodePage, encodePage, type PageCell, type PageView, type WireKind } from '../src/shared/ipc/wire/pages.ts'
+import { CELL_ERROR, CELL_NULL, CELL_TRUNCATED, cellFlags, cellText, hex, runText, textRun, utf8Prefix } from '../src/shared/ipc/wire/cells.ts'
 import { fuzzIterations, fuzzSeed, mulberry32, mutate } from './fuzz/prng.ts'
 
 interface Golden { resultId: number; firstRow: number; columns: { name: string; dataType: string; wire: WireKind }[]; rows: [string | null, number][][] }
@@ -131,4 +131,51 @@ describe('result pages', () => {
     // Byte flips inside cell data leave a page valid, so some mutants must decode.
     expect(decoded, `seed ${seed}`).toBeGreaterThan(0)
   }, Math.max(20_000, 2 * fuzzIterations(5000)))
+})
+
+describe('text runs', () => {
+  /** A one-column page view over raw cell bytes, which may be any byte sequence (encodePage writes only valid UTF-8). */
+  function view(cells: readonly (readonly number[])[], wire: WireKind = 'text', truncated?: Uint8Array): PageView {
+    const offsets = new Uint32Array(cells.length + 1)
+    cells.forEach((cell, row) => { offsets[row + 1] = offsets[row] + cell.length })
+    return { resultId: 1, firstRow: 0, rowCount: cells.length, byteLength: 0, columns: [{ wire, validity: undefined, offsets, data: Uint8Array.from(cells.flat()), truncated, errors: undefined }] }
+  }
+  const bytes = (text: string) => [...new TextEncoder().encode(text)]
+
+  it('cover only text whose every byte decodes to one unit, so no character spans two cells', () => {
+    expect(textRun(view([bytes('ab'), [], bytes('c')]), 0, 0, 3)).toEqual({ text: 'abc', start: 0 })
+    expect(textRun(view([bytes('ab'), bytes('cd')]), 0, 1, 2)).toEqual({ text: 'cd', start: 2 })
+    // A lone invalid byte is one U+FFFD either way; a character split across cells would decode differently.
+    expect(textRun(view([[0x41, 0xff], [0xc3], [0x41]]), 0, 0, 3)?.text).toBe('A\uFFFD\uFFFDA')
+    expect(textRun(view([[0x41, 0xc3], [0xa9]]), 0, 0, 2)).toBeUndefined()
+    expect(textRun(view([bytes('é')]), 0, 0, 1)).toBeUndefined()
+    expect(textRun(view([bytes('\uFEFFbom')]), 0, 0, 1)).toBeUndefined()
+    expect(textRun(view([[1, 2]], 'binary'), 0, 0, 1)).toBeUndefined()
+    expect(textRun(view([bytes('a')]), 0, 1, 1)).toBeUndefined()
+  })
+
+  it('give exactly the text and truncation of cellText for every cell and cap', () => {
+    const seed = fuzzSeed()
+    const random = mulberry32(seed)
+    const ascii = [[0x41], [0x7a], [0x00], [0x20]]
+    const other = [[0xc3, 0xa9], [0xe6, 0x97, 0xa5], [0xf0, 0x9f, 0x98, 0x80], [0xef, 0xbb, 0xbf], [0x80], [0xbf], [0xc3], [0xe6, 0x97], [0xff], [0xed, 0xa0, 0x80]]
+    const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)]
+    let runs = 0
+    for (let iteration = 0; iteration < fuzzIterations(3000); iteration++) {
+      const rows = 1 + Math.floor(random() * 12)
+      const mixed = random() < 0.5
+      const cells = Array.from({ length: rows }, () => Array.from({ length: Math.floor(random() * 7) }, () => pick(mixed && random() < 0.2 ? other : ascii)).flat())
+      const truncated = new Uint8Array(Math.ceil(rows / 8))
+      for (let row = 0; row < rows; row++) if (random() < 0.2) truncated[row >>> 3] |= 1 << (row & 7)
+      const page = view(cells, 'text', truncated)
+      const from = Math.floor(random() * rows), to = from + 1 + Math.floor(random() * (rows - from))
+      const run = textRun(page, 0, from, to)
+      if (!run) continue
+      runs++
+      for (let row = from; row < to; row++) {
+        for (const cap of [Number.POSITIVE_INFINITY, 0, 1, 2, 3, 5]) expect(runText(run, page, 0, row, cap), `seed ${seed}, row ${row}, cap ${cap}`).toEqual(cellText(page, 0, row, cap))
+      }
+    }
+    expect(runs, `seed ${seed}`).toBeGreaterThan(fuzzIterations(3000) / 4)
+  })
 })

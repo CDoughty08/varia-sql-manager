@@ -15,5 +15,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["src", "tests", "electron.vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "tests", "electron.vite.config.ts", "vitest.config.ts", "vitest.bench.config.ts"]
 }

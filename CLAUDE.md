@@ -3,7 +3,8 @@
 SSMS-style SQL Server workbench. Electron 44 + React 19 + Monaco 0.57 + Dockview renderer; a .NET 10 sidecar
 (Microsoft.Data.SqlClient 7.1, SMO 181) speaks length-prefixed MessagePack frames (protocol v2) over stdio. It is not a
 VS Code fork.
-README.md documents user-facing behaviour, limits, and the protocol.
+README.md documents user-facing behaviour, limits, and the protocol; docs/ipc.md is the protocol v2 reference (frames,
+pages, limits, error codes, display formats, benchmarks).
 
 ## Commands
 
@@ -15,6 +16,9 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
   (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
+- `npm run bench` (node harness, Release backend) and `npm run bench:e2e [-- --live]` (Electron, needs `out/`): the IPC
+  benchmarks, not part of `check`. `node scripts/check-bench.mjs [--enforce]` compares them with
+  `tests/bench/floors.json`; CI enforces floors on Linux only.
 
 ## Environment
 
@@ -22,7 +26,7 @@ README.md documents user-facing behaviour, limits, and the protocol.
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 80 checks instead of 40, and
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 162 checks instead of 113, and
   `connections-smoke.mjs` connects for real. Never print the password.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
@@ -45,8 +49,12 @@ README.md documents user-facing behaviour, limits, and the protocol.
   Unknown methods and unknown members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
 - Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
   connection strings. Passwords stay in memory: not in `connections.json`, process arguments, or previews.
+- Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
+  exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
+  messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
-  per backend generation, a deadline per method (`methodPolicies`), and explicit truncation of results and messages.
+  per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
+  per port), and explicit truncation of results and messages.
   New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
   never re-sent.
 - Preferences are written atomically (`src/main/json-file.ts`); unreadable files are quarantined, never overwritten.
@@ -66,6 +74,9 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
   first; live checks follow and create only session-local temporary objects.
 - UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
+- IPC performance: `tests/bench/*.bench.ts` and `scripts/ipc-bench.mjs` only measure; a new metric needs a
+  `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in docs/ipc.md. Floors must
+  stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.
 
 ## Conventions

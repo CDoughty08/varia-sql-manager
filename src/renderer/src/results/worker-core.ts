@@ -4,7 +4,7 @@
 import type { BackendStatus, ResultsCloseResult, ResultsReadResult, WireKind } from '../../../shared/contracts'
 import type { PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
-import { CELL_NULL, CELL_TRUNCATED, cellFlags, cellText } from '../../../shared/ipc/wire/cells'
+import { CELL_NULL, CELL_TRUNCATED, cellFlags, cellText, runText, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { FLAG_OVER_BUDGET, FLAG_TRUNCATED, type ResultKey, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
 
@@ -370,11 +370,13 @@ export class ResultsWorkerCore {
     const flags = new Uint8Array(count * width)
     let budget = request.textBudget
     let page: CachedPage | undefined
+    let runs: (TextRun | undefined)[] = []
     for (let r = 0; r < count; r++) {
       const row = request.first + r
       if (!page || row >= page.firstRow + page.rowCount) {
         page = this.pageAt(result, row)!
         this.touch(page)
+        runs = this.runs(page.view, row - page.firstRow, Math.min(page.rowCount, row - page.firstRow + count - r), request, budget)
       }
       const local = row - page.firstRow
       for (let column = request.colStart; column < request.colEnd; column++) {
@@ -383,7 +385,8 @@ export class ResultsWorkerCore {
         if ((flag & CELL_NULL) !== 0) { text[index] = ''; flags[index] = flag; continue }
         if (budget <= 0) { text[index] = ''; flags[index] = flag | FLAG_OVER_BUDGET; continue }
         const cap = Math.min(request.maxCellChars, budget)
-        const cell = cellText(page.view, column, local, cap)
+        const run = runs[column - request.colStart]
+        const cell = run ? runText(run, page.view, column, local, cap) : cellText(page.view, column, local, cap)
         if (cell.truncated && (flag & CELL_TRUNCATED) === 0) flag |= cap < request.maxCellChars ? FLAG_OVER_BUDGET : FLAG_TRUNCATED
         text[index] = cell.text
         flags[index] = flag
@@ -391,5 +394,17 @@ export class ResultsWorkerCore {
       }
     }
     return { text, flags }
+  }
+
+  /** Text runs for the window's rows [from, to) of one page, per requested column. A run is decoded only when that
+   *  costs no more than decoding its cells one by one could (within the cell cap and the remaining text budget). */
+  private runs(view: PageView, from: number, to: number, request: WindowRequest, budget: number): (TextRun | undefined)[] {
+    const runs: (TextRun | undefined)[] = []
+    for (let column = request.colStart; column < request.colEnd; column++) {
+      const offsets = view.columns[column].offsets
+      const bytes = offsets[to] - offsets[from]
+      runs.push(bytes > 0 && bytes <= Math.min((to - from) * request.maxCellChars, budget) ? textRun(view, column, from, to) : undefined)
+    }
+    return runs
   }
 }
