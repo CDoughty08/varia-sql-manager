@@ -20,6 +20,8 @@ function describeTemplate(platform: NodeJS.Platform): string {
   const calls: unknown[] = []
   const actions: ApplicationMenuActions = {
     command: id => calls.push(['command', id]), isChecked: id => id === 'editor.toggleWordWrap', setTheme: patch => calls.push(['setTheme', patch]),
+    // An item that asks shows it, so the snapshot names the items that act elsewhere when the page lacks the keyboard.
+    pageHasKeyFocus: () => { calls.push(['pageHasKeyFocus']); return true }, sendActionToFirstResponder: action => calls.push(['sendActionToFirstResponder', action]),
     createTheme: () => calls.push(['createTheme']), openThemesFolder: () => calls.push(['openThemesFolder']), reloadThemes: () => calls.push(['reloadThemes'])
   }
   const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'system', darkTheme: 'dusk', lightTheme: 'gone' }, themes } }, actions, platform)
@@ -44,9 +46,9 @@ describe('native application menu template', () => {
   it.each(platforms)('is pinned on %s', async platform => {
     await expect(describeTemplate(platform)).toMatchFileSnapshot(`fixtures/application-menu.${platform}.txt`)
   })
-  const actions: ApplicationMenuActions = { command: () => {}, isChecked: () => false, setTheme: () => {}, createTheme: () => {}, openThemesFolder: () => {}, reloadThemes: () => {} }
-  const items = (platform: NodeJS.Platform, menu: string) => {
-    const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, actions, platform)
+  const actions: ApplicationMenuActions = { command: () => {}, isChecked: () => false, pageHasKeyFocus: () => true, sendActionToFirstResponder: () => {}, setTheme: () => {}, createTheme: () => {}, openThemesFolder: () => {}, reloadThemes: () => {} }
+  const items = (platform: NodeJS.Platform, menu: string, menuActions: ApplicationMenuActions = actions) => {
+    const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, menuActions, platform)
     return template.find(item => item.id === 'menu.' + menu)!.submenu as MenuItemConstructorOptions[]
   }
   it.each(platforms)('keeps Electron\'s own Zoom In key beside the catalogue\'s on %s', platform => {
@@ -62,5 +64,21 @@ describe('native application menu template', () => {
     // Elsewhere the menu is hidden and only gives the roles their keys.
     expect(edit('win32')).toEqual({ 'edit.delete': 'delete', 'edit.selectAll': 'selectAll' })
     expect(items('darwin', 'edit').filter(item => item.role).map(item => item.role)).toEqual(['cut', 'copy', 'paste'])
+  })
+  it('sends Select All and Delete to whatever has the keyboard when it is not the page, as their roles do, on macOS', () => {
+    const calls: unknown[] = []
+    let pageFocused = false
+    const edit = items('darwin', 'edit', { ...actions, command: id => calls.push(['command', id]), pageHasKeyFocus: () => pageFocused, sendActionToFirstResponder: action => calls.push(['firstResponder', action]) })
+    const click = (id: string) => (edit.find(item => item.id === id)!.click as (menuItem: object) => void)({})
+    // ⌘A is the item's key equivalent, so in a Save sheet's file name or DevTools it must select that text, not the query.
+    expect(edit.find(item => item.id === 'edit.selectAll')!.accelerator).toBe('Cmd+A')
+    click('edit.selectAll')
+    click('edit.delete')
+    expect(calls).toEqual([['firstResponder', 'selectAll:'], ['firstResponder', 'delete:']])
+    calls.length = 0
+    pageFocused = true
+    click('edit.selectAll')
+    click('edit.delete')
+    expect(calls).toEqual([['command', 'edit.selectAll'], ['command', 'edit.delete']])
   })
 })

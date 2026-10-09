@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore, t
 import type { DisplayQueryResult, DisplayResultSet } from '../../shared/contracts'
 import { chordFromEvent, type Platform } from '../../shared/commands/keybindings'
 import { useWorkbench } from './core/WorkbenchContext'
-import { columnTitle, describeRange, dragSelection, pressSelection, rangeOf, tooLargeToCopy, toTsv, type GridHit } from './grid/selection'
+import { columnTitle, describeRange, dragSelection, pressButton, pressSelection, rangeOf, tooLargeToCopy, toTsv, type GridHit } from './grid/selection'
 
 /** `hint` replaces the empty state's advice, for example when the query's connection was lost. `rowsRead` counts the
  *  rows a running script has read so far. */
@@ -52,11 +52,11 @@ function ResultGrid({ tabId, set, resultIndex }: { tabId: string; set: DisplayRe
   useEffect(() => () => { if (drag.current?.frame !== undefined) cancelAnimationFrame(drag.current.frame) }, [])
 
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 && event.button !== 2) return
-    const hit = hitOf(event.target)
+    const press = pressButton(event, platform)
+    const hit = press && hitOf(event.target)
     if (!hit) return
-    resultSelection.set(tabId, pressSelection(resultSelection.get(tabId), hit, { resultIndex, shift: event.shiftKey, right: event.button === 2, rows, columns }))
-    drag.current = event.button === 0 && hit.kind !== 'corner' ? {} : null
+    resultSelection.set(tabId, pressSelection(resultSelection.get(tabId), hit, { resultIndex, shift: event.shiftKey, right: press === 'secondary', rows, columns }))
+    drag.current = press === 'primary' && hit.kind !== 'corner' ? {} : null
   }
   // At most one selection update per frame while dragging over a wide result.
   const pointerMove = (event: PointerEvent<HTMLDivElement>) => {

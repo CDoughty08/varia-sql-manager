@@ -27,7 +27,9 @@ pages, limits, error codes, display formats, benchmarks).
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
   `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 187 checks instead of 123, and
-  `connections-smoke.mjs` connects for real. Never print the password.
+  `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
+  session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
+  (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
@@ -68,10 +70,13 @@ pages, limits, error codes, display formats, benchmarks).
   provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
   natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends
   back a bare id; it is the macOS menu bar and stays hidden elsewhere, where it still serves Electron's role keys. macOS
-  context menus (`src/main/context-menu.ts`) send back a token and an id. Menu targets
+  context menus (`src/main/context-menu.ts`) open only in the focused window or within 1 s of input there, and send
+  back a token and an id. Menu targets
   (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
-  `contextmenu` listener, only `.menu-layer` reaches z-index 30000, and the page cannot read the clipboard: main runs
-  Paste only just after a click, key press or tap in the focused window.
+  `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
+- The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
+  in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 
