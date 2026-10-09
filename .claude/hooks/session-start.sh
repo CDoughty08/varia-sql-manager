@@ -63,6 +63,8 @@ start_sql() {
     if probe=$(docker exec varia-sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$sql_password" -l 5 -b -Q 'SELECT 1' 2>&1); then
       persist 'export VARIA_TEST_SQL_SERVER=localhost'
       persist 'export VARIA_TEST_SQL_USER=sa'
+      # The container is disposable, so the Object Explorer checks may create and drop their scratch databases.
+      persist 'export VARIA_TEST_SQL_SCRATCH=1'
       persist "export VARIA_TEST_SQL_PASSWORD='$sql_password'"
       say 'SQL Server is ready on localhost:1433; live SQL checks are enabled'
       return 0

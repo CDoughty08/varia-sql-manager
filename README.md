@@ -247,7 +247,7 @@ $env:VARIA_TEST_SQL_SERVER = 'localhost'
 try { npm run backend:test } finally { Remove-Item Env:VARIA_TEST_SQL_SERVER }
 ```
 
-These checks create only session-local temporary objects, except that with `VARIA_TEST_SQL_SCRATCH=1` (set in CI) a Select Top 1000 Rows test also creates and drops a uniquely named `varia_scratch_…` database for graph and temporal tables, which cannot be temporary. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default. With the same variables set, `npm run test:smoke` also connects the connection dialog to that server. The password is never printed.
+These checks create only session-local temporary objects, except that with `VARIA_TEST_SQL_SCRATCH=1` (set in CI and in cloud sessions) a Select Top 1000 Rows test also creates and drops a uniquely named `varia_scratch_…` database for graph and temporal tables, which cannot be temporary. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default. With the same variables set, `npm run test:smoke` also connects the connection dialog to that server. The password is never printed.
 
 ## Continuous integration
 
