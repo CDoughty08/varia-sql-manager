@@ -419,6 +419,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   lost, its results are dropped, and the next generation starts after 0 s, 1 s, then 2 s. The third unexpected loss
   within 120 s trips the breaker: `failed (crashLoop)` until the user restarts. 300 s of continuous readiness resets
   the delays and the breaker. Spawn failures (`ENOENT`, `EACCES`) and incompatible builds fail at once, without retry.
+  In development a missing `Varia.Backend.dll` is a spawn failure too: main checks for it before every launch, since
+  `dotnet` would start without it and exit, which reads as a crash loop.
 - **Silence.** Main sends PING every 5 s; any frame counts as liveness. After 15 s without one, the state is
   `unresponsive` and a warning banner offers **Restart now**; it returns to `ready` only when a frame arrives (not when
   main's own silence window restarts after a sleep or a stall). A silent backend
