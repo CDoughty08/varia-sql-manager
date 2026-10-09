@@ -258,12 +258,14 @@ internal static class LiveResultChecks
         await run("CREATE TABLE " + table + " (id int PRIMARY KEY); INSERT " + table + " SELECT TOP (3000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
         var locker = Guid.NewGuid().ToString();
         var reader = Guid.NewGuid().ToString();
-        // Runs the query while the last row is locked, until `rows` are readable or 10 s pass, then releases the lock.
-        async Task<(bool Blocked, long Available, QueryResult Result, List<string?> Kinds)> WhileLocked(string sql, int maxRows, long rows)
+        // Runs the query while the last row's delete is uncommitted, until `rows` are readable or 10 s pass, then rolls the
+        // delete back. A locking read skips row locks on pages without uncommitted changes, so an XLOCK taken by a SELECT
+        // blocked it only sometimes (a new server let the reader through); a pending delete always makes it wait.
+        async Task<(bool Blocked, long Available, QueryResult Result, List<string?> Kinds, long WaitedMs)> WhileLocked(string sql, int maxRows, long rows)
         {
             var events = new List<JsonElement>();
             using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) => { lock (events) events.Add(JsonSerializer.SerializeToElement(value, json)); });
-            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 3000;", null, locker, 0);
+            await runIn("BEGIN TRANSACTION; DELETE " + table + " WHERE id = 3000;", null, locker, 0);
             var running = runIn(sql, context, reader, maxRows);
             long available = 0;
             var watch = Stopwatch.StartNew();
@@ -278,18 +280,21 @@ internal static class LiveResultChecks
             var blocked = !running.IsCompleted;
             await runIn("ROLLBACK;", null, locker, 0);
             var result = await running;
-            lock (events) return (blocked, available, result, [.. events.Select(item => item.GetProperty("type").GetString())]);
+            lock (events) return (blocked, available, result, [.. events.Select(item => item.GetProperty("type").GetString())], watch.ElapsedMilliseconds);
         }
+        // A failure names what the reader saw, since a lock wait that never came and one that hid every row look alike.
+        static string Waited(bool blocked, long available, QueryResult result, List<string?> kinds, long waited) =>
+            available + " rows after " + waited + " ms, " + (blocked ? "blocked" : "not blocked") + ", " + result.Status + ", " + result.ResultSets.Count + " sets, events " + string.Join(" ", kinds);
         try
         {
-            var (blocked, available, result, kinds) = await WhileLocked("SELECT id FROM " + table + " ORDER BY id;", 0, PageBuilder.FirstPageRows + 1);
+            var (blocked, available, result, kinds, waited) = await WhileLocked("SELECT id FROM " + table + " ORDER BY id;", 0, PageBuilder.FirstPageRows + 1);
             check(blocked && available > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
-                "rows read before a lock wait are sealed and readable while the statement waits (" + available + " rows)");
+                "rows read before a lock wait are sealed and readable while the statement waits (" + Waited(blocked, available, result, kinds, waited) + ")");
             check(kinds.First() == "resultSet.opened" && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
                 "query events report the result set as it opens and closes: " + string.Join(", ", kinds.Distinct()));
-            (blocked, available, result, _) = await WhileLocked("SELECT id, CAST(N'x' AS nvarchar(max)) AS note FROM " + table + " ORDER BY id;", 100, 100);
+            (blocked, available, result, kinds, waited) = await WhileLocked("SELECT id, CAST(N'x' AS nvarchar(max)) AS note FROM " + table + " ORDER BY id;", 100, 100);
             check(blocked && available == 100 && result.Status == "completed" && result.ResultSets[0] is { RowsRead: 3000, RowsStored: 100 },
-                "rows stored before skipped rows with long values are readable while the statement waits (" + available + " rows)");
+                "rows stored before skipped rows with long values are readable while the statement waits (" + Waited(blocked, available, result, kinds, waited) + ")");
         }
         finally
         {
@@ -326,7 +331,8 @@ internal static class LiveResultChecks
         {
             // Sessions log in first, so the timed part is only the readers' queries.
             foreach (var reader in readers) await runIn("SELECT 1;", null, reader.Session, 0);
-            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 1500;", null, locker, 0);
+            // An uncommitted delete, not an XLOCK, so that every reader waits on the row (see IdleSeal).
+            await runIn("BEGIN TRANSACTION; DELETE " + table + " WHERE id = 1500;", null, locker, 0);
             running.AddRange(readers.Select(reader => runIn("SELECT id, doc FROM " + table + " ORDER BY id;", reader.Context, reader.Session, 100)));
             // Requests arrive as they do in the host, whose reader thread hands each one to the pool with Task.Run. The pool
             // adds threads within seconds, so they are timed while the readers start skipping and for a second after.
