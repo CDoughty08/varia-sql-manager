@@ -7,6 +7,7 @@ import { BackendError } from './backend/errors'
 import { backendSpawnSpec } from './backend/spawn-spec'
 import { installTestHooks } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
+import { ExplorerRequests } from './backend/explorer-requests'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
@@ -22,6 +23,7 @@ import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
+import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
 import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
@@ -272,6 +274,7 @@ app.whenReady().then(async () => {
     ...liveness
   })
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
+  const explorerRequests = new ExplorerRequests(backend)
   backend.onState(state => {
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
@@ -339,7 +342,12 @@ app.whenReady().then(async () => {
       const validated = validateRequest(method, params)
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
-      const result = await backend.request(method as RpcMethod, validated as never, queryId === undefined ? {} : { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) })
+      // An Object Explorer load is registered before it is sent, so varia:explorer-cancel can always find it.
+      const load = method === 'explorer.children' ? explorerRequests.begin((validated as RpcMethods['explorer.children']['params']).requestId) : undefined
+      let result: unknown
+      try {
+        result = await backend.request(method as RpcMethod, validated as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
+      } finally { load?.end() }
       if (queryId !== undefined) results.own((result as QueryResult).resultSets)
       if (method === 'connections.connect') {
         try { await connectionStore.remember(validated as RpcMethods['connections.connect']['params']) }
@@ -348,6 +356,7 @@ app.whenReady().then(async () => {
       return { ok: true, value: result }
     } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
+  handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
   handle('varia:files-open', async () => {
     const selected = await dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] })
     if (selected.canceled) return []

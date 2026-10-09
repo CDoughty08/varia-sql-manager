@@ -131,6 +131,19 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'tables.columns', { ...table, name: 'Orders' })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('tables.columns', { ...table, name: 'Orders' })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
   })
+  it('checks Object Explorer refs against the catalogue before the connection', async () => {
+    const connection = backend()
+    const base = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }
+    const folder = { type: 'folder', owner: { kind: 'database', name: 'master' }, folder: 'tables' } as const
+    // Shapes zod would also refuse reach the backend only through tests; it re-checks them on its own.
+    for (const node of [{ type: 'folder', owner: { kind: 'server' }, folder: 'tables' }, { type: 'object', object: { kind: 'table', database: 'x', name: 'y' } }, { type: 'object', object: { kind: 'nope' } }])
+      await expect(call(connection, 'explorer.children', { ...base, node } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'explorer.children', { ...base, node: folder, cursor: 'v1.tables.AQ' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'explorer.children', { ...base, node: folder, extra: 1 } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'explorer.children', { ...base, node: folder })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    await expect(call(connection, 'explorer.children', { ...base, node: { type: 'object', object: { kind: 'server' } } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    expect(deadlineFor('explorer.children', { ...base, node: folder })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
+  })
   it('handles cancellation of a completed or unknown query', async () => {
     await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
   })

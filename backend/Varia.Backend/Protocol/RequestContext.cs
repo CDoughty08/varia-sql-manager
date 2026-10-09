@@ -1,8 +1,9 @@
 namespace Varia.Backend.Protocol;
 
 /// <summary>What a method waits for before it runs (the lanes of src/shared/ipc/methods.ts): control runs at once,
-/// metadata takes one of 8 slots, query uses the session path, results one of 16 read slots.</summary>
-internal enum RequestLane { Control, Metadata, Query, Results }
+/// metadata takes one of 8 slots, query uses the session path, results one of 16 read slots, and explorer runs at once
+/// under Object Explorer's own gates (static folders need no slot at all).</summary>
+internal enum RequestLane { Control, Metadata, Query, Results, Explorer }
 
 /// <summary>Why a request's token was cancelled: CANCEL frame reasons 1–4, or its own header deadline.</summary>
 internal enum CancelReason { None = 0, User = 1, Deadline = 2, ConsumerGone = 3, Shutdown = 4, Expired = 5 }

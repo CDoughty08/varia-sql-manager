@@ -5,6 +5,8 @@ import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
 import type { MenuStyle } from './menu-style'
 import type { ErrorCode } from './ipc/wire/protocol'
+import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
+import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -49,8 +51,15 @@ export interface ConnectionOptions {
   advanced?: Partial<AdvancedConnectionOptions>
 }
 
-/** `generation` is the backend generation that holds the connection (stamped by main); a later generation cannot use it. */
-export interface ConnectionInfo { id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number }
+/**
+ * `generation` is the backend generation that holds the connection (stamped by main); a later generation cannot use it.
+ * `productVersion` (≤ 32 characters), `login` (≤ 128) and `engineEdition` come from the server profile probed at connect,
+ * and are absent when the probe failed.
+ */
+export interface ConnectionInfo {
+  id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
+  productVersion?: string; login?: string; engineEdition?: number
+}
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
 export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
 export const serverObjectKinds = ['logins', 'serverRoles', 'credentials', 'cryptographicProviders', 'audits', 'serverAuditSpecifications'] as const
@@ -154,6 +163,35 @@ export interface ResultsReadResult { nextRow: number; rowsAvailable: number; com
 export interface ResultsCloseResult { closed: number; usedBytes: number }
 /** The backend's descriptor, before main stamps its generation. */
 export type BackendResultDescriptor = Omit<ResultDescriptor, 'generation'>
+/** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts
+ *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`. */
+export interface ExplorerNode {
+  readonly ref: ExplorerNodeRef
+  readonly label: string
+  readonly icon: ExplorerIcon
+  readonly hasChildren: boolean
+  readonly sublabel?: string
+  readonly detail?: string
+  readonly subtype?: NodeSubtype
+  readonly status?: NodeStatus
+  readonly created?: string
+}
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR'] as const
+export type ExplorerErrorCode = typeof explorerErrorCodes[number]
+/** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
+export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
+/**
+ * A page of children: on the first page the static folders, then rows. `cursor` asks for the next page; `total` (first page
+ * only) counts static folders, rows and a Parameters folder's return row. With `error`, `nodes` holds at most the static
+ * folders that did not need the failed query.
+ */
+export interface ExplorerChildrenResult {
+  readonly nodes: readonly ExplorerNode[]
+  readonly elapsedMs: number
+  readonly cursor?: string
+  readonly total?: number
+  readonly error?: ExplorerError
+}
 export interface RpcMethods {
   'system.health': { params: Record<string, never>; result: BackendHealth }
   'connections.connect': { params: ConnectionOptions; result: ConnectionInfo }
@@ -169,6 +207,7 @@ export interface RpcMethods {
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
   'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
+  'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
@@ -232,6 +271,11 @@ export interface VariaApi {
   tables(connectionId: string, database: string): Promise<ApiResult<TableInfo[]>>
   scriptTable(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<{ sql: string }>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
+  /** One page of an Object Explorer node's children. */
+  explorerChildren(params: ExplorerChildrenParams): Promise<ApiResult<ExplorerChildrenResult>>
+  /** Cancels Object Explorer loads by their `requestId`s (1–256); `cancelled` counts those still running. A load cancelled
+   *  this way answers `CANCELLED`. */
+  explorerCancel(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>

@@ -11,4 +11,8 @@
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <PackageReference Include="Microsoft.SqlServer.SqlManagementObjects" Version="181.36.0" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Generated from src/shared/explorer/catalog.ts by tests/explorer-catalog.test.ts. -->
+    <EmbeddedResource Include="Explorer/explorer-catalog.json" LogicalName="Varia.Backend.Explorer.explorer-catalog.json" />
+  </ItemGroup>
 </Project>

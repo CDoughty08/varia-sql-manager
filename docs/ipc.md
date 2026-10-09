@@ -179,7 +179,8 @@ from cannot be zeroed.
 
 `methodPolicies` (`src/shared/ipc/methods.ts`) gives each method its kind, lane and deadline. Lanes decide how the
 backend schedules it: `control` runs at once, `metadata` waits for one of 8 slots (at most 30 s or the remaining
-deadline, then `BUSY`), `query` uses the per-tab session path, and `results` takes one of 16 read slots.
+deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, and `explorer`
+runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither).
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -196,6 +197,7 @@ deadline, then `BUSY`), `query` uses the per-tab session path, and `results` tak
 | `query.session.close` | invoke | unary | control | 10 s; answered locally `{ closed: false }` for a session of an ended generation |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
+| `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
 **A backend method is added in five places:** `RpcMethods` (`src/shared/contracts.ts`); `requestSchemas`
@@ -203,6 +205,14 @@ deadline, then `BUSY`), `query` uses the per-tab session path, and `results` tak
 is usually one `metadata` line); a preload or `ResultClient` method; and a `SqlService.DispatchAsync` case with its
 `MethodNames` entry and record in `Contracts.cs`. A backend whose HELLO lacks a method main may call is refused, and
 lists that could exceed 16 MiB must be paged (`RESPONSE_TOO_LARGE`).
+
+**Object Explorer cancellation** has no backend method. Each `explorer.children` load carries the renderer's
+`requestId`; main (`ExplorerRequests`) maps it to the REQUEST frame it went out as, and `explorerCancel(requestIds)`
+(`varia:explorer-cancel`, 1–256 ids) sends a CANCEL frame with reason 1 for each, so the load answers `CANCELLED`. A
+cancel that reaches main before the load was written is sent right after it; one for an id main has not seen is kept for
+60 s (1,024 ids), and that load is then refused with `CANCELLED`. A running `requestId` sent again is
+`DUPLICATE_REQUEST`. Catalog failures (permission, access, a missing object, a lock, the 40 s budget, a lost connection)
+are not envelope errors but `result.error` values with their own codes, so each tree node shows its own failure.
 
 ## Streams and credits
 
@@ -454,7 +464,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Result budget | `clamp(available memory / 4, 256 MiB, 2 GiB)`; 50 % per query; none under high system memory load | backend |
 | Messages | 1,000 messages / 1,000,000 characters; error text 16,384 characters | backend |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 32 query sessions; 16 concurrent `results.read` | backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 32 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
@@ -469,9 +479,9 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`; an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |

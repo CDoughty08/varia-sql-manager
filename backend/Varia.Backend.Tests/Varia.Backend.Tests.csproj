@@ -9,4 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="../Varia.Backend/Varia.Backend.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures/*.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

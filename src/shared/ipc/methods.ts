@@ -5,8 +5,9 @@ import type { BackendMethod, BackendMethods } from '../contracts'
 
 export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
- *  one of 16 read slots. Main reserves 32 extra pending requests for the control lane. */
-export type MethodLane = 'control' | 'metadata' | 'query' | 'results'
+ *  one of 16 read slots, and explorer runs at once under Object Explorer's own gates (4 per connection, 8 in all; static
+ *  folders need none). Main reserves 32 extra pending requests for the control lane. */
+export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly kind: MethodKind
@@ -43,6 +44,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Pages arrive as DATA frames within the stream's credit; the RESPONSE ends the stream.
   'results.read': { kind: 'stream', lane: 'results', deadlineMs: 60_000 },
   'results.close': control,
+  // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
+  'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
 
