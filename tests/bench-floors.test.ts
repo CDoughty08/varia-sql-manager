@@ -12,7 +12,7 @@ interface CheckBench { compare(floors: Floors, results: Result[]): Row[]; failed
 
 const checker = (): Promise<CheckBench> => import(/* @vite-ignore */ pathToFileURL(resolve('scripts/check-bench.mjs')).href)
 const floors = JSON.parse(readFileSync('tests/bench/floors.json', 'utf8')) as Floors
-const sources = ['tests/bench/codec.bench.ts', 'tests/bench/backend.bench.ts', 'scripts/ipc-bench.mjs'].map(path => readFileSync(path, 'utf8')).join('\n')
+const sources = ['tests/bench/codec.bench.ts', 'tests/bench/backend.bench.ts', 'tests/bench/grid.bench.ts', 'scripts/ipc-bench.mjs'].map(path => readFileSync(path, 'utf8')).join('\n')
 
 describe('benchmark floors', () => {
   it('describe every metric the benchmarks record, and nothing else', () => {

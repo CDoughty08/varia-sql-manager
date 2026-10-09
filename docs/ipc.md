@@ -603,7 +603,7 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, and main ↔ Release backend ↔ results worker
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
 ```
@@ -619,6 +619,9 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
 - **The node pipeline** runs main's real classes: `BackendSupervisor` and `BackendConnection` over stdio to the Release
   backend, `ResultsPortHost` over a `MessageChannel`, and `ResultsWorkerCore` in a worker thread reading windows of
   every row with every cell decoded (four windows in flight).
+- **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
+  1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, and
+  tile planning.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
   `maxRows: 0`.
@@ -635,6 +638,9 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
 | Main event-loop delay during W1, p99 | ≤ 20 ms | ≤ 100 ms | 12 – 14 ms | 17 ms |
 | Page bytes sent ÷ distinct page bytes, W1 | ≤ 1.05 | reported only | 1.29 | 1.29 |
 | Budget charged ÷ page bytes | ≤ 1.15 | ≤ 1.5 | 1.00 | 1.00 |
+| Grid frame: 64 selection blocks clipped, 1,800 cells tested | ≥ 5,000 ops/s | ≥ 1,000 ops/s | 4,500 – 4,900 ops/s | 5,300 – 5,700 ops/s |
+| Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
+| Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |
 | B1 into the worker | ≥ 200 MB/s | ≥ 40 MB/s | 90 – 143 MB/s | 90 MB/s |

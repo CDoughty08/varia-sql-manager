@@ -157,6 +157,12 @@ export interface ResultsReadParams { resultId: number; firstRow: number; maxRows
 /** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
 export interface ResultsReadResult { nextRow: number; rowsAvailable: number; complete: boolean; pages: number; rows: number }
 export interface ResultsCloseResult { closed: number; usedBytes: number }
+/** Inclusive row indexes; a last row of 2^53 − 1 runs to the end of the result. */
+export type RowRange = readonly [first: number, last: number]
+/** Inclusive column indexes, 0..4095. */
+export type ColumnRange = readonly [first: number, last: number]
+/** One rectangle-like piece of a copy: 1..64 ascending, disjoint row ranges by 1..64 column ranges. */
+export interface CopyPart { rows: readonly RowRange[]; columns: readonly ColumnRange[] }
 /** The backend's descriptor, before main stamps its generation. */
 export type BackendResultDescriptor = Omit<ResultDescriptor, 'generation'>
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts

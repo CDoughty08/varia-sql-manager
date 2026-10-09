@@ -40,7 +40,7 @@ function ResultGrid({ tabId, set, resultIndex }: { tabId: string; set: DisplayRe
   const selection = useSyncExternalStore(resultSelection.subscribe, () => resultSelection.get(tabId, resultIndex))
   const rows = set.rows.length, columns = set.columns.length
   const range = selection ? rangeOf(selection, rows, columns) : undefined
-  const active = selection && rows && columns ? { row: Math.min(Math.max(selection.focus.row, 0), rows - 1), column: Math.min(Math.max(selection.focus.column, 0), columns - 1) } : undefined
+  const active = selection && rows && columns ? { row: Math.min(Math.max(selection.active.row, 0), rows - 1), column: Math.min(Math.max(selection.active.column, 0), columns - 1) } : undefined
   const drag = useRef<{ hit?: GridHit; frame?: number } | null>(null)
   const [status, setStatus] = useState('')
   const summary = range ? describeRange(range) : ''

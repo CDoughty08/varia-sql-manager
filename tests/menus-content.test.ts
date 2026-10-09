@@ -65,7 +65,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   ] } })
   await fixture.queries.execute()
   fixture.connections.remove('server-r')
-  fixture.resultSelection.set(ran.id, { resultIndex: 1, anchor: { row: 0, column: 0 }, focus: { row: 0, column: 0 }, mode: 'cells' })
+  fixture.resultSelection.set(ran.id, { resultIndex: 1, blocks: [{ kind: 'cells', anchor: { row: 0, column: 0 }, focus: { row: 0, column: 0 } }], active: { row: 0, column: 0 } })
   const output = (view: OutputView, resultIndex: number, selectedText = ''): MenuTarget => ({ kind: 'output', tabId: ran.id, view, resultIndex, selectedText, element: { textContent: 'Completed.' } as HTMLElement })
   const unsaved = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
   const saved = fixture.documents.create('saved.sql', 'SELECT 2', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql' })

@@ -467,7 +467,7 @@ describe('Query Output commands', () => {
     { columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }], rows: [['1', 'a'], ['2', null]], truncated: false },
     { columns: [{ name: 'Microsoft SQL Server 2005 XML Showplan', dataType: 'xml' }], rows: [['<ShowPlanXML/>']], truncated: false, kind: 'executionPlan' }
   ] }
-  const block = (resultIndex = 0): GridSelection => ({ resultIndex, anchor: { row: 0, column: 0 }, focus: { row: 1, column: 1 }, mode: 'cells' })
+  const block = (resultIndex = 0): GridSelection => ({ resultIndex, blocks: [{ kind: 'cells', anchor: { row: 0, column: 0 }, focus: { row: 1, column: 1 } }], active: { row: 1, column: 1 } })
   /** A query that has run and shows `value`, and targets for its views, each over an element of the fake document. */
   async function ran(platform: Platform = 'win32', value: DisplayQueryResult = results) {
     const fixture = workbenchFixture({ platform })
