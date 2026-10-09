@@ -31,6 +31,9 @@ import { queryContribution } from '../../src/renderer/src/contributions/query'
 import { shellContribution, type ShellHost } from '../../src/renderer/src/contributions/shell'
 import { themeContribution, type ThemeController } from '../../src/renderer/src/contributions/theme'
 import { backendContribution } from '../../src/renderer/src/contributions/backend'
+import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
+import { ScriptingOptionsService } from '../../src/renderer/src/scripting/ScriptingOptionsService'
+import { defaultScriptingOptions } from '../../src/shared/scripting/options'
 import { CommandHistory, type HistoryStorage } from '../../src/renderer/src/quickinput/history'
 import { QuickInputService, type FocusAdapter } from '../../src/renderer/src/quickinput/QuickInputService'
 import { defaultThemePreference } from '../../src/shared/theme/format'
@@ -133,6 +136,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     explorerCancel: vi.fn<VariaApi['explorerCancel']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     scriptObjects: vi.fn<VariaApi['scriptObjects']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    getScriptingOptions: vi.fn<VariaApi['getScriptingOptions']>(async () => ({ ok: true, value: { options: defaultScriptingOptions } })),
+    setScriptingOptions: vi.fn<VariaApi['setScriptingOptions']>(async options => ({ ok: true, value: options })),
     ...backendApi()
   }
   const { documents, events } = doc
@@ -151,6 +156,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const activeElement = () => focused.panel ? { matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => focused.panel } : null } as unknown as Element : null
   const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, activeElement })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
+  const scriptingOptions = new ScriptingOptionsService(api, message => commands.reportError(message))
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
     disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
@@ -165,10 +171,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
-  const workbench = { platform, commands, context, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, databaseList, menuTargets, resultSelection }
+  const workbench = { platform, commands, context, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, databaseList, menuTargets, resultSelection, scriptingOptions }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
     menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history),
-    themeContribution(workbench, api, options.timers), backendContribution(workbench)]
+    themeContribution(workbench, api, options.timers), backendContribution(workbench), scriptingContribution(workbench)]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
     const pending = deferred<Awaited<ReturnType<QueryApi['execute']>>>()
@@ -180,7 +186,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
     menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose()
-    explorer.dispose(); databaseList.dispose(); documents.dispose(); backend.dispose()
+    explorer.dispose(); databaseList.dispose(); scriptingOptions.dispose(); documents.dispose(); backend.dispose()
   }
-  return { ...doc, api, connections, backend, editorOptions, panes, explorer, databaseList, resultSelection, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, focused, history, host, theme, startQuery, connect, dispose }
+  return { ...doc, api, connections, backend, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, focused, history, host, theme, startQuery, connect, dispose }
 }

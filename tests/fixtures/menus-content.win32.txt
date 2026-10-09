@@ -75,6 +75,8 @@ Query
   ---
   E&xecute  F5  -+--
   &Cancel Executing Query  Alt+Pause  --+-
+Tools
+  &Options…  ++++
 Window
   &Object Explorer  F8  ++++
   Query &Editor  ++++

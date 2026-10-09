@@ -8,6 +8,7 @@ import type { ErrorCode } from './ipc/wire/protocol'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
+import type { ScriptingOptions } from './scripting/options.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -276,6 +277,10 @@ export interface VariaApi {
   /** Cancels scripting requests by their `requestId`s (1–64); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelScripting(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Tools › Options › Scripting as main stored it; `warning` reports a file that was invalid and was reset. */
+  getScriptingOptions(): Promise<ApiResult<{ options: ScriptingOptions; warning?: string }>>
+  /** Stores a complete set of scripting options; main validates it strictly and resolves to what it stored. */
+  setScriptingOptions(options: ScriptingOptions): Promise<ApiResult<ScriptingOptions>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>

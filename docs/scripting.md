@@ -107,6 +107,11 @@ Tools › Options › SQL Server Object Explorer › Scripting, with the docs pa
 SSMS's Script As produces; where the docs page states another default, it is shown in parentheses. Every request
 carries all of them.
 
+Main stores them in `scripting-options.json` in the user data folder, replacing the file atomically on OK. Options a
+newer version added are dropped and missing ones take their defaults; a file that is too large, not UTF-8, not JSON,
+or holds a value of the wrong type is renamed to `scripting-options.json.invalid-<uuid>.json`, and the defaults are
+used with a warning.
+
 ### General scripting options
 
 | # | Option | Key | Default | Description | SMO |

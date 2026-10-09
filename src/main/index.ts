@@ -13,6 +13,7 @@ import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
+import { ScriptingOptionsStore } from './scripting-options-store'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
@@ -292,6 +293,7 @@ app.whenReady().then(async () => {
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
+  const scriptingOptions = new ScriptingOptionsStore(join(app.getPath('userData'), 'scripting-options.json'))
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
   await appearance.initialize()
@@ -323,6 +325,8 @@ app.whenReady().then(async () => {
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
   handle('varia:connections-save', value => connectionStore.save(connectionProfileInputSchema.parse(value)))
   handle('varia:connections-remove', value => connectionStore.remove(z.uuid().parse(value)))
+  handle('varia:scripting-options-get', () => scriptingOptions.load())
+  handle('varia:scripting-options-set', value => scriptingOptions.save(value))
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
   handle('varia:layout-import', async () => {

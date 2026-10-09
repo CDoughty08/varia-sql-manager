@@ -34,11 +34,12 @@ describe('menu model', () => {
       expect(raw('query', platform)).toEqual(outline('query', platform))
       expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
+      expect(outline('tools', platform)).toEqual(['preferences.options'])
     }
     expect(buildMenuModel('file', 'win32').at(-1)).toMatchObject({ id: 'window.close', title: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
     expect(buildMenuModel('file', 'linux').at(-1)).toMatchObject({ id: 'window.close', title: 'Quit', role: 'quit', accelerator: 'Ctrl+Q' })
     expect(buildMenuModel('file', 'linux').at(-1)).not.toHaveProperty('mnemonic')
-    expect(applicationMenus.map(menu => menu.id)).toEqual(['file', 'edit', 'view', 'query', 'window'])
+    expect(applicationMenus.map(menu => menu.id)).toEqual(['file', 'edit', 'view', 'query', 'tools', 'window'])
   })
   it('places submenus like commands, with their own native ids', () => {
     const submenu = (menu: MenuId, platform: Platform) => buildMenuModel(menu, platform).filter(entry => entry.kind === 'submenu')
@@ -52,7 +53,7 @@ describe('menu model', () => {
     expect(menuRoots('query.connection')).toEqual(['query', 'editor.context'])
     expect(menuRoots('theme')).toEqual(['view'])
     expect(menuRoots('file')).toEqual(['file'])
-    expect(nativeMenuIds).toEqual(['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'window'])
+    expect(nativeMenuIds).toEqual(['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'tools', 'window'])
   })
   it('carries placement mnemonics, platform titles, and compiled when clauses', () => {
     expect(buildMenuModel('file', 'win32').find(entry => entry.kind === 'command' && entry.id === 'file.saveAs')).toMatchObject({ title: 'Save As…', mnemonic: 'a' })
@@ -119,6 +120,9 @@ describe('menu model', () => {
     expect(find('view', 'win32', 'workbench.showCommands')).toEqual({ kind: 'command', id: 'workbench.showCommands', nativeId: 'workbench.showCommands', title: 'Command Palette…', mnemonic: 'c', toggle: false, accelerator: 'Ctrl+Shift+P' })
     expect(find('view', 'darwin', 'workbench.quickOpen')).toMatchObject({ title: 'Go to Query…', accelerator: 'Cmd+P' })
     expect(find('query', 'linux', 'query.changeDatabase')).toMatchObject({ title: 'Change Database…', accelerator: 'Ctrl+U' })
+    // Tools › Options… carries macOS's settings key, ⌘,; Windows and Linux have none.
+    expect(find('tools', 'darwin', 'preferences.options')).toEqual({ kind: 'command', id: 'preferences.options', nativeId: 'preferences.options', title: 'Options…', mnemonic: 'o', toggle: false, accelerator: 'Cmd+,' })
+    expect(find('tools', 'win32', 'preferences.options')).not.toHaveProperty('accelerator')
     expect(find('file', 'darwin', 'connection.disconnect')).toEqual({ kind: 'command', id: 'connection.disconnect', nativeId: 'connection.disconnect', title: 'Disconnect from Server…', mnemonic: 'd', toggle: false })
   })
   it('gives each command and submenu item a unique native id, the first placement keeping the bare id', () => {
@@ -134,7 +138,7 @@ describe('menu model', () => {
     expect(() => nativeItemId('file.new', 'edit')).toThrow('file.new has no placement in the edit menu')
   })
   it('finds menus by mnemonic', () => {
-    expect(['f', 'E', 'v', 'q', 'W'].map(menuForMnemonic)).toEqual(['file', 'edit', 'view', 'query', 'window'])
+    expect(['f', 'E', 'v', 'q', 't', 'W'].map(menuForMnemonic)).toEqual(['file', 'edit', 'view', 'query', 'tools', 'window'])
     expect(['x', '', 'fi', 'alt+f', 'f10'].map(menuForMnemonic)).toEqual([undefined, undefined, undefined, undefined, undefined])
   })
 })
@@ -210,8 +214,8 @@ describe('application menu template', () => {
     for (const platform of platforms) {
       const { items } = template(platform)
       const menubar = items.filter(entry => entry.id)
-      expect(menubar.map(entry => entry.id), platform).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.window'])
-      expect(items.map(entry => entry.id ?? entry.role), platform).toEqual(platform === 'darwin' ? ['appMenu', 'menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.window'] : menubar.map(entry => entry.id))
+      expect(menubar.map(entry => entry.id), platform).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.tools', 'menu.window'])
+      expect(items.map(entry => entry.id ?? entry.role), platform).toEqual(platform === 'darwin' ? ['appMenu', 'menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.tools', 'menu.window'] : menubar.map(entry => entry.id))
       expect(item(items, 'menu.window').role, platform).toBe(platform === 'darwin' ? 'window' : undefined)
       for (const top of menubar) {
         const menu = top.id!.slice('menu.'.length) as Parameters<typeof buildMenuModel>[0]

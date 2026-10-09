@@ -187,6 +187,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .filter-problem { margin-top: 4px; font-size: 11px; color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
 .filter-dialog .field-note { margin-top: 12px; }
 .filter-dialog .connect-error { margin: 12px 0 0; }
+/* Tools › Options: SSMS's page tree beside a dense property list (22 px rows), with the focused row's description below. */
+/* Two classes: .connection-modal, later in this file, would otherwise set its own width. */
+.connection-modal.options-dialog { width: min(820px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px)); max-height: none; }
+.options-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.options-pages { flex: 0 0 clamp(150px, 24%, 200px); overflow: auto; padding: 6px 0; border-right: 1px solid var(--varia-dialog-separatorBackground); }
+.options-pages ul { list-style: none; margin: 0; padding: 0; }
+.options-pages span, .options-pages li[aria-current] { display: block; padding: 3px 10px; line-height: 16px; overflow-wrap: anywhere; }
+.options-pages ul ul li[aria-current] { padding-left: 26px; }
+.options-pages li[aria-current="page"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.options-list { flex: 1; min-width: 0; overflow-y: auto; padding: 2px 0 6px; }
+.options-category { height: 22px; line-height: 22px; padding: 0 10px; font-weight: 600; color: var(--varia-settings-headerForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.options-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 46%); align-items: center; gap: 8px; height: 22px; padding: 0 10px 0 22px; }
+.options-row > label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.options-row[data-focused] { background: var(--varia-list-inactiveSelectionBackground); }
+.options-dialog .options-row select { width: 100%; min-width: 0; height: 20px; padding: 0 4px; line-height: 16px; }
+.options-row select[data-changed] { font-weight: 700; }
+.options-row:has(select:disabled) > label, .options-row select:disabled { color: var(--varia-disabledForeground); }
+.options-description { flex-shrink: 0; height: 80px; overflow-y: auto; padding: 8px 20px; overflow-wrap: anywhere; }
+.options-description p { margin: 2px 0 0; line-height: 1.5; color: var(--varia-descriptionForeground); }
+.options-dialog .options-error { margin: 0 20px 8px; flex-shrink: 0; }
+@media (forced-colors: active) {
+  .options-pages li[aria-current="page"], .options-row[data-focused] { outline: 1px solid CanvasText; outline-offset: -1px; }
+  .options-row:has(select:disabled) > label, .options-row select:disabled { color: GrayText; }
+}
 .explorer-fault { padding: 18px; font-size: 12px; color: var(--varia-errorForeground); }
 .explorer-fault button { margin-top: 8px; border: 1px solid var(--varia-button-border); }
 .explorer-error { flex-shrink: 0; font-size: 11px; color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }

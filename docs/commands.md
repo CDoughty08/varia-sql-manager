@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (74)
+## Commands (75)
 
 ### File
 
@@ -112,6 +112,7 @@ keys it uses are listed below.
 | Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | View › Theme › Open Themes Folder |
 | Reload Themes | `preferences.reloadThemes` | — | — | — | Always | View › Theme › Reload Themes |
 | Set Color Theme (not in the palette) | `preferences.setTheme` | — | — | — | Always | View › Theme › Dark, Light, Follow System, and each theme under Dark Theme and Light Theme |
+| Options… | `preferences.options` | — | — | ⌘, | Always | Tools › Options… |
 
 ### Developer
 
@@ -219,6 +220,12 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_connect` | Disconnect **A**ll Queries | `query.disconnectAll` | Always |
 | `1_connect` | **R**econnect… | `connection.reconnect` | Always |
 | `2_change` | C**h**ange Connection… | `query.changeConnection` | Always |
+
+#### Tools (Alt+T)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_options` | **O**ptions… | `preferences.options` | Always |
 
 #### Window (Alt+W)
 
@@ -388,7 +395,7 @@ Workbench keybindings never use these keys, because menus, Electron, the operati
 
 | Reason | Windows | Linux | macOS |
 | --- | --- | --- | --- |
-| opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | — |
+| opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, F10 | — |
 | an Electron role or system key | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4 | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Ctrl+Q | — |
 | clipboard or text editing | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | — |
 | find or comment in the editor | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\ | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\, Ctrl+Shift+A | ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, ⌘E, ⌘/, ⌥⌘C, ⌥⌘W, ⌥⌘R, ⌥⌘P, ⌥⌘L |

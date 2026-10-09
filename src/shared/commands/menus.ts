@@ -6,7 +6,7 @@ import { compileWhen, type WhenAst } from './when'
 /** The menubar, in title-bar order. Alt plus the mnemonic opens a menu on Windows and Linux. */
 export const applicationMenus = [
   { id: 'file', label: 'File', mnemonic: 'f' }, { id: 'edit', label: 'Edit', mnemonic: 'e' }, { id: 'view', label: 'View', mnemonic: 'v' },
-  { id: 'query', label: 'Query', mnemonic: 'q' }, { id: 'window', label: 'Window', mnemonic: 'w' }
+  { id: 'query', label: 'Query', mnemonic: 'q' }, { id: 'tools', label: 'Tools', mnemonic: 't' }, { id: 'window', label: 'Window', mnemonic: 'w' }
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
 /** Context menus, one per kind of target: the editor, an Object Explorer node, a query tab, Query Output, a panel tab, a text field. */
@@ -16,7 +16,7 @@ export const submenuIds = ['theme', 'query.connection', 'explorer.scriptTableAs'
 export type SubmenuId = typeof submenuIds[number]
 export type MenuId = MenubarId | SubmenuId | ContextMenuId
 /** Every menu in native-id order: a submenu follows the menu it first appears in, and context menus come last. */
-export const menuIds: readonly MenuId[] = ['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'window', 'editor.context', 'explorer.context',
+export const menuIds: readonly MenuId[] = ['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'tools', 'window', 'editor.context', 'explorer.context',
   'explorer.scriptTableAs', 'explorer.scriptTableAs.create', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context']
 export const menubarIds: readonly MenubarId[] = applicationMenus.map(menu => menu.id)
 export const isContextMenuId = (menu: MenuId): menu is ContextMenuId => (contextMenuIds as readonly MenuId[]).includes(menu)
