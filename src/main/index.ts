@@ -11,6 +11,8 @@ import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
 import { runRole } from './window-roles'
+import { ContextMenuPopups } from './context-menu'
+import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
@@ -38,6 +40,9 @@ let previewSeq = 0
 let rendererLoaded = false
 let rendererReady = false
 let rendererUnresponsive = false
+// Native context menus on macOS; smoke tests may choose either style on any platform.
+const menuStyle = menuStyleFor(process.platform, process.env)
+const contextMenus = new ContextMenuPopups<BrowserWindow>({ style: menuStyle, platform: process.platform, build: template => Menu.buildFromTemplate(template) })
 // Tests use their own profile so layout checks never modify the user's workspace preferences.
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // A second instance would overwrite this instance's layouts and connection library.
@@ -76,6 +81,7 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
 function resetRendererState(): void {
   rendererReady = false
   menuBridge.reset()
+  contextMenus.close()
   endPreview()
   backend?.restart()
   files.clear()
@@ -159,7 +165,7 @@ function createWindow(): void {
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1' }
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle)] }
   })
   const window = mainWindow, contents = window.webContents
   if (process.platform !== 'darwin') {
@@ -264,6 +270,7 @@ app.whenReady().then(async () => {
   })
   // Custom menus and the palette run Electron's roles on the trusted window: a fixed set of window methods, never quit.
   handle('varia:run-role', value => { if (mainWindow) runRole(value, mainWindow) })
+  handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
   ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {
     if (!trusted(event)) {
       return { ok: false, error: 'Untrusted IPC sender.' }

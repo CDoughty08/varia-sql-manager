@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ApiResult, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
+import type { ContextMenuCommand } from '../shared/commands/menus'
+import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
 
 const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params)
@@ -9,6 +11,14 @@ const api: VariaApi = {
   platform: process.platform,
   setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
   runRole: role => ipcRenderer.invoke('varia:run-role', role),
+  // Main passes its choice as a renderer argument; anything else there means the platform's default.
+  menuStyle: menuStyleFromArgv(process.argv, process.platform),
+  showContextMenu: request => ipcRenderer.invoke('varia:context-menu', request),
+  onContextMenuCommand: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, command: ContextMenuCommand) => callback(command)
+    ipcRenderer.on('varia:context-menu-command', listener)
+    return () => { ipcRenderer.removeListener('varia:context-menu-command', listener) }
+  },
   health: () => request('system.health', {}),
   connect: options => request('connections.connect', options),
   discoverDatabases: options => request('connections.databases', options),

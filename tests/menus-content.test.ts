@@ -1,6 +1,9 @@
+import type { MenuItemConstructorOptions } from 'electron'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Platform } from '../src/shared/commands/keybindings'
-import { applicationMenus } from '../src/shared/commands/menus'
+import { applicationMenus, contextMenuIds, type ContextMenuId } from '../src/shared/commands/menus'
+import { contextMenuTemplate } from '../src/main/context-menu'
+import { nativeMenuRequest } from '../src/renderer/src/menus/native'
 import type { ThemeState, ThemeSummary } from '../src/shared/theme/types'
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { menuForTarget, type ExplorerNode, type InputTarget, type MenuTarget, type OutputView } from '../src/renderer/src/menus/targets'
@@ -141,6 +144,20 @@ describe('title-bar menu content', () => {
       const shape = (items: readonly ResolvedMenuItem[]): unknown[] => items.map(item => item.kind === 'submenu' ? [item.key, shape(item.items)] : item.key)
       for (const snapshot of snapshots) expect(snapshot.map(shape)).toEqual(snapshots[0].map(shape))
       expect(snapshots[0][0].at(-1)).toMatchObject(platform === 'win32' ? { title: 'Exit', keybinding: { text: 'Alt+F4' } } : { title: 'Quit', keybinding: { text: 'Ctrl+Q' } })
+    }
+  })
+  it('shows macOS\'s native context menus exactly as resolved: the same items, ids, titles, and enablement', async () => {
+    const { labels, snapshots } = await resolveContexts('darwin')
+    const resolved = (items: readonly ResolvedMenuItem[]): unknown[] => items.map(item => item.kind === 'separator' ? '---'
+      : item.kind === 'submenu' ? [`${item.key} ${item.title}`, resolved(item.items)] : `${item.key} ${item.title}${item.enabled ? '' : ' (disabled)'}`)
+    const native = (items: readonly MenuItemConstructorOptions[]): unknown[] => items.map(item => item.type === 'separator' ? '---'
+      : Array.isArray(item.submenu) ? [`${item.id} ${item.label}`, native(item.submenu)] : `${item.id} ${item.label}${item.enabled === false ? ' (disabled)' : ''}`)
+    for (const snapshot of snapshots) {
+      snapshot.forEach((items, index) => {
+        const menu = labels[index].split(',')[0] as ContextMenuId
+        expect(contextMenuIds).toContain(menu)
+        expect(native(contextMenuTemplate(nativeMenuRequest(1, menu, items, { x: 0, y: 0 }), 'darwin', () => {})), labels[index]).toEqual(resolved(items))
+      })
     }
   })
 })

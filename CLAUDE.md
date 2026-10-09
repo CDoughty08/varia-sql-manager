@@ -52,8 +52,9 @@ README.md documents user-facing behaviour, limits, and the protocol.
   first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
   the role, custom menus and the palette run it through `varia:run-role`. Context menus are for typed targets
   (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) that never cross IPC; `MenuService` is the only
-  `contextmenu` listener, and the page never reads the clipboard. After catalogue changes, regenerate
-  `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  `contextmenu` listener, and the page never reads the clipboard. macOS shows context menus natively: main builds them
+  from command ids (`src/main/context-menu.ts`) and sends a choice back as a token and an id. After catalogue changes,
+  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 

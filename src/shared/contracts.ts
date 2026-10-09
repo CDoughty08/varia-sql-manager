@@ -2,7 +2,8 @@ import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
-import type { MenuState } from './commands/menus'
+import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
+import type { MenuStyle } from './menu-style'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -126,6 +127,11 @@ export interface VariaApi {
   setMenuState(state: MenuState): void
   /** Runs an Electron role (Cut, Zoom In, Reload, …) on the window, for custom menus and the palette. */
   runRole(role: RendererRole): Promise<ApiResult<void>>
+  /** Main's choice of context menus: 'native' (macOS) shows them through `showContextMenu`. */
+  readonly menuStyle: MenuStyle
+  /** Shows a native context menu of catalogue command ids; resolves when it closes. A chosen item arrives on `onContextMenuCommand`. */
+  showContextMenu(request: ContextMenuRequest): Promise<ApiResult<void>>
+  onContextMenuCommand(callback: (command: ContextMenuCommand) => void): () => void
   health(): Promise<ApiResult<BackendHealth>>
   connect(options: ConnectionOptions): Promise<ApiResult<ConnectionInfo>>
   discoverDatabases(options: ConnectionOptions): Promise<ApiResult<DatabaseInfo[]>>

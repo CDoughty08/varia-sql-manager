@@ -1,7 +1,9 @@
 import type { CommandId } from '../../../shared/commands/catalog'
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
-import { menuForMnemonic, type MenubarId, type MenuId } from '../../../shared/commands/menus'
+import { menuForMnemonic, type ContextMenuId, type MenubarId, type MenuId } from '../../../shared/commands/menus'
+import type { VariaApi } from '../../../shared/contracts'
+import type { MenuStyle } from '../../../shared/menu-style'
 import { themeMenuModel, type ThemeMenuItem } from '../../../shared/theme/menu'
 import type { ThemeState } from '../../../shared/theme/types'
 import type { CommandService } from '../core/commands'
@@ -13,6 +15,7 @@ import type { Disposable } from '../core/types'
 import type { Anchor, Rect } from './geometry'
 import { MenuController, type CloseReason, type MenuKey } from './MenuController'
 import { MenubarAccess } from './menubar'
+import { NativeMenuPresenter } from './native'
 import { resolveMenu, type DynamicMenuItem, type ResolvedCommandItem, type ResolvedMenuItem } from './resolve'
 import { argsFor, contextMenuLabels, menuForTarget, targetKeys, type MenuTarget, type MenuTargetService, type TargetHit } from './targets'
 
@@ -52,6 +55,9 @@ export interface MenuServiceOptions {
   readonly editorCaret?: () => Rect | undefined
   /** Whether `element` is inside the topmost open dialog, where text fields keep their menu. */
   readonly modalContains?: (element: Element) => boolean
+  /** 'native' shows context menus through main (macOS), and the workbench's own only when main cannot. */
+  readonly style?: MenuStyle
+  readonly api?: Pick<VariaApi, 'showContextMenu' | 'onContextMenuCommand'>
   readonly timers?: Timers
 }
 
@@ -81,6 +87,9 @@ export class MenuService implements Disposable {
   private lastFocus: unknown
   /** The element an open context menu is for, outlined while the menu shows. */
   private marked?: Element
+  /** The same for an open native menu. */
+  private nativeMarked?: Element
+  private readonly native?: NativeMenuPresenter
   private readonly subscriptions: Disposable[]
   private detach?: () => void
 
@@ -93,6 +102,7 @@ export class MenuService implements Disposable {
       closed: reason => this.closed(reason)
     })
     this.access = new MenubarAccess(options.platform)
+    if (options.style === 'native' && options.api) this.native = new NativeMenuPresenter({ api: options.api, commands: options.commands, ...(options.timers ? { timers: options.timers } : {}) })
     const unsubscribe = this.controller.subscribe(() => this.ownershipChanged())
     this.subscriptions = [
       { dispose: unsubscribe },
@@ -230,15 +240,36 @@ export class MenuService implements Disposable {
     const hit = targets.targetFor(element)
     if (!hit) return false
     if (this.options.modalOpen() && (hit.target.kind !== 'input' || !this.options.modalContains?.(hit.element))) return false
+    // A native menu does not replace the workbench's own, so those close first and return focus before the target takes it.
+    if (this.native && this.ownsKeyboard()) this.close('command')
     // Also undoes Monaco moving focus from its find widget's input to the editor on right-click.
     hit.focus?.focus({ preventScroll: true })
     const target = targets.refresh(hit.target), menu = menuForTarget[target.kind]
     const items = this.resolve(menu, target)
     if (!hasItems(items)) return false
-    this.controller.openContext(items, anchor ?? this.keyboardAnchor(hit), { keyboard, label: contextMenuLabels[menu] })
-    if (this.controller.view.source !== 'context') return false
-    if (hit.mark) { hit.mark.setAttribute('data-menu-target', ''); this.marked = hit.mark }
+    const at = anchor ?? this.keyboardAnchor(hit), open = () => this.openContext(menu, items, at, keyboard, hit.mark)
+    if (!this.native) return open()
+    this.showNative(this.native, menu, items, at, hit.mark, open)
     return true
+  }
+  private openContext(menu: ContextMenuId, items: readonly ResolvedMenuItem[], anchor: Anchor, keyboard: boolean, mark: Element | undefined): boolean {
+    this.controller.openContext(items, anchor, { keyboard, label: contextMenuLabels[menu] })
+    if (this.controller.view.source !== 'context') return false
+    if (mark) { mark.setAttribute('data-menu-target', ''); this.marked = mark }
+    return true
+  }
+  /** Main shows the menu at the pointer, or below what a keyboard-opened menu is for; if it cannot, `fallback` does. */
+  private showNative(native: NativeMenuPresenter, menu: ContextMenuId, items: readonly ResolvedMenuItem[], anchor: Anchor, mark: Element | undefined, fallback: () => void): void {
+    this.unmarkNative()
+    mark?.setAttribute('data-menu-target', '')
+    this.nativeMarked = mark
+    const at = anchor.kind === 'point' ? anchor : anchor.kind === 'below' ? { x: anchor.rect.left, y: anchor.rect.bottom } : { x: anchor.rect.right, y: anchor.rect.top }
+    const unmark = () => { if (mark && this.nativeMarked === mark) this.unmarkNative() }
+    native.show(menu, items, at, { closed: unmark, failed: () => { unmark(); fallback() } })
+  }
+  private unmarkNative(): void {
+    this.nativeMarked?.removeAttribute('data-menu-target')
+    this.nativeMarked = undefined
   }
   private keyboardAnchor(hit: TargetHit): Anchor {
     const caret = hit.target.kind === 'editor' ? this.options.editorCaret?.() : undefined
@@ -273,6 +304,8 @@ export class MenuService implements Disposable {
   }
   dispose(): void {
     this.detach?.()
+    this.native?.dispose()
+    this.unmarkNative()
     this.controller.dispose()
     this.subscriptions.forEach(subscription => subscription.dispose())
     this.access.dispose()

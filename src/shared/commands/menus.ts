@@ -279,3 +279,5 @@ export function createContextMenuRequestSchema(commandsOf: (menu: ContextMenuId)
 }
 export const contextMenuRequestSchema = createContextMenuRequestSchema(contextCommandIds)
 export type ContextMenuRequest = z.infer<typeof contextMenuRequestSchema>
+/** A native context menu's chosen item, sent back to the renderer with the token of the request that showed it. */
+export interface ContextMenuCommand { readonly token: number; readonly id: CommandId }

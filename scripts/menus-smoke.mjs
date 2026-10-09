@@ -12,7 +12,7 @@ const appearanceFile = join(profile, 'appearance.json'), savedPath = join(profil
 let application
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Menus suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 240000)
+const watchdog = setTimeout(() => { console.error('Menus suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 420000)
 
 const menubar = () => page.getByRole('menubar', { name: 'Application menu' })
 const menubarItem = name => menubar().getByRole('menuitem', { name, exact: true })
@@ -50,6 +50,33 @@ async function choose(name, label, role = 'menuitem') {
   await expect(openMenus()).toHaveCount(0)
 }
 const exit = process.platform === 'win32' ? { label: 'Exit', key: 'Alt+F4' } : { label: 'Quit', key: 'Ctrl+Q' }
+/** Replaces main's backend requests with a server that has AppData and dbo.Orders, recording every call (runs in main). */
+function explorerBackend({ ipcMain }, { realHealth, script }) {
+  globalThis.variaCalls = []
+  globalThis.variaConnections = {}
+  ipcMain.removeHandler('varia:request')
+  ipcMain.handle('varia:request', async (_event, method, params) => {
+    globalThis.variaCalls.push({ method, params })
+    if (method === 'system.health') return { ok: true, value: realHealth }
+    if (method === 'connections.connect') {
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.test' }
+      globalThis.variaConnections[info.id] = info
+      return { ok: true, value: info }
+    }
+    if (method === 'connections.disconnect') { delete globalThis.variaConnections[params.connectionId]; return { ok: true, value: { disconnected: true } } }
+    if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
+    if (method === 'server.objects.list') return { ok: true, value: params.kind === 'logins' ? [{ name: 'sa', description: 'SQL_LOGIN' }] : [] }
+    if (method === 'tables.list') return { ok: true, value: [{ schema: 'dbo', name: 'Orders' }] }
+    if (method === 'tables.script') return { ok: true, value: { sql: script } }
+    if (method === 'tables.columns') return { ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } }
+    if (method === 'query.session.close') return { ok: true, value: { closed: true } }
+    if (method === 'query.execute') return { ok: true, value: {
+      resultSets: [{ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], rows: [[1, 'Contoso']], truncated: false }],
+      messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false
+    } }
+    return { ok: false, error: 'Unsupported test operation.' }
+  })
+}
 
 try {
   application = await electron.launch(launchOptions)
@@ -479,32 +506,7 @@ try {
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok).toBe(true)
   const createScript = 'CREATE TABLE [dbo].[Orders] ([Id] int);'
-  await application.evaluate(({ ipcMain }, { realHealth, script }) => {
-    globalThis.variaCalls = []
-    globalThis.variaConnections = {}
-    ipcMain.removeHandler('varia:request')
-    ipcMain.handle('varia:request', async (_event, method, params) => {
-      globalThis.variaCalls.push({ method, params })
-      if (method === 'system.health') return { ok: true, value: realHealth }
-      if (method === 'connections.connect') {
-        const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.test' }
-        globalThis.variaConnections[info.id] = info
-        return { ok: true, value: info }
-      }
-      if (method === 'connections.disconnect') { delete globalThis.variaConnections[params.connectionId]; return { ok: true, value: { disconnected: true } } }
-      if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
-      if (method === 'server.objects.list') return { ok: true, value: params.kind === 'logins' ? [{ name: 'sa', description: 'SQL_LOGIN' }] : [] }
-      if (method === 'tables.list') return { ok: true, value: [{ schema: 'dbo', name: 'Orders' }] }
-      if (method === 'tables.script') return { ok: true, value: { sql: script } }
-      if (method === 'tables.columns') return { ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } }
-      if (method === 'query.session.close') return { ok: true, value: { closed: true } }
-      if (method === 'query.execute') return { ok: true, value: {
-        resultSets: [{ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], rows: [[1, 'Contoso']], truncated: false }],
-        messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false
-      } }
-      return { ok: false, error: 'Unsupported test operation.' }
-    })
-  }, { realHealth: health.value, script: createScript })
+  await application.evaluate(explorerBackend, { realHealth: health.value, script: createScript })
   const calls = method => application.evaluate((_electron, name) => globalThis.variaCalls.filter(call => call.method === name).map(call => call.params), method)
   const explorerMenu = menu('Object Explorer'), labels = () => explorerMenu.locator('.menu-item .menu-label').allTextContents()
   // The empty area offers Connect… and Refresh, which needs a server.
@@ -701,8 +703,125 @@ try {
   expect(await clipboard()).not.toContain('SELECT')
   console.log('Menus checks: results grid cell selection and copying by menu, keys, and Edit › Copy, and the Messages menu.')
 
+  // 14. Native context menus, as macOS shows them: main builds each from command ids and sends back the request's token
+  // with the chosen id. The custom style refuses them; the app is relaunched with the native style, Electron's popups
+  // are recorded (one is really shown), and choices are made as Electron would make them.
+  expect(await page.evaluate(() => window.varia.menuStyle)).toBe('custom')
+  const forged = { token: 1, menu: 'explorer.context', x: 10, y: 10, visible: ['explorer.copyName'], disabled: [], checked: [] }
+  expect(await page.evaluate(request => window.varia.showContextMenu(request), forged)).toEqual({ ok: false, error: 'Native context menus are not in use.' })
   expect(failures).toEqual([])
-  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; and results grid cell selection.')
+  await application.close()
+  application = await electron.launch({ ...launchOptions, env: { ...env, VARIA_SMOKE_MENU_STYLE: 'native' } })
+  page = await application.firstWindow()
+  page.setDefaultTimeout(10000)
+  page.on('pageerror', error => failures.push(error.message))
+  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  expect(await page.evaluate(() => window.varia.menuStyle)).toBe('native')
+  await application.evaluate(explorerBackend, { realHealth: health.value, script: createScript })
+  await application.evaluate(({ Menu }) => {
+    globalThis.variaPopups = []
+    globalThis.variaPopupMode = 'record'
+    const show = Menu.prototype.popup
+    const describe = menu => menu.items.map(item => item.type === 'separator' ? '---' : item.submenu ? [item.label, describe(item.submenu)] : item.label)
+    Menu.prototype.popup = function (options) {
+      globalThis.variaPopups.push({ menu: this, options, items: describe(this) })
+      if (globalThis.variaPopupMode === 'fail') throw new Error('No popup.')
+      if (globalThis.variaPopupMode === 'show') show.call(this, options)
+    }
+  })
+  const popups = () => application.evaluate(() => globalThis.variaPopups.map(popup => ({ items: popup.items, x: popup.options.x, y: popup.options.y })))
+  const popupMode = mode => application.evaluate((_electron, value) => { globalThis.variaPopupMode = value }, mode)
+  /** Chooses an item of the latest popup as Electron does (roles get the focused window's contents) and closes it: Linux reports the choice first, macOS the close. */
+  const pick = (id, order = 'choice first') => application.evaluate(({ BrowserWindow }, { id, order }) => {
+    const popup = globalThis.variaPopups.at(-1), window = BrowserWindow.getAllWindows()[0]
+    const click = () => popup.menu.getMenuItemById(id).click(undefined, window, window.webContents)
+    if (order === 'close first') { popup.options.callback(); click() } else { click(); popup.options.callback() }
+  }, { id, order })
+  // A text field in a dialog: Cut is Electron's role, acting on the field, which kept focus.
+  await choose('File', 'Connect to Server…')
+  const nativeField = page.locator('#connect-server')
+  await nativeField.fill('native-server')
+  await nativeField.selectText()
+  await nativeField.click({ button: 'right' })
+  await expect.poll(async () => (await popups()).length).toBe(1)
+  expect((await popups())[0].items).toEqual(['Undo', 'Redo', '---', 'Cut', 'Copy', 'Paste', 'Delete', '---', 'Select All'])
+  await expect(openMenus()).toHaveCount(0)
+  await pick('edit.cut@input.context')
+  await expect(nativeField).toHaveValue('')
+  await expect.poll(clipboard).toBe('native-server')
+  await expect(nativeField).toBeFocused()
+  await nativeField.fill('server-a')
+  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const nativeServer = page.getByRole('region', { name: 'Server server-a', exact: true })
+  await nativeServer.locator('[data-database="AppData"] .database-node').click()
+  const nativeTable = nativeServer.locator('[data-database="AppData"]').getByRole('button', { name: 'dbo.Orders', exact: true })
+  await expect(nativeTable).toBeVisible()
+  // A table's menu at the pointer: the catalogue's labels from main, the table outlined until it closes.
+  const tableBox = await nativeTable.boundingBox()
+  await nativeTable.click({ button: 'right', position: { x: 12, y: 6 } })
+  await expect.poll(async () => (await popups()).length).toBe(2)
+  const tablePopup = (await popups())[1]
+  expect(tablePopup.items).toEqual(['Select Top 1000 Rows', '---', ['Script Table as', [['CREATE To', ['New Query Editor Window', 'File…', 'Clipboard']]]], '---', 'Copy Name'])
+  expect(Math.abs(tablePopup.x - (tableBox.x + 12))).toBeLessThanOrEqual(1)
+  expect(Math.abs(tablePopup.y - (tableBox.y + 6))).toBeLessThanOrEqual(1)
+  await expect(openMenus()).toHaveCount(0)
+  await expect(nativeTable).toHaveAttribute('data-menu-target', '')
+  await expect(nativeTable).toBeFocused()
+  await pick('explorer.scriptCreateToClipboard')
+  await expect.poll(clipboard).toBe(createScript)
+  await expect(nativeTable).not.toHaveAttribute('data-menu-target')
+  await nativeTable.click({ button: 'right' })
+  await expect.poll(async () => (await popups()).length).toBe(3)
+  await pick('explorer.copyName', 'close first')
+  await expect.poll(clipboard).toBe('[dbo].[Orders]')
+  // Only the open menu's token counts: a choice from the table's older menu does not run on the server's.
+  await nativeServer.locator('.server-toggle').click({ button: 'right' })
+  await expect.poll(async () => (await popups()).length).toBe(4)
+  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', '---', 'New Query', '---', 'Copy Name', '---', 'Refresh'])
+  const queriesBefore = await tabs().count()
+  await application.evaluate(() => { globalThis.variaPopups[2].menu.getMenuItemById('explorer.copyName').click() })
+  await pick('explorer.newQuery')
+  await expect(tabs()).toHaveCount(queriesBefore + 1)
+  expect(await clipboard()).toBe('[dbo].[Orders]')
+  // A real popup: Electron reports its close, which ends the outline.
+  await popupMode('show')
+  await nativeTable.click({ button: 'right' })
+  await expect.poll(async () => (await popups()).length).toBe(5)
+  await expect(nativeTable).toHaveAttribute('data-menu-target', '')
+  await application.evaluate(({ BrowserWindow }) => { globalThis.variaPopups.at(-1).menu.closePopup(BrowserWindow.getAllWindows()[0]) })
+  await expect(nativeTable).not.toHaveAttribute('data-menu-target')
+  // Shift+F10 asks for the focused node's menu below it.
+  await popupMode('record')
+  await nativeTable.focus()
+  await page.keyboard.press('Shift+F10')
+  await expect.poll(async () => (await popups()).length).toBe(6)
+  const nodeBox = await nativeTable.boundingBox(), keyboardPopup = (await popups())[5]
+  expect(keyboardPopup.y).toBeGreaterThanOrEqual(nodeBox.y + nodeBox.height - 1)
+  expect(keyboardPopup.y).toBeLessThanOrEqual(nodeBox.y + nodeBox.height + 30)
+  expect(keyboardPopup.x).toBeGreaterThanOrEqual(nodeBox.x - 30)
+  await application.evaluate(() => globalThis.variaPopups.at(-1).options.callback())
+  await expect(nativeTable).toBeFocused()
+  // When main cannot show a menu, the workbench shows the same one itself.
+  await popupMode('fail')
+  await nativeTable.click({ button: 'right' })
+  const fallbackMenu = menu('Object Explorer')
+  await expect(fallbackMenu).toBeVisible()
+  expect(await fallbackMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name'])
+  await page.keyboard.press('Escape')
+  await expect(openMenus()).toHaveCount(0)
+  await popupMode('record')
+  // Main refuses foreign ids, disabled items that are not shown, and points off the window; roles and files are fixed lists.
+  for (const change of [{ visible: ['file.save'] }, { disabled: ['explorer.refresh'] }, { x: -1 }]) {
+    expect((await page.evaluate(request => window.varia.showContextMenu(request), { ...forged, ...change })).ok, JSON.stringify(change)).toBe(false)
+  }
+  for (const call of [() => window.varia.runRole('openExternal'), () => window.varia.revealSqlFile('x')]) expect((await page.evaluate(call)).ok).toBe(false)
+  expect((await popups()).length).toBe(7)
+  console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, and the fallback.')
+
+  expect(failures).toEqual([])
+  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; and native context menus.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'menus-failure.png') }).catch(() => {})
   console.log(await page?.evaluate(() => ({ focused: document.activeElement?.outerHTML.slice(0, 300), menus: document.querySelectorAll('.menu').length, errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })).catch(() => 'no page'))
