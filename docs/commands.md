@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (69)
+## Commands (72)
 
 ### File
 
@@ -83,7 +83,8 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
-| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect… |
+| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Object Explorer context menu › Reconnect… |
+| Remove Lost Connection… | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
 ### Object Explorer
@@ -91,12 +92,14 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
-| New Query (not in the palette) | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
-| Select Top 1000 Rows (not in the palette) | `explorer.selectTopRows` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
-| Script Table as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › New Query Editor Window |
-| Script Table as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › File… |
-| Script Table as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady` | Object Explorer context menu › Script Table as › CREATE To › Clipboard |
-| Copy Name (not in the palette) | `explorer.copyName` | — | — | — | Always | Object Explorer context menu › Copy Name |
+| Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
+| Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
+| New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
+| Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
+| Script Table as CREATE to New Query Editor Window | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › New Query Editor Window |
+| Script Table as CREATE to File… | `explorer.scriptCreateToFile` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › File… |
+| Script Table as CREATE to Clipboard | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady` | Object Explorer context menu › Script Table as › CREATE To › Clipboard |
+| Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 
 ### Preferences
 
@@ -249,17 +252,19 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 
 #### Object Explorer context menu (`explorer.context`)
 
-Right-click an Object Explorer node or the empty area below the servers, or press Shift+F10 or the context-menu key on a focused node. Items act on that node.
+Right-click an Object Explorer node (which selects it) or the empty area below the servers, or press Shift+F10 or the context-menu key in the tree for the selected node. Items act on that node.
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == 'server' \|\| explorerNode == 'background'` |
-| `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server'` |
-| `1_query` | New **Q**uery | `explorer.newQuery` | `explorerNode == 'server' \|\| explorerNode == 'database'` |
+| `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
+| `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
+| `0_connect` | Re**m**ove | `connection.removeLost` | `explorerServerLost` |
+| `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerNode == 'table'` |
 | `2_script` | **S**cript Table as › | Submenu: Object Explorer context menu › Script Table as | `explorerNode == 'table'` |
-| `5_copy` | Copy **N**ame | `explorer.copyName` | `explorerNode == 'server' \|\| explorerNode == 'database' \|\| explorerNode == 'table' \|\| explorerNode == 'serverObject'` |
-| `8_refresh` | Re**f**resh | `explorer.refresh` | `explorerNode != 'table' && explorerNode != 'serverObject'` |
+| `5_copy` | Copy **N**ame | `explorer.copyName` | `explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost` |
+| `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 
 #### Object Explorer context menu › Script Table as
 
@@ -324,7 +329,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (34)
+## Context keys (35)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -364,7 +369,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerSelectionInsertable` | boolean | state | The selected Object Explorer node has a name to copy: a server, an object, or a fully loaded Columns folder. |
 | `explorerSelectionScriptable` | boolean | state | The selected Object Explorer node is an object SMO can script. |
 | `explorerLoading` | boolean | state | Object Explorer is loading or waiting to load nodes. |
-| `explorerNode` | `'background'`, `'server'`, `'databasesFolder'`, `'systemDatabasesFolder'`, `'snapshotsFolder'`, `'database'`, `'tablesFolder'`, `'table'`, `'securityFolder'`, `'serverObjectsFolder'`, `'serverObject'`, `''` | target | The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object. |
+| `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
+| `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
 | `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
 | `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
 

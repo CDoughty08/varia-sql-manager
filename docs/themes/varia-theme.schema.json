@@ -383,8 +383,8 @@
         },
         "disabledForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Text of disabled controls, such as unavailable commands in the command palette. Default $textMuted (Dark #8a9cb3, Light #525e72).",
-          "markdownDescription": "(VS Code) Text of disabled controls, such as unavailable commands in the command palette. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
+          "description": "(VS Code) Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "errorForeground": {
           "$ref": "#/definitions/value",
@@ -643,13 +643,13 @@
         },
         "sideBarTitle.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Object Explorer heading. Default $textTertiary (Dark #9eafc5, Light #465366).",
-          "markdownDescription": "(VS Code) Object Explorer heading. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
+          "description": "(VS Code) Side bar section titles. Not used yet; reserved for side bar section titles. Default $textTertiary (Dark #9eafc5, Light #465366).",
+          "markdownDescription": "(VS Code) Side bar section titles. Not used yet; reserved for side bar section titles. Default `$textTertiary` (Dark `#9eafc5`, Light `#465366`)."
         },
         "sideBarSectionHeader.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Lines around the Object Explorer heading and footer. Default $borderSubtle (Dark #252f3d, Light #e3e7ed).",
-          "markdownDescription": "(VS Code) Lines around the Object Explorer heading and footer. Default `$borderSubtle` (Dark `#252f3d`, Light `#e3e7ed`)."
+          "description": "(VS Code) Lines around the Object Explorer toolbar and footer. Default $borderSubtle (Dark #252f3d, Light #e3e7ed).",
+          "markdownDescription": "(VS Code) Lines around the Object Explorer toolbar and footer. Default `$borderSubtle` (Dark `#252f3d`, Light `#e3e7ed`)."
         },
         "list.hoverBackground": {
           "$ref": "#/definitions/value",
@@ -678,8 +678,8 @@
         },
         "list.focusOutline": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Outline of the focused list row. Not used yet; reserved for the Object Explorer tree. Default @focusBorder (Dark #76acff, Light #005fb8).",
-          "markdownDescription": "(VS Code) Outline of the focused list row. Not used yet; reserved for the Object Explorer tree. Default `@focusBorder` (Dark `#76acff`, Light `#005fb8`)."
+          "description": "(VS Code) Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. Default @focusBorder (Dark #76acff, Light #005fb8).",
+          "markdownDescription": "(VS Code) Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. Default `@focusBorder` (Dark `#76acff`, Light `#005fb8`)."
         },
         "list.highlightForeground": {
           "$ref": "#/definitions/value",
@@ -698,18 +698,23 @@
         },
         "objectExplorer.activeConnectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Row of the selected server. Default $accentSurface (Dark #1d2b40, Light #e3ebf5).",
-          "markdownDescription": "(Varia) Row of the selected server. Default `$accentSurface` (Dark `#1d2b40`, Light `#e3ebf5`)."
+          "description": "(Varia) Row of the active query's server. Default $accentSurface (Dark #1d2b40, Light #e3ebf5).",
+          "markdownDescription": "(Varia) Row of the active query's server. Default `$accentSurface` (Dark `#1d2b40`, Light `#e3ebf5`)."
         },
         "objectExplorer.headingForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Folder headings. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
-          "markdownDescription": "(Varia) Folder headings. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+          "description": "(Varia) Folder row labels. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(Varia) Folder row labels. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+        },
+        "objectExplorer.sublabelForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text after a row's label, such as a column's type or a database's state. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(Varia) Text after a row's label, such as a column's type or a database's state. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
         },
         "objectExplorer.countForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Item counts next to folder headings. Default $textMuted (Dark #8a9cb3, Light #525e72).",
-          "markdownDescription": "(Varia) Item counts next to folder headings. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
+          "description": "(Varia) The (filtered) marker and loading progress next to folder labels. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) The (filtered) marker and loading progress next to folder labels. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "objectExplorer.chevronForeground": {
           "$ref": "#/definitions/value",
@@ -728,8 +733,8 @@
         },
         "objectExplorer.actionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Row actions such as Disconnect. Default $textMuted (Dark #8a9cb3, Light #525e72).",
-          "markdownDescription": "(Varia) Row actions such as Disconnect. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
+          "description": "(Varia) Object Explorer toolbar icons. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Object Explorer toolbar icons. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "editorGroupHeader.tabsBackground": {
           "$ref": "#/definitions/value",

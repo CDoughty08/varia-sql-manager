@@ -1,19 +1,15 @@
 import type { TargetKeys } from '../../../shared/commands/context-keys'
 import type { ContextMenuId } from '../../../shared/commands/menus'
-import type { ServerObjectKind } from '../../../shared/contracts'
+import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 
-/** An Object Explorer node a context menu can be for; 'background' is the empty area below the servers. */
-export type ExplorerNode =
-  | { readonly kind: 'background' }
-  | { readonly kind: 'server'; readonly connectionId: string }
-  | { readonly kind: 'databasesFolder' | 'systemDatabasesFolder' | 'snapshotsFolder' | 'securityFolder'; readonly connectionId: string }
-  | { readonly kind: 'database' | 'tablesFolder'; readonly connectionId: string; readonly database: string }
-  | { readonly kind: 'table'; readonly connectionId: string; readonly database: string; readonly schema: string; readonly name: string }
-  | { readonly kind: 'serverObjectsFolder'; readonly connectionId: string; readonly objectKind: ServerObjectKind }
-  | { readonly kind: 'serverObject'; readonly connectionId: string; readonly objectKind: ServerObjectKind; readonly name: string }
+/**
+ * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`), its
+ * node id in `ExplorerService`, and whether it is a server whose connection was lost with its backend generation.
+ */
+export interface ExplorerMenuNode extends ExplorerTarget { readonly id: number; readonly lost: boolean }
 /** A text field's state when its menu opened: what Cut, Copy, Paste, Delete, Select All, Undo, and Redo can do. */
 export interface InputTarget {
   readonly kind: 'input'
@@ -41,7 +37,8 @@ export interface OutputTarget {
 /** What a context menu was opened for. Renderer objects only: commands receive it as `CommandArgs.target`, and it never crosses IPC. */
 export type MenuTarget =
   | { readonly kind: 'editor'; readonly tabId: string }
-  | { readonly kind: 'explorer'; readonly node: ExplorerNode }
+  /** Without a node, the empty area below the servers. */
+  | { readonly kind: 'explorer'; readonly node?: ExplorerMenuNode }
   | { readonly kind: 'documentTab'; readonly tabId: string }
   | OutputTarget
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean }
@@ -59,7 +56,8 @@ export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
 /** The target keys placement `when` clauses read; each describes one kind of target and is '' or false for the others. */
 export function targetKeys(target: MenuTarget | undefined): TargetKeys {
   return {
-    explorerNode: target?.kind === 'explorer' ? target.node.kind : '',
+    explorerNode: target?.kind === 'explorer' ? target.node?.kind ?? 'background' : '',
+    explorerServerLost: target?.kind === 'explorer' && !!target.node?.lost,
     outputView: target?.kind === 'output' ? target.view : '',
     paneFloating: target?.kind === 'dockTab' && target.floating
   }
@@ -70,7 +68,8 @@ export function argsFor(target: MenuTarget): CommandArgs {
   return { target, ...(tabId ? { tabId } : {}) }
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
-export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
+/** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
+export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
 export const outputOf = (args: CommandArgs | undefined): OutputTarget | undefined => args?.target?.kind === 'output' ? args.target : undefined
 
 const textTypes: ReadonlySet<string> = new Set(['text', 'search', 'email', 'url', 'tel', 'number', 'password'])

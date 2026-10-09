@@ -146,7 +146,7 @@ try {
   await expect.poll(text).toBe(typed)
   const selectionRules = await page.evaluate(() => ({
     tabs: getComputedStyle(document.querySelector('.tab-name')).userSelect,
-    heading: getComputedStyle(document.querySelector('.panel-heading')).userSelect,
+    heading: getComputedStyle(document.querySelector('.explorer-toolbar')).userSelect,
     status: getComputedStyle(document.querySelector('.status-bar')).userSelect,
     editor: getComputedStyle(document.querySelector('.monaco-editor')).userSelect
   }))

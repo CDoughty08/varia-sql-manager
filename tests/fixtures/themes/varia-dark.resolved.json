@@ -70,6 +70,7 @@
     "tree.indentGuidesStroke": "#252f3d",
     "objectExplorer.activeConnectionBackground": "#1d2b40",
     "objectExplorer.headingForeground": "#c3cddd",
+    "objectExplorer.sublabelForeground": "#c3cddd",
     "objectExplorer.countForeground": "#8a9cb3",
     "objectExplorer.chevronForeground": "#7e93b1",
     "objectExplorer.folderIconForeground": "#d9b370",

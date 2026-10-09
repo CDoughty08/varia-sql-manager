@@ -7,6 +7,7 @@ import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
+import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import { ExplorerLoader, type ExplorerLimitValues, type LoaderLimits, type LoadOutcome, type LoadPriority, type LoadTask } from './loader'
 import { emptyRows, flatten, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
@@ -63,6 +64,9 @@ const databaseFolders: ReadonlySet<string> = new Set<FolderId>(['databases', 'sy
 const objectOf = (ref: ExplorerNodeRef): ObjectRef => ref.type === 'object' ? ref.object : ref.owner
 const isParentKind = (kind: string): kind is ParentRef['kind'] => (parentKinds as readonly string[]).includes(kind)
 const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema === b.schema && a.name === b.name
+
+const targetOf = (node: TreeNode): ExplorerTarget =>
+  ({ connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label })
 
 /** The server row's "(SQL Server 16.0.4135.4 - sa)", from the profile probed at connect, else the reported version. */
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
@@ -250,8 +254,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The selected node as a command target; synthetic rows have none. */
   target(): ExplorerTarget | undefined {
     const node = this.selectedNode()
-    if (!node) return undefined
-    return { connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label }
+    return node && targetOf(node)
+  }
+  /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
+  menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
+    const node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
+    return node && this.attached(node) ? { ...targetOf(node), id: node.id, lost: node.lost } : undefined
   }
   /** The server and database a new query for the row should use (the database is the node's, if it has one). */
   queryTarget(id: number | undefined = this.selected): { connectionId: string; database?: string } | undefined {

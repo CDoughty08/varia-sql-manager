@@ -15,6 +15,8 @@ const inactiveSelection: ColorKey[] = ['sideBar.background', 'list.inactiveSelec
 const panelTitle: ColorKey[] = ['panelTitle.background'], titleBar: ColorKey[] = ['titleBar.activeBackground']
 const quickInput: ColorKey[] = ['quickInput.background'], quickInputActive: ColorKey[] = ['quickInput.background', 'quickInputList.focusBackground']
 const quickInputHover: ColorKey[] = ['quickInput.background', 'list.hoverBackground']
+const treeActive: ColorKey[] = ['sideBar.background', 'list.activeSelectionBackground'], treeInactive: ColorKey[] = ['sideBar.background', 'list.inactiveSelectionBackground']
+const treeHover: ColorKey[] = ['sideBar.background', 'list.hoverBackground'], treeServer: ColorKey[] = ['sideBar.background', 'objectExplorer.activeConnectionBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
@@ -75,6 +77,12 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
   ...text(['sideBarTitle.foreground', 'objectExplorer.headingForeground', 'objectExplorer.countForeground', 'errorForeground'], sideBar),
   ...text(['objectExplorer.countForeground'], sideBarHover),
+  // Object Explorer rows: labels and sublabels on hover, on the active query's server, and selected (labels then take
+  // the selection's foreground; sublabels keep theirs).
+  ...text(['foreground', 'objectExplorer.headingForeground', 'objectExplorer.countForeground', 'objectExplorer.sublabelForeground'], treeHover, treeServer),
+  ...text(['objectExplorer.sublabelForeground'], sideBar, treeActive, treeInactive),
+  ...text(['list.activeSelectionForeground'], treeActive),
+  ...text(['list.inactiveSelectionForeground'], treeInactive),
   ...text(['documentTabs.activeForeground'], ['documentTabs.background', 'documentTabs.activeBackground']),
   ...text(['documentTabs.inactiveForeground'], strip),
   ...text(['documentTabs.iconForeground'], strip, ['documentTabs.background', 'documentTabs.activeBackground']),
@@ -92,6 +100,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, strip, input, quickInputActive, ...dockTabBackgrounds.map(dockTabs)),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground', 'objectExplorer.actionForeground'], sideBar),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], sideBarHover),
+  ...graphic(['objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], treeHover, treeServer),
+  ...graphic(['list.focusOutline'], sideBar, treeActive),
   ...graphic(['titleBar.iconForeground'], titleBar),
   ...graphic(['connection.red', 'connection.orange', 'connection.yellow', 'connection.green', 'connection.blue', 'connection.purple'], sideBar, strip, editor, statusBar, widget),
   ...graphic(['connection.default'], widget, activeSelection),

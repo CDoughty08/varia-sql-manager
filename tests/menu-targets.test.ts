@@ -11,15 +11,17 @@ describe('menu targets', () => {
   it('map every kind of target to its context menu and keys', () => {
     const input = inputTarget(element('input', { value: 'a' }).dom, () => true)
     const targets: MenuTarget[] = [
-      { kind: 'editor', tabId: 't1' }, { kind: 'explorer', node: { kind: 'table', connectionId: 'c', database: 'd', schema: 's', name: 'n' } }, { kind: 'documentTab', tabId: 't2' },
+      { kind: 'editor', tabId: 't1' }, { kind: 'explorer', node: { id: 7, lost: false, kind: 'table', connectionId: 'c', label: 's.n', ref: { type: 'object', object: { kind: 'table', database: 'd', schema: 's', name: 'n' } } } }, { kind: 'documentTab', tabId: 't2' },
       { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'output', floating: true }, input
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    expect(targets.map(targetKeys)).toEqual([
-      { explorerNode: '', outputView: '', paneFloating: false }, { explorerNode: 'table', outputView: '', paneFloating: false }, { explorerNode: '', outputView: '', paneFloating: false },
-      { explorerNode: '', outputView: 'messages', paneFloating: false }, { explorerNode: '', outputView: '', paneFloating: true }, { explorerNode: '', outputView: '', paneFloating: false }
-    ])
-    expect(targetKeys(undefined)).toEqual({ explorerNode: '', outputView: '', paneFloating: false })
+    const none = { explorerNode: '', explorerServerLost: false, outputView: '', paneFloating: false }
+    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, { ...none, outputView: 'messages' }, { ...none, paneFloating: true }, none])
+    expect(targetKeys(undefined)).toEqual(none)
+    // The empty area below the servers, and a server lost with its backend generation.
+    expect(targetKeys({ kind: 'explorer' })).toEqual({ ...none, explorerNode: 'background' })
+    const lost = { id: 1, lost: true, kind: 'server', connectionId: 'c', label: 'c', ref: { type: 'object', object: { kind: 'server' } } } as const
+    expect(targetKeys({ kind: 'explorer', node: lost })).toEqual({ ...none, explorerNode: 'server', explorerServerLost: true })
     expect(targetKeys({ kind: 'dockTab', pane: 'editor', floating: false }).paneFloating).toBe(false)
     // File commands act on the tab the menu is for.
     expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't2', 't3', undefined, undefined])

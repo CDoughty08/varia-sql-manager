@@ -1,6 +1,7 @@
 import { _electron as electron, expect } from '@playwright/test'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { explorerRow, explorerStatics, explorerTree } from './fixtures/explorer-tree.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'palette-profile-'))
@@ -214,7 +215,7 @@ try {
   // Stub SQL responses so connected commands run without a server.
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok).toBe(true)
-  await application.evaluate(({ ipcMain }, realHealth) => {
+  await application.evaluate(({ ipcMain }, { realHealth, statics }) => {
     globalThis.variaCalls = []
     globalThis.variaConnections = {}
     ipcMain.removeHandler('varia:request')
@@ -233,7 +234,13 @@ try {
         { name: 'AppData', isSystem: false, isSnapshot: false },
         { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
       ] }
-      if (method === 'server.objects.list' || method === 'tables.list') return { ok: true, value: [] }
+      // Object Explorer: the catalogue's static folders, and AppData in Databases.
+      if (method === 'explorer.children') {
+        const { node } = params, owner = node.type === 'object' ? node.object : node.owner
+        const nodes = (node.type === 'object' ? statics.objects[node.object.kind] : statics.folders[node.folder]).map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
+        if (node.type === 'folder' && node.folder === 'databases') nodes.push({ ref: { type: 'object', object: { kind: 'database', name: 'AppData' } }, label: 'AppData', icon: 'svg:database', hasChildren: true })
+        return { ok: true, value: { nodes, total: nodes.length, elapsedMs: 1 } }
+      }
       if (method === 'query.session.close') return { ok: true, value: { closed: true } }
       // Rows live in the backend's result store, which a stub does not have; the summary's messages carry the target.
       if (method === 'query.execute') return { ok: true, value: {
@@ -242,7 +249,7 @@ try {
       } }
       return { ok: false, error: 'Unsupported test operation.' }
     })
-  }, health.value)
+  }, { realHealth: health.value, statics: explorerStatics() })
 
   // 8. Connecting enables Execute in the native menu; Ctrl+U picks the query's database.
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
@@ -250,7 +257,7 @@ try {
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  const explorer = page.getByRole('region', { name: 'Server server-a', exact: true })
+  const explorer = await explorerRow(page, 'server-a')
   await expect(explorer).toBeVisible()
   await expect.poll(() => menuItem('query.execute')).toMatchObject({ enabled: true })
   await textbox().focus()
@@ -270,11 +277,12 @@ try {
   await expect.poll(editorText).toBe('x')
   await expect(widget()).toHaveCount(0)
 
-  // 10. F5 refreshes Object Explorer when it has focus, and executes in the editor.
-  const listed = await calls('databases.list')
-  await explorer.locator('.server-toggle').focus()
+  // 10. F5 refreshes Object Explorer's selected node when the tree has focus, and executes in the editor.
+  const listed = await calls('explorer.children')
+  await explorer.click()
+  await expect(explorerTree(page)).toBeFocused()
   await page.keyboard.press('F5')
-  await expect.poll(() => calls('databases.list')).toBeGreaterThan(listed)
+  await expect.poll(() => calls('explorer.children')).toBeGreaterThan(listed)
   const executed = await calls('query.execute')
   await textbox().focus()
   await page.keyboard.press('F5')
@@ -282,11 +290,11 @@ try {
   await expect(page.locator('.messages')).toContainText('Executed on server-a in AppData')
   // F8 moves focus to Object Explorer, as in SSMS, so the F5 after it refreshes rather than executes.
   await textbox().focus()
-  const refreshed = await calls('databases.list'), ran = await calls('query.execute')
+  const refreshed = await calls('explorer.children'), ran = await calls('query.execute')
   await page.keyboard.press('F8')
-  await expect(explorer.locator('.server-toggle')).toBeFocused()
+  await expect(explorerTree(page)).toBeFocused()
   await page.keyboard.press('F5')
-  await expect.poll(() => calls('databases.list')).toBeGreaterThan(refreshed)
+  await expect.poll(() => calls('explorer.children')).toBeGreaterThan(refreshed)
   expect(await calls('query.execute')).toBe(ran)
 
   // 11. A double-click or a held Enter on a command that opens a picker picks nothing there, and choosing the query's

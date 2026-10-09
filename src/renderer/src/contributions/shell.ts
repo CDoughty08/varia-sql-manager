@@ -55,6 +55,12 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  */
 export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
+  /** The lost server a menu was opened for (undefined without one); null when the menu's node is not one, or no longer. */
+  const lostNode = (args: CommandArgs | undefined) => {
+    const node = explorerNodeOf(args)
+    if (!node) return undefined
+    return node.kind === 'server' && node.lost && connections.get(node.connectionId)?.lost ? node : null
+  }
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }) }),
@@ -76,7 +82,7 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('connection.connect', { run: () => host.showConnect() }),
     // From a server node's menu, that server; otherwise the user picks one.
     commands.register('connection.disconnect', {
-      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (connections.isLive(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
       run: args => {
         const node = explorerNodeOf(args)
         if (node?.kind === 'server') return host.disconnect(node.connectionId)
@@ -86,15 +92,33 @@ export function shellContribution({ commands, documents, files, quickInput, conn
         })
       }
     }),
-    // The active query's lost connection first; otherwise the user picks among the lost ones.
-    commands.register('connection.reconnect', { run: () => {
-      const active = documents.active?.connectionId ? connections.get(documents.active.connectionId) : undefined
-      if (active?.lost) return host.reconnect(active.id)
-      quickInput.show({
-        ariaLabel: 'Reconnect', placeholder: 'Select a lost connection to reconnect', noun: 'servers',
-        items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.reconnect(item.id)
-      })
-    } }),
+    // A lost server's menu reconnects that server; otherwise the active query's lost connection, else the user picks
+    // among the lost ones.
+    commands.register('connection.reconnect', {
+      when: args => lostNode(args) !== null,
+      run: args => {
+        const node = lostNode(args)
+        if (node) return host.reconnect(node.connectionId)
+        const active = documents.active?.connectionId ? connections.get(documents.active.connectionId) : undefined
+        if (active?.lost) return host.reconnect(active.id)
+        quickInput.show({
+          ariaLabel: 'Reconnect', placeholder: 'Select a lost connection to reconnect', noun: 'servers',
+          items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.reconnect(item.id)
+        })
+      }
+    }),
+    // A lost server's menu removes that server, as its Remove button does; otherwise the user picks among the lost ones.
+    commands.register('connection.removeLost', {
+      when: args => lostNode(args) !== null,
+      run: args => {
+        const node = lostNode(args)
+        if (node) return host.disconnect(node.connectionId)
+        quickInput.show({
+          ariaLabel: 'Remove Lost Connection', placeholder: 'Select a lost connection to remove', noun: 'servers',
+          items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.disconnect(item.id)
+        })
+      }
+    }),
     commands.register('pane.float', { when: args => located(args, 'grid'), run: onPane(pane => host.floatPane(pane)) }),
     commands.register('pane.dock', { when: args => located(args, 'floating'), run: onPane(pane => host.dockPane(pane)) }),
     commands.register('pane.close', { when: args => !!paneOf(args) && !located(args, 'closed'), run: onPane(pane => host.closePane(pane)) })

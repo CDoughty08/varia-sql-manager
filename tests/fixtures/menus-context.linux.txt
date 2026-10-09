@@ -96,13 +96,11 @@ explorer.context, for a server
   Copy &Name  -+++
   ---
   Re&fresh  F5  -+++
-explorer.context, for the databasesFolder node
-  Re&fresh  F5  -+++
-explorer.context, for the systemDatabasesFolder node
-  Re&fresh  F5  -+++
-explorer.context, for the snapshotsFolder node
-  Re&fresh  F5  -+++
-explorer.context, for the securityFolder node
+explorer.context, for a server whose connection was lost
+  &Connect…  ++++
+  &Reconnect…  ++++
+  Re&move  +++-
+explorer.context, for the Databases folder
   Re&fresh  F5  -+++
 explorer.context, for a database
   New &Query  -++-
@@ -122,10 +120,18 @@ explorer.context, for a table
       C&lipboard  -+++
   ---
   Copy &Name  -+++
-explorer.context, for a server object folder
+  ---
   Re&fresh  F5  -+++
-explorer.context, for a server object
+explorer.context, for a column
   Copy &Name  -+++
+  ---
+  Re&fresh  F5  -+++
+explorer.context, for a return value
+  Re&fresh  F5  -+++
+explorer.context, for a login
+  Copy &Name  -+++
+  ---
+  Re&fresh  F5  -+++
 output.context, for a results grid with selected cells
   &Copy  Ctrl+C  ++++
   Copy with &Headers  Ctrl+Shift+C  ++++

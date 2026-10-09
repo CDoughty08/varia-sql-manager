@@ -5,7 +5,7 @@ export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Obje
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'debug-restart', 'refresh',
   'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
-  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table'] as const
+  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table', 'collapse-all'] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
@@ -76,6 +76,7 @@ const openFirst = 'Open a query first.'
 const noServer = 'No server is connected.'
 const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
+const selectTable = 'Select a table in Object Explorer.'
 
 /**
  * Every command, with its keys, menu placements, and enablement. Main builds native menus from its own compiled copy,
@@ -225,46 +226,57 @@ export const commandCatalog = {
   },
   'connection.disconnect': {
     title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
-    // A server node's menu disconnects that server without asking which.
-    menus: [{ menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' }, { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server'" }]
+    // A server node's menu (and Object Explorer's toolbar, for the selected node's server) disconnects that server without asking which.
+    menus: [
+      { menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' },
+      { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" }
+    ]
   },
+  // A lost server's menu reconnects that server.
   'connection.reconnect': {
     title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && backendReady',
-    unavailableHint: 'No connection was lost.', menus: [{ menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }]
+    unavailableHint: 'No connection was lost.',
+    menus: [{ menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' }]
+  },
+  // Takes a lost connection out of Object Explorer; its queries become disconnected.
+  'connection.removeLost': {
+    title: 'Remove Lost Connection…', category: 'Connection', icon: 'close', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && !documentBusy',
+    unavailableHint: 'No connection was lost.', menus: [{ menu: 'explorer.context', group: '0_connect', order: 4, title: 'Remove', mnemonic: 'm', when: 'explorerServerLost' }]
   },
   // Always available: it is also the way out of an unresponsive or failed backend.
   'backend.restart': { title: 'Restart SQL Backend…', category: 'Connection', icon: 'debug-restart', keywords: ['backend', 'restart', 'sidecar'] },
-  // F5 and a node's menu refresh that node's lists (a leaf's parent list); the toolbar button refreshes everything.
+  // Object Explorer's commands act on the node a context menu was opened for, otherwise on the selected node (F5, the
+  // toolbar, the palette). Refresh reloads the node (a leaf's parent); without a selection, or from the empty area, every server.
   'explorer.refresh': {
     title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer,
     keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }],
-    menus: [{ menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: "explorerNode != 'table' && explorerNode != 'serverObject'" }]
+    menus: [{ menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: '!explorerServerLost' }]
   },
-  // An Object Explorer node's menu: the node comes from the menu's target, so these have no keys and are not in the palette.
+  'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
+  'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
   'explorer.newQuery': {
-    title: 'New Query', category: 'Object Explorer', icon: 'new-file', palette: false, precondition: '!documentBusy',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'q', when: "explorerNode == 'server' || explorerNode == 'database'" }]
+    title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.',
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
   },
   'explorer.selectTopRows': {
-    title: 'Select Top 1000 Rows', category: 'Object Explorer', icon: 'table', palette: false, precondition: 'backendReady && !documentBusy',
+    title: 'Select Top 1000 Rows', category: 'Object Explorer', icon: 'table', precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
     menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'w', when: "explorerNode == 'table'" }]
   },
-  // Clicking a table also runs this, as before the menu existed.
   'explorer.scriptCreateToNewQuery': {
-    title: 'Script Table as CREATE to New Query Editor Window', category: 'Object Explorer', palette: false, precondition: 'backendReady && !documentBusy',
+    title: 'Script Table as CREATE to New Query Editor Window', category: 'Object Explorer', keywords: ['script'], precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
     menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 1, title: 'New Query Editor Window', mnemonic: 'n' }]
   },
   'explorer.scriptCreateToFile': {
-    title: 'Script Table as CREATE to File…', category: 'Object Explorer', icon: 'save-as', palette: false, precondition: 'backendReady && !documentBusy',
+    title: 'Script Table as CREATE to File…', category: 'Object Explorer', icon: 'save-as', keywords: ['script'], precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
     menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 2, title: 'File…', mnemonic: 'f' }]
   },
   'explorer.scriptCreateToClipboard': {
-    title: 'Script Table as CREATE to Clipboard', category: 'Object Explorer', icon: 'clippy', palette: false, precondition: 'backendReady',
+    title: 'Script Table as CREATE to Clipboard', category: 'Object Explorer', icon: 'clippy', keywords: ['script'], precondition: 'backendReady', unavailableHint: selectTable,
     menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 3, title: 'Clipboard', mnemonic: 'l' }]
   },
   'explorer.copyName': {
-    title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false,
-    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "explorerNode == 'server' || explorerNode == 'database' || explorerNode == 'table' || explorerNode == 'serverObject'" }]
+    title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
+    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost" }]
   },
   'query.changeConnection': {
     title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && !queryRunning && !documentBusy',

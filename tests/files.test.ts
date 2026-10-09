@@ -4,6 +4,8 @@ import { FileService } from '../src/renderer/src/services/files'
 import { CommandService } from '../src/renderer/src/core/commands'
 import { filesContribution } from '../src/renderer/src/contributions/files'
 import { deferred, documentFixture, type SaveResponse } from './fixtures/documents'
+import { connectionInfo, connectionOptions } from './fixtures/workbench'
+import { contextRecord } from '../src/shared/commands/context-keys'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -19,10 +21,14 @@ function fixture() {
   }
   const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false) }
   const files = new FileService(doc.documents, queries, api), commands = new CommandService()
-  const contribution = filesContribution({ files, commands, documents: doc.documents }, { writeClipboardText: async () => ({ ok: true, value: undefined }), revealSqlFile: async () => ({ ok: true, value: undefined }) })
+  // Focus is in Object Explorer when `explorer.panel` says so; its selection is `explorer.target`.
+  const explorer: { panel: '' | 'explorer'; target?: { connectionId: string; database?: string } } = { panel: '' }
+  const context = { get: () => contextRecord('win32', { activePanel: explorer.panel }) }
+  const connections = { get: (id: string) => id === 'server-b' ? { ...connectionInfo('server-b'), options: connectionOptions, database: 'sales' } : undefined }
+  const contribution = filesContribution({ files, commands, documents: doc.documents, context, connections, explorer: { queryTarget: () => explorer.target } }, { writeClipboardText: async () => ({ ok: true, value: undefined }), revealSqlFile: async () => ({ ok: true, value: undefined }) })
   doc.documents.create('SQLQuery1.sql', '', 'master', 'server-a')
   cleanups.push(() => { contribution.dispose(); commands.dispose(); files.dispose(); doc.documents.dispose() })
-  return { ...doc, api, queries, files, commands, contribution }
+  return { ...doc, api, queries, files, commands, contribution, explorer }
 }
 
 describe('file commands', () => {
@@ -37,6 +43,24 @@ describe('file commands', () => {
     pending.resolve(); await busy
     await commands.run('file.new')
     expect(documents.active?.name).toBe('SQLQuery3.sql')
+  })
+  it('opens New Query on the selected Object Explorer node\'s server and database while the tree has focus, as SSMS does', async () => {
+    const { documents, commands, explorer } = fixture()
+    explorer.target = { connectionId: 'server-b', database: 'AppData' }
+    // Elsewhere, the active query's target, whatever Object Explorer has selected.
+    await commands.run('file.new')
+    expect(documents.active).toMatchObject({ name: 'SQLQuery2.sql', connectionId: 'server-a', database: 'master' })
+    explorer.panel = 'explorer'
+    await commands.run('file.new')
+    expect(documents.active).toMatchObject({ name: 'SQLQuery3.sql', connectionId: 'server-b', database: 'AppData' })
+    // A server node: its connection's database.
+    explorer.target = { connectionId: 'server-b' }
+    await commands.run('file.new')
+    expect(documents.active).toMatchObject({ connectionId: 'server-b', database: 'sales' })
+    // Nothing selected: as anywhere else.
+    explorer.target = undefined
+    await commands.run('file.new')
+    expect(documents.active).toMatchObject({ connectionId: 'server-b', database: 'sales', name: 'SQLQuery5.sql' })
   })
   it('captures the open-dialog target and opens multiple clean documents', async () => {
     const { documents, api, commands } = fixture()

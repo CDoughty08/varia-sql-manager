@@ -1,6 +1,7 @@
 import { _electron as electron, expect } from '@playwright/test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -635,11 +636,14 @@ try {
   await expect(tabs().first()).toHaveAttribute('aria-selected', 'true')
   console.log('Menus checks: context menus stay inside a 1024x700 window and close on scrolling, resizing, blur, and clicks elsewhere.')
 
-  // 12. Object Explorer node menus, over the fake backend's server: each kind of node shows its own items, they act on
-  // that node, Refresh reloads only that node's lists, and Shift+F10 or the context-menu key opens a focused node's menu below it.
+  // 12. Object Explorer menus, over the fake backend's server: right-click selects a node and shows its own items, which
+  // act on it; Refresh reloads only that node; Shift+F10 or the context-menu key opens the selected node's menu below it.
   const createScript = 'CREATE TABLE dbo.Orders (Id int);'
   await forgetCalls()
   const explorerMenu = menu('Object Explorer'), labels = () => explorerMenu.locator('.menu-item .menu-label').allTextContents()
+  const tree = explorerTree(page), row = (...path) => explorerRow(page, ...path)
+  const ordersPath = ['server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders']
+  const loads = async folder => (await calls('explorer.children')).filter(params => params.node.type === 'folder' && params.node.folder === folder).length
   // The empty area offers Connect… and Refresh, which needs a server.
   await page.locator('.explorer-empty p').click({ button: 'right', force: true })
   await expect(explorerMenu).toBeVisible()
@@ -650,32 +654,32 @@ try {
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  const serverA = page.getByRole('region', { name: 'Server server-a', exact: true })
-  await expect(serverA.locator('[data-database="AppData"]')).toBeVisible()
   // A server: its own items, and New Query on its connection with focus in the new query.
-  await serverA.locator('.server-toggle').click({ button: 'right', force: true })
+  const serverA = await row('server-a')
+  await serverA.click({ button: 'right', force: true })
   expect(await labels()).toEqual(['Connect…', 'Disconnect', 'New Query', 'Copy Name', 'Refresh'])
-  await expect(serverA.locator('.server-row')).toHaveAttribute('data-menu-target', '')
+  await expect(serverA).toHaveAttribute('data-menu-target', '')
+  await expect(serverA).toHaveAttribute('aria-selected', 'true')
   const before = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click(fast)
   await expect(tabs()).toHaveCount(before + 1)
   await expect(page.locator('#query-server option:checked')).toHaveText('server-a')
   await expect(page.locator('#query-database')).toHaveValue('master')
   await expect(textbox()).toBeFocused()
-  // A database's name, quoted.
-  const appData = serverA.locator('[data-database="AppData"] .database-node')
+  // A database's name, quoted. Right-click selected it, and focus went back to the tree.
+  await expandExplorerPath(page, 'server-a', 'Databases')
+  const appData = await row('server-a', 'Databases', 'AppData')
   await appData.click({ button: 'right', force: true })
   expect(await labels()).toEqual(['New Query', 'Copy Name', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[AppData]')
-  await expect(appData).toBeFocused()
+  await expect(tree).toBeFocused()
+  await expect(appData).toHaveAttribute('aria-selected', 'true')
   // A table: Select Top 1000 Rows opens SSMS's script on its database and runs it there.
-  await appData.click(fast)
-  // master is expanded too (the new query selected it), and the fake backend lists the same table there.
-  const orders = serverA.locator('[data-database="AppData"]').getByRole('button', { name: 'dbo.Orders', exact: true })
-  await expect(orders).toBeVisible()
+  await expandExplorerPath(page, ...ordersPath.slice(0, -1))
+  const orders = await row(...ordersPath)
   await orders.click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name'])
+  expect(await labels()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click(fast)
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [Id]', '      ,[CustomerName]', '  FROM [AppData].[dbo].[Orders]'].join('\n')
   await expect.poll(async () => (await calls('query.execute')).at(-1)?.sql).toBe(selectTop)
@@ -685,7 +689,7 @@ try {
   await expect(page.locator('.results-grid')).toContainText('Contoso')
   // Script Table as › CREATE To › Clipboard, then File… through the save dialog.
   const scriptTo = async destination => {
-    await orders.click({ button: 'right', force: true })
+    await (await row(...ordersPath)).click({ button: 'right', force: true })
     await explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }).click(fast)
     await menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click(fast)
     await menu('CREATE To').getByRole('menuitem', { name: destination, exact: true }).click(fast)
@@ -703,42 +707,49 @@ try {
   await expect.poll(() => readFile(scriptFile, 'utf8').catch(() => null)).toBe(createScript)
   expect(await application.evaluate(() => globalThis.variaSaveDialogs.map(path => path.split(/[\\/]/).at(-1)))).toEqual(['dbo.Orders.sql'])
   await expect(tabs()).toHaveCount(tabCount)
-  // Refresh on Tables reloads that list only.
-  const listed = { tables: (await calls('tables.list')).length, databases: (await calls('databases.list')).length }
-  await serverA.getByRole('button', { name: 'Tables in AppData', exact: true }).click({ button: 'right', force: true })
+  // Refresh on Tables reloads that folder only.
+  const tables = await row(...ordersPath.slice(0, -1)), stale = await (await row(...ordersPath)).getAttribute('id')
+  const listed = { tables: await loads('tables'), databases: await loads('databases') }
+  await tables.click({ button: 'right', force: true })
   expect(await labels()).toEqual(['Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
-  await expect.poll(async () => (await calls('tables.list')).length).toBe(listed.tables + 1)
-  expect((await calls('databases.list')).length).toBe(listed.databases)
-  // The keyboard: Shift+F10 opens a focused table's menu below it with its first item active; so does the context-menu key.
-  await orders.focus()
+  await expect.poll(() => loads('tables')).toBe(listed.tables + 1)
+  expect(await loads('databases')).toBe(listed.databases)
+  // The old rows stay until the folder's first page replaces them.
+  await expect.poll(async () => (await row(...ordersPath)).getAttribute('id')).not.toBe(stale)
+  // The keyboard: Shift+F10 opens the selected table's menu below its row with its first item active; so does the
+  // context-menu key. Focus stays on the tree, which names the row as its active descendant.
+  const table = await row(...ordersPath)
+  await table.click(fast)
+  await expect(tree).toBeFocused()
   await page.keyboard.press('Shift+F10')
   await expect(explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true })).toBeFocused()
-  await expect(orders).toHaveAttribute('data-menu-target', '')
-  const node = await orders.boundingBox(), anchored = await explorerMenu.boundingBox()
+  await expect(table).toHaveAttribute('data-menu-target', '')
+  const node = await table.boundingBox(), anchored = await explorerMenu.boundingBox()
   expect(anchored.y).toBeGreaterThanOrEqual(node.y + node.height - 1)
   expect(anchored.y).toBeLessThanOrEqual(node.y + node.height + 30)
   await page.keyboard.press('Escape')
-  await expect(orders).toBeFocused()
-  await expect(orders).not.toHaveAttribute('data-menu-target')
+  await expect(tree).toBeFocused()
+  await expect(table).not.toHaveAttribute('data-menu-target')
   await page.keyboard.press('ContextMenu')
   await expect(explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
-  // F5 on a table refreshes its list, and the table keeps focus.
+  // Left moves to Tables, and F5 reloads it; the tree keeps focus.
+  await page.keyboard.press('ArrowLeft')
+  await expect(tables).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('F5')
-  await expect.poll(async () => (await calls('tables.list')).length).toBe(listed.tables + 2)
-  expect((await calls('databases.list')).length).toBe(listed.databases)
-  await expect(orders).toBeFocused()
-  // A login has only Copy Name; the server's Disconnect needs no picker.
-  await serverA.getByRole('button', { name: 'Security', exact: true }).click(fast)
-  await serverA.getByRole('button', { name: 'Logins', exact: true }).click(fast)
-  await serverA.locator('.object-node').filter({ hasText: 'sa' }).click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['Copy Name'])
+  await expect.poll(() => loads('tables')).toBe(listed.tables + 2)
+  expect(await loads('databases')).toBe(listed.databases)
+  await expect(tree).toBeFocused()
+  // A login's name; the server's Disconnect needs no picker.
+  await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
+  await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
+  expect(await labels()).toEqual(['Copy Name', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[sa]')
-  await serverA.locator('.server-toggle').click({ button: 'right', force: true })
+  await serverA.click({ button: 'right', force: true })
   await explorerMenu.getByRole('menuitem', { name: 'Disconnect', exact: true }).click(fast)
-  await expect(serverA).toHaveCount(0)
+  await expect(tree).toHaveCount(0)
   await expect(page.locator('.quick-input')).toHaveCount(0)
   expect(await calls('connections.disconnect')).toHaveLength(1)
   console.log('Menus checks: Object Explorer menus for the empty area, a server, a database, a table, Tables, and a login, by mouse and keyboard.')
@@ -844,12 +855,9 @@ try {
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await serverA.locator('[data-database="AppData"] .database-node').click(fast)
-  await expect(orders).toBeVisible()
-  await serverA.getByRole('button', { name: 'Security', exact: true }).click(fast)
-  await serverA.getByRole('button', { name: 'Logins', exact: true }).click(fast)
-  const login = serverA.locator('.object-node').filter({ hasText: 'sa' })
-  await expect(login).toBeVisible()
+  await expandExplorerPath(page, ...ordersPath.slice(0, -1))
+  await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
+  await expect(await row('server-a', 'Security', 'Logins', 'sa')).toBeVisible()
   await typeSql('SELECT Id, CustomerName FROM dbo.Orders -- MENUS_PLAN_FIXTURE')
   await page.keyboard.press('F5')
   await page.locator('.output-toolbar').getByRole('button', { name: /^Results/ }).click(fast)
@@ -895,19 +903,20 @@ try {
     ['a query tab by Shift+F10', async () => { await firstTab.getByRole('tab').focus(); await page.keyboard.press('Shift+F10') }, firstTab.getByRole('tab')],
     ['a panel tab by mouse', () => rightClick(page.locator('[data-pane-tab="explorer"]')), dockTab('explorer')],
     ['a panel tab by Shift+F10', async () => { await dockTab('output').focus(); await page.keyboard.press('Shift+F10') }, dockTab('output')],
-    ['a server', () => rightClick(serverA.locator('.server-toggle')), serverA.locator('.server-toggle')],
-    ['the Databases folder', () => rightClick(serverA.getByRole('button', { name: 'Databases', exact: true })), serverA.getByRole('button', { name: 'Databases', exact: true })],
-    ['a database', () => rightClick(appData), appData],
-    ['a Tables folder', () => rightClick(serverA.getByRole('button', { name: 'Tables in AppData', exact: true })), serverA.getByRole('button', { name: 'Tables in AppData', exact: true })],
+    // Object Explorer's rows are not focusable: focus stays on the tree, which names the selected row.
+    ['a server', async () => rightClick(await row('server-a')), tree],
+    ['the Databases folder', async () => rightClick(await row('server-a', 'Databases')), tree],
+    ['a database', async () => rightClick(await row('server-a', 'Databases', 'AppData')), tree],
+    ['a Tables folder', async () => rightClick(await row(...ordersPath.slice(0, -1))), tree],
     ['a table\'s Script Table as › CREATE To', async () => {
-      await rightClick(orders)
+      await rightClick(await row(...ordersPath))
       await tap(explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }))
       await tap(menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }))
       await expect(menu('CREATE To')).toBeVisible()
-    }, orders],
-    ['a table by Shift+F10', async () => { await orders.focus(); await page.keyboard.press('Shift+F10') }, orders],
-    ['the Logins folder', () => rightClick(serverA.getByRole('button', { name: 'Logins', exact: true })), serverA.getByRole('button', { name: 'Logins', exact: true })],
-    ['a login', () => rightClick(login), null],
+    }, tree],
+    ['a table by Shift+F10', async () => { await tap(await row(...ordersPath)); await page.keyboard.press('Shift+F10') }, tree],
+    ['the Logins folder', async () => rightClick(await row('server-a', 'Security', 'Logins')), tree],
+    ['a login', async () => rightClick(await row('server-a', 'Security', 'Logins', 'sa')), tree],
     ['a results grid cell', async () => { await showResult('Result 1 · Batch 1'); await rightClick(cell(0, 1)) }, grid],
     ['the results grid by Shift+F10', async () => { await grid.focus(); await page.keyboard.press('Shift+F10') }, grid],
     ['Messages', async () => { await tap(page.locator('.output-toolbar').getByRole('button', { name: /^Messages/ })); await rightClick(messages.locator('pre').first()) }, messages],
@@ -942,7 +951,7 @@ try {
     await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
     await expect.poll(appearance).toContain(`"mode": "${mode}"`)
     await expect.poll(async () => await variable('editor.background') === '#ffffff').toBe(mode === 'light')
-    await rightClick(orders)
+    await rightClick(await row(...ordersPath))
     await tap(explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }))
     await tap(menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }))
     await point(menu('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }))
@@ -1031,21 +1040,21 @@ try {
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  const nativeServer = page.getByRole('region', { name: 'Server server-a', exact: true })
-  await nativeServer.locator('[data-database="AppData"] .database-node').click(fast)
-  const nativeTable = nativeServer.locator('[data-database="AppData"]').getByRole('button', { name: 'dbo.Orders', exact: true })
+  await expandExplorerPath(page, ...ordersPath.slice(0, -1))
+  const nativeTree = explorerTree(page), nativeTable = await explorerRow(page, ...ordersPath)
   await expect(nativeTable).toBeVisible()
   // A table's menu at the pointer: the catalogue's labels from main, the table outlined until it closes.
   const tableBox = await nativeTable.boundingBox()
   await nativeTable.click({ button: 'right', position: { x: 12, y: 6 } })
   await expect.poll(async () => (await popups()).length).toBe(2)
   const tablePopup = (await popups())[1]
-  expect(tablePopup.items).toEqual(['Select Top 1000 Rows', '---', ['Script Table as', [['CREATE To', ['New Query Editor Window', 'File…', 'Clipboard']]]], '---', 'Copy Name'])
+  expect(tablePopup.items).toEqual(['Select Top 1000 Rows', '---', ['Script Table as', [['CREATE To', ['New Query Editor Window', 'File…', 'Clipboard']]]], '---', 'Copy Name', '---', 'Refresh'])
   expect(Math.abs(tablePopup.x - (tableBox.x + 12))).toBeLessThanOrEqual(1)
   expect(Math.abs(tablePopup.y - (tableBox.y + 6))).toBeLessThanOrEqual(1)
   await expect(openMenus()).toHaveCount(0)
   await expect(nativeTable).toHaveAttribute('data-menu-target', '')
-  await expect(nativeTable).toBeFocused()
+  await expect(nativeTree).toBeFocused()
+  await expect(nativeTable).toHaveAttribute('aria-selected', 'true')
   await pick('explorer.scriptCreateToClipboard')
   await expect.poll(clipboard).toBe(createScript)
   await expect(nativeTable).not.toHaveAttribute('data-menu-target')
@@ -1054,7 +1063,7 @@ try {
   await pick('explorer.copyName', 'close first')
   await expect.poll(clipboard).toBe('[dbo].[Orders]')
   // Only the open menu's token counts: a choice from the table's older menu does not run on the server's.
-  await nativeServer.locator('.server-toggle').click({ button: 'right' })
+  await (await explorerRow(page, 'server-a')).click({ button: 'right' })
   await expect.poll(async () => (await popups()).length).toBe(4)
   expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', '---', 'New Query', '---', 'Copy Name', '---', 'Refresh'])
   const queriesBefore = await tabs().count()
@@ -1071,7 +1080,7 @@ try {
   await expect(nativeTable).not.toHaveAttribute('data-menu-target')
   // Shift+F10 asks for the focused node's menu below it.
   await popupMode('record')
-  await nativeTable.focus()
+  await nativeTable.click()
   await page.keyboard.press('Shift+F10')
   await expect.poll(async () => (await popups()).length).toBe(6)
   const nodeBox = await nativeTable.boundingBox(), keyboardPopup = (await popups())[5]
@@ -1079,13 +1088,13 @@ try {
   expect(keyboardPopup.y).toBeLessThanOrEqual(nodeBox.y + nodeBox.height + 30)
   expect(keyboardPopup.x).toBeGreaterThanOrEqual(nodeBox.x - 30)
   await application.evaluate(() => globalThis.variaPopups.at(-1).options.callback())
-  await expect(nativeTable).toBeFocused()
+  await expect(nativeTree).toBeFocused()
   // When main cannot show a menu, the workbench shows the same one itself.
   await popupMode('fail')
   await nativeTable.click({ button: 'right' })
   const fallbackMenu = menu('Object Explorer')
   await expect(fallbackMenu).toBeVisible()
-  expect(await fallbackMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name'])
+  expect(await fallbackMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Refresh'])
   await page.keyboard.press('Escape')
   await expect(openMenus()).toHaveCount(0)
   await popupMode('record')
@@ -1121,10 +1130,11 @@ try {
     await connect.getByLabel('Trust server certificate', { exact: true }).check()
     await connect.getByRole('button', { name: 'Connect', exact: true }).click(fast)
     await expect(connect).toHaveCount(0, { timeout: 30000 })
-    const live = page.locator('.server-section'), systemDatabases = live.getByRole('button', { name: 'System Databases', exact: true })
-    await expect(systemDatabases).toBeVisible({ timeout: 30000 })
-    if (await systemDatabases.getAttribute('aria-expanded') === 'false') await systemDatabases.click(fast)
-    const master = live.locator('[data-database="master"] .database-node')
+    const liveServer = page.locator('.explorer-row.server').first()
+    await expect(liveServer).toBeVisible({ timeout: 30000 })
+    const liveName = await liveServer.locator('.oe-label').textContent(), wait = { timeout: 30000 }
+    await expandExplorerPath(page, liveName, 'Databases', 'System Databases', wait)
+    const master = await explorerRow(page, liveName, 'Databases', 'System Databases', 'master', wait)
     const liveTabs = await tabs().count()
     await master.click({ button: 'right' })
     await menu('Object Explorer').getByRole('menuitem', { name: 'New Query', exact: true }).click(fast)
@@ -1134,13 +1144,14 @@ try {
     await page.keyboard.insertText('SELECT DB_NAME()')
     await page.keyboard.press('F5')
     await expect(page.locator('.grid-scroll td[data-row="0"][data-col="0"]')).toHaveText('master', { timeout: 30000 })
-    await live.locator('.server-toggle').click({ button: 'right' })
+    await liveServer.click({ button: 'right' })
     await menu('Object Explorer').getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
-    await expect(live.getByText('Loading…')).toHaveCount(0, { timeout: 30000 })
-    await expect(master).toBeVisible()
+    // The server's folders come back as new rows, collapsed, as in SSMS.
+    await expect.poll(async () => (await explorerRow(page, liveName, 'Databases', wait)).getAttribute('aria-expanded'), wait).toBe('false')
+    await expect(page.locator('.explorer-row.progress, .explorer-row.error')).toHaveCount(0, wait)
     // Monaco's empty live regions are alerts too; these are the workbench's error messages.
     await expect(page.locator('.global-error, .explorer-error, .query-error')).toHaveCount(0)
-    console.log('Menus checks: a real server\'s master database opens a query on master from its menu, and the server refreshes.')
+    console.log('Menus checks: a real server\'s master database opens a query on master from its menu, and the server refreshes with its folders collapsed.')
   } else console.log('Menus checks: the live server step was skipped (VARIA_TEST_SQL_SERVER is not set).')
 
   expect(failures).toEqual([])

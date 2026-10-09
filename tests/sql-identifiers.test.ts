@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { copyName, maxSelectTopScriptLength, quoteName, selectTopRowsScript } from '../src/shared/sql/identifiers'
+import { maxSelectTopScriptLength, quoteName, selectTopRowsScript } from '../src/shared/sql/identifiers'
 
 const header = '/****** Script for SelectTopNRows command from Varia SQL Manager ******/'
 const columns = (...names: string[]) => names.map(name => ({ name, dataType: 'int' }))
@@ -46,15 +46,5 @@ describe('selectTopRowsScript', () => {
     for (const count of [0, -1, 1.5, Number.NaN, Infinity]) expect(() => selectTopRowsScript(source, count), String(count)).toThrow('positive integer')
     expect(() => selectTopRowsScript({ ...source, schema: '' })).toThrow('cannot be empty')
     expect(() => selectTopRowsScript({ ...source, columns: columns('a'.repeat(129)) })).toThrow('limited to 128 characters')
-  })
-})
-
-describe('copyName', () => {
-  it('copies the server as connected to, and quoted object names', () => {
-    const connection = { server: 'sql01.example,1433' }
-    expect(copyName({ kind: 'server' }, connection)).toBe('sql01.example,1433')
-    expect(copyName({ kind: 'database', database: 'App]Data' }, connection)).toBe('[App]]Data]')
-    expect(copyName({ kind: 'table', schema: 'dbo', name: 'Order Lines' }, connection)).toBe('[dbo].[Order Lines]')
-    expect(copyName({ kind: 'serverObject', name: 'NT AUTHORITY\\SYSTEM' }, connection)).toBe('[NT AUTHORITY\\SYSTEM]')
   })
 })

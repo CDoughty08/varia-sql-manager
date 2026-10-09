@@ -5,7 +5,7 @@
 // (encodePage) within the stream's credit. Its control directory, VARIA_TEST_BACKEND_DIR, holds:
 //   calls.jsonl         one { generation, method, params } line per request, passwords redacted
 //   hold/<method>       the method waits while this file exists
-//   allow/audits        server.objects.list may list audits (otherwise it fails as a permission error would)
+//   allow/audits        server.objects.list and explorer.children may list audits (otherwise they fail as a permission error would)
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
@@ -17,6 +17,7 @@ import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/f
 import { decodeControl, encodeControl } from '../../src/shared/ipc/wire/msgpack.ts'
 import { encodePage } from '../../src/shared/ipc/wire/pages.ts'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
+import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
 
 const [mode = 'echo', argument] = process.argv.slice(2)
 const parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
@@ -155,6 +156,35 @@ const serverObjects = {
   audits: [{ name: 'LoginAudit', description: 'FILE · Enabled' }],
   serverAuditSpecifications: [{ name: 'LoginAuditSpec', description: 'Enabled' }]
 }
+// Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
+// these rows in the folders that list them. Every database has dbo.Orders; Audits fails until allow/audits exists.
+const explorerProfile = { band: 16, engine: 'box' }
+const explorerRows = {
+  systemDatabases: () => ['master', 'model', 'msdb', 'tempdb'].map(name => explorerObject({ kind: 'database', name }, name, { subtype: 'system', hasChildren: true })),
+  databaseSnapshots: () => [explorerObject({ kind: 'database', name: 'AppData_Snapshot' }, 'AppData_Snapshot', { subtype: 'snapshot', icon: 'device-camera', hasChildren: true })],
+  databases: () => [explorerObject({ kind: 'database', name: 'AppData' }, 'AppData', { hasChildren: true })],
+  tables: owner => [explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Orders' }, 'dbo.Orders', { hasChildren: true, created: '2024-05-01T09:30:00' })],
+  columns: owner => [
+    explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'Id' }, 'Id', { sublabel: '(PK, int, not null)', icon: 'svg:key' }),
+    explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'CustomerName' }, 'CustomerName', { sublabel: '(nvarchar(100), null)' })
+  ],
+  logins: () => [explorerObject({ kind: 'login', name: 'sa' }, 'sa')],
+  serverRoles: () => serverObjects.serverRoles.map(role => explorerObject({ kind: 'serverRole', name: role.name }, role.name)),
+  cryptographicProviders: () => [explorerObject({ kind: 'cryptographicProvider', name: 'Test EKM Provider' }, 'Test EKM Provider')],
+  audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
+  serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')]
+}
+function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
+function explorerChildren({ node, subtype }) {
+  const owner = node.type === 'object' ? node.object : node.owner
+  const statics = staticChildren(node.type === 'object' ? { kind: node.object.kind, subtype } : { folder: node.folder }, explorerProfile)
+    .map(folder => ({ ref: { type: 'folder', owner, folder }, label: folderSpecs[folder].label, icon: 'folder', hasChildren: true }))
+  if (node.type === 'folder' && node.folder === 'audits' && !control(join('allow', 'audits'))) {
+    return { nodes: statics, elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } }
+  }
+  const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : [])]
+  return { nodes, total: nodes.length, elapsedMs: 1 }
+}
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them.
 const stored = new Map()
 let nextResultId = 1
@@ -260,6 +290,7 @@ async function workbench(id, method, params, credit) {
     case 'tables.list': return respond(id, [{ schema: 'dbo', name: 'Orders' }])
     case 'tables.script': return respond(id, { sql: 'CREATE TABLE dbo.Orders (Id int);' })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
+    case 'explorer.children': return respond(id, explorerChildren(params))
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (control('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)

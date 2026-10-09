@@ -64,6 +64,12 @@ export interface MenuServiceOptions {
 const guard = (action: () => void) => { try { action() } catch (error) { onUnexpectedError(error) } }
 const hasItems = (items: readonly ResolvedMenuItem[]) => items.some(item => item.kind !== 'separator')
 const inside = (target: EventTarget | null, selector: string) => typeof (target as Partial<Element> | null)?.closest === 'function' && !!(target as Element).closest(selector)
+/** The item a focused composite widget names as active (`aria-activedescendant`), when it is inside the widget. */
+function activeDescendant(element: Element | null): Element | undefined {
+  if (typeof element?.getAttribute !== 'function') return undefined
+  const id = element.getAttribute('aria-activedescendant'), found = id ? element.ownerDocument?.getElementById(id) : null
+  return found && element.contains(found) ? found : undefined
+}
 /** The menubar menu whose button `target` is in, if any. */
 function menubarButton(target: EventTarget | null): MenubarId | undefined {
   if (typeof (target as Partial<Element> | null)?.closest !== 'function') return undefined
@@ -183,8 +189,12 @@ export class MenuService implements Disposable {
     if (inside(event.target, '.menu-layer')) return
     this.openFor(event.target as Element | null, { kind: 'point', x: event.clientX, y: event.clientY }, false)
   }
-  /** Shift+F10 and the context-menu key: the focused element's menu, below it, with its first item active. */
-  openForElement(element: Element | null, _how: { keyboard: true }): boolean { return this.openFor(element, undefined, true) }
+  /**
+   * Shift+F10 and the context-menu key: the focused element's menu, below it, with its first item active. A widget that
+   * keeps focus on itself and names its active item with `aria-activedescendant` (Object Explorer's tree) gets that
+   * item's menu.
+   */
+  openForElement(element: Element | null, _how: { keyboard: true }): boolean { return this.openFor(activeDescendant(element) ?? element, undefined, true) }
 
   /** A menubar button activated without a pointer press (assistive technology): toggles its menu. */
   toggleMenubarMenu(id: MenubarId): void {

@@ -6,7 +6,9 @@ import { contextMenuTemplate } from '../src/main/context-menu'
 import { nativeMenuRequest } from '../src/renderer/src/menus/native'
 import type { ThemeState, ThemeSummary } from '../src/shared/theme/types'
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
-import { menuForTarget, type ExplorerNode, type InputTarget, type MenuTarget, type OutputView } from '../src/renderer/src/menus/targets'
+import { menuForTarget, type ExplorerMenuNode, type InputTarget, type MenuTarget, type OutputView } from '../src/renderer/src/menus/targets'
+import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
+import type { FolderId } from '../src/shared/explorer/catalog'
 import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { deferred } from './fixtures/documents'
 
@@ -68,19 +70,28 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   const unsaved = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
   const saved = fixture.documents.create('saved.sql', 'SELECT 2', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql' })
   vi.mocked(fixture.host.paneLocation).mockImplementation(pane => pane === 'output' ? 'floating' : 'grid')
-  const node = (value: ExplorerNode): MenuTarget => ({ kind: 'explorer', node: value })
-  const server = { connectionId: 'server-a' }, database = { ...server, database: 'AppData' }
+  // Server-l's connection was lost with an earlier backend generation.
+  fixture.connections.add(connectionInfo('server-l', 0), connectionOptions)
+  let ids = 0
+  const at = (ref: ExplorerNodeRef, label: string, connectionId = 'server-a', lost = false): MenuTarget => {
+    const node: ExplorerMenuNode = { id: ++ids, lost, connectionId, ref, label, kind: ref.type === 'folder' ? 'folder' : ref.object.kind, ...(ref.type === 'folder' ? { folder: ref.folder } : {}) }
+    return { kind: 'explorer', node }
+  }
+  const object = (value: ObjectRef, label: string) => at({ type: 'object', object: value }, label)
+  const folder = (owner: ObjectRef, id: FolderId, label: string) => at({ type: 'folder', owner, folder: id }, label)
+  const server: ObjectRef = { kind: 'server' }, appData: ObjectRef = { kind: 'database', name: 'AppData' }, orders: ObjectRef = { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }
   const field = (facts: Partial<InputTarget>): MenuTarget => ({ kind: 'input', element: {} as HTMLElement, readOnly: false, secret: false, hasSelection: true, empty: false, canUndo: true, canRedo: false, ...facts })
   const targets: [string, MenuTarget][] = [
     ['the query editor', { kind: 'editor', tabId: saved.id }], ['a saved query\'s tab', { kind: 'documentTab', tabId: saved.id }], ['an unsaved query\'s tab', { kind: 'documentTab', tabId: unsaved.id }],
     ['a docked panel\'s tab', { kind: 'dockTab', pane: 'explorer', floating: false }], ['a floating panel\'s tab', { kind: 'dockTab', pane: 'output', floating: true }],
     ['a text field with selected text', field({})], ['a read-only text field', field({ readOnly: true })], ['a password field', field({ secret: true })],
     ['an empty text field', field({ empty: true, hasSelection: false, canUndo: false })],
-    ['Object Explorer\'s empty area', node({ kind: 'background' })], ['a server', node({ kind: 'server', ...server })],
-    ...(['databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'securityFolder'] as const).map((kind): [string, MenuTarget] => [`the ${kind} node`, node({ kind, ...server })]),
-    ['a database', node({ kind: 'database', ...database })], ['a Tables folder', node({ kind: 'tablesFolder', ...database })],
-    ['a table', node({ kind: 'table', ...database, schema: 'dbo', name: 'Orders' })], ['a server object folder', node({ kind: 'serverObjectsFolder', ...server, objectKind: 'logins' })],
-    ['a server object', node({ kind: 'serverObject', ...server, objectKind: 'logins', name: 'sa' })],
+    ['Object Explorer\'s empty area', { kind: 'explorer' }], ['a server', object(server, 'server-a.example')],
+    ['a server whose connection was lost', at({ type: 'object', object: server }, 'server-l.example', 'server-l', true)], ['the Databases folder', folder(server, 'databases', 'Databases')],
+    ['a database', object(appData, 'AppData')], ['a Tables folder', folder(appData, 'tables', 'Tables')], ['a table', object(orders, 'dbo.Orders')],
+    ['a column', object({ kind: 'column', database: 'AppData', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'Id' }, 'Id')],
+    ['a return value', object({ kind: 'returnValue', database: 'AppData', parent: { kind: 'function', schema: 'dbo', name: 'Total' } }, 'Returns int')],
+    ['a login', object({ kind: 'login', name: 'sa' }, 'sa')],
     ['a results grid with selected cells', output('grid', 1)], ['a results grid without', output('grid', 0)],
     ['Messages with selected text', output('messages', 0, 'Completed.')], ['Messages without', output('messages', 0)], ['the XML plan', output('plan', 0)]
   ]

@@ -703,6 +703,24 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(f.explorer.target()).toMatchObject({ kind: 'folder', folder: 'tables', label: 'Tables' })
     expect(f.explorer.keyOf(tables)).toBe(JSON.stringify([cid('server-a'), 'folder', 'database', null, null, 'AppData', null, null, null, 'tables']))
   })
+  it('describes a row for its context menu: the node and its id, a synthetic row\'s owner, and a lost server', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const table = f.find('dbo.T0'), root = f.find('server-a.example')
+    expect(f.explorer.menuNode(table)).toEqual({
+      id: table, lost: false, connectionId: cid('server-a'), ref: { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'T0' } }, kind: 'table', label: 'dbo.T0'
+    })
+    expect(f.explorer.menuNode(syntheticId(tables, RowKind.Error))).toMatchObject({ id: tables, kind: 'folder', folder: 'tables', lost: false })
+    expect(f.explorer.menuNode(undefined)).toBeUndefined()
+    // The backend restarted: the server stays, lost, and the rows below it are gone.
+    f.connections.markLostBefore(2)
+    expect(f.explorer.menuNode(root)).toMatchObject({ id: root, kind: 'server', lost: true })
+    expect(f.explorer.menuNode(table)).toBeUndefined()
+    f.connections.remove(cid('server-a'))
+    expect(f.explorer.menuNode(root)).toBeUndefined()
+  })
   it('gives quoted insert text, a fully loaded Columns folder\'s list, and a server\'s name to copy', async () => {
     const f = fixture()
     f.connect()

@@ -7,7 +7,8 @@ import type { Platform } from '../src/shared/commands/keybindings'
 import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import type { CommandArgs } from '../src/renderer/src/core/types'
 import { selectAll, type GridSelection } from '../src/renderer/src/grid/selection'
-import type { ExplorerNode, InputTarget, OutputView } from '../src/renderer/src/menus/targets'
+import type { InputTarget, OutputView } from '../src/renderer/src/menus/targets'
+import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
 const cleanups: (() => void)[] = []
@@ -247,13 +248,26 @@ describe('context menu commands', () => {
 })
 
 describe('Object Explorer commands', () => {
-  const on = (node: ExplorerNode): CommandArgs => ({ target: { kind: 'explorer', node } })
-  const server = { connectionId: 'server-a' }, appData = { ...server, database: 'AppData' }, orders = on({ kind: 'table', ...appData, schema: 'dbo', name: 'Orders' })
+  let ids = 1000
+  /** A context menu's target: a node of server-a (unless named), as the tree captures it when the menu opens. */
+  const at = (ref: ExplorerNodeRef, connectionId = 'server-a', lost = false): CommandArgs => ({ target: { kind: 'explorer', node: {
+    id: ++ids, lost, connectionId, ref, label: 'node', kind: ref.type === 'folder' ? 'folder' : ref.object.kind, ...(ref.type === 'folder' ? { folder: ref.folder } : {})
+  } } })
+  const on = (object: ObjectRef, connectionId?: string, lost?: boolean) => at({ type: 'object', object }, connectionId, lost)
+  const appDataRef: ObjectRef = { kind: 'database', name: 'AppData' }
+  const server = on({ kind: 'server' }), appData = on(appDataRef), orders = on({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
+  const tables = at({ type: 'folder', owner: appDataRef, folder: 'tables' }), background: CommandArgs = { target: { kind: 'explorer' } }
   function connected() {
     const fixture = setup()
     fixture.api.push(readyBackend())
     fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     return fixture
+  }
+  /** The tree's node with this label, once loaded. */
+  const find = async (fixture: ReturnType<typeof setup>, label: string) => {
+    let id: number | undefined
+    await vi.waitFor(() => { id = fixture.explorer.getSnapshot().rows.nodes.find(node => node?.label === label)?.id; expect(id, label).toBeDefined() })
+    return id!
   }
   it('open a new query on a server\'s or database\'s connection and put focus in its editor', async () => {
     const { commands, documents } = connected()
@@ -261,12 +275,34 @@ describe('Object Explorer commands', () => {
     documents.create('SQLQuery1.sql', '', 'master')
     const binding = documents.bindEditor(editor.asEditor())
     cleanups.push(() => binding.dispose())
-    expect(await commands.execute('explorer.newQuery', on({ kind: 'server', ...server }), 'menu')).toBe(true)
+    expect(await commands.execute('explorer.newQuery', server, 'menu')).toBe(true)
     expect(documents.active).toMatchObject({ connectionId: 'server-a', database: 'master', dirty: false })
-    expect(await commands.execute('explorer.newQuery', on({ kind: 'database', ...appData }), 'menu')).toBe(true)
+    expect(await commands.execute('explorer.newQuery', appData, 'menu')).toBe(true)
     expect(documents.active).toMatchObject({ connectionId: 'server-a', database: 'AppData' })
     expect(editor.focus).toHaveBeenCalledTimes(2)
-    for (const args of [on({ kind: 'server', connectionId: 'gone' }), orders, on({ kind: 'databasesFolder', ...server }), undefined]) expect(commands.isEnabled('explorer.newQuery', args)).toBe(false)
+    for (const args of [on({ kind: 'server' }, 'gone'), on({ kind: 'server' }, 'server-a', true), orders, tables, background]) expect(commands.isEnabled('explorer.newQuery', args)).toBe(false)
+  })
+  it('act on the selected node from F5, the toolbar, and the palette', async () => {
+    const fixture = connected(), { commands, documents, explorer, api } = fixture
+    // Connecting selects and expands the server.
+    expect(explorer.target()).toMatchObject({ kind: 'server', connectionId: 'server-a' })
+    expect(commands.isEnabled('explorer.newQuery')).toBe(true)
+    expect(await commands.execute('explorer.copyName', undefined, 'palette')).toBe(true)
+    explorer.select(await find(fixture, 'Databases'))
+    explorer.expand(await find(fixture, 'Databases'))
+    expect(commands.isEnabled('explorer.newQuery')).toBe(false)
+    expect(commands.isEnabled('explorer.copyName')).toBe(false)
+    explorer.select(await find(fixture, 'AppData'))
+    expect(await commands.execute('explorer.newQuery', undefined, 'palette')).toBe(true)
+    expect(documents.active).toMatchObject({ connectionId: 'server-a', database: 'AppData' })
+    expect(commands.isEnabled('explorer.selectTopRows')).toBe(false)
+    explorer.expand(await find(fixture, 'AppData'))
+    explorer.expand(await find(fixture, 'Tables'))
+    explorer.select(await find(fixture, 'dbo.Orders'))
+    expect(await commands.execute('explorer.scriptCreateToClipboard', undefined, 'palette')).toBe(true)
+    expect(await commands.execute('explorer.copyName', undefined, 'palette')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([['server-a.example'], ['CREATE TABLE [dbo].[Orders] (Id int);'], ['[dbo].[Orders]']])
+    expect(api.scriptTable.mock.calls).toEqual([['server-a', 'AppData', 'dbo', 'Orders']])
   })
   it('select the top 1000 rows of a table by its columns and run them on its database', async () => {
     const { commands, documents, api, model } = connected()
@@ -282,7 +318,7 @@ describe('Object Explorer commands', () => {
     expect(await commands.execute('explorer.selectTopRows', orders, 'menu')).toBe(false)
     expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Select Top 1000 Rows”: Table was not found.')
     expect(documents.getSnapshot().documents).toHaveLength(1)
-    expect(commands.isEnabled('explorer.selectTopRows', on({ kind: 'tablesFolder', ...appData }))).toBe(false)
+    expect(commands.isEnabled('explorer.selectTopRows', tables)).toBe(false)
   })
   it('script a table as CREATE to a new query, a file, or the clipboard', async () => {
     const { commands, documents, api, model } = connected()
@@ -303,41 +339,59 @@ describe('Object Explorer commands', () => {
   })
   it('copy a node\'s name: the server as connected to, or the quoted object name', async () => {
     const { commands, api } = connected()
-    for (const node of [{ kind: 'server', ...server }, { kind: 'database', ...appData }, { kind: 'serverObject', ...server, objectKind: 'logins', name: 'sa' }] as const) {
-      expect(await commands.execute('explorer.copyName', on(node), 'menu'), node.kind).toBe(true)
-    }
-    expect(await commands.execute('explorer.copyName', orders, 'menu')).toBe(true)
-    expect(api.writeClipboardText.mock.calls).toEqual([['server-a.example'], ['[AppData]'], ['[sa]'], ['[dbo].[Orders]']])
-    for (const args of [on({ kind: 'tablesFolder', ...appData }), on({ kind: 'background' }), on({ kind: 'server', connectionId: 'gone' }), undefined]) expect(commands.isEnabled('explorer.copyName', args)).toBe(false)
+    const column = on({ kind: 'column', database: 'AppData', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'Id' })
+    const parameter = on({ kind: 'parameter', database: 'AppData', parent: { kind: 'procedure', schema: 'dbo', name: 'Ship' }, name: '@id' })
+    for (const args of [server, appData, on({ kind: 'login', name: 'sa' }), orders, column, parameter]) expect(await commands.execute('explorer.copyName', args, 'menu')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([['server-a.example'], ['[AppData]'], ['[sa]'], ['[dbo].[Orders]'], ['[Id]'], ['@id']])
+    const returnValue = on({ kind: 'returnValue', database: 'AppData', parent: { kind: 'function', schema: 'dbo', name: 'Total' } })
+    for (const args of [tables, background, returnValue, on({ kind: 'server' }, 'gone'), on({ kind: 'server' }, 'server-a', true)]) expect(commands.isEnabled('explorer.copyName', args)).toBe(false)
   })
-  it('refresh the node the menu is for, else the focused node, else everything', async () => {
-    const { commands, explorer, menuTargets } = connected()
+  it('refresh the node the menu is for, else the selected node; the empty area refreshes everything', async () => {
+    const { commands, explorer } = connected()
     const refresh = vi.spyOn(explorer, 'refresh')
-    await commands.execute('explorer.refresh', on({ kind: 'tablesFolder', ...appData }), 'menu')
-    await commands.execute('explorer.refresh', on({ kind: 'background' }), 'toolbar')
-    const doc = fakeDocument(), focused = new FakeElement(doc, 'button')
-    menuTargets.register(focused.dom, () => orders.target!)
-    vi.stubGlobal('document', { activeElement: focused })
-    cleanups.push(() => vi.unstubAllGlobals())
+    await commands.execute('explorer.refresh', tables, 'menu')
+    await commands.execute('explorer.refresh', background, 'menu')
     await commands.execute('explorer.refresh', undefined, 'keybinding')
-    vi.stubGlobal('document', { activeElement: null })
-    await commands.execute('explorer.refresh', undefined, 'keybinding')
-    expect(refresh.mock.calls).toEqual([[['s', 'server-a', 'd', 'AppData', 't']], [undefined], [['s', 'server-a', 'd', 'AppData', 't']], [undefined]])
+    const root = explorer.rootIds[0]
+    expect(refresh.mock.calls).toEqual([[(tables.target as { node: { id: number } }).node.id], [undefined], [root]])
+  })
+  it('stop every load and collapse everything below the servers', async () => {
+    const { commands, explorer } = connected()
+    const stop = vi.spyOn(explorer, 'stop'), collapse = vi.spyOn(explorer, 'collapseAll')
+    expect(commands.isEnabled('explorer.collapseAll')).toBe(true)
+    await commands.execute('explorer.stop', undefined, 'toolbar')
+    await commands.execute('explorer.collapseAll', undefined, 'toolbar')
+    expect([stop.mock.calls.length, collapse.mock.calls.length]).toEqual([1, 1])
   })
   it('disconnect a server node\'s server without asking which, unless a query runs on it', async () => {
     const { commands, documents, host, quickInput, startQuery } = connected()
-    const node = on({ kind: 'server', ...server })
-    expect(await commands.execute('connection.disconnect', node, 'menu')).toBe(true)
+    expect(await commands.execute('connection.disconnect', server, 'menu')).toBe(true)
     expect(vi.mocked(host.disconnect).mock.calls).toEqual([['server-a']])
     expect(quickInput.getSnapshot()).toMatchObject({ visible: false })
     documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
     const running = startQuery()
-    expect(commands.isEnabled('connection.disconnect', node)).toBe(false)
-    expect(commands.isEnabled('connection.disconnect', on({ kind: 'server', connectionId: 'gone' }))).toBe(false)
+    expect(commands.isEnabled('connection.disconnect', server)).toBe(false)
+    expect(commands.isEnabled('connection.disconnect', on({ kind: 'server' }, 'gone'))).toBe(false)
     // The picker stays available; it disables that server's row instead.
     expect(commands.isEnabled('connection.disconnect')).toBe(true)
     await running.finish()
-    expect(commands.isEnabled('connection.disconnect', node)).toBe(true)
+    expect(commands.isEnabled('connection.disconnect', server)).toBe(true)
+  })
+  it('reconnect or remove a lost server from its menu, and pick among the lost ones elsewhere', async () => {
+    const { commands, host, connections, quickInput } = connected()
+    connections.add(connectionInfo('server-l', 0), connectionOptions)
+    expect(connections.get('server-l')).toMatchObject({ lost: true })
+    const lost = on({ kind: 'server' }, 'server-l', true)
+    expect(await commands.execute('connection.reconnect', lost, 'menu')).toBe(true)
+    expect(await commands.execute('connection.removeLost', lost, 'menu')).toBe(true)
+    expect([vi.mocked(host.reconnect).mock.calls, vi.mocked(host.disconnect).mock.calls]).toEqual([[['server-l']], [['server-l']]])
+    // Not for a live server, nor for a lost one that was reconnected or removed meanwhile.
+    for (const args of [server, on({ kind: 'server' }, 'server-x', true)]) {
+      expect(commands.isEnabled('connection.reconnect', args)).toBe(false)
+      expect(commands.isEnabled('connection.removeLost', args)).toBe(false)
+    }
+    expect(await commands.execute('connection.removeLost', undefined, 'palette')).toBe(true)
+    expect(quickInput.getSnapshot()).toMatchObject({ visible: true, ariaLabel: 'Remove Lost Connection', rows: [{ item: { id: 'server-l' } }] })
   })
   it('leave a server lost with a backend restart alone, even when the restart comes while a command waits', async () => {
     const { commands, documents, api, connections } = connected()
@@ -354,7 +408,6 @@ describe('Object Explorer commands', () => {
     expect(documents.getSnapshot().documents).toHaveLength(0)
     expect(api.execute).not.toHaveBeenCalled()
     api.push(readyBackend(2))
-    const server = on({ kind: 'server', connectionId: 'server-a' })
     for (const id of ['explorer.newQuery', 'explorer.copyName', 'connection.disconnect'] as const) expect(commands.isEnabled(id, server), id).toBe(false)
     for (const id of ['explorer.selectTopRows', 'explorer.scriptCreateToNewQuery', 'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName'] as const) expect(commands.isEnabled(id, orders), id).toBe(false)
     expect(await commands.execute('explorer.newQuery', server, 'menu')).toBe(false)

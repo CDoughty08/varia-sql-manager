@@ -9,10 +9,14 @@ export interface FakeDocument {
   selection: string
   selectionIn: FakeElement | null
   getSelection(): { toString(): string; readonly anchorNode: FakeElement | null; readonly focusNode: FakeElement | null; selectAllChildren(element: FakeElement): void }
+  /** Elements created with an `id` attribute, by id. */
+  readonly ids: Map<string, FakeElement>
+  getElementById(id: string): FakeElement | null
 }
 export function fakeDocument(): FakeDocument {
+  const ids = new Map<string, FakeElement>()
   const document: FakeDocument = {
-    activeElement: null, selection: '', selectionIn: null,
+    activeElement: null, selection: '', selectionIn: null, ids, getElementById: id => ids.get(id) ?? null,
     getSelection: () => ({
       toString: () => document.selection, anchorNode: document.selectionIn, focusNode: document.selectionIn,
       selectAllChildren: element => { document.selection = element.textContent; document.selectionIn = element }
@@ -57,6 +61,7 @@ export class FakeElement {
     this.tagName = tag.toUpperCase()
     this.classes = new Set(className?.split(' ').filter(Boolean))
     for (const [name, value] of Object.entries(attributes ?? {})) this.attributes.set(name, value)
+    if (attributes?.id) ownerDocument.ids.set(attributes.id, this)
     Object.assign(this, properties)
   }
   append(...children: FakeElement[]): this {

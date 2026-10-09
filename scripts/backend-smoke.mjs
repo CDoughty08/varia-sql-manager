@@ -1,6 +1,7 @@
 import { _electron as electron, expect } from '@playwright/test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { explorerRow } from './fixtures/explorer-tree.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
@@ -178,15 +179,15 @@ try {
     const after = await ready(before.state.generation + 1)
     expect(after.pid).not.toBe(before.pid)
     await expect(banner()).toContainText('1 connection was lost and 1 running script was stopped; nothing was re-run.')
-    await expect(page.locator('.lost-server')).toContainText('— connection lost')
-    await page.locator('.lost-server').getByRole('button', { name: /^Reconnect/ }).click()
+    await expect(page.locator('.explorer-row.lost')).toContainText('(connection lost)')
+    await page.locator('.explorer-row.lost').getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
     await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
     if (liveUser) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
-    await expect(page.locator('.lost-server')).toHaveCount(0)
+    await expect(page.locator('.explorer-row.lost')).toHaveCount(0)
     // SPIDs can be reused, so the old session's temporary table shows whether the session is new.
     await typeSql("SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
     await execute().click()
@@ -208,7 +209,7 @@ try {
   await fillLogin(dialog, 'crash-server', 'reader', 'smoke-password-marker')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(page.getByRole('region', { name: 'Server crash-server', exact: true })).toBeVisible()
+  await expect(await explorerRow(page, 'crash-server')).toBeVisible()
   await typeSql('SELECT 1;')
   // The script is running when the backend crashes.
   await writeFile(join(control, 'hold', 'query.execute'), '')
@@ -226,7 +227,20 @@ try {
   expect(history.indexOf('restarting:1')).toBeLessThan(history.indexOf('starting:2'))
   expect(await app.evaluate(() => globalThis.__variaTest.states.find(state => state.status === 'restarting')?.lost)).toEqual({ generation: 1, reason: 'crash', connections: 1, queries: 1 })
   await expect(statusBar()).toContainText('fake · Ready')
-  await expect(page.getByRole('region', { name: 'Server crash-server', exact: true })).toContainText('crash-server — connection lost')
+  // Object Explorer keeps the server's row, collapsed and dimmed, with Reconnect and Remove (in its menu too).
+  const lostRow = page.locator('.explorer-row.lost')
+  await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (connection lost)')
+  await expect(lostRow).not.toHaveAttribute('aria-expanded')
+  await lostRow.locator('.oe-label').click({ button: 'right' })
+  await expect(page.getByRole('menu', { name: 'Object Explorer', exact: true }).locator('.menu-item .menu-label')).toHaveText(['Connect…', 'Reconnect…', 'Remove'])
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.menu')).toHaveCount(0)
+  // Enter on the lost row reconnects it, as its button does: the Connect dialog opens filled in from it.
+  await lostRow.locator('.oe-label').click()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('dialog', { name: 'Connect', exact: true }).getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(execute()).toBeDisabled()
   await expect(execute()).toHaveAttribute('title', lostHint)
   await expect(page.locator('.query-context')).toContainText('crash-server (connection lost)')
@@ -247,8 +261,8 @@ try {
   await dialog.getByLabel('Password', { exact: true }).fill('smoke-password-marker')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(page.locator('.lost-server')).toHaveCount(0)
-  await expect(page.getByRole('region', { name: 'Server crash-server', exact: true })).toBeVisible()
+  await expect(page.locator('.explorer-row.lost')).toHaveCount(0)
+  await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('aria-expanded', 'true')
   await expect(page.locator('.query-context')).not.toContainText('connection lost')
   await expect(execute()).toBeEnabled()
   await execute().click()

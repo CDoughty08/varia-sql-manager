@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions, DatabaseInfo } from '../../shared/contracts'
+import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions } from '../../shared/contracts'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import type { QueryTab } from './documents'
@@ -8,7 +8,7 @@ import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
 import type { CommandArgs, CommandId } from './core/types'
 import QueryEditor from './QueryEditor'
 import Icon from './Icon'
-import ServerExplorer, { LostServer } from './ServerExplorer'
+import ExplorerPane from './explorer/ExplorerPane'
 import BackendBanner from './BackendBanner'
 import QueryOutput from './QueryOutput'
 import TitleBar from './TitleBar'
@@ -50,7 +50,7 @@ export default function App() {
   const connections = useServiceSnapshot(workbench.connections)
   const { state: backendState } = useServiceSnapshot(workbench.backend)
   const [health, setHealth] = useState<BackendHealth>()
-  const [databasesById, setDatabasesById] = useState<Record<string, DatabaseInfo[]>>({})
+  const databaseLists = useServiceSnapshot(workbench.databaseList)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(connectionDefaults)
@@ -61,21 +61,20 @@ export default function App() {
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
   const enabled = {
     connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'),
-    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel'), refresh: useCommandEnabled('explorer.refresh')
+    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel')
   }
-  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), execute: useKeybindingLabel('query.execute'), refresh: useKeybindingLabel('explorer.refresh') }
+  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), execute: useKeybindingLabel('query.execute') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = { ...(tabs.find(tab => tab.id === activeId) ?? emptyTab), result: queryState[activeId]?.result, error: queryState[activeId]?.error }
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
-  const liveConnections = connections.filter(value => !value.lost)
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
   // Also re-renders App when the theme changes, which the per-tab accents below rely on.
   const accent = useConnectionAccent(connection?.color)
-  const databases = liveConnection ? databasesById[liveConnection.id] ?? [] : []
+  const databases = liveConnection ? databaseLists.get(liveConnection.id) ?? [] : []
   const availableDatabases = databases.some(value => value.name === active.database) ? databases : [{ name: active.database, isSystem: false }, ...databases]
 
   function activate(id: string) { documents.activate(id) }
@@ -105,8 +104,6 @@ export default function App() {
     const tabId = element.dataset.tabId
     return tabId && documents.get(tabId) ? { kind: 'documentTab', tabId } : null
   })
-  // Object Explorer's empty area; nodes register their own targets.
-  const explorerBackground = useMenuTarget<HTMLDivElement>(() => ({ kind: 'explorer', node: { kind: 'background' } }))
 
   // Readiness comes from main's backend state; health only fills the status bar tooltip, once per generation.
   useEffect(() => {
@@ -135,8 +132,6 @@ export default function App() {
     document.title = windowTitle
   }, [windowTitle])
 
-  const onDatabases = useCallback((id: string, values: DatabaseInfo[]) => { setDatabasesById(current => ({ ...current, [id]: values })) }, [])
-
   function connected(info: ConnectionInfo, chosen: ConnectionOptions) {
     setOptions(chosen)
     setExplorerError(info.historyWarning ?? '')
@@ -146,7 +141,6 @@ export default function App() {
     if (reconnecting && workbench.connections.get(reconnecting)?.lost) {
       workbench.connections.replace(reconnecting, info, chosen)
       targets.retarget(reconnecting, info.id)
-      setDatabasesById(current => { const next = { ...current }; delete next[reconnecting]; return next })
       return
     }
     workbench.connections.add(info, chosen)
@@ -162,22 +156,11 @@ export default function App() {
       await documents.runTask(async () => {
         unwrap(await window.varia.disconnect(id))
         workbench.connections.remove(id)
-        workbench.explorer.forget(id)
         for (const tab of documents.getSnapshot().documents) if (tab.connectionId === id) targets.update(tab.id, { connectionId: undefined })
-        setDatabasesById(current => { const next = { ...current }; delete next[id]; return next })
         setExplorerError('')
       })
     } catch (error) { setExplorerError(errorText(error)) }
   }
-
-  const selectDatabase = useStableCallback((id: string, database: string) => {
-    if (documents.getSnapshot().busy) return
-    if (!active.id || (active.connectionId && active.connectionId !== id) || activeRunning) documents.newQuery('', undefined, id, database)
-    else targets.update(active.id, { connectionId: id, database })
-  })
-
-  const onDisconnect = useStableCallback((id: string) => { void disconnect(id) })
-  const onReconnect = useCallback((id: string) => shellHost.reconnect(id), [shellHost])
 
   function tabKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     const destination = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined
@@ -211,15 +194,7 @@ export default function App() {
     {fileError && <div className="global-error" role="alert"><span>{fileError}</span><button aria-label="Dismiss file error" onClick={() => files.clearError()}><Icon name="close" /></button></div>}
     {commandError && <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>}
     <ThemeNotice />
-    <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer">
-        <div className="panel-heading"><span>SERVERS</span><button className="icon-button" aria-label="Refresh Object Explorer" title={withKey('Refresh', keys.refresh)} disabled={!enabled.refresh} onClick={() => run('explorer.refresh', { target: { kind: 'explorer', node: { kind: 'background' } } })}><Icon name="refresh" /></button></div>
-        <div className="explorer-scroll" ref={explorerBackground}>{connections.length ? connections.map(value => value.lost ? <LostServer key={value.id} connection={value} canRemove={!documentBusy} onReconnect={onReconnect} onRemove={onDisconnect} />
-          : <ServerExplorer key={value.id} connection={value} selectedDatabase={active.connectionId === value.id ? active.database : undefined} canDisconnect={!documentBusy && !queries.isConnectionRunning(value.id)} onDatabases={onDatabases} onSelect={selectDatabase} onDisconnect={onDisconnect} />)
-          : <div className="explorer-empty"><Icon name="server" /><p>Connect to SQL Server to browse databases and script tables.</p><button disabled={!enabled.connect} onClick={() => run('connection.connect')}>Connect to server</button></div>}
-          {explorerError && <p className="explorer-error" role="alert">{explorerError}</p>}
-        </div>
-        <div className="explorer-footer">{liveConnections.length ? `${liveConnections.length} connected server${liveConnections.length === 1 ? '' : 's'}` : connections.length ? 'No connected servers' : 'Windows & SQL authentication'}</div>
-      </aside>} editor={<main className="workspace">
+    <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
         <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
           <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><span className="sql-icon">SQL</span><span className="tab-name">{tab.name}</span>{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? 'Cancel the running query before closing' : `Close ${tab.name}`} disabled={!!queryState[tab.id]?.running || documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>

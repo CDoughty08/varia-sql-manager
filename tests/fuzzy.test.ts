@@ -36,7 +36,9 @@ describe('fuzzy matching', () => {
     expect(palette('use')[0]).toBe('Query: Change Database…')
     expect(palette('run')[0]).toBe('Query: Execute')
     // A category match is no better than the same words in a title, so an available command wins the tie.
-    expect(palette('object explorer', ['Object Explorer: Refresh'])).toEqual(['View: Show Object Explorer', 'Object Explorer: Refresh'])
+    const explorerCommands = commandIds.map(paletteLabel).filter(label => label.startsWith('Object Explorer: '))
+    expect(palette('object explorer', explorerCommands)).toEqual(['View: Show Object Explorer', ...palette('object explorer').filter(label => label !== 'View: Show Object Explorer')])
+    expect(palette('object explorer', explorerCommands).slice(1).sort()).toEqual(explorerCommands.filter(label => palette('object explorer').includes(label)).sort())
     expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
     // The word in the title outranks the same word in the category, and in another command's title. Reconnect is
     // unavailable until a connection is lost, so it ranks below the commands that tie with it.

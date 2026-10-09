@@ -4,12 +4,26 @@ import type { Workbench } from '../core/workbench'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
-/** File commands act on the tab a toolbar button or query tab menu names (`tabId`), otherwise on the active query. */
-export function filesContribution({ files, commands, documents }: Pick<Workbench, 'files' | 'commands' | 'documents'>, api: Pick<VariaApi, 'writeClipboardText' | 'revealSqlFile'>): Disposable {
+const frame = (callback: () => void) => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(callback); else callback() }
+
+/**
+ * File commands act on the tab a toolbar button or query tab menu names (`tabId`), otherwise on the active query. New
+ * Query with Object Explorer focused opens on the selected node's server and database, as in SSMS.
+ */
+export function filesContribution({ files, commands, documents, context, explorer, connections }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
+  readonly context: Pick<Workbench['context'], 'get'>; readonly explorer: Pick<Workbench['explorer'], 'queryTarget'>; readonly connections: Pick<Workbench['connections'], 'get'>
+}, api: Pick<VariaApi, 'writeClipboardText' | 'revealSqlFile'>): Disposable {
   const tabOf = (context?: CommandArgs) => context?.tabId ?? documents.getSnapshot().activeId
   const fileOf = (context?: CommandArgs) => documents.get(tabOf(context))?.file
+  const newQuery = () => {
+    const target = context.get().activePanel === 'explorer' ? explorer.queryTarget() : undefined
+    if (!target) { files.newFile(); return }
+    files.newFile(target.connectionId, target.database ?? connections.get(target.connectionId)?.database)
+    // Focus stays in the tree otherwise; SSMS puts it in the new query window.
+    frame(() => documents.boundEditor?.focus())
+  }
   const registrations = [
-    commands.register('file.new', { when: () => files.canRun(), run: () => files.newFile() }),
+    commands.register('file.new', { when: () => files.canRun(), run: newQuery }),
     commands.register('file.open', { when: () => files.canRun(), run: () => files.open() }),
     commands.register('file.save', { when: context => files.canSave(context?.tabId), run: context => files.save(context?.tabId) }),
     commands.register('file.saveAs', { when: context => files.canSave(context?.tabId), run: context => files.save(context?.tabId, true) }),
