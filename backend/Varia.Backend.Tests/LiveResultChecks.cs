@@ -101,7 +101,7 @@ internal static class LiveResultChecks
             await UnreadValues(check, store, (sql, context, maxRows, maxResultSets) => Run(sql, context, Guid.NewGuid().ToString(), maxRows: maxRows, maxResultSets: maxResultSets));
 
             // maxRows 0 stores rows up to the budget only.
-            await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId) => Run(sql, context, sessionId, maxRows: 0), Close);
+            await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close);
 
             var cancelled = await Cancelled(CancelReason.User);
             check(cancelled.Status == "cancelled" && cancelled.Error?.Code == "CANCELLED", "a user CANCEL frame cancels the script");
@@ -229,38 +229,47 @@ internal static class LiveResultChecks
     }
 
     /// <summary>Rows that wait for a lock mid-statement are sealed after 200 ms, so they can be read before the statement
-    /// ends. A second session holds a row lock on a uniquely named global temporary table for that.</summary>
+    /// ends. A second session holds a row lock on a uniquely named global temporary table for that. Rows past maxRows in a
+    /// set with a long column are read past synchronously, so the rows stored before them are sealed first.</summary>
     private static async Task IdleSeal(Action<bool, string> check, ResultStore store, JsonSerializerOptions json, Func<string, Task<QueryResult>> run,
-        Func<string, RequestContext?, string?, Task<QueryResult>> runIn, Func<string, Task> close)
+        Func<string, RequestContext?, string?, int, Task<QueryResult>> runIn, Func<string, Task> close)
     {
         var table = "##varia_seal_" + Guid.NewGuid().ToString("N");
         await run("CREATE TABLE " + table + " (id int PRIMARY KEY); INSERT " + table + " SELECT TOP (3000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
         var locker = Guid.NewGuid().ToString();
         var reader = Guid.NewGuid().ToString();
-        var events = new List<JsonElement>();
-        using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) => { lock (events) events.Add(JsonSerializer.SerializeToElement(value, json)); });
-        long availableWhileBlocked = 0;
-        try
+        // Runs the query while the last row is locked, until `rows` are readable or 10 s pass, then releases the lock.
+        async Task<(bool Blocked, long Available, QueryResult Result, List<string?> Kinds)> WhileLocked(string sql, int maxRows, long rows)
         {
-            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 3000;", null, locker);
-            var running = runIn("SELECT id FROM " + table + " ORDER BY id;", context, reader);
+            var events = new List<JsonElement>();
+            using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) => { lock (events) events.Add(JsonSerializer.SerializeToElement(value, json)); });
+            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 3000;", null, locker, 0);
+            var running = runIn(sql, context, reader, maxRows);
+            long available = 0;
             var watch = Stopwatch.StartNew();
             while (watch.ElapsedMilliseconds < 10_000 && !running.IsCompleted)
             {
                 uint? id;
                 lock (events) id = events.Where(item => item.GetProperty("type").GetString() == "resultSet.opened").Select(item => (uint?)item.GetProperty("descriptor").GetProperty("resultId").GetUInt32()).FirstOrDefault();
-                availableWhileBlocked = id is { } resultId ? store.Find(resultId)?.RowsAvailable ?? 0 : 0;
-                if (availableWhileBlocked > PageBuilder.FirstPageRows) break;
+                available = id is { } resultId ? store.Find(resultId)?.RowsAvailable ?? 0 : 0;
+                if (available >= rows) break;
                 await Task.Delay(50);
             }
             var blocked = !running.IsCompleted;
-            await runIn("ROLLBACK;", null, locker);
+            await runIn("ROLLBACK;", null, locker, 0);
             var result = await running;
-            var kinds = events.Select(item => item.GetProperty("type").GetString()).ToList();
-            check(blocked && availableWhileBlocked > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
-                "rows read before a lock wait are sealed and readable while the statement waits (" + availableWhileBlocked + " rows)");
+            lock (events) return (blocked, available, result, [.. events.Select(item => item.GetProperty("type").GetString())]);
+        }
+        try
+        {
+            var (blocked, available, result, kinds) = await WhileLocked("SELECT id FROM " + table + " ORDER BY id;", 0, PageBuilder.FirstPageRows + 1);
+            check(blocked && available > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
+                "rows read before a lock wait are sealed and readable while the statement waits (" + available + " rows)");
             check(kinds.First() == "resultSet.opened" && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
                 "query events report the result set as it opens and closes: " + string.Join(", ", kinds.Distinct()));
+            (blocked, available, result, _) = await WhileLocked("SELECT id, CAST(N'x' AS nvarchar(max)) AS note FROM " + table + " ORDER BY id;", 100, 100);
+            check(blocked && available == 100 && result.Status == "completed" && result.ResultSets[0] is { RowsRead: 3000, RowsStored: 100 },
+                "rows stored before skipped rows with long values are readable while the statement waits (" + available + " rows)");
         }
         finally
         {
