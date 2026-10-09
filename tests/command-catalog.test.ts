@@ -9,6 +9,8 @@ import { themeMenuModel } from '../src/shared/theme/menu'
 import type { KeybindingSpec } from '../src/shared/commands/catalog'
 import type { CommandId as RendererCommandId } from '../src/renderer/src/core/types'
 import { workbenchFixture } from './fixtures/workbench'
+import { folderIds, nodeKinds } from '../src/shared/explorer/catalog'
+import { noExplorerContext } from '../src/renderer/src/explorer/ExplorerService'
 
 const rule = (command: CommandId, spec: KeybindingSpec, platform: Platform = 'win32') => resolveKeybinding(command, spec, platform)!
 const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConflicts(rules, platform).map(conflict => [conflict.kind, conflict.chord, ...conflict.commands])
@@ -191,6 +193,16 @@ describe('context keys', () => {
       expect(record.textInputFocus, sample.name).toBe(record.editorTextFocus || record.inputFocus)
       if (record.editorTextFocus) expect(record.editorFocus, sample.name).toBe(true)
       expect(Object.keys(sample.keys).every(key => contextKeys[key as keyof typeof contextKeys].scope === 'focus'), sample.name).toBe(true)
+    }
+  })
+  it('keep Object Explorer selection keys in step with the catalogue and out of keybinding conditions', () => {
+    expect(contextKeys.explorerSelectionKind.values).toEqual(['', 'folder', ...nodeKinds])
+    expect(contextKeys.explorerSelectionFolder.values).toEqual(['', ...folderIds])
+    const explorerKeys = contextKeyNames.filter(key => key.startsWith('explorer') && contextKeys[key].scope === 'state')
+    expect(explorerKeys.sort()).toEqual(Object.keys(noExplorerContext).sort())
+    // findConflicts enumerates every value of the keys two clauses share; these enums would make that explode.
+    for (const id of commandIds) for (const spec of commandDescriptor(id).keybindings ?? []) {
+      if (spec.when !== undefined) expect(referencedKeys(parseWhen(spec.when)).filter(key => explorerKeys.includes(key as never)), id).toEqual([])
     }
   })
   it('report clauses that use unknown keys, the wrong scope, or impossible values', () => {

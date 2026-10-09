@@ -20,4 +20,6 @@ export type WorkbenchEvent =
   | { type: 'documents.closed'; tabId: string }
   | { type: 'query.started'; tabId: string; queryId: string }
   | { type: 'query.finished'; tabId: string; queryId: string; result?: DisplayQueryResult; error?: string }
+  /** Object Explorer reloaded a server, a databases folder, or another node of the connection. */
+  | { type: 'explorer.refreshed'; connectionId: string; scope: 'server' | 'databases' | 'other' }
 export interface ExternalStore<T> { getSnapshot(): T; subscribe(listener: () => void): () => void }

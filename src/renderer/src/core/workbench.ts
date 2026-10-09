@@ -12,7 +12,7 @@ import { ResultClient } from '../results/ResultClient'
 import { legacyExecute } from '../results/legacy'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { PaneService } from '../services/panes'
-import { ExplorerService } from '../services/explorer'
+import { ExplorerRefreshService } from '../services/explorer'
 import { ResultSelectionService } from '../services/result-selection'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
@@ -62,7 +62,7 @@ export interface Workbench extends Disposable {
   readonly editorOptions: EditorOptionsService
   readonly panes: PaneService
   /** Which Object Explorer lists to load again. */
-  readonly explorer: ExplorerService
+  readonly explorer: ExplorerRefreshService
   /** The cells selected in each query's results grid. */
   readonly resultSelection: ResultSelectionService
   readonly theme: ThemeService
@@ -80,7 +80,7 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
 }
 export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService): Workbench {
   const platform = toPlatform(api.platform)
-  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerService()
+  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerRefreshService()
   const backend = new BackendStateService(api, connections)
   const documents = new DocumentService((sql, uri) => monaco.editor.createModel(sql, 'sql', monaco.Uri.parse(uri)), api, events)
   const results = new ResultClient({ api, createWorker: () => new ResultsWorker(), window })

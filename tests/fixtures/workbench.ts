@@ -12,7 +12,7 @@ import { FileService } from '../../src/renderer/src/services/files'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
 import { PaneService } from '../../src/renderer/src/services/panes'
-import { ExplorerService } from '../../src/renderer/src/services/explorer'
+import { ExplorerRefreshService } from '../../src/renderer/src/services/explorer'
 import { ResultSelectionService } from '../../src/renderer/src/services/result-selection'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
 import { outputContribution } from '../../src/renderer/src/contributions/output'
@@ -110,7 +110,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ...backendApi()
   }
   const { documents, events } = doc
-  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerService()
+  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerRefreshService()
   const backend = new BackendStateService(api, connections)
   const queries = new QueryService(documents, api, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)

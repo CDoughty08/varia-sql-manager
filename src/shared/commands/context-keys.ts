@@ -1,5 +1,6 @@
 import type { Platform } from './keybindings'
 import { comparisons, parseWhen, referencedKeys, type ContextRecord } from './when'
+import { folderIds, nodeKinds } from '../explorer/catalog.ts'
 
 /**
  * `static` keys never change while the app runs, `state` keys come from service snapshots, `focus` keys from the
@@ -39,6 +40,20 @@ export const contextKeys = {
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
+  explorerHasSelection: { type: 'boolean', scope: 'state', description: 'A node is selected in Object Explorer (a loading, error, or progress row is not a node).' },
+  explorerSelectionKind: {
+    type: 'enum', scope: 'state', values: ['', 'folder', ...nodeKinds],
+    description: "The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses."
+  },
+  explorerSelectionFolder: {
+    type: 'enum', scope: 'state', values: ['', ...folderIds],
+    description: "The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses."
+  },
+  explorerSelectionFilterable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is a folder that Filter Settings can filter.' },
+  explorerSelectionFiltered: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer folder has a filter.' },
+  explorerSelectionInsertable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node has a name to copy: a server, an object, or a fully loaded Columns folder.' },
+  explorerSelectionScriptable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is an object SMO can script.' },
+  explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
   explorerNode: {
     type: 'enum', scope: 'target', menu: 'explorer.context', description: "The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object.",
     values: ['background', 'server', 'databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'database', 'tablesFolder', 'table', 'securityFolder', 'serverObjectsFolder', 'serverObject', '']

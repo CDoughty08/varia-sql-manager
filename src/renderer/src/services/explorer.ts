@@ -40,8 +40,9 @@ const keyOf = (path: ExplorerPath) => JSON.stringify(path)
  * Which Object Explorer lists to load again. Each list reads `version(path)`, which changes when its path or any
  * prefix of it is refreshed, so refreshing a Tables folder reloads only that list while refreshing its server reloads
  * every list below the server. Versions are revisions of one counter, so a refreshed list never sees an old version again.
+ * It serves the current tree only: Object Explorer v2's model (`explorer/ExplorerService.ts`) is its own cache and refreshes nodes itself.
  */
-export class ExplorerService extends SnapshotStore<{ readonly revision: number }> implements Disposable {
+export class ExplorerRefreshService extends SnapshotStore<{ readonly revision: number }> implements Disposable {
   private revision = 0
   /** Every list is at least this version: the revision of the latest refresh of everything. */
   private epoch = 0
