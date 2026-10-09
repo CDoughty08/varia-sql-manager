@@ -6,7 +6,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
 import ExplorerRow, { type RowActions } from './ExplorerRow'
-import { computeWindow, renderedIndices, rowIndex, RowKind, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction } from './tree-model'
+import { computeWindow, renderedIndices, rowIndex, RowKind, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
@@ -67,12 +67,15 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     if (top < tree.scrollTop) tree.scrollTop = top
     else if (bottom > tree.scrollTop + tree.clientHeight) tree.scrollTop = bottom - tree.clientHeight
   }, [])
-  // Selecting can publish rows that arrived since the last render, which moves the row: its index is read from them.
+  // Selecting can publish rows that arrived since the last render, which moves the row: its index is read from them. A
+  // selection made outside the tree (Filter Settings closing) asks for the same through the snapshot's `reveal`.
+  const revealed = useRef(snapshot.reveal)
   useLayoutEffect(() => {
-    const id = reveal.current
-    if (id === undefined) return
+    const requested = snapshot.reveal !== revealed.current
+    revealed.current = snapshot.reveal
+    const id = reveal.current ?? (requested ? selected : undefined)
     reveal.current = undefined
-    ensureVisible(rowIndex(rows, id))
+    if (id !== undefined) ensureVisible(rowIndex(rows, id))
   })
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
@@ -133,7 +136,10 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       }
       if (event.key === 'Escape' && typing.value) { typing.clear(); event.preventDefault(); return }
       const text = typing.accept(event.nativeEvent)
-      if (text === undefined) return
+      if (text === undefined) {
+        if (swallowedKey(event.nativeEvent)) event.preventDefault()
+        return
+      }
       event.preventDefault()
       const found = typeAhead(current, index, text)
       if (found >= 0) act({ type: 'select', index: found })

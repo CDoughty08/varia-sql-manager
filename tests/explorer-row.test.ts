@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
-import { rowName, rowTooltip } from '../src/renderer/src/explorer/ExplorerRow'
+import { rowDescription, rowName, rowTooltip } from '../src/renderer/src/explorer/ExplorerRow'
 import type { TreeNode } from '../src/renderer/src/explorer/tree-model'
 
 const tableRef: ExplorerNodeRef = { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } }
@@ -39,5 +39,12 @@ describe('Object Explorer rows', () => {
     const long = rowTooltip(node({ detail: 'x'.repeat(2000) }))
     expect(long).toHaveLength(512)
     expect(long.endsWith('…')).toBe(true)
+  })
+  it('describe a row with its tooltip after the name, which the accessible name already says', () => {
+    expect(rowDescription(node({ sublabel: '(System-Versioned)', created: '2024-05-01T09:30:00', detail: 'Owner dbo' }))).toBe('Table · Created 2024-05-01 09:30:00\nOwner dbo')
+    expect(rowDescription(node({ kind: 'database', label: 'Legacy', sublabel: '(Offline)', status: 'unavailable' })))
+      .toBe('Database\nThe database is not available. Bring it online, then refresh Databases.')
+    expect(rowDescription(node({ kind: 'folder', folder: 'tables', label: 'Tables' }))).toBeUndefined()
+    expect(rowDescription(node({ detail: 'x'.repeat(2000) }))).toHaveLength(512)
   })
 })

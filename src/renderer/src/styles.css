@@ -194,6 +194,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
   .explorer-row[aria-selected="true"] .oe-sublabel, .explorer-row[aria-selected="true"] .oe-icon, .explorer-row[aria-selected="true"] .oe-twistie { color: HighlightText; }
   .explorer-row[aria-selected="true"] .oe-icon .oe-badge { color: HighlightText; background: Highlight; }
+  /* Offline, inaccessible and disabled rows stay dimmed, as disabled menu items are. */
+  .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
   /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
 }

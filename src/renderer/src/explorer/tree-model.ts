@@ -294,6 +294,14 @@ export function typeAhead(rows: VisibleRows, from: number, buffer: string): numb
   return -1
 }
 
+/**
+ * Keys the tree swallows when type-ahead does not take them: Space and Shift+Space would scroll it a page and leave the
+ * selected row out of view, and the Windows tree ignores them. Type-ahead takes a space only after other text.
+ */
+export function swallowedKey(event: { readonly key: string; readonly ctrlKey?: boolean; readonly altKey?: boolean; readonly metaKey?: boolean; readonly isComposing?: boolean }): boolean {
+  return event.key === ' ' && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing
+}
+
 /** Type-ahead input: printable keys without Ctrl, Alt or Meta, outside IME composition, reset after a pause. */
 export class TypeAheadBuffer {
   private text = ''

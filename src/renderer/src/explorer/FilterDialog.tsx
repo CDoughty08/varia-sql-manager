@@ -10,7 +10,8 @@ import { dateOpLabels, draftFilter, filterDraft, isRange, textOpLabels, type Fil
 /**
  * SSMS's Filter Settings for one folder: a row per property the folder allows, each with an operator and a value.
  * OK applies the rows that have a value (none clears the filter) and reloads the folder; Clear Filter empties the rows.
- * Enter is OK and Escape is Cancel; focus then returns to the folder's row.
+ * Enter is OK and Escape is Cancel. Focus then returns to the tree: OK selects the folder it reloaded, and Cancel goes
+ * back to the row that was selected (the capped row the dialog may have been opened from), scrolled into view.
  */
 export default function FilterDialog({ folderId }: { readonly folderId: number }) {
   const { explorer } = useWorkbench()
@@ -19,9 +20,10 @@ export default function FilterDialog({ folderId }: { readonly folderId: number }
   const [draft, setDraft] = useState(() => filterDraft(explorer.filter(folderId)))
   const [problems, setProblems] = useState<FilterProblems>({})
   const [error, setError] = useState('')
-  const close = () => {
+  const close = (applied = false) => {
     explorer.closeFilter()
-    explorer.select(folderId)
+    const { selected } = explorer.getSnapshot()
+    explorer.select(!applied && selected !== undefined && explorer.menuNode(selected) ? selected : folderId, { reveal: true })
     document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
   }
   const apply = () => {
@@ -29,7 +31,7 @@ export default function FilterDialog({ folderId }: { readonly folderId: number }
     if (!result.ok) { setProblems(result.problems); return }
     try {
       explorer.setFilter(folderId, result.filter)
-      close()
+      close(true)
     } catch (failure) { setProblems({}); setError(failure instanceof Error ? failure.message : 'The filter could not be applied.') }
   }
   const change = (property: FilterProperty, value: Partial<FilterRow>) => {
@@ -46,7 +48,7 @@ export default function FilterDialog({ folderId }: { readonly folderId: number }
   const title = `Filter Settings – ${displayText(node?.label ?? 'Folder')}`
   return <div className="modal-backdrop"><form className="connection-modal filter-dialog" role="dialog" aria-modal="true" aria-labelledby="filter-title" noValidate
     onSubmit={event => { event.preventDefault(); apply() }} onKeyDown={keyDown}>
-    <div className="connection-heading"><h2 id="filter-title">{title}</h2><button type="button" className="icon-button" aria-label="Close filter settings" onClick={close}><Icon name="close" /></button></div>
+    <div className="connection-heading"><h2 id="filter-title">{title}</h2><button type="button" className="icon-button" aria-label="Close filter settings" onClick={() => close()}><Icon name="close" /></button></div>
     <div className="connection-scroll">
       <table className="filter-grid">
         <thead><tr><th scope="col">Property</th><th scope="col">Operator</th><th scope="col">Value</th></tr></thead>
@@ -75,7 +77,7 @@ export default function FilterDialog({ folderId }: { readonly folderId: number }
     </div>
     <div className="connection-footer">
       <button type="button" onClick={() => { setDraft(filterDraft()); setProblems({}); setError('') }}>Clear Filter</button><span />
-      <button className="primary" type="submit">OK</button><button type="button" onClick={close}>Cancel</button>
+      <button className="primary" type="submit">OK</button><button type="button" onClick={() => close()}>Cancel</button>
     </div>
   </form></div>
 }

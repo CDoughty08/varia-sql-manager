@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, flatten, needsQuery, parentIndex, renderedIndices, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, syntheticId, treeKey, treeKeyOf, typeAhead,
+  computeWindow, flatten, needsQuery, parentIndex, renderedIndices, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
 
@@ -300,6 +300,12 @@ describe('type-ahead', () => {
     expect(buffer.value).toBe('')
     for (let index = 0; index < 100; index++) buffer.accept({ key: 'a' })
     expect(buffer.value).toHaveLength(64)
+  })
+  it('swallows Space and Shift+Space that type-ahead leaves, which would scroll the tree away from its selection', () => {
+    expect(swallowedKey({ key: ' ' })).toBe(true)
+    expect(swallowedKey({ key: ' ', shiftKey: true } as { key: string })).toBe(true)
+    for (const event of [{ key: ' ', ctrlKey: true }, { key: ' ', altKey: true }, { key: ' ', metaKey: true }, { key: ' ', isComposing: true }, { key: 'a' }, { key: 'PageDown' }])
+      expect(swallowedKey(event)).toBe(false)
   })
 })
 

@@ -48,12 +48,24 @@ const statusSentences = {
 const lostSentence = 'The connection was lost when the SQL backend restarted. Reconnect, or remove the server.'
 const clip = (text: string) => text.length > explorerLimits.detail ? text.slice(0, explorerLimits.detail - 1) + '…' : text
 
+/** What the tooltip says after the name: kind and creation date, facts, status, and any error. */
+function tooltipFacts(node: TreeNode): string[] {
+  const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
+  const error = node.error ?? node.connectionError
+  return [kind, node.detail && displayText(node.detail), node.lost ? lostSentence : node.status && statusSentences[node.status], error && `Could not load: ${displayText(error.message)}`]
+    .filter((line): line is string => !!line)
+}
 /** The row's tooltip: name, kind and creation date, facts, status, and any error. */
 export function rowTooltip(node: TreeNode): string {
   const name = node.lost ? `${node.label} (connection lost)` : node.sublabel ? `${node.label} ${node.sublabel}` : node.label
-  const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
-  const error = node.error ?? node.connectionError
-  return clip([displayText(name), kind, node.detail && displayText(node.detail), node.lost ? lostSentence : node.status && statusSentences[node.status], error && `Could not load: ${displayText(error.message)}`].filter(Boolean).join('\n'))
+  return clip([displayText(name), ...tooltipFacts(node)].join('\n'))
+}
+/**
+ * The row's accessible description: the tooltip without the name, which the accessible name already says (a title
+ * alone would be the description, so screen readers would read the name twice).
+ */
+export function rowDescription(node: TreeNode): string | undefined {
+  return clip(tooltipFacts(node).join('\n')) || undefined
 }
 /** The row's accessible name: the label and sublabel as shown, then its state. */
 export function rowName(node: TreeNode): string {
@@ -88,7 +100,8 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
   if (kind !== RowKind.Node || !node) {
-    const inert = kind === RowKind.Loading || kind === RowKind.More || kind === RowKind.Capped
+    // Loading rows do nothing; the capped row's Enter opens Filter Settings, so it is not announced as unavailable.
+    const inert = kind === RowKind.Loading || kind === RowKind.More
     const tone = kind === RowKind.Error || kind === RowKind.MoreError ? ' error' : kind === RowKind.More || kind === RowKind.Loading ? ' progress' : ''
     const icon = kind === RowKind.Error || kind === RowKind.MoreError ? 'error' : kind === RowKind.Loading || kind === RowKind.More ? 'loading' : 'info'
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
@@ -102,7 +115,7 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} title={rowTooltip(node)} style={style} draggable={draggable || undefined}
+    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} aria-description={rowDescription(node)} title={rowTooltip(node)} style={style} draggable={draggable || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}

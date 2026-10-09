@@ -62,8 +62,12 @@ async function select(...path) {
   await expect.poll(async () => (await active())?.id).toBe(await row.getAttribute('id'))
   return row
 }
-async function connect(server) {
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+/** Connects from the main toolbar, or with `keyboard` from the empty state's Connect button by Enter, submitting by Enter. */
+async function connect(server, { keyboard = false } = {}) {
+  if (keyboard) {
+    await page.getByRole('button', { name: 'Connect to server', exact: true }).focus()
+    await page.keyboard.press('Enter')
+  } else await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
@@ -73,7 +77,10 @@ async function connect(server) {
     await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
   } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   if (server === process.env.VARIA_TEST_SQL_SERVER) await dialog.getByLabel('Trust server certificate', { exact: true }).check()
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  if (keyboard) {
+    await dialog.getByLabel('Server Name', { exact: true }).focus()
+    await page.keyboard.press('Enter')
+  } else await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0, { timeout: 30000 })
 }
 /** Records renderer long tasks (50 ms or more, the shortest Chromium reports) from now on, by the phase they fell in. */
@@ -101,6 +108,40 @@ const enabledTools = () => page.evaluate(() => [...document.querySelectorAll('.e
 const focusedTool = () => page.evaluate(() => document.activeElement?.closest('.explorer-toolbar') ? document.activeElement.getAttribute('aria-label') : null)
 /** Waits until Object Explorer has nothing loading or queued (the tree's aria-busy). */
 const idle = (timeout = 30000) => expect(tree()).toHaveAttribute('aria-busy', 'false', { timeout })
+/** Whether the row `aria-activedescendant` names is inside the tree's scrolled view. */
+const activeInView = () => page.evaluate(() => {
+  const tree = document.querySelector('[data-explorer-tree]'), row = document.getElementById(tree.getAttribute('aria-activedescendant') ?? '')
+  if (!row) return false
+  const box = tree.getBoundingClientRect(), rect = row.getBoundingClientRect()
+  return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1
+})
+/** The labels of the rendered children of the row at `path`, in order. */
+const childLabels = (...path) => page.evaluate(path => {
+  const rows = [...document.querySelectorAll('.explorer-tree [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+  const stack = [], children = []
+  let inside = false
+  for (const row of rows) {
+    const level = Number(row.getAttribute('aria-level')), label = row.querySelector('.oe-label, .oe-text')?.textContent ?? ''
+    if (inside && level <= path.length) break
+    if (inside && level === path.length + 1) children.push(label)
+    stack.length = level - 1
+    stack[level - 1] = label
+    if (!inside && level === path.length && path.every((part, index) => stack[index] === part)) inside = true
+  }
+  return children
+}, path)
+/**
+ * Presses F5 on the selected folder (`folder` at `path`) and waits until its refreshed rows have replaced the old ones:
+ * its first page was requested and the folder lists exactly `objects` (its rows that are not static folders). Until
+ * then, a row found by its path may be an old one that the first page is about to replace.
+ */
+async function refreshTo(folder, path, objects) {
+  const from = (await stubCalls()).length
+  await press('F5')
+  await expect.poll(async () => (await stubCalls()).slice(from).some(params => isFolder(params, folder) && !params.cursor)).toBe(true)
+  await idle()
+  await expect.poll(async () => (await childLabels(...path)).filter(label => label.startsWith('dbo.'))).toEqual(objects)
+}
 /** Reloads a selected folder from its first page: F5 when it is expanded, else expanding it (F5 on a collapsed folder only forgets its rows). */
 async function reload(...path) {
   const row = await select(...path)
@@ -113,7 +154,9 @@ try {
   await expect(page.getByText('Connect to SQL Server to browse databases and objects.')).toBeVisible()
 
   // 1. One focusable ARIA tree: a new server is expanded, its folders are collapsed, and nothing below them is loaded.
-  await connect('server-a')
+  // Connecting the first server by keyboard from the empty state moves focus to the tree, which replaced the button.
+  await connect('server-a', { keyboard: true })
+  await expect(tree()).toBeFocused()
   const serverA = await explorerRow(page, 'server-a')
   await expect(serverA).toHaveAttribute('aria-level', '1')
   await expect(serverA).toHaveAttribute('aria-expanded', 'true')
@@ -125,7 +168,7 @@ try {
   expect(await active()).toMatchObject({ label: 'server-a', selected: 'true', level: 1, expanded: 'true' })
   await connect('server-b')
   await expect(await explorerRow(page, 'server-b')).toHaveAttribute('aria-expanded', 'true')
-  console.log('Object Explorer checks: the ARIA tree, two servers expanded on connect, and nothing loaded below their folders.')
+  console.log('Object Explorer checks: the ARIA tree, focused after the first server is connected by keyboard, two servers expanded on connect, and nothing loaded below their folders.')
 
   // 2. The Windows tree's keys, type-ahead, and `*`.
   await select('server-a')
@@ -209,15 +252,23 @@ try {
   await press('Enter')
   await expect.poll(async () => (await stubCalls()).length).toBeGreaterThan(before)
   await expect(page.locator('.explorer-row.progress')).toBeVisible()
-  await toolbarButton('Stop').click()
+  // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
+  await expect(tree()).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  for (let step = 0; step < 6 && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
+  expect(await focusedTool()).toBe('Stop')
+  await page.keyboard.press('Enter')
   await expect(stopped).toBeVisible()
-  console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, and Stop shows how far a folder got and continues on Enter.')
+  await expect(toolbarButton('Stop')).toBeDisabled()
+  await expect.poll(focusedTool).toBe('Filter Settings')
+  await page.keyboard.press('Tab')
+  await expect(tree()).toBeFocused()
+  console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
 
   // 4. F5 in the tree refreshes the selected folder once; what was expanded below it comes back collapsed.
   await setStub({ pageDelayMs: 0, pageSize: 2000, tables: 3 })
   await select('server-a', 'Databases', 'AppData', 'Tables')
-  await press('F5')
-  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
+  await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
   await expect(page.locator('.explorer-row.synthetic')).toHaveCount(0)
   await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
   await select('server-a', 'Databases', 'AppData', 'Tables')
@@ -274,14 +325,17 @@ try {
       const element = document.querySelector('[data-explorer-tree]')
       element.scrollTop = (6 + 100_000) * 22 - element.clientHeight / 2
     })
-    // It is aria-disabled (nothing more loads), which Playwright would wait out; a user can still select it.
-    await capped.click({ force: true })
+    // It is not aria-disabled: Enter acts on it. Escape returns to it, still in view.
+    expect(await capped.getAttribute('aria-disabled')).toBeNull()
+    await capped.click()
     await press('Enter')
     const cappedDialog = page.getByRole('dialog', { name: 'Filter Settings – Tables', exact: true })
     await expect(cappedDialog).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(cappedDialog).toHaveCount(0)
-    await tree().focus()
+    await expect(tree()).toBeFocused()
+    await expect.poll(async () => (await active())?.label).toBe('Showing the first 100,000 of 120,005 items in Tables. Use Filter Settings to narrow the list.')
+    expect(await activeInView()).toBe(true)
     await phase('End and Home')
     await press('End')
     await expect.poll(async () => (await active())?.label).toBe('Server Objects')
@@ -343,8 +397,15 @@ try {
   // 6. Filter Settings from the toolbar narrows a folder; Remove Filter from its menu restores it.
   await setStub({ tables: 3 })
   await select('server-a', 'Databases', 'AppData', 'Tables')
-  await press('F5')
-  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
+  // Space does nothing, as in the Windows tree, rather than scrolling Tables' 2,000 rows a page past the selection.
+  const scrollTop = () => page.evaluate(() => document.querySelector('[data-explorer-tree]').scrollTop)
+  const top = await scrollTop()
+  await page.keyboard.press('Space')
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  expect(await scrollTop()).toBe(top)
+  expect(await active()).toMatchObject({ label: 'Tables', selected: 'true' })
+  expect(await activeInView()).toBe(true)
+  await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
   await expect(toolbarButton('Filter Settings')).toBeEnabled()
   await toolbarButton('Filter Settings').click()
   const filterDialog = page.getByRole('dialog', { name: 'Filter Settings – Tables', exact: true })
@@ -367,20 +428,23 @@ try {
   await page.keyboard.press('Enter')
   await expect(filterDialog).toHaveCount(0)
   await expect(tree()).toBeFocused()
+  await expect.poll(async () => (await active())?.label).toBe('Tables')
+  expect(await activeInView()).toBe(true)
   await expect.poll(async () => (await stubCalls()).slice(filterFrom).map(params => params.filter)).toEqual([{ name: { op: 'contains', value: 'Ord' } }])
   const tablesRow = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')
   await expect(tablesRow).toHaveAttribute('aria-label', 'Tables (filtered)')
   await expect(tablesRow.locator('.oe-filtered')).toHaveText('(filtered)')
   await expect(toolbarButton('Filter Settings').locator('.codicon-filter-filled')).toHaveCount(1)
+  // The filtered first page replaces the old rows, dbo.Orders's included.
+  await expect.poll(async () => (await childLabels('server-a', 'Databases', 'AppData', 'Tables')).filter(label => label.startsWith('dbo.'))).toEqual(['dbo.Orders'])
   await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')).toBeVisible()
-  await expect(page.locator('.explorer-row').filter({ hasText: 'dbo.table2' })).toHaveCount(0)
   await tablesRow.click({ button: 'right' })
   await menu('Object Explorer').getByRole('menuitem', { name: 'Remove Filter', exact: true }).click()
   await expect(tablesRow).toHaveAttribute('aria-label', 'Tables')
   await expect.poll(async () => (await stubCalls()).at(-1)).toMatchObject({ node: { type: 'folder', folder: 'tables' } })
   expect((await stubCalls()).at(-1)).not.toHaveProperty('filter')
   await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
-  console.log('Object Explorer checks: Filter Settings from the toolbar (Escape cancels, a missing date is explained, Enter applies), the (filtered) marker, and Remove Filter from the menu.')
+  console.log('Object Explorer checks: Space keeps the selection in view; Filter Settings from the toolbar (Escape cancels, a missing date is explained, Enter applies and keeps the folder in view), the (filtered) marker, and Remove Filter from the menu.')
 
   // 7. Dragging a table into the query inserts its quoted name as one undo step; Dockview shows no drop overlay.
   await textbox().focus()
@@ -443,6 +507,20 @@ try {
   expect(await legacy.getAttribute('aria-expanded')).toBeNull()
   await expect(legacy).toHaveAttribute('aria-label', 'Legacy (Offline), unavailable')
   await expect(legacy.locator('.oe-badge')).toHaveAttribute('data-badge', 'unavailable')
+  // Forced colors keep it dimmed (GrayText), unlike AppData.
+  const labelColor = path => explorerRow(page, ...path).then(row => row.locator('.oe-label').evaluate(label => getComputedStyle(label).color))
+  await page.emulateMedia({ forcedColors: 'active' })
+  const dimmedColor = await labelColor(['server-a', 'Databases', 'Legacy']), plainColor = await labelColor(['server-a', 'Databases', 'AppData'])
+  await page.emulateMedia({ forcedColors: null })
+  expect(dimmedColor).not.toBe(plainColor)
+  // Screen readers hear the name once: the description is the tooltip without it.
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Accessibility.enable')
+  const items = (await cdp.send('Accessibility.getFullAXTree')).nodes.filter(node => node.role?.value === 'treeitem').map(node => ({ name: node.name?.value ?? '', description: node.description?.value ?? '' }))
+  await cdp.detach()
+  expect(items.find(item => item.name === 'Legacy (Offline), unavailable')?.description).toMatch(/^Database\s+The database is not available\./)
+  expect(items.filter(item => item.description && item.description.startsWith(item.name.replace(/,.*$/, '')))).toEqual([])
+  console.log('Object Explorer checks: an offline database is dimmed without a chevron, in forced colors too, and rows describe themselves without repeating their names.')
 
   // 10. Ctrl+N in the tree opens a query on the selected database; F8 returns to the tree; the palette lists Filter Settings.
   await select('server-a', 'Databases', 'AppData')
@@ -612,11 +690,13 @@ try {
     const live = page.locator('.explorer-row.server').first()
     await expect(live).toBeVisible(wait)
     const server = await live.locator('.oe-label').textContent()
+    // Set before the batch runs, and the database is marked in the batch that creates it: a failure after CREATE still
+    // drops it here, or leaves it marked for ScratchDatabase's sweep, which drops only marked online databases.
     let created = false
     try {
-      await run(`CREATE DATABASE [${name}];`, 'created')
       created = true
-      await run(`USE [${name}];\nEXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = N'1';\nCREATE TABLE dbo.Orders (Id int PRIMARY KEY);\nUSE master;`, 'tabled')
+      await run(`CREATE DATABASE [${name}];\nEXEC [${name}].sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;`, 'created')
+      await run(`USE [${name}];\nCREATE TABLE dbo.Orders (Id int PRIMARY KEY);\nUSE master;`, 'tabled')
       await expandExplorerPath(page, server, 'Databases', wait)
       const stale = await (await explorerRow(page, server, 'Databases', name, wait)).getAttribute('id')
       await select(server, 'Databases')
@@ -632,7 +712,7 @@ try {
       console.log('Object Explorer checks: a real server lists a new scratch database\'s table and its key column, and F5 on Columns shows a column added by a query.')
     } finally {
       // Object Explorer's pool holds no database open, so nothing it did blocks the drop.
-      if (created) await run(`USE master;\nALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\nDROP DATABASE [${name}];`, 'dropped')
+      if (created) await run(`USE master;\nIF DB_ID(N'${name}') IS NOT NULL\nBEGIN\n  ALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n  DROP DATABASE [${name}];\nEND`, 'dropped')
     }
   } else console.log('Object Explorer checks: the live slice was skipped (it needs VARIA_TEST_SQL_SERVER and VARIA_TEST_SQL_SCRATCH=1).')
 

@@ -21,6 +21,8 @@ export interface ExplorerSnapshot {
   /** A node id, or a synthetic row's (negative) id. */
   readonly selected?: number
   readonly announcement?: Announcement
+  /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
+  readonly reveal?: number
 }
 /** The Object Explorer context keys (state scope), from the selected node. */
 export interface ExplorerContextState {
@@ -113,6 +115,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private selected?: number
   private announcement?: Announcement
   private announcements = 0
+  private reveals = 0
   private version = 0
   private dirty = false
   private scheduled = false
@@ -211,7 +214,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (node.more === 'auto' && node.cursor) node.more = 'stopped'
       else if (node.load === 'none') {
         this.state(node).pendingMode = undefined
-        if (node.children?.length) node.load = 'loaded'
+        if (node.children?.length) { node.load = 'loaded'; this.restorePaging(node) }
         else node.expanded = false
       }
       node.rev++
@@ -252,16 +255,21 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
   }
 
-  /** Selects a row and publishes the selection and context keys at once, so a menu opened next reads them. */
-  select(id: number): void {
+  /**
+   * Selects a row and publishes the selection and context keys at once, so a menu opened next reads them. `reveal` asks
+   * the tree to scroll the row into view, as it does for rows its keys select.
+   */
+  select(id: number, options?: { readonly reveal?: boolean }): void {
     const node = this.nodes.get(rowOwner(id))
     if (!node || !this.attached(node)) return
     node.lastUsed = ++this.clock
-    if (this.selected === id) return
+    const reveal = !!options?.reveal
+    if (this.selected === id && !reveal) return
     this.selected = id
+    if (reveal) this.reveals++
     this.evictable = true
     if (this.dirty) this.flush()
-    else this.publish({ ...this.getSnapshot(), version: ++this.version, selected: id })
+    else this.publish({ ...this.getSnapshot(), version: ++this.version, selected: id, ...(this.reveals ? { reveal: this.reveals } : {}) })
     this.updateContext()
   }
   /** The selected node as a command target; synthetic rows have none. */
@@ -902,7 +910,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // A synthetic row can disappear (a load finished); its owner is selected instead.
     if (this.selected !== undefined && this.selected < 0 && rowIndex(rows, this.selected) < 0) this.selected = rowOwner(this.selected)
     if (this.selected !== undefined && !this.nodes.has(rowOwner(this.selected))) this.selected = undefined
-    this.publish({ version: ++this.version, rows, ...(this.selected !== undefined ? { selected: this.selected } : {}), ...(this.announcement ? { announcement: this.announcement } : {}) })
+    this.publish({ version: ++this.version, rows, ...(this.selected !== undefined ? { selected: this.selected } : {}), ...(this.announcement ? { announcement: this.announcement } : {}),
+      ...(this.reveals ? { reveal: this.reveals } : {}) })
     this.updateContext()
   }
   private updateContext(): void {

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type Ref } from 'react'
+import { useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type Ref } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
@@ -9,11 +9,13 @@ import ExplorerTree from './ExplorerTree'
 
 interface Tool { readonly id: CommandId; readonly icon: string; readonly label: string; readonly args?: CommandArgs }
 
-function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus }: { tool: Tool; enabled: boolean; tabbable: boolean; buttonRef: Ref<HTMLButtonElement>; onFocus: () => void }) {
+function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus, onBlur }: {
+  tool: Tool; enabled: boolean; tabbable: boolean; buttonRef: Ref<HTMLButtonElement>; onFocus: () => void; onBlur: (event: FocusEvent<HTMLButtonElement>) => void
+}) {
   const { commands } = useWorkbench()
   const key = useKeybindingLabel(tool.id)
   const title = key ? `${tool.label} (${key.text})` : tool.label
-  return <button ref={buttonRef} className="icon-button" aria-label={tool.label} title={title} disabled={!enabled} tabIndex={tabbable ? 0 : -1} onFocus={onFocus}
+  return <button ref={buttonRef} className="icon-button" aria-label={tool.label} title={title} disabled={!enabled} tabIndex={tabbable ? 0 : -1} onFocus={onFocus} onBlur={onBlur}
     onClick={() => void commands.execute(tool.id, tool.args, 'toolbar')}>
     <span className={`codicon codicon-${tool.icon}`} aria-hidden="true" />
   </button>
@@ -21,13 +23,30 @@ function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus }: { tool: 
 
 /**
  * SSMS's toolbar as an ARIA toolbar: one tab stop (the button used last, or the first enabled one), and the arrow keys,
- * Home and End move between the enabled buttons.
+ * Home and End move between the enabled buttons. A focused button that turns disabled (Stop once loading ends,
+ * Disconnect while it runs) would drop focus to the page, so focus moves on to the next enabled button, or the tree.
  */
 function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
   const enabled = useCommandsEnabled(tools)
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
   const [current, setCurrent] = useState(0)
   const stop = enabled[current] ? current : enabled.indexOf(true)
+  const focused = useRef(-1)
+  const rescue = () => {
+    const index = focused.current, button = buttons.current[index]
+    if (!button?.disabled || (document.activeElement !== button && !focusLost())) return
+    focused.current = -1
+    const count = buttons.current.length
+    const next = Array.from({ length: count - 1 }, (_, step) => buttons.current[(index + 1 + step) % count]).find(candidate => candidate && !candidate.disabled)
+    if (next) next.focus()
+    else document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+  }
+  useLayoutEffect(rescue)
+  // Chromium can also blur the button after this render; that blur has no related target.
+  const blurred = (index: number, event: FocusEvent<HTMLButtonElement>) => {
+    if (event.currentTarget.disabled && !event.relatedTarget) queueMicrotask(rescue)
+    else if (focused.current === index) focused.current = -1
+  }
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const order = tools.map((_, index) => index).filter(index => enabled[index])
     const at = order.indexOf(buttons.current.findIndex(button => button === document.activeElement))
@@ -41,7 +60,7 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
   }
   return <div className="explorer-toolbar" role="toolbar" aria-label="Object Explorer toolbar" onKeyDown={onKeyDown}>
     {tools.map((tool, index) => <ToolbarButton key={tool.id} tool={tool} enabled={enabled[index]} tabbable={index === stop}
-      buttonRef={button => { buttons.current[index] = button }} onFocus={() => setCurrent(index)} />)}
+      buttonRef={button => { buttons.current[index] = button }} onFocus={() => { focused.current = index; setCurrent(index) }} onBlur={event => blurred(index, event)} />)}
   </div>
 }
 
@@ -70,10 +89,14 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     { id: 'explorer.refresh', icon: 'refresh', label: 'Refresh' },
     { id: 'explorer.collapseAll', icon: 'collapse-all', label: 'Collapse All' }
   ]
-  // When the last server goes, focus the tree held moves to the empty state's Connect button rather than the page.
+  // When the last server goes, focus the tree held moves to the empty state's Connect button rather than the page; when
+  // the first one comes, focus the Connect button or its dialog held moves to the tree, as SSMS focuses Object Explorer.
   const empty = !servers.length, connectButton = useRef<HTMLButtonElement>(null), wasEmpty = useRef(empty)
   useLayoutEffect(() => {
-    if (empty && !wasEmpty.current && focusLost()) connectButton.current?.focus()
+    if (empty !== wasEmpty.current && focusLost()) {
+      if (empty) connectButton.current?.focus()
+      else document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+    }
     wasEmpty.current = empty
   }, [empty])
   return <>
