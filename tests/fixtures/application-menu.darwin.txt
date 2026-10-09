@@ -16,8 +16,8 @@
   {"accelerator":"Cmd+X","id":"edit.cut","label":"Cut","role":"cut"}
   {"accelerator":"Cmd+C","id":"edit.copy","label":"Copy","role":"copy"}
   {"accelerator":"Cmd+V","id":"edit.paste","label":"Paste","role":"paste"}
-  {"accelerator":"","id":"edit.delete","label":"Delete","role":"delete"}
-  {"accelerator":"Cmd+A","id":"edit.selectAll","label":"Select All","role":"selectAll"}
+  {"id":"edit.delete","label":"Delete","registerAccelerator":false,"type":"normal","click":[["command","edit.delete"]]}
+  {"accelerator":"Cmd+A","id":"edit.selectAll","label":"Select All","registerAccelerator":false,"type":"normal","click":[["command","edit.selectAll"]]}
   {"type":"separator"}
   {"accelerator":"Cmd+F","id":"edit.find","label":"Find","registerAccelerator":false,"type":"normal","click":[["command","edit.find"]]}
   {"accelerator":"Cmd+Alt+F","id":"edit.replace","label":"Replace","registerAccelerator":false,"type":"normal","click":[["command","edit.replace"]]}
@@ -59,6 +59,7 @@
     {"id":"theme.reload","label":"Reload Themes","click":[["reloadThemes"]]}
   {"type":"separator"}
   {"accelerator":"Cmd+=","id":"view.zoomIn","label":"Zoom In","role":"zoomIn"}
+  {"accelerator":"Cmd+Shift+=","acceleratorWorksWhenHidden":true,"role":"zoomIn","visible":false}
   {"accelerator":"Cmd+-","id":"view.zoomOut","label":"Zoom Out","role":"zoomOut"}
   {"accelerator":"Cmd+0","id":"view.resetZoom","label":"Reset Zoom","role":"resetZoom"}
   {"accelerator":"Cmd+Ctrl+F","id":"view.toggleFullScreen","label":"Full Screen","role":"togglefullscreen"}

@@ -60,6 +60,7 @@
     {"id":"theme.reload","label":"Reload Themes","click":[["reloadThemes"]]}
   {"type":"separator"}
   {"accelerator":"Ctrl+=","id":"view.zoomIn","label":"Zoom In","role":"zoomIn"}
+  {"accelerator":"Ctrl+Shift+=","role":"zoomIn","visible":false}
   {"accelerator":"Ctrl+-","id":"view.zoomOut","label":"Zoom Out","role":"zoomOut"}
   {"accelerator":"Ctrl+0","id":"view.resetZoom","label":"Reset Zoom","role":"resetZoom"}
   {"accelerator":"F11","id":"view.toggleFullScreen","label":"Full Screen","role":"togglefullscreen"}

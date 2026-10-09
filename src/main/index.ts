@@ -10,7 +10,7 @@ import { ConnectionStore } from './connection-store'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
-import { runRole } from './window-roles'
+import { runRole, UserActivation } from './window-roles'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { userInfo } from 'node:os'
@@ -31,6 +31,8 @@ const files = new SqlFileStore()
 let closeApproved = false
 // The title bar starts active, so a window that never gets OS focus (smoke tests) keeps the active colors.
 let windowActive = true
+// The user's last click or key press in the window: the page may run Paste only just after one.
+let userActivation = new UserActivation()
 let layouts: LayoutStore
 let appearance: AppearanceService
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
@@ -178,7 +180,10 @@ function createWindow(): void {
   }
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   contents.on('will-navigate', event => event.preventDefault())
-  // The page never reads the clipboard (Paste is Electron's role, and copies the renderer makes go through main); every other permission stays denied.
+  const activation = userActivation = new UserActivation()
+  contents.on('input-event', (_event, input) => activation.note(input.type))
+  // The page cannot read the clipboard (Paste is Electron's role, run just after a click or key; copies the renderer
+  // makes go through main); every other permission stays denied.
   contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
     callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
   })
@@ -189,7 +194,7 @@ function createWindow(): void {
     ] } })
   })
   contents.on('did-finish-load', () => { rendererLoaded = true })
-  // will-navigate cancels navigation elsewhere, so only a same-URL main-frame navigation is a reload (menu, Ctrl+R, or dev HMR).
+  // will-navigate cancels navigation elsewhere, so only a same-URL main-frame navigation is a reload (View › Reload Window, the palette, or dev HMR).
   contents.on('did-start-navigation', details => {
     if (details.isMainFrame && !details.isSameDocument && rendererLoaded && details.url === contents.getURL()) resetRendererState()
   })
@@ -269,7 +274,11 @@ app.whenReady().then(async () => {
     return true
   })
   // Custom menus and the palette run Electron's roles on the trusted window: a fixed set of window methods, never quit.
-  handle('varia:run-role', value => { if (mainWindow) runRole(value, mainWindow) })
+  // Paste needs the focused window (smoke-test windows are hidden, so never focused) and a click or key just before.
+  handle('varia:run-role', value => {
+    const window = mainWindow
+    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent())
+  })
   handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
   ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {
     if (!trusted(event)) {
@@ -305,7 +314,8 @@ app.whenReady().then(async () => {
   })
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
-  // Write only: there is no clipboard read, and the length is bounded like a full results grid copy.
+  // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
+  // a full results grid copy.
   handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)

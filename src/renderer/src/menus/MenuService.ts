@@ -1,7 +1,7 @@
 import type { CommandId } from '../../../shared/commands/catalog'
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
-import { menuForMnemonic, type ContextMenuId, type MenubarId, type MenuId } from '../../../shared/commands/menus'
+import { menubarIds, menuForMnemonic, type ContextMenuId, type MenubarId, type MenuId } from '../../../shared/commands/menus'
 import type { VariaApi } from '../../../shared/contracts'
 import type { MenuStyle } from '../../../shared/menu-style'
 import { themeMenuModel, type ThemeMenuItem } from '../../../shared/theme/menu'
@@ -64,6 +64,12 @@ export interface MenuServiceOptions {
 const guard = (action: () => void) => { try { action() } catch (error) { onUnexpectedError(error) } }
 const hasItems = (items: readonly ResolvedMenuItem[]) => items.some(item => item.kind !== 'separator')
 const inside = (target: EventTarget | null, selector: string) => typeof (target as Partial<Element> | null)?.closest === 'function' && !!(target as Element).closest(selector)
+/** The menubar menu whose button `target` is in, if any. */
+function menubarButton(target: EventTarget | null): MenubarId | undefined {
+  if (typeof (target as Partial<Element> | null)?.closest !== 'function') return undefined
+  const id = (target as Element).closest('.title-bar-menus [data-menu]')?.getAttribute('data-menu')
+  return menubarIds.find(menu => menu === id)
+}
 function menuKey(event: KeyDownEvent, platform: Platform): MenuKey {
   // AltGr types characters (Ctrl+Alt on Windows), so it is neither a shortcut nor an access key here.
   const altGraph = platform !== 'darwin' && event.getModifierState?.('AltGraph') === true
@@ -200,7 +206,14 @@ export class MenuService implements Disposable {
     const resize = () => guard(() => this.close('resize'))
     const blur = () => guard(() => { this.access.disarm(); this.close('blur') })
     const visibility = () => guard(() => { if (target.document.visibilityState === 'hidden') this.close('blur') })
-    const focusIn = () => guard(() => { const focused = this.options.focus.capture(); if (focused !== undefined) this.lastFocus = focused })
+    const focusIn = (event: Event) => guard(() => {
+      // Tab and Shift+Tab reach the menubar's button too: the menubar then takes the keyboard, as after F10, and gives
+      // focus back to where it came from.
+      const menubar = menubarButton(event.target)
+      if (menubar) { if (!this.ownsKeyboard() && this.accessAllowed()) this.controller.focusMenubar(menubar); return }
+      const focused = this.options.focus.capture()
+      if (focused !== undefined) this.lastFocus = focused
+    })
     // Bubble phase: Monaco has already focused the editor and moved the caret to the click.
     const contextMenu = (event: Event) => guard(() => this.openFromEvent(event as MouseEvent))
     target.addEventListener('pointerdown', pointerDown, options)
@@ -228,7 +241,8 @@ export class MenuService implements Disposable {
     return { dispose: detach }
   }
 
-  private accessAllowed(): boolean { return !this.options.modalOpen() && !this.options.context.getState().quickInputVisible }
+  /** Behind a dialog the menubar stays shut. Over the quick input it opens (as F10 did before), and the quick input closes. */
+  private accessAllowed(): boolean { return !this.options.modalOpen() }
   /**
    * Opens the context menu for `element`: at `anchor` for the pointer, else below the element (the caret in the query
    * editor) with its first item active. While a dialog is open only text fields in it have menus. Focus moves to what

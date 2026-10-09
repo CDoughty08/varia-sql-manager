@@ -44,4 +44,23 @@ describe('native application menu template', () => {
   it.each(platforms)('is pinned on %s', async platform => {
     await expect(describeTemplate(platform)).toMatchFileSnapshot(`fixtures/application-menu.${platform}.txt`)
   })
+  const actions: ApplicationMenuActions = { command: () => {}, isChecked: () => false, setTheme: () => {}, createTheme: () => {}, openThemesFolder: () => {}, reloadThemes: () => {} }
+  const items = (platform: NodeJS.Platform, menu: string) => {
+    const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, actions, platform)
+    return template.find(item => item.id === 'menu.' + menu)!.submenu as MenuItemConstructorOptions[]
+  }
+  it.each(platforms)('keeps Electron\'s own Zoom In key beside the catalogue\'s on %s', platform => {
+    const zoomIn = items(platform, 'view').filter(item => item.role === 'zoomIn')
+    const mod = platform === 'darwin' ? 'Cmd' : 'Ctrl'
+    // Ctrl+Shift+= is the key Electron's Zoom In role had (Ctrl++); a hidden copy carries it, since an item has one key.
+    expect(zoomIn.map(item => [item.accelerator, item.visible ?? true])).toEqual([[`${mod}+=`, true], [`${mod}+Shift+=`, false]])
+    expect(zoomIn[1].acceleratorWorksWhenHidden).toBe(platform === 'darwin' ? true : undefined)
+  })
+  it('runs Delete and Select All from the macOS menu bar through their handlers, which reach the query editor', () => {
+    const edit = (platform: NodeJS.Platform) => Object.fromEntries(items(platform, 'edit').filter(item => item.id === 'edit.delete' || item.id === 'edit.selectAll').map(item => [item.id, item.role ?? 'handler']))
+    expect(edit('darwin')).toEqual({ 'edit.delete': 'handler', 'edit.selectAll': 'handler' })
+    // Elsewhere the menu is hidden and only gives the roles their keys.
+    expect(edit('win32')).toEqual({ 'edit.delete': 'delete', 'edit.selectAll': 'selectAll' })
+    expect(items('darwin', 'edit').filter(item => item.role).map(item => item.role)).toEqual(['cut', 'copy', 'paste'])
+  })
 })

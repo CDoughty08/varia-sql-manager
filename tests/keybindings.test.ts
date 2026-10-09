@@ -166,7 +166,7 @@ describe('default keybindings', () => {
     expect(defaultRules('win32')).toBe(defaultRules('win32'))
     expect(Object.isFrozen(defaultRules('darwin'))).toBe(true)
     const native = ['edit.find', 'edit.replace', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines']
-    const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
+    const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll']
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,

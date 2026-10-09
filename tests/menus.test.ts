@@ -215,7 +215,9 @@ describe('application menu template', () => {
       expect(item(items, 'menu.window').role, platform).toBe(platform === 'darwin' ? 'window' : undefined)
       for (const top of menubar) {
         const menu = top.id!.slice('menu.'.length) as Parameters<typeof buildMenuModel>[0]
-        const entries = (top.submenu as MenuItemConstructorOptions[]).map(entry => entry.type === 'separator' ? '-' : entry.role && !entry.id ? `role:${entry.role}` : entry.submenu ? `submenu:${entry.id}` : entry.id)
+        // Hidden copies of role items only carry further keys (Zoom In's Ctrl+Shift+=).
+        const entries = (top.submenu as MenuItemConstructorOptions[]).filter(entry => entry.visible !== false)
+          .map(entry => entry.type === 'separator' ? '-' : entry.role && !entry.id ? `role:${entry.role}` : entry.submenu ? `submenu:${entry.id}` : entry.id)
         expect(entries, `${platform} ${menu}`).toEqual(outline(menu, platform))
       }
     }
@@ -237,7 +239,8 @@ describe('application menu template', () => {
   it('renders role-backed commands as Electron roles with the catalogue\'s accelerator or none', () => {
     for (const platform of platforms) {
       const roles = flatten(template(platform).items).filter(entry => entry.role && entry.id && commandIds.includes(entry.id.split('@')[0] as CommandId))
-      expect(roles.map(entry => entry.id), platform).toEqual([...platform === 'darwin' ? [] : ['window.close'], 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
+      // The macOS menu bar runs Delete and Select All through their handlers, which reach the query editor.
+      expect(roles.map(entry => entry.id), platform).toEqual([...platform === 'darwin' ? [] : ['window.close'], 'edit.cut', 'edit.copy', 'edit.paste', ...platform === 'darwin' ? [] : ['edit.delete', 'edit.selectAll'],
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools'])
       for (const entry of roles) {
         const id = entry.id as CommandId
@@ -252,7 +255,9 @@ describe('application menu template', () => {
     expect(item(items, 'edit.delete')).toMatchObject({ role: 'delete', accelerator: 'Delete' })
     expect(item(items, 'view.zoomIn')).toMatchObject({ role: 'zoomIn', accelerator: 'Ctrl+=' })
     // macOS menus show only keys with ⌘, so Delete has none there.
-    expect(item(template('darwin').items, 'edit.delete')).toMatchObject({ role: 'delete', accelerator: '' })
+    expect(item(template('darwin').items, 'edit.delete')).toMatchObject({ label: 'Delete', type: 'normal' })
+    expect(item(template('darwin').items, 'edit.delete')).not.toHaveProperty('accelerator')
+    expect(item(template('darwin').items, 'edit.selectAll')).toMatchObject({ label: 'Select All', accelerator: 'Cmd+A', type: 'normal' })
     expect(item(template('darwin').items, 'view.toggleFullScreen')).toMatchObject({ role: 'togglefullscreen', accelerator: 'Cmd+Ctrl+F' })
     expect(item(template('win32').items, 'window.close')).toMatchObject({ label: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
     expect(item(template('linux').items, 'window.close')).toMatchObject({ label: 'Quit', role: 'quit', accelerator: 'Ctrl+Q' })

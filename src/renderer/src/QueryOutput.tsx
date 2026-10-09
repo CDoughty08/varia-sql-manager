@@ -90,7 +90,7 @@ function ResultGrid({ tabId, set, resultIndex }: { tabId: string; set: ResultSet
     event.preventDefault()
     event.clipboardData.setData('text/plain', text)
   }
-  return <div className="grid-scroll" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={resultIndex}
+  return <div className="grid-scroll" role="region" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={resultIndex}
     aria-label={`Result ${resultIndex + 1}, ${plural(rows, 'row')}, ${plural(columns, 'column')}`}
     onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => { drag.current = null }} onKeyDown={keyDown} onCopy={copy}>
     <table className="results-grid"><thead><tr><th className="row-number" data-corner="">#</th>{set.columns.map((column, position) => <th key={position} data-col={position}>{columnTitle(column.name)}<small>{column.dataType}</small></th>)}</tr></thead>
@@ -136,14 +136,14 @@ function QueryOutput({ tabId, result, error, running, connected }: Props) {
       </div>
       {result && <small>{statusText} · {result.elapsedMs} ms · {result.resultSets.reduce((sum, item) => sum + item.rows.length, 0)} rows{result.totalBatches > 1 ? ' · ' + result.completedBatches + '/' + result.totalBatches + ' batches' : ''}</small>}
     </div>
-    {view === 'messages' && (result || failure) ? <div className="messages" tabIndex={0} data-output-view="messages" data-tab-id={tabId} data-result-index={0} aria-label="Messages" onKeyDown={selectText}>
+    {view === 'messages' && (result || failure) ? <div className="messages" role="region" tabIndex={0} data-output-view="messages" data-tab-id={tabId} data-result-index={0} aria-label="Messages" onKeyDown={selectText}>
       {!!result?.messages.length && <pre>{result.messages.join('\n')}</pre>}
       {failure && <pre role="alert" className="query-error">{result?.error?.batchNumber ? 'Batch ' + result.error.batchNumber + ', repetition ' + result.error.iteration + '\n' : ''}{failure}</pre>}
       {result && <pre>{!result.messages.length && !failure ? 'Command completed successfully.\n' : ''}{result.recordsAffected >= 0 ? result.recordsAffected + ' total rows affected.\n' : ''}{statusText} in {result.elapsedMs} ms.</pre>}
     </div> : view === 'results' && result ? <>
       {result.resultSets.length > 1 && <div className="result-selector">{result.resultSets.map((_, position) => <button key={position} className={index === position ? 'active' : ''} onClick={() => setIndex(position)}>{resultLabel(position)}</button>)}</div>}
       {set ? <>
-        {set.kind === 'executionPlan' ? <div className="plan-output" tabIndex={0} data-output-view="plan" data-tab-id={tabId} data-result-index={index} aria-label="XML plan" onKeyDown={selectText}><pre className="plan-xml">{set.rows.map(row => String(row[0] ?? '')).join('\n')}</pre></div>
+        {set.kind === 'executionPlan' ? <div className="plan-output" role="region" tabIndex={0} data-output-view="plan" data-tab-id={tabId} data-result-index={index} aria-label="XML plan" onKeyDown={selectText}><pre className="plan-xml">{set.rows.map(row => String(row[0] ?? '')).join('\n')}</pre></div>
           : <ResultGrid key={`${tabId}:${index}`} tabId={tabId} set={set} resultIndex={index} />}
         {set.truncated && <div className="truncation">Output truncated by display limits. See Messages.</div>}
         {set.incomplete && <div className="truncation">This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.</div>}

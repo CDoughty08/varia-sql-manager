@@ -55,7 +55,7 @@ keys it uses are listed below.
 | Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown | Ctrl+Tab, Ctrl+PageDown | ⌃⇥ | `multipleDocuments` | Window › Next Query |
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | View › Word Wrap |
-| Zoom In | `view.zoomIn` | Ctrl+= * | Ctrl+= * | ⌘= * | Always | View › Zoom In |
+| Zoom In | `view.zoomIn` | Ctrl+= *, Ctrl+Shift+= * | Ctrl+= *, Ctrl+Shift+= * | ⌘= *, ⇧⌘= * | Always | View › Zoom In |
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
 | Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |

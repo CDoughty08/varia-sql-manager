@@ -28,13 +28,15 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .title-bar-menus { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
 .title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: 3px; font-size: 12px; outline: 1px solid transparent; outline-offset: -1px; }
 .title-bar-menus button:hover, .title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); outline: 1px solid var(--varia-menubar-selectionBorder); outline-offset: -1px; }
+/* A resting pointer highlights its button only while no other one is open or keyboard-focused. */
+.title-bar-menus:has(button[aria-expanded="true"], button:focus-visible) button:hover:not(.active, [aria-expanded="true"], :focus-visible) { background: transparent; color: var(--varia-button-secondaryForeground); outline: none; }
 .title-bar-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 20px; font-size: 11px; color: var(--varia-titleBar-activeForeground); pointer-events: none; }
 .title-bar-spacer { width: 24px; flex-shrink: 0; }
 :root[data-window-focus="inactive"] .title-bar { background: var(--varia-titleBar-inactiveBackground); }
 :root[data-window-focus="inactive"] .title-bar-caption, :root[data-window-focus="inactive"] .title-bar-menus button:not(:hover, :focus-visible, .active) { color: var(--varia-titleBar-inactiveForeground); }
 /* Access keys are underlined only while the keyboard drives the menus, as in Windows. */
 .menu-mnemonic { text-decoration: none; }
-[data-mnemonics="visible"] .menu-mnemonic { text-decoration: underline; }
+[data-mnemonics="visible"] .menu-mnemonic { text-decoration: underline; text-decoration-skip-ink: none; }
 /* Above the docking guides (15000), the quick input (19000), and dialogs (20000): text fields in dialogs get menus too. */
 .menu-layer { position: fixed; inset: 0; pointer-events: none; z-index: 30000; }
 .menu { position: fixed; pointer-events: auto; min-width: 200px; max-width: min(480px, 100vw - 8px); padding: 4px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 16px var(--varia-widget-shadow); font: 12px var(--varia-font-ui); -webkit-app-region: no-drag; user-select: none; outline: none; }
@@ -52,8 +54,11 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 [data-menu-target] { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 @media (forced-colors: active) {
   .menu { border-color: CanvasText; }
-  .menu-item[data-active] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  /* Forced colors draw the transparent outlines that leave room for a theme's selection border as CanvasText boxes. */
+  .menu-item, .title-bar-menus button { outline: none; }
+  .menu-item[data-active], .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: Highlight; color: HighlightText; forced-color-adjust: none; }
   .menu-item[aria-disabled="true"] { color: GrayText; }
+  .menu-separator { background: CanvasText; forced-color-adjust: none; }
 }
 .status-dot, .dirty-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
 .status-dot { background: var(--varia-statusBar-idleIndicator); }

@@ -323,8 +323,10 @@ export const commandCatalog = {
   'preferences.reloadThemes': { title: 'Reload Themes', category: 'Preferences', icon: 'refresh', keywords: ['color'] },
   // View › Theme's theme and mode items in custom menus: the choice travels as the item's arguments.
   'preferences.setTheme': { title: 'Set Color Theme', category: 'Preferences', palette: false },
+  // Ctrl+Shift+= too: Electron's own Zoom In key (Ctrl++, ⌘+), which the menus used before they showed Ctrl+=.
   'view.zoomIn': {
-    title: 'Zoom In', category: 'View', icon: 'zoom-in', role: 'zoomIn', keybindings: [{ key: 'mod+=', native: true }], menus: [{ menu: 'view', group: '4_zoom', order: 1, mnemonic: 'i' }]
+    title: 'Zoom In', category: 'View', icon: 'zoom-in', role: 'zoomIn', keybindings: [{ key: 'mod+=', native: true }, { key: 'mod+shift+=', native: true }],
+    menus: [{ menu: 'view', group: '4_zoom', order: 1, mnemonic: 'i' }]
   },
   'view.zoomOut': {
     title: 'Zoom Out', category: 'View', icon: 'zoom-out', role: 'zoomOut', keybindings: [{ key: 'mod+-', native: true }], menus: [{ menu: 'view', group: '4_zoom', order: 2, mnemonic: 'o' }]

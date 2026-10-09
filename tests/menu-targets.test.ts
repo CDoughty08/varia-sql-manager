@@ -106,8 +106,9 @@ describe('menu target service', () => {
     expect(service.targetFor(dom(editContext))).toEqual({ target: { kind: 'editor', tabId: 't1' }, element: editor })
     expect(service.targetFor(dom(scrollbar))).toBeNull()
     expect(service.targetFor(dom(findToggle))).toBeNull()
-    // The find widget's input is a text field, which takes focus back from the editor before its menu opens.
-    expect(service.targetFor(dom(findInput))).toMatchObject({ target: { kind: 'input', element: findInput, empty: false }, element: findInput, focus: findInput })
+    // The find widget's input is a text field, which takes focus back from the editor before its menu opens, and is
+    // outlined while the menu shows (its selection is not, without focus).
+    expect(service.targetFor(dom(findInput))).toMatchObject({ target: { kind: 'input', element: findInput, empty: false }, element: findInput, focus: findInput, mark: findInput })
     const closed = setup('')
     expect(closed.service.targetFor(dom(closed.line))).toBeNull()
   })

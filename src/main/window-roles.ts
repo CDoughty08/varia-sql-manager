@@ -15,13 +15,30 @@ export const rendererRoleSchema = z.enum(rendererRoles)
 /** Electron's zoom roles step by half a level and are not clamped, so custom menus and the palette do the same. */
 const zoomStep = 0.5
 
+/** Input types that are the user acting: a press or release of a mouse button or a key, never a pointer just moving. */
+const activationInputs: ReadonlySet<string> = new Set(['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'keyUp', 'char'])
+/** How recent that input must be for Paste: a menu's Paste runs within milliseconds of the click or key that chose it. */
+export const userActivationMs = 1000
+/**
+ * When the user last clicked or pressed a key in the window, from the input main forwards to the page (`input-event`):
+ * events the page dispatches itself never pass through main, so the page cannot fake one.
+ */
+export class UserActivation {
+  private last = Number.NEGATIVE_INFINITY
+  constructor(private readonly now: () => number = () => performance.now()) {}
+  note(type: string): void { if (activationInputs.has(type)) this.last = this.now() }
+  recent(): boolean { return this.now() - this.last <= userActivationMs }
+}
+
 /**
  * Runs an Electron role for the renderer's custom menus and palette, exactly as the native role item would: the editing
  * roles act on the focused element, and Reload still asks before discarding unsaved queries. Only these fixed methods
- * of the trusted window run; quitting is not a role here, because the renderer runs its own close flow.
+ * of the trusted window run; quitting is not a role here, because the renderer runs its own close flow. Paste reads the
+ * system clipboard, which the page itself may not, so it runs only while `userActivated` (a click or key just now).
  */
-export function runRole(value: unknown, window: RoleWindow): void {
+export function runRole(value: unknown, window: RoleWindow, userActivated: () => boolean): void {
   const role: RendererRole = rendererRoleSchema.parse(value)
+  if (role === 'paste' && !userActivated()) throw new Error('Paste runs only from a click or a key press in the window.')
   const contents = window.webContents
   switch (role) {
     case 'cut': contents.cut(); break

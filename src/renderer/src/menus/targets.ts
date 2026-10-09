@@ -162,7 +162,8 @@ export class MenuTargetService {
     try {
       if (element.closest('.quick-input')) return null
       const field = editableText(element)
-      if (field) return { target: inputTarget(field, this.options.commandEnabled ?? documentCommandEnabled), element: field, focus: field }
+      // Outlined while its menu is open: focus is in the menu, and Chromium hides an unfocused field's selection.
+      if (field) return { target: inputTarget(field, this.options.commandEnabled ?? documentCommandEnabled), element: field, focus: field, mark: field }
       for (let node: Element | null = element; node; node = node.parentElement) {
         const provider = this.providers.get(node)
         if (provider) return this.hit(provider, node, element)

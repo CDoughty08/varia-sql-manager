@@ -204,7 +204,9 @@ internal sealed class SqlService : IDisposable
 
     private const int MaxColumns = 4096;
 
-    // Select Top N Rows lists the columns; QUOTENAME and parameters keep the names out of the SQL text.
+    // Select Top N Rows lists the columns; QUOTENAME and parameters keep the names out of the SQL text. Hidden internal
+    // columns (graph tables' graph_id and node ids) cannot be selected, unlike hidden temporal period and ledger columns,
+    // which are GENERATED ALWAYS.
     private async Task<TableColumnsResult> ColumnsAsync(TableArgs args)
     {
         Name(args.Schema);
@@ -216,7 +218,8 @@ internal sealed class SqlService : IDisposable
         command.CommandTimeout = 30;
         command.CommandText = "DECLARE @id int = OBJECT_ID(QUOTENAME(@schema) + N'.' + QUOTENAME(@name));\n"
             + "SELECT CONVERT(bit, CASE WHEN @id IS NULL THEN 0 ELSE 1 END);\n"
-            + "SELECT TOP (" + (MaxColumns + 1) + ") c.name, TYPE_NAME(c.user_type_id) FROM sys.all_columns AS c WHERE c.object_id = @id ORDER BY c.column_id;";
+            + "SELECT TOP (" + (MaxColumns + 1) + ") c.name, TYPE_NAME(c.user_type_id) FROM sys.all_columns AS c WHERE c.object_id = @id"
+            + " AND (c.is_hidden = 0 OR c.generated_always_type <> 0) ORDER BY c.column_id;";
         command.Parameters.Add(new SqlParameter("@schema", System.Data.SqlDbType.NVarChar, 128) { Value = args.Schema });
         command.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = args.Name });
         await using var reader = await command.ExecuteReaderAsync(deadline.Token);

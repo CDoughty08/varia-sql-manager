@@ -65,7 +65,7 @@ The shortcuts follow SSMS where SSMS has one:
 | Comment or uncomment the selection | Ctrl+K Ctrl+C or Ctrl+K Ctrl+U | ⌘K ⌘C or ⌘K ⌘U |
 | Toggle line comment | Ctrl+/ | ⌘/ |
 
-The [command reference](docs/commands.md) lists every command with its keys on each platform, the condition under which it can run, its menu items, and the keys Varia leaves to menus, the editor, and the operating system. It is generated from the command catalogue, so it always matches the app. On macOS, menu items show only shortcuts with ⌘: the menu bar would take any other key (F5, F8, ⌃⇥) before the focused pane saw it. Menus, the toolbar, the keyboard, and the palette run the same commands and agree on what is available. While a dialog is open, workbench shortcuts and menu commands do nothing and the dialog keeps its keys; Undo, Redo, and the clipboard commands still act on its text fields, whose context menu works inside the dialog. Holding a key down runs its command once, except Next and Previous Query. Custom keybindings are future work.
+The [command reference](docs/commands.md) lists every command with its keys on each platform, the condition under which it can run, its menu items, and the keys Varia leaves to menus, the editor, and the operating system. It is generated from the command catalogue, so it always matches the app. On macOS, the menu bar shows only shortcuts with ⌘: it would take any other key (F5, F8, ⌃⇥) before the focused pane saw it. An open context menu handles its own keys, so it shows every key. Menus, the toolbar, the keyboard, and the palette run the same commands and agree on what is available. While a dialog is open, workbench shortcuts and menu commands do nothing and the dialog keeps its keys; Undo, Redo, and the clipboard commands still act on its text fields, whose context menu works inside the dialog. Holding a key down runs its command once, except Next and Previous Query. Custom keybindings are future work.
 
 ## Menus and context menus
 
@@ -73,7 +73,7 @@ The title bar holds **File**, **Edit**, **View**, **Query**, and **Window**. On 
 
 ### Keyboard and mouse
 
-- **F10** or a tap of **Alt** moves focus to the menu bar and underlines the access keys; **Alt+F**, **Alt+E**, **Alt+V**, **Alt+Q**, and **Alt+W** open a menu directly. In the editor's find widget **Alt+W** still toggles Whole Word, and while a dialog is open the menu bar stays closed.
+- **F10** or a tap of **Alt** moves focus to the menu bar and underlines the access keys, as does reaching it with **Tab** or **Shift+Tab**; **Alt+F**, **Alt+E**, **Alt+V**, **Alt+Q**, and **Alt+W** open a menu directly. These keys also work from the command palette, which closes. In the editor's find widget **Alt+W** still toggles Whole Word, and while a dialog is open the menu bar stays closed.
 - In the menu bar, **←** and **→** move between menus and **↓**, **Enter**, or **Space** opens one. In a menu, **↑** and **↓** move (**Home** and **End** jump to the ends), **→** opens a submenu or the next menu, **←** closes a submenu or opens the previous menu, and **Enter** or **Space** runs the item. An underlined letter runs its item; when several items share it, each press moves to the next. Other letters find an item by the start of its name.
 - **Escape** closes one menu at a time, then returns focus to where it was, so a command acts on the editor, field, or node you came from. **Tab**, **F10**, a tap of **Alt**, a click elsewhere, scrolling outside the menu, resizing the window, or switching to another window closes every open menu. A **Ctrl** shortcut closes the menu and still runs, so **Ctrl+S** saves.
 - With the mouse, click a menu and then an item, or press on a menu, drag to an item, and release. Hovering over a submenu opens it after a moment; while the pointer moves toward an open submenu, it stays open.
@@ -103,11 +103,11 @@ A server offers Connect…, Disconnect (that server, without asking which), New 
 - The results grid copies its selected cells as tab-separated text, one line per row: NULL becomes `NULL`, line breaks and tabs inside a value become spaces, and lines end with CRLF on Windows and LF elsewhere. **Copy with Headers** (**Ctrl+Shift+C**) adds a line of column names, with "(No column name)" for unnamed columns. **Ctrl+C**, **Edit → Copy**, and the menu's Copy copy the same text.
 - In Messages and the XML plan, Copy copies the selected text.
 - **Copy Name** copies a server's name as you connected to it, or an object's bracket-quoted name (`[AppData]`, `[dbo].[Orders]`). **Copy Full Path** copies a saved query's file path.
-- The workbench writes to the clipboard through Electron's main process and never reads it: Paste is the operating system's paste into the focused editor or field.
+- The workbench writes to the clipboard through Electron's main process and cannot read it: Paste is the operating system's paste into the focused editor or field, and the main process runs it for a menu only just after a click or key press in the focused window.
 
 ### macOS
 
-The title-bar menus are the macOS menu bar; there is no menu bar in the window, and File has no Quit because the application menu has it. Context menus are native macOS menus built from the same items: they follow Dark and Light, open with a right-click, **Control**-click, VoiceOver's **VO+Shift+M**, or **Shift+F10**, and act on the item they were opened for. The query tab's Open Containing Folder reads **Reveal in Finder**. Menu items show only shortcuts with ⌘ (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)). If a native menu cannot be shown, the themed menu appears instead.
+The title-bar menus are the macOS menu bar; there is no menu bar in the window, and File has no Quit because the application menu has it. Context menus are native macOS menus built from the same items: they follow Dark and Light, open with a right-click, **Control**-click, VoiceOver's **VO+Shift+M**, or **Shift+F10**, and act on the item they were opened for. The query tab's Open Containing Folder reads **Reveal in Finder**. The menu bar shows only shortcuts with ⌘ (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)); context menus show every key. If a native menu cannot be shown, the themed menu appears instead.
 
 ## Connection dialog
 
@@ -247,7 +247,7 @@ $env:VARIA_TEST_SQL_SERVER = 'localhost'
 try { npm run backend:test } finally { Remove-Item Env:VARIA_TEST_SQL_SERVER }
 ```
 
-These checks create only session-local temporary objects. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default. With the same variables set, `npm run test:smoke` also connects the connection dialog to that server. The password is never printed.
+These checks create only session-local temporary objects, except that with `VARIA_TEST_SQL_SCRATCH=1` (set in CI) a Select Top 1000 Rows test also creates and drops a uniquely named `varia_scratch_…` database for graph and temporal tables, which cannot be temporary. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default. With the same variables set, `npm run test:smoke` also connects the connection dialog to that server. The password is never printed.
 
 ## Continuous integration
 

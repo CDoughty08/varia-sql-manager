@@ -147,7 +147,7 @@ describe('menu access keys', () => {
     expect(menus.handleAccessKey('f10', key('F10'))).toBe(true)
     expect(menus.controller.view.menubar.focused).toBe('file')
   })
-  it('toggles the menubar with a bare Alt tap, except behind a dialog or the quick input', () => {
+  it('toggles the menubar with a bare Alt tap, also over the quick input, but not behind a dialog', () => {
     const { menus, state, fixture, order } = setup()
     const altTap = () => { menus.noteKeyDown(key('Alt')); const up = key('Alt'); menus.handleKeyUp(up); return up }
     altTap()
@@ -168,9 +168,10 @@ describe('menu access keys', () => {
     altTap()
     expect(menus.ownsKeyboard()).toBe(false)
     state.modal = false
+    // As F10 and Alt+letter do: the quick input closes as focus moves to the menubar.
     fixture.quickInput.show({ ariaLabel: 'Command Palette', placeholder: '', noun: 'commands', items: [], onDidAccept: () => {} })
     altTap()
-    expect(menus.ownsKeyboard()).toBe(false)
+    expect(menus.controller.view.menubar.focused).toBe('file')
   })
   it('does nothing on macOS, whose menu bar is native', () => {
     const { menus } = setup({ platform: 'darwin' })
@@ -232,6 +233,31 @@ describe('menu window listeners', () => {
     menus.controller.focusMenubar('file')
     menus.close('escape')
     expect(order).toEqual(['closed', 'restore server field'])
+  })
+  it('takes the keyboard when Tab reaches a menubar button, and gives focus back to where it came from', () => {
+    const { menus, state, order } = setup()
+    const fake = fakeWindow()
+    menus.attach(fake.window)
+    const button = (id: string) => ({ closest: (selector: string) => selector === '.title-bar-menus [data-menu]' ? { getAttribute: () => id } : null })
+    state.focused = 'toolbar button'
+    fake.fire('focusin', { target: element() })
+    // The button itself is never a place to return to (capture skips the menubar).
+    state.focused = undefined
+    fake.fire('focusin', { target: button('file') })
+    expect(menus.controller.view).toMatchObject({ levels: [], mnemonics: true, menubar: { focused: 'file', open: null } })
+    menus.handleKeyDown(key('ArrowRight'))
+    expect(menus.controller.view.menubar.focused).toBe('edit')
+    // Moving between buttons, the menubar already owns the keyboard.
+    fake.fire('focusin', { target: button('edit') })
+    menus.handleKeyDown(key('ArrowDown'))
+    expect(menus.controller.view).toMatchObject({ source: 'menubar', menubar: { open: 'edit' } })
+    menus.handleKeyDown(key('Escape'))
+    menus.handleKeyDown(key('Escape'))
+    expect(order).toEqual(['closed', 'restore toolbar button'])
+    // Not behind a dialog.
+    state.modal = true
+    fake.fire('focusin', { target: button('view') })
+    expect(menus.ownsKeyboard()).toBe(false)
   })
   it('clears its timers and listeners when disposed', () => {
     const { menus, pending } = setup()
@@ -390,7 +416,10 @@ describe('context menus', () => {
     expect(level(menus).label).toBe('Text field')
     expect(enablement(level(menus).items)).toEqual(['Undo +', 'Redo +', '-', 'Cut -', 'Copy -', 'Paste +', 'Delete -', '-', 'Select All +'])
     expect(level(menus).items.find(item => item.kind === 'command' && item.id === 'edit.copy')).toMatchObject({ args: { target: { kind: 'input', element: outside, hasSelection: false } } })
+    // The field is outlined while its menu is open, since its selection does not show without focus.
+    expect(outside.hasAttribute('data-menu-target')).toBe(true)
     menus.close('escape')
+    expect(outside.hasAttribute('data-menu-target')).toBe(false)
     state.modal = true
     menus.openFromEvent(event(password))
     expect(doc.activeElement).toBe(password)

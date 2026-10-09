@@ -1,7 +1,7 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import type { CommandId } from '../shared/commands/catalog'
-import { toPlatform } from '../shared/commands/keybindings'
-import { applicationMenus, buildMenuModel, pruneMenu, type MenuEntry, type MenuId } from '../shared/commands/menus'
+import { defaultRules, toAccelerator, toPlatform, type Platform } from '../shared/commands/keybindings'
+import { applicationMenus, buildMenuModel, menuMayShowChords, pruneMenu, type MenuEntry, type MenuId } from '../shared/commands/menus'
 import { themeMenuModel, type ThemeMenuItem } from '../shared/theme/menu'
 import type { ThemePreferencePatch, ThemeState } from '../shared/theme/types'
 
@@ -32,29 +32,44 @@ function themeItems(items: readonly ThemeMenuItem[], actions: ApplicationMenuAct
   })
 }
 
-function commandItem(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions): MenuItemConstructorOptions {
+/**
+ * Role commands whose handlers reach the query editor and the results grid, which their roles cannot (Delete and Select
+ * All act on the page's DOM selection, not Monaco's). The macOS menu bar runs their handlers, as it does Undo's: an
+ * NSMenu leaves DOM focus where it was. Elsewhere this menu is hidden and serves only the roles' keys.
+ */
+const macHandlerRoles: ReadonlySet<CommandId> = new Set(['edit.delete', 'edit.selectAll'])
+/** A role command's further keys (Zoom In's Ctrl+Shift+=): an item has one accelerator, so hidden copies carry the rest. */
+const extraAccelerators = (id: CommandId, platform: Platform): string[] => defaultRules(platform)
+  .filter(rule => rule.command === id && rule.chords.length === 1 && menuMayShowChords(rule.chords, platform)).slice(1)
+  .flatMap(rule => toAccelerator(rule.chords, platform) ?? [])
+
+function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
   const { id, toggle, role } = entry
-  // Electron runs a role itself, so its keys work while the renderer is busy. Its accelerator is always the catalogue's,
-  // or none: Electron's own defaults would give Reload Ctrl+R and ⌘R, which toggle the results pane.
-  if (role) return { id: entry.nativeId, label: entry.title, role, accelerator: entry.accelerator ?? '' }
+  // Electron performs a role natively. Its accelerator is always the catalogue's, or none: Electron's own defaults would
+  // give Reload Ctrl+R and ⌘R, which toggle the results pane.
+  if (role && !(platform === 'darwin' && macHandlerRoles.has(id))) {
+    const hidden = extraAccelerators(id, toPlatform(platform)).map((accelerator): MenuItemConstructorOptions =>
+      ({ role, accelerator, visible: false, ...(platform === 'darwin' ? { acceleratorWorksWhenHidden: true } : {}) }))
+    return [{ id: entry.nativeId, label: entry.title, role, accelerator: entry.accelerator ?? '' }, ...hidden]
+  }
   // Main never resolves keys (the renderer's dispatcher owns them), so the accelerator is only a label.
-  return {
+  return [{
     id: entry.nativeId, label: entry.title, ...(entry.accelerator ? { accelerator: entry.accelerator } : {}), registerAccelerator: false, type: toggle ? 'checkbox' : 'normal',
     // Electron flips a checkbox before calling click; the renderer owns the state, so the item keeps showing what it last sent.
     click: item => { if (toggle) item.checked = actions.isChecked(id); actions.command(id) }
-  }
+  }]
 }
 
 function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
   const entries = (id: MenuId) => buildMenuModel(id, toPlatform(platform))
   // Menubar placements have no `when`, so pruning only leaves out submenus with nothing in them.
-  return pruneMenu(entries(menu), () => true, entries).map((entry): MenuItemConstructorOptions => {
-    if (entry.kind === 'separator') return { type: 'separator' }
-    if (entry.kind === 'role') return { role: entry.role }
-    if (entry.kind === 'command') return commandItem(entry, actions)
+  return pruneMenu(entries(menu), () => true, entries).flatMap((entry): MenuItemConstructorOptions[] => {
+    if (entry.kind === 'separator') return [{ type: 'separator' }]
+    if (entry.kind === 'role') return [{ role: entry.role }]
+    if (entry.kind === 'command') return commandItems(entry, actions, platform)
     const commands = menuItems(entry.id, model, actions, platform)
     const dynamic = entry.dynamic === 'theme' ? themeItems(themeMenuModel(model.theme), actions, platform) : []
-    return { id: entry.nativeId, label: entry.title, submenu: [...commands, ...(commands.length && dynamic.length ? [{ type: 'separator' as const }] : []), ...dynamic] }
+    return [{ id: entry.nativeId, label: entry.title, submenu: [...commands, ...(commands.length && dynamic.length ? [{ type: 'separator' as const }] : []), ...dynamic] }]
   })
 }
 
