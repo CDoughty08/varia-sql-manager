@@ -42,9 +42,13 @@ let previewSeq = 0
 let rendererLoaded = false
 let rendererReady = false
 let rendererUnresponsive = false
-// Native context menus on macOS; smoke tests may choose either style on any platform.
+// Native context menus on macOS; smoke tests may choose either style on any platform. Either condition shows one: a
+// right-click on an inactive macOS window does not focus it but is input, and VoiceOver's VO+Shift+M is no input but
+// comes from the focused window. Hidden smoke windows are never focused, so their menus need a click or key: no bypass.
 const menuStyle = menuStyleFor(process.platform, process.env)
-const contextMenus = new ContextMenuPopups<BrowserWindow>({ style: menuStyle, platform: process.platform, build: template => Menu.buildFromTemplate(template) })
+const contextMenus = new ContextMenuPopups<BrowserWindow>({
+  style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent(), build: template => Menu.buildFromTemplate(template)
+})
 // Tests use their own profile so layout checks never modify the user's workspace preferences.
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // A second instance would overwrite this instance's layouts and connection library.

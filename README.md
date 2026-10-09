@@ -107,7 +107,7 @@ A server offers Connect…, Disconnect (that server, without asking which), New 
 
 ### macOS
 
-The title-bar menus are the macOS menu bar; there is no menu bar in the window, and File has no Quit because the application menu has it. Context menus are native macOS menus built from the same items: they follow Dark and Light, open with a right-click, **Control**-click, VoiceOver's **VO+Shift+M**, or **Shift+F10**, and act on the item they were opened for. The query tab's Open Containing Folder reads **Reveal in Finder**. The menu bar shows only shortcuts with ⌘ (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)); context menus show every key. If a native menu cannot be shown, the themed menu appears instead.
+The title-bar menus are the macOS menu bar; there is no menu bar in the window, and File has no Quit because the application menu has it. Context menus are native macOS menus built from the same items: they follow Dark and Light, open with a right-click, **Control**-click, VoiceOver's **VO+Shift+M**, or **Shift+F10**, and act on the item they were opened for. The query tab's Open Containing Folder reads **Reveal in Finder**. The menu bar shows only shortcuts with ⌘ (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)); context menus show every key. A native menu opens only in the focused window or just after a click, tap, or key press in it, so a background window cannot show one over other apps. If a native menu cannot be shown, the themed menu appears instead.
 
 ## Connection dialog
 

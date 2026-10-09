@@ -46,13 +46,20 @@ export interface PopupMenu<W> {
  * Native context menus for the renderer (`varia:context-menu`), one at a time. Only ids, an integer token, and integer
  * coordinates come from the renderer, validated against the catalogue; a chosen item goes back as
  * `varia:context-menu-command` with the request's token. Showing resolves when the menu closes.
+ *
+ * A menu shows only while `userCanAct` (the window is focused, or a click, tap, or key just came): a macOS popup draws
+ * above other apps' windows, and its Paste is Electron's role, which no Paste check in main sees, so an idle or
+ * background page must not put one where the user is working. A refused page shows its own menu, inside its window.
  */
 export class ContextMenuPopups<W extends PopupWindow> {
   private open: { readonly menu: PopupMenu<W>; readonly window: W } | null = null
-  constructor(private readonly options: { readonly style: MenuStyle; readonly platform: NodeJS.Platform; build(template: MenuItemConstructorOptions[]): PopupMenu<W> }) {}
+  constructor(private readonly options: {
+    readonly style: MenuStyle; readonly platform: NodeJS.Platform; userCanAct(): boolean; build(template: MenuItemConstructorOptions[]): PopupMenu<W>
+  }) {}
 
   async show(value: unknown, window: W): Promise<void> {
     if (this.options.style !== 'native') throw new Error('Native context menus are not in use.')
+    if (!this.options.userCanAct()) throw new Error('A native context menu needs the focused window or a click, tap, or key press in it.')
     const request = contextMenuRequestSchema.parse(value)
     this.close()
     const menu = this.options.build(contextMenuTemplate(request, this.options.platform, id => {
