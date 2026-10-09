@@ -70,6 +70,52 @@ internal static class HostChecks
             var invalid = host.Next(FrameKind.Response);
             check(invalid?.Header.Id == 6 && ErrorCode(invalid.Value) == "INVALID_PARAMS" && host.Exits.IsEmpty, "invalid params are an INVALID_PARAMS answer, not a protocol error");
 
+            // Malformed MessagePack inside params (float32, invalid UTF-8, an unsafe integer) is a bad parameter too.
+            byte[][] malformed = [[0x81, 0xa1, 0x61, 0xca, 0, 0, 0, 0], [0x81, 0xa1, 0x61, 0xa2, 0xc3, 0x28], [0x81, 0xa1, 0x61, 0xcf, 0, 0x20, 0, 0, 0, 0, 0, 0]];
+            var answers = new List<string?>();
+            foreach (var (value, index) in malformed.Select((value, index) => (value, index)))
+            {
+                var raw = new ArrayBufferWriter<byte>();
+                var envelope = new MsgPackWriter(raw);
+                envelope.WriteMapHeader(2);
+                envelope.WriteString("method");
+                envelope.WriteString("test.echo");
+                envelope.WriteString("params");
+                raw.Write(value);
+                host.Send(FrameKind.Request, 30 + (uint)index, 0, raw.WrittenSpan);
+                answers.Add(host.Next(FrameKind.Response) is { } answer && answer.Header.Id == 30 + index ? ErrorCode(answer) : "missing");
+            }
+            host.Request(33, "test.echo", new { ok = true });
+            check(answers.All(code => code == "INVALID_PARAMS") && host.Next(FrameKind.Response)?.Header.Id == 33 && host.Exits.IsEmpty,
+                "malformed MessagePack inside params is answered INVALID_PARAMS and the host carries on: " + string.Join(", ", answers));
+
+            // The { result } wrapper is one level of the body, so an echoed value 16 containers deep would be 17 on the wire,
+            // past what main's decoder (and ParseControl) accepts: it must be refused, and 15 must pass.
+            var nested = new List<string?>();
+            foreach (var depth in new[] { 15, 16 })
+            {
+                var raw = new ArrayBufferWriter<byte>();
+                var envelope = new MsgPackWriter(raw);
+                envelope.WriteMapHeader(2);
+                envelope.WriteString("method");
+                envelope.WriteString("test.echo");
+                envelope.WriteString("params");
+                envelope.WriteMapHeader(1);
+                envelope.WriteString("a");
+                for (var level = 2; level < depth; level++) envelope.WriteArrayHeader(1);
+                envelope.WriteArrayHeader(0);
+                host.Send(FrameKind.Request, 40 + (uint)depth, 0, raw.WrittenSpan);
+                var answer = host.Next(FrameKind.Response);
+                try { nested.Add(answer is { } frame ? ErrorCode(frame) ?? "ok" : "missing"); }
+                catch (ProtocolException error) { nested.Add("undecodable " + error.Code); }
+            }
+            check(nested.SequenceEqual(["ok", "BACKEND_ERROR"]), "a RESPONSE never nests deeper than main decodes: " + string.Join(", ", nested));
+
+            host.Request(50, "test.unsent", new { });
+            var unsent = host.Next(FrameKind.Response);
+            check(unsent?.Header.Id == 50 && ErrorCode(unsent.Value) == "RESPONSE_TOO_LARGE" && host.Dispatcher.Unsent == 1,
+                "a result too large to send is answered RESPONSE_TOO_LARGE and the handler is told, so it can release what it stored");
+
             host.Request(7, "test.stream", new { pages = 4, bytes = 40 * 1024 }, credit: 64 * 1024);
             var first = host.Next(FrameKind.Data);
             var second = host.Next(FrameKind.Data);
@@ -162,7 +208,7 @@ internal static class HostChecks
         using (var host = new HostHarness(output: new BrokenStream()))
         {
             host.Send(FrameKind.Hello, 0, 0, JsonBridge.Encode(new { versions = new[] { 2, 2 }, generation = 1 }, Json));
-            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0, "a broken stdout (main gone) exits 0");
+            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0, "a stdout that fails to write ends the writer and exits 0");
         }
 
         OutboundChecks(check);
@@ -206,7 +252,7 @@ internal static class HostChecks
             "the control lane is drained before the bulk lane (" + string.Join(",", ids.Take(3)) + "…" + string.Join(",", ids.TakeLast(2)) + ")");
     }
 
-    /// <summary>A stdout whose reader is gone (EPIPE).</summary>
+    /// <summary>A stdout whose writes fail (the real console stream swallows EPIPE; backend-sidecar.test.ts covers that).</summary>
     private sealed class BrokenStream : MemoryStream
     {
         public override void Write(byte[] buffer, int offset, int count) => throw new IOException("Broken pipe");
@@ -245,9 +291,10 @@ internal sealed class StubDispatcher : IRequestDispatcher
 {
     public int Completed;
     public int CancelAllCalls;
+    public int Unsent;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events"];
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent"];
     public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, _ => RequestLane.Control };
     public (long GlobalBytes, long QueryBytes) ResultBudget => (256L << 20, 128L << 20);
 
@@ -277,6 +324,9 @@ internal sealed class StubDispatcher : IRequestDispatcher
                 context.SendEvent(new { Type = "messages", Messages = new[] { new string('x', 300 * 1024) } }, true);
                 context.SendEvent(new { Type = "resultSet.closed" }, false);
                 return new { Sent = 3 };
+            case "test.unsent":
+                context!.Unsent = () => Interlocked.Increment(ref Unsent);
+                return new { Text = new string('x', ProtocolLimits.ResponseBody) };
             default: throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.");
         }
     }

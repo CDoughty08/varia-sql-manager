@@ -144,10 +144,27 @@ describe('ResultsPortHost', () => {
     expect(reads[4].credit).toBe(64 * 1024)
     port().send({ t: 'credit', rid: 1, bytes: MiB })
     expect(reads[0].credits).toEqual([])
+    // The page frees room on the port: the credit held back goes out first, then as much of the next as fits.
     reads[0].sink.data(1, new ArrayBuffer(2 * MiB))
+    expect(reads[0].credits).toEqual([MiB])
     port().send({ t: 'credit', rid: 1, bytes: 16 * MiB })
-    expect(reads[0].credits).toEqual([2 * MiB - 64 * 1024])
+    expect(reads[0].credits).toEqual([MiB, MiB - 64 * 1024])
     port().send({ t: 'credit', rid: 99, bytes: MiB })
+  })
+
+  it('passes on credit the port held back once other streams end, so no stream stalls', async () => {
+    const { host, read, reads, port } = fixture()
+    host.own([descriptor(7)])
+    for (let rid = 1; rid <= 16; rid++) read(rid, 7, { credit: 4 * MiB })
+    read(17, 7, { credit: 4 * MiB })
+    expect(reads[16].credit).toBe(64 * 1024)
+    // The backend sends while credit is positive, so one 256 KiB page overdraws the stream; the worker credits it back.
+    reads[16].sink.data(1, new ArrayBuffer(256 * 1024))
+    port().send({ t: 'credit', rid: 17, bytes: 256 * 1024 })
+    expect(reads[16].credits).toEqual([])
+    for (const stream of reads.slice(0, 16)) stream.resolve({ nextRow: 0, rowsAvailable: 0, complete: true, pages: 0, rows: 0 })
+    await settle()
+    expect(reads[16].credits).toEqual([256 * 1024])
   })
 
   it('allows at most 64 outstanding requests', () => {
@@ -178,12 +195,18 @@ describe('ResultsPortHost', () => {
     expect(host.isOpen).toBe(false)
   })
 
-  it('limits opens to 10 a minute', () => {
+  it('limits opens to 10 a minute within one page load', () => {
     let now = 0
     const { host, frame } = fixture({ now: () => now })
     for (let open = 1; open < 10; open++) host.open(frame)
     expect(() => host.open(frame)).toThrow('reopened too often')
     now = 60_001
+    expect(() => host.open(frame)).not.toThrow()
+    for (let open = 1; open < 10; open++) host.open(frame)
+    expect(() => host.open(frame)).toThrow('reopened too often')
+    // A reload starts a new page, whose first open must not fail because of the previous page's.
+    host.reset()
+    expect(host.isOpen).toBe(false)
     expect(() => host.open(frame)).not.toThrow()
   })
 

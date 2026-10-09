@@ -20,11 +20,15 @@ internal sealed class ResultSetBuffer
     private long firstRowAt;
     private int truncated;
     private int state;
+    private int sealedPages;
     private volatile bool incomplete;
 
-    internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires)
+    /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
+    internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
+        IReadOnlyList<WireKind> wires, long metadata = 0)
     {
         this.store = store;
+        charged = metadata;
         Budget = budget;
         ResultId = resultId;
         Index = index;
@@ -52,6 +56,8 @@ internal sealed class ResultSetBuffer
     public TruncationReason Truncated => (TruncationReason)Volatile.Read(ref truncated);
     public long RowsRead => Interlocked.Read(ref rowsRead);
     public long RowsAvailable { get { lock (gate) return rowsAvailable; } }
+    /// <summary>Pages sealed so far; read without the lock, so ingestion can tell that a row sealed one.</summary>
+    public int SealedPages => Volatile.Read(ref sealedPages);
     /// <summary>Rows waiting in the page being built.</summary>
     public bool HasPendingRows { get { lock (gate) return builder?.HasRows == true; } }
 
@@ -146,6 +152,7 @@ internal sealed class ResultSetBuffer
         }
         pending = 0;
         pages.Add(new StoredPage(first, rows, page));
+        Volatile.Write(ref sealedPages, pages.Count);
         rowsAvailable += rows;
         bytesStored += page.Length;
         // Checked at every seal: under memory pressure the page just sealed is kept, and nothing more is stored.
@@ -164,16 +171,6 @@ internal sealed class ResultSetBuffer
         Skip(reason);
         Budget.Stop(reason);
         return false;
-    }
-
-    /// <summary>Charged at once, whatever the budget.</summary>
-    internal void Charge(long bytes)
-    {
-        lock (gate)
-        {
-            store.Force(Budget, bytes);
-            charged += bytes;
-        }
     }
 
     /// <summary>Seals the last rows and returns the builder's memory: the set is complete.</summary>

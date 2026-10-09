@@ -40,6 +40,14 @@ internal static class LiveResultChecks
             check(result.ResultSets[0].Columns.All(column => column.Wire == "text")
                 && variant.SequenceEqual(["1", "1.50", "abc", "2026-10-08 12:34:56.123", "6F9619FF-8B86-D011-B42D-00C04FC964FF", "0x0102", "1.00", null]),
                 "sql_variant values are formatted by their base type: " + string.Join(" | ", variant));
+            // SqlClient reports neither a variant's base type nor its scale, so the date and time family shows 7 digits
+            // and smalldatetime shows milliseconds (docs/ipc.md); pinned so a change is visible.
+            result = await Run("SELECT CAST(CAST('2026-10-08' AS date) AS sql_variant), CAST(CAST('2026-10-08T12:34:00' AS smalldatetime) AS sql_variant),"
+                + " CAST(CAST('2026-10-08T12:34:56.123' AS datetime2(3)) AS sql_variant), CAST(CAST('12:34:56' AS time(0)) AS sql_variant),"
+                + " CAST(CAST('2026-10-08T12:34:56+05:30' AS datetimeoffset(0)) AS sql_variant);");
+            variant = RowsOf(store, result.ResultSets[0])[0];
+            check(variant.SequenceEqual(["2026-10-08 00:00:00.0000000", "2026-10-08 12:34:00.000", "2026-10-08 12:34:56.1230000", "12:34:56.0000000", "2026-10-08 12:34:56.0000000 +05:30"]),
+                "sql_variant date and time values show all 7 fractional digits: " + string.Join(" | ", variant));
 
             // TypeSystemVersion 2005 delivers the newer date and time types as nvarchar text.
             var legacy = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(options with { Advanced = new(TypeSystemVersion: "SQL Server 2005") }, json), json);
@@ -67,6 +75,30 @@ internal static class LiveResultChecks
                 "a 50,000,000-character nvarchar(max) and a 3 MB xml value are stored as truncated prefixes");
             check(growth < 64L * 1024 * 1024, "reading the huge values grew the working set by " + growth / 1024 / 1024 + " MB, under 64 MB (" + watch.ElapsedMilliseconds + " ms)");
 
+            // xml is serialised as SqlClient's GetChars would, including fragments that start with text.
+            result = await Run("SELECT CAST(N'abc' AS xml), CAST(N'é<a b=\"1\"/>' AS xml), (SELECT ',' + name FROM (VALUES ('x'), ('y')) AS t(name) FOR XML PATH(''), TYPE),"
+                + " CAST(N'<r><!-- c --><?pi d?><x:e xmlns:x=\"urn:x\">&lt;&amp;</x:e></r>' AS xml);");
+            var documents = RowsOf(store, result.ResultSets[0])[0];
+            check(documents.SequenceEqual(["abc", "é<a b=\"1\" />", ",x,y", "<r><!-- c --><?pi d?><x:e xmlns:x=\"urn:x\">&lt;&amp;</x:e></r>"]),
+                "xml values, including fragments that start with text, keep their serialised text: " + string.Join(" | ", documents));
+            // GetChars on xml is quadratic in a large text node (about 12 s for this cell), and nothing checked the token inside it.
+            const string bigXml = "DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), 8000000) + '</a>' AS xml); ";
+            watch.Restart();
+            result = await Run(bigXml + "SELECT @x AS doc, 7 AS after FROM (VALUES (1), (2)) AS t(n);");
+            var xmlMs = watch.ElapsedMilliseconds;
+            check(result.Status == "completed" && RowsOf(store, result.ResultSets[0]).All(row => row[0]!.Length == ColumnPlan.DocumentCap && row[1] == "7") && xmlMs < 10_000,
+                "two 8,000,000-character xml cells are read in linear time (" + xmlMs + " ms)");
+            using (var context = new RequestContext(1, "query.execute", RequestLane.Query, 0))
+            {
+                var running = Run(bigXml + "SELECT @x AS doc FROM (SELECT TOP (500) 1 AS n FROM sys.all_objects) AS t;", context, Guid.NewGuid().ToString());
+                await Task.Delay(1000);
+                watch.Restart();
+                context.Cancel(CancelReason.User);
+                var stopped = await running;
+                var cancelMs = watch.ElapsedMilliseconds;
+                check(stopped.Status == "cancelled" && cancelMs < 5000, "a cancel stops a script that is reading large xml cells (" + cancelMs + " ms)");
+            }
+
             // maxRows 0 stores rows up to the budget only.
             await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId) => Run(sql, context, sessionId, maxRows: 0), Close);
 
@@ -75,11 +107,31 @@ internal static class LiveResultChecks
             var expired = await Cancelled(CancelReason.Deadline);
             check(expired.Status == "timedOut" && expired.Error?.Code == "TIMEOUT", "main's deadline backstop (CANCEL reason 2) times the script out");
 
-            async Task<QueryResult> Cancelled(CancelReason reason)
+            // 20 collected errors of about 2,000 characters each fill the error text; the stop reason must not push the
+            // summary past main's limit of 16,384 characters plus the ellipsis.
+            const string noisy = "DECLARE @m nvarchar(2000) = REPLICATE(N'e', 2000), @i int = 0; WHILE @i < 25 BEGIN RAISERROR(@m, 16, 1); SET @i += 1 END;"
+                + " RAISERROR('flush', 0, 1) WITH NOWAIT; WAITFOR DELAY '00:00:20';";
+            var noisyCancel = await Cancelled(CancelReason.User, noisy, 1500);
+            var noisyTimeout = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
+                new QueryArgs(info.Id, Guid.NewGuid().ToString(), "master", noisy, Guid.NewGuid().ToString(), 1000, 2), json), json);
+            check(noisyCancel.Status == "cancelled" && noisyCancel.Error!.Message.StartsWith("The script was cancelled.") && noisyCancel.Error.Message.Length == 16_385
+                && noisyTimeout.Status == "timedOut" && noisyTimeout.Error!.Message.StartsWith("The script exceeded its execution timeout.") && noisyTimeout.Error.Message.Length == 16_385,
+                "a cancelled or timed-out script keeps its error text within 16,385 characters (" + noisyCancel.Error?.Message.Length + ", " + noisyTimeout.Error?.Message.Length + ")");
+
+            // Ten sets of 4,096 columns with 128-character CJK names would make an 18 MB summary, over the 16 MiB response
+            // limit: the sets whose descriptors do not fit are counted as discarded instead.
+            var wideSelect = "SELECT " + string.Join(", ", Enumerable.Range(0, 4096).Select(i => "1 AS [" + new string('名', 124) + i.ToString("D4", System.Globalization.CultureInfo.InvariantCulture) + "]")) + ";\nGO 10";
+            var wide = await Run(wideSelect);
+            var encoded = JsonBridge.Encode(wide, json).Length;
+            check(wide.Status == "completed" && wide.ResultSets.Count is > 0 and < 10 && wide.DiscardedResultSets == 10 - wide.ResultSets.Count && encoded < 15 * 1024 * 1024
+                && wide.Messages.Any(message => message.Contains("later result sets are not displayed")),
+                "result sets whose column lists would overflow the 16 MiB summary are discarded (" + wide.ResultSets.Count + " kept, " + encoded / 1024 + " KiB)");
+
+            async Task<QueryResult> Cancelled(CancelReason reason, string sql = "WAITFOR DELAY '00:00:20';", int delayMs = 300)
             {
                 using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0);
-                var running = Run("WAITFOR DELAY '00:00:20';", context, Guid.NewGuid().ToString());
-                await Task.Delay(300);
+                var running = Run(sql, context, Guid.NewGuid().ToString());
+                await Task.Delay(delayMs);
                 context.Cancel(reason);
                 return await running;
             }

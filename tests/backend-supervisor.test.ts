@@ -226,11 +226,16 @@ describe('BackendSupervisor restarts', () => {
     const { value, advance, last } = simulated({ configure: backend => { backend.exitOnEnd = false } })
     await value.request('system.health', {})
     const stopping = value.stop()
+    // Quitting stops it again (window closed, then will-quit): the second call waits for the same kill.
+    let again = false
+    void value.stop().then(() => { again = true })
     await advance(1999)
     expect(last().alive).toBe(true)
+    expect(again).toBe(false)
     await advance(1)
     await stopping
     expect(last().signals).toEqual(['SIGKILL'])
+    expect(again).toBe(true)
     expect(value.state).toEqual({ status: 'stopped' })
   })
 })
@@ -280,6 +285,27 @@ describe('BackendSupervisor liveness', () => {
     expect(value.state.status).toBe('ready')
     await advance(2000)
     expect(value.state.status).toBe('unresponsive')
+  })
+  it('keeps warning after a sleep or a stall until the backend sends a frame', async () => {
+    const power = new EventEmitter()
+    const { value, advance, jump, backends } = simulated({ deps: { power } })
+    await value.request('system.health', {})
+    backends[0].pong = false
+    await advance(16_000)
+    expect(value.state.status).toBe('unresponsive')
+    power.emit('suspend')
+    await advance(5000)
+    power.emit('resume')
+    await advance(1000)
+    expect(value.state.status).toBe('unresponsive')
+    jump(5000)
+    await advance(1)
+    expect(value.state.status).toBe('unresponsive')
+    await advance(20_000)
+    expect(value.state.status).toBe('unresponsive')
+    backends[0].pong = true
+    await advance(6000)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 1 })
   })
   it('pauses while the computer sleeps', async () => {
     const power = new EventEmitter()

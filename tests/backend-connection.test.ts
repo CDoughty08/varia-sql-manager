@@ -7,7 +7,8 @@ import { BackendConnection, type ConnectionDeps, type Loss } from '../src/main/b
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/ipc/wire/frames'
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../src/shared/ipc/wire/msgpack'
-import { backendMethods } from '../src/shared/ipc/methods'
+import { backendMethods, deadlineFor } from '../src/shared/ipc/methods'
+import { fakeSpawn, manualClock, settle } from './fixtures/fake-process'
 
 const connections: BackendConnection[] = []
 function fake(mode: string, deps: ConnectionDeps = {}, argument?: string): BackendConnection {
@@ -139,6 +140,21 @@ describe('BackendConnection lifetime', () => {
     await expect.poll(() => connection.lateFrames, { timeout: 5000 }).toBe(1)
     expect((await health(connection)).cancels).toEqual([{ id: 1, reason: 2 }])
     expect(connection.lost).toBeUndefined()
+  })
+  it('never writes a request whose backstop fired while it waited for HELLO', async () => {
+    const { spawn, last } = fakeSpawn(backend => { backend.hello = false })
+    const { clock, advance } = manualClock()
+    const connection = new BackendConnection({ command: 'fake', args: [], cwd: process.cwd(), packaged: false }, 1, { spawn, clock })
+    connections.push(connection)
+    const params = { sessionId: crypto.randomUUID() }
+    const closing = failure(connection.send('query.session.close', params, deadlineFor('query.session.close', params)).done)
+    await advance(15_001)
+    expect(await closing).toMatchObject({ code: 'TIMEOUT' })
+    last().sayHello()
+    await connection.ready
+    await settle()
+    expect(last().requests).toEqual([])
+    expect(last().cancels).toEqual([])
   })
   it('pings, so only a silent backend accumulates silence', async () => {
     const quiet = fake('echo', { limits: { pingMs: 50 } })

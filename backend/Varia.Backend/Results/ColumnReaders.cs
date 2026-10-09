@@ -1,6 +1,8 @@
 using System.Data;
 using System.Data.SqlTypes;
 using System.Globalization;
+using System.Text;
+using System.Xml;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.SqlTypes;
 
@@ -10,12 +12,14 @@ namespace Varia.Backend.Results;
 internal enum CellCodec : byte
 {
     Bit, Byte, Int16, Int32, Int64, Decimal, SqlDecimal, Money, Real, Float, Date, Time, SmallDateTime, DateTime, DateTime2, DateTimeOffset, Guid,
-    Chars, Bytes, Timestamp, Stream, Variant, Vector, Value, LongText, Unreadable
+    Chars, Xml, Bytes, Timestamp, Stream, Variant, Vector, Value, LongText, Unreadable
 }
 
 /// <summary>The codecs for one result set, chosen once from its schema (never by catching exceptions per cell). Reads
 /// follow CommandBehavior.SequentialAccess: IsDBNull first, then each column once, in ordinal order. Long values are read
-/// in 8,192-unit chunks only up to their cap plus one, so a huge value never materialises; SqlClient skips the rest.</summary>
+/// in 8,192-unit chunks only up to their cap plus one, so a huge value never materialises; SqlClient skips the rest.
+/// xml is the exception (see <see cref="Xml"/>). The query's token is checked between chunks, so a cancel or timeout
+/// takes effect inside a long cell.</summary>
 internal sealed class ColumnPlan
 {
     public const int TextCap = 65_535;
@@ -26,6 +30,8 @@ internal sealed class ColumnPlan
     private const int Chunk = 8192;
     private const int JsonType = 35, VectorType = 36;
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
+    // SqlClient's own GetChars on xml serialises with these settings.
+    private static readonly XmlWriterSettings XmlOutput = new() { ConformanceLevel = ConformanceLevel.Fragment, CloseOutput = false };
     private readonly Column[] columns;
     private char[] chars = new char[Chunk];
     private byte[] bytes = new byte[Chunk];
@@ -51,6 +57,9 @@ internal sealed class ColumnPlan
 
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }
+    /// <summary>An upper bound on this set's descriptor in the query.execute summary (MessagePack), which must stay under
+    /// the 16 MiB response limit: its names and types, plus 96 bytes of keys and values per column and 512 per set.</summary>
+    public long DescriptorBytes => 512 + Columns.Sum(column => Encoding.UTF8.GetByteCount(column.Name) + Encoding.UTF8.GetByteCount(column.DataType) + 96L);
     /// <summary>Today's rule: a single column named "Microsoft SQL Server 2005 XML Showplan" is an execution plan.</summary>
     public bool IsPlan { get; }
 
@@ -91,7 +100,7 @@ internal sealed class ColumnPlan
     private static (CellCodec Codec, WireKind Wire, string? Role, int Cap) Choose(int provider, int? precision, bool isLong, Type? clrType, bool isPlan)
     {
         const WireKind text = WireKind.Text, binary = WireKind.Binary;
-        if (isPlan) return (CellCodec.Chars, text, "plan", DocumentCap);
+        if (isPlan) return (provider == (int)SqlDbType.Xml ? CellCodec.Xml : CellCodec.Chars, text, "plan", DocumentCap);
         return provider switch
         {
             (int)SqlDbType.Bit => (CellCodec.Bit, text, null, 0),
@@ -111,7 +120,7 @@ internal sealed class ColumnPlan
             (int)SqlDbType.DateTimeOffset => (CellCodec.DateTimeOffset, text, null, 0),
             (int)SqlDbType.UniqueIdentifier => (CellCodec.Guid, text, null, 0),
             (int)SqlDbType.Char or (int)SqlDbType.VarChar or (int)SqlDbType.Text or (int)SqlDbType.NChar or (int)SqlDbType.NVarChar or (int)SqlDbType.NText => (CellCodec.Chars, text, null, TextCap),
-            (int)SqlDbType.Xml => (CellCodec.Chars, text, "xml", DocumentCap),
+            (int)SqlDbType.Xml => (CellCodec.Xml, text, "xml", DocumentCap),
             JsonType => (CellCodec.Chars, text, "json", DocumentCap),
             VectorType => (CellCodec.Vector, text, "vector", VectorCap),
             (int)SqlDbType.Binary or (int)SqlDbType.VarBinary or (int)SqlDbType.Image => (CellCodec.Bytes, binary, null, BinaryCap),
@@ -129,14 +138,14 @@ internal sealed class ColumnPlan
     /// <summary>Appends one row's cells. A value that cannot be read becomes NULL with the read-error flag, the column switches
     /// to its fallback reader for later rows, and one message names the column. SQL Server errors propagate.
     /// Returns the number of cells stored as truncated prefixes.</summary>
-    public int ReadRow(SqlDataReader reader, PageBuilder builder, Action<string> warn)
+    public int ReadRow(SqlDataReader reader, PageBuilder builder, Action<string> warn, CancellationToken token = default)
     {
         var truncated = 0;
         for (var i = 0; i < columns.Length; i++)
         {
             var column = columns[i];
             if (reader.IsDBNull(i)) { builder.AppendNull(); continue; }
-            try { if (Read(column, reader, i, builder)) truncated++; }
+            try { if (Read(column, reader, i, builder, token)) truncated++; }
             catch (Exception error) when (IsCellFailure(error))
             {
                 builder.AppendNull(error: true);
@@ -153,9 +162,9 @@ internal sealed class ColumnPlan
 
     /// <summary>A value the provider cannot convert; anything else (SQL errors, a closed connection, cancellation) ends the read.</summary>
     private static bool IsCellFailure(Exception error) => error is InvalidCastException or OverflowException or FormatException or ArgumentException
-        or NotSupportedException or SqlTypeException or FileNotFoundException or FileLoadException or TypeLoadException or InvalidDataException;
+        or NotSupportedException or SqlTypeException or FileNotFoundException or FileLoadException or TypeLoadException or InvalidDataException or XmlException;
 
-    private bool Read(Column column, SqlDataReader reader, int i, PageBuilder builder)
+    private bool Read(Column column, SqlDataReader reader, int i, PageBuilder builder, CancellationToken token)
     {
         switch (column.Codec)
         {
@@ -176,16 +185,17 @@ internal sealed class ColumnPlan
             case CellCodec.DateTime2: builder.EndFormatted(CellFormat.WriteDateTime2(builder.BeginFormatted(), reader.GetDateTime(i), column.Scale)); return false;
             case CellCodec.DateTimeOffset: builder.EndFormatted(CellFormat.WriteDateTimeOffset(builder.BeginFormatted(), reader.GetDateTimeOffset(i), column.Scale)); return false;
             case CellCodec.Guid: builder.EndFormatted(CellFormat.WriteGuid(builder.BeginFormatted(), reader.GetGuid(i))); return false;
-            case CellCodec.Chars: return Chars(reader, i, column.Cap, builder);
-            case CellCodec.Bytes: return Bytes(reader, i, column.Cap, builder);
+            case CellCodec.Chars: return Chars(reader, i, column.Cap, builder, token);
+            case CellCodec.Xml: return Xml(reader, i, column.Cap, builder, token);
+            case CellCodec.Bytes: return Bytes(reader, i, column.Cap, builder, token);
             // SqlClient reports a NULL rowversion as not null with no bytes; a real one always has 8.
             case CellCodec.Timestamp:
                 if (reader.GetBytes(i, 0, null, 0, 0) == 0) { builder.AppendNull(); return false; }
-                return Bytes(reader, i, column.Cap, builder);
+                return Bytes(reader, i, column.Cap, builder, token);
             case CellCodec.Stream:
             {
                 using var stream = reader.GetStream(i);
-                return Binary(stream, column.Cap, builder);
+                return Binary(stream, column.Cap, builder, token);
             }
             case CellCodec.Variant: return Variant(reader.GetSqlValue(i), builder);
             case CellCodec.Vector:
@@ -198,7 +208,7 @@ internal sealed class ColumnPlan
             case CellCodec.LongText:
             {
                 using var text = reader.GetTextReader(i);
-                return Chars(text, column.Cap, builder);
+                return Chars(text, column.Cap, builder, token);
             }
             default: throw new NotSupportedException("The column type cannot be read.");
         }
@@ -224,12 +234,13 @@ internal sealed class ColumnPlan
     }
 
     /// <summary>Reads at most cap + 1 characters, so a longer value is known to be truncated without reading it all.</summary>
-    private bool Chars(SqlDataReader reader, int i, int cap, PageBuilder builder)
+    private bool Chars(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
     {
         var limit = cap + 1;
         var total = 0;
         while (total < limit)
         {
+            token.ThrowIfCancellationRequested();
             var length = Math.Min(Chunk, limit - total);
             Chars(total + length);
             var read = (int)reader.GetChars(i, total, chars, total, length);
@@ -239,12 +250,13 @@ internal sealed class ColumnPlan
         return Text(chars.AsSpan(0, total), cap, builder);
     }
 
-    private bool Chars(TextReader reader, int cap, PageBuilder builder)
+    private bool Chars(TextReader reader, int cap, PageBuilder builder, CancellationToken token)
     {
         var limit = cap + 1;
         var total = 0;
         while (total < limit)
         {
+            token.ThrowIfCancellationRequested();
             var length = Math.Min(Chunk, limit - total);
             var read = reader.Read(Chars(total + length).Slice(total, length));
             if (read <= 0) break;
@@ -253,12 +265,13 @@ internal sealed class ColumnPlan
         return Text(chars.AsSpan(0, total), cap, builder);
     }
 
-    private bool Bytes(SqlDataReader reader, int i, int cap, PageBuilder builder)
+    private bool Bytes(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
     {
         var limit = cap + 1;
         var total = 0;
         while (total < limit)
         {
+            token.ThrowIfCancellationRequested();
             var length = Math.Min(Chunk, limit - total);
             Bytes(total + length);
             var read = (int)reader.GetBytes(i, total, bytes, total, length);
@@ -269,12 +282,13 @@ internal sealed class ColumnPlan
         return total > cap;
     }
 
-    private bool Binary(Stream stream, int cap, PageBuilder builder)
+    private bool Binary(Stream stream, int cap, PageBuilder builder, CancellationToken token)
     {
         var limit = cap + 1;
         var total = 0;
         while (total < limit)
         {
+            token.ThrowIfCancellationRequested();
             var length = Math.Min(Chunk, limit - total);
             var read = stream.Read(Bytes(total + length).Slice(total, length));
             if (read <= 0) break;
@@ -282,6 +296,66 @@ internal sealed class ColumnPlan
         }
         builder.AppendBinary(bytes.AsSpan(0, Math.Min(total, cap)), total > cap);
         return total > cap;
+    }
+
+    /// <summary>xml, up to cap + 1 characters. SqlClient's GetChars on xml copies each chunk out of a StringBuilder that holds
+    /// the whole serialised node, which is quadratic in a large text node, and GetXmlReader under sequential access
+    /// misdetects the encoding of a value that starts with text (FOR XML PATH('') output). So the value is read once, in
+    /// linear time and held only while this cell is read, then serialised node by node as GetChars would, stopping at the
+    /// cap.</summary>
+    private bool Xml(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
+    {
+        var sink = new CharSink(cap + 1);
+        using (var xml = reader.GetSqlXml(i).CreateReader())
+        {
+            // Never closed: closing ends open elements, which would only add text past a full sink.
+            var writer = XmlWriter.Create(sink, XmlOutput);
+            while (!sink.Full && xml.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                switch (xml.NodeType)
+                {
+                    case XmlNodeType.Element:
+                        writer.WriteStartElement(xml.Prefix, xml.LocalName, xml.NamespaceURI);
+                        writer.WriteAttributes(xml, true);
+                        if (xml.IsEmptyElement) writer.WriteEndElement();
+                        break;
+                    case XmlNodeType.Text:
+                        int read;
+                        while (!sink.Full && (read = xml.ReadValueChunk(chars, 0, Chunk)) > 0) writer.WriteChars(chars, 0, read);
+                        break;
+                    case XmlNodeType.Whitespace or XmlNodeType.SignificantWhitespace: writer.WriteWhitespace(xml.Value); break;
+                    case XmlNodeType.CDATA: writer.WriteCData(xml.Value); break;
+                    case XmlNodeType.EntityReference: writer.WriteEntityRef(xml.Name); break;
+                    case XmlNodeType.XmlDeclaration or XmlNodeType.ProcessingInstruction: writer.WriteProcessingInstruction(xml.Name, xml.Value); break;
+                    case XmlNodeType.Comment: writer.WriteComment(xml.Value); break;
+                    case XmlNodeType.EndElement: writer.WriteFullEndElement(); break;
+                }
+            }
+            if (!sink.Full) writer.Flush();
+        }
+        return Text(sink.Text, cap, builder);
+    }
+
+    /// <summary>A TextWriter that keeps the first <c>limit</c> characters written to it and drops the rest.</summary>
+    private sealed class CharSink(int limit) : TextWriter
+    {
+        private char[] buffer = new char[Math.Min(limit, Chunk)];
+        private int count;
+        public bool Full => count == limit;
+        public ReadOnlySpan<char> Text => buffer.AsSpan(0, count);
+        public override Encoding Encoding => Encoding.Unicode;
+        public override void Write(char value) => Write([value]);
+        public override void Write(char[] buffer, int index, int count) => Write(buffer.AsSpan(index, count));
+        public override void Write(string? value) => Write(value.AsSpan());
+        public override void Write(ReadOnlySpan<char> value)
+        {
+            var take = Math.Min(value.Length, limit - count);
+            if (take <= 0) return;
+            if (buffer.Length < count + take) Array.Resize(ref buffer, Math.Min(limit, Math.Max(count + take, buffer.Length * 2)));
+            value[..take].CopyTo(buffer.AsSpan(count));
+            count += take;
+        }
     }
 
     /// <summary>sql_variant: formatted by its base type as the rows above would; binary values become 0x text.</summary>

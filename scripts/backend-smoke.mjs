@@ -135,10 +135,13 @@ try {
   console.log(`Read ${responsiveness.rows} rows in ${responsiveness.elapsed} ms (${Math.round(responsiveness.rows / responsiveness.elapsed * 1000)} rows/s); long tasks ${JSON.stringify(responsiveness.longTasks)}; ${responsiveness.frames} frames, largest frame gap ${responsiveness.frameGap} ms, largest timer gap ${responsiveness.timerGap} ms (${responsiveness.visibility} window).`)
   expect(responsiveness.rows).toBe(synthesized.rowsAvailable)
   expect(responsiveness.first).toEqual(['0', 'Customer 0000000000 GmbH', '2026-01-01 00:00:00.0000000', '0.00', '00000000-0000-4A1F-9C2E-00C04FC90000', expect.stringMatching(/^Note 0: /), '1', '0'])
-  expect(responsiveness.longTasks.filter(duration => duration > 250)).toEqual([])
-  expect(responsiveness.longTasks.length).toBeLessThanOrEqual(2)
+  // Linux measures no long task and gaps under 150 ms even on 2 CPUs; Windows runners are slower and shared, so they keep
+  // looser bounds.
+  const linux = process.platform === 'linux'
+  expect(responsiveness.longTasks.filter(duration => duration > (linux ? 100 : 250))).toEqual([])
+  if (!linux) expect(responsiveness.longTasks.length).toBeLessThanOrEqual(2)
   // A window that was never shown may get frames only once a second; then the timer heartbeat measures the UI thread.
-  expect(responsiveness.frames >= responsiveness.elapsed / 100 ? responsiveness.frameGap : responsiveness.timerGap).toBeLessThanOrEqual(500)
+  expect(responsiveness.frames >= responsiveness.elapsed / 100 ? responsiveness.frameGap : responsiveness.timerGap).toBeLessThanOrEqual(linux ? 300 : 500)
   console.log('Responsiveness passed: a million synthetic rows read through the results worker without blocking the UI.')
 
   step = 'reload'
@@ -315,7 +318,18 @@ try {
   await expect(banner()).toHaveCount(0)
   console.log('Unresponsive backend passed: warned, never killed, recovered on its own, and replaced on Restart now.')
   expect(failures).toEqual([])
+
+  step = 'quit'
+  // Quitting stops the backend before the app exits, killing one that cannot act on stdin EOF, and starts no other.
+  const wedged = await hooks()
+  await writeFile(join(control, 'ignore-eof'), '')
+  const spawns = async () => (await readFile(join(control, 'spawns.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).pid)
+  const spawnedBefore = await spawns()
   await close()
+  const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
+  await expect.poll(() => alive(wedged.pid), { timeout: 3000 }).toBe(false)
+  expect(await spawns()).toEqual(spawnedBefore)
+  console.log('Quit passed: the wedged backend was killed before the app exited, and no backend was started while quitting.')
 
   step = 'incompatible backend'
   // 4. A protocol 1 backend is detected from its JSON answer to the handshake, at once.

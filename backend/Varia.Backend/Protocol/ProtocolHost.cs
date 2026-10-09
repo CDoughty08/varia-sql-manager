@@ -168,6 +168,11 @@ internal sealed class ProtocolHost
         try { (method, start, length, credit) = Envelope(body); }
         catch (ProtocolException error) { return Fatal("PROTOCOL_ERROR", "Invalid request envelope (" + error.Code + ").", ExitProtocolError, "envelope " + error.Code); }
         if (header.Id == 0 || contexts.ContainsKey(header.Id)) return Fatal("PROTOCOL_ERROR", "Invalid request id.", ExitProtocolError, "request id");
+        if (start < 0)
+        {
+            Respond(header.Id, Error("INVALID_PARAMS", "Invalid request parameters."), stream: false);
+            return null;
+        }
         if (contexts.Count >= options.MaxInFlight)
         {
             Respond(header.Id, Error("BUSY", "The backend is busy. Retry after a running operation finishes."), stream: credit is not null);
@@ -182,7 +187,8 @@ internal sealed class ProtocolHost
     }
 
     /// <summary>The envelope { method: str ≤ 64 bytes, params: map, credit?: uint }. Only its structure is checked here;
-    /// params are transcoded on the request's own task.</summary>
+    /// params are transcoded on the request's own task. A malformed value inside params returns start −1: the frame's
+    /// length keeps framing intact, so that request is answered INVALID_PARAMS like any other bad parameter.</summary>
     private static (string Method, int Start, int Length, long? Credit) Envelope(byte[] body)
     {
         var reader = new MsgPackReader(body);
@@ -205,7 +211,8 @@ internal sealed class ProtocolHost
             {
                 if (reader.PeekType() != MsgPackType.Map) throw new ProtocolException("ENVELOPE", at);
                 start = reader.Consumed;
-                reader.Skip();
+                try { reader.Skip(); }
+                catch (ProtocolException) { return (method ?? "", -1, 0, null); }
                 length = reader.Consumed - start;
             }
             else if (key.SequenceEqual("credit"u8) && credit is null)
@@ -244,7 +251,14 @@ internal sealed class ProtocolHost
                 slot = lane;
             }
             var result = await dispatcher!.DispatchAsync(context.Method, parameters, json, context).ConfigureAwait(false);
-            Respond(context, Result(result));
+            byte[] answer;
+            try { answer = Result(result); }
+            catch
+            {
+                context.Unsent?.Invoke();
+                throw;
+            }
+            Respond(context, answer);
         }
         catch (Exception error) { Respond(context, Failure(context, error)); }
         finally
@@ -292,7 +306,7 @@ internal sealed class ProtocolHost
         var writer = new MsgPackWriter(buffer);
         writer.WriteMapHeader(1);
         writer.WriteString("result");
-        JsonBridge.FromJson(JsonSerializer.SerializeToUtf8Bytes(result, json), writer);
+        JsonBridge.FromJson(JsonSerializer.SerializeToUtf8Bytes(result, json), writer, depth: 1);
         if (buffer.WrittenCount > responseLimit) throw new RequestException("RESPONSE_TOO_LARGE", "The backend result is too large to return (limit 16 MB).");
         return buffer.WrittenSpan.ToArray();
     }

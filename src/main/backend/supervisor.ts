@@ -74,6 +74,7 @@ export class BackendSupervisor {
   private snapshot: BackendState = { status: 'stopped' }
   private started = false
   private closing = false
+  private stopping: Promise<void> | undefined
   private restartTimer: unknown
   /** Unexpected losses since the counters were last reset, and when each happened (for the breaker). */
   private attempts = 0
@@ -170,7 +171,12 @@ export class BackendSupervisor {
     await previous?.close(undefined, reason === 'reload' ? new BackendError('BACKEND_LOST', sentences.reloaded) : undefined)
   }
 
-  async stop(): Promise<void> {
+  /** Ends the backend for good; later calls wait for the same stop. */
+  stop(): Promise<void> {
+    return this.stopping ??= this.stopNow()
+  }
+
+  private async stopNow(): Promise<void> {
     const previous = this.connection
     this.closing = true
     this.connection = undefined
@@ -357,8 +363,9 @@ export class BackendSupervisor {
     this.scheduleTick()
     if (this.suspended) return
     const silentMs = () => Math.min(connection.silentMs, this.clock.now() - this.windowStart)
+    // Only a frame ends the warning: a fresh window (resume, a late tick) shows main was away, not that the backend spoke.
     if (this.snapshot.status === 'unresponsive') {
-      if (silentMs() < this.unresponsiveMs) this.setState(this.readyState(connection))
+      if (connection.silentMs < this.unresponsiveMs) this.setState(this.readyState(connection))
       return
     }
     if (this.snapshot.status !== 'ready' || silentMs() < this.unresponsiveMs) return

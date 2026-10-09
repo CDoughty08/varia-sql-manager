@@ -8,6 +8,8 @@
 //   allow/audits        server.objects.list may list audits (otherwise it fails as a permission error would)
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   silent-<generation> that generation stops answering PING, as a hung backend would
+//   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it
+//   spawns.jsonl        one { pid } line per process started
 import { appendFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
@@ -35,7 +37,8 @@ if (mode === 'v1') {
 } else {
   process.stdin.on('data', chunk => { for (const frame of parser.push(chunk)) handle(frame) })
 }
-process.stdin.on('end', () => process.exit(0))
+process.stdin.on('end', () => { if (!control('ignore-eof')) process.exit(0) })
+if (controlDirectory) appendFileSync(join(controlDirectory, 'spawns.jsonl'), JSON.stringify({ pid: process.pid }) + '\n')
 
 function handle(frame) {
   if (frame.kind === FrameKind.HELLO) return hello(decodeControl(frame.body))

@@ -29,6 +29,7 @@ export class FakeBackend extends EventEmitter {
   /** Exit when stdin ends, as the real backend does. */
   exitOnEnd = true
   readonly requests: FakeRequest[] = []
+  readonly cancels: { id: number; reason: number }[] = []
   readonly signals: string[] = []
   private readonly parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
 
@@ -55,6 +56,11 @@ export class FakeBackend extends EventEmitter {
     this.send(FrameKind.RESPONSE, request.id, 0, { result })
   }
 
+  /** The HELLO reply; call it directly for a backend whose HELLO comes late (`hello = false`). */
+  sayHello(): void {
+    this.send(FrameKind.HELLO, 0, 0, { version: 2, generation: this.generation, pid: this.pid, runtime: '.NET fake', platform: 'fake OS', sqlClientVersion: '0', maxFrameBytes: 4 * 1024 * 1024, methods: backendMethods })
+  }
+
   send(kind: FrameKind, id: number, arg: number, value?: unknown): void {
     if (this.alive) this.stdout.write(encodeFrame(kind, id, arg, value === undefined ? undefined : encodeControl(value)))
   }
@@ -79,10 +85,11 @@ export class FakeBackend extends EventEmitter {
     if (!this.alive || frame.oversize) return
     if (frame.kind === FrameKind.HELLO) {
       this.generation = (decodeControl(frame.body) as { generation: number }).generation
-      if (this.hello) this.send(FrameKind.HELLO, 0, 0, { version: 2, generation: this.generation, pid: this.pid, runtime: '.NET fake', platform: 'fake OS', sqlClientVersion: '0', maxFrameBytes: 4 * 1024 * 1024, methods: backendMethods })
+      if (this.hello) this.sayHello()
       return
     }
     if (frame.kind === FrameKind.PING) { if (this.pong) this.send(FrameKind.PONG, 0, frame.arg); return }
+    if (frame.kind === FrameKind.CANCEL) { this.cancels.push({ id: frame.id, reason: frame.arg }); return }
     if (frame.kind !== FrameKind.REQUEST) return
     const { method, params } = decodeControl(frame.body) as { method: string; params: Record<string, unknown> }
     const request = { generation: this.generation, id: frame.id, method, params }

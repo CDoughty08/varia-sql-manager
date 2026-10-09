@@ -35,7 +35,8 @@ export function toExactArrayBuffer(body: Uint8Array): ArrayBuffer {
   return body.slice().buffer as ArrayBuffer
 }
 
-interface Stream { readonly rid: number; readonly generation: number; granted: number; received: number; handle?: ReadStream }
+/** `withheld` is credit the worker granted that the port's limits held back; it is passed on once there is room. */
+interface Stream { readonly rid: number; readonly generation: number; granted: number; received: number; withheld: number; handle?: ReadStream }
 
 /**
  * Main's end of the results port: one MessagePort per renderer load, through which the results worker reads pages and
@@ -86,7 +87,14 @@ export class ResultsPortHost {
     this.post({ t: 'backend', generation: this.generation, status: this.status })
   }
 
-  /** Renderer reload, crash or window close: the port and its streams end. Ownership stays with the generation. */
+  /** A new page load (reload, crash or window close): the port closes and earlier opens stop counting, so the rate
+   *  limit applies to reopens within one load. */
+  reset(): void {
+    this.close()
+    this.opens = []
+  }
+
+  /** The port and its streams end. Ownership stays with the generation. */
   close(): void {
     const port = this.port
     this.port = undefined
@@ -153,13 +161,15 @@ export class ResultsPortHost {
     if (this.streams.size + this.closing >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     if (request.generation !== this.generation || this.backend.readyGeneration() !== request.generation || !this.owned.has(request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const credit = Math.min(request.credit, Math.max(wire.credit.min, this.limits.perPort - this.outstanding()))
-    const stream: Stream = { rid, generation: request.generation, granted: credit, received: 0 }
+    const stream: Stream = { rid, generation: request.generation, granted: credit, received: 0, withheld: 0 }
     this.streams.set(rid, stream)
     const port = this.port
     const sink: StreamSink = {
       data: (seq, body) => {
         stream.received += body.byteLength
-        if (this.streams.get(rid) === stream) this.post({ t: 'page', rid, seq, body: toExactArrayBuffer(new Uint8Array(body)) })
+        if (this.streams.get(rid) !== stream) return
+        this.post({ t: 'page', rid, seq, body: toExactArrayBuffer(new Uint8Array(body)) })
+        this.grantWithheld()
       }
     }
     stream.handle = this.backend.read(request.generation, { resultId: request.resultId, firstRow: request.firstRow, maxRows: request.maxRows }, sink, credit)
@@ -167,21 +177,35 @@ export class ResultsPortHost {
       if (this.streams.get(rid) !== stream || this.port !== port) return
       this.streams.delete(rid)
       this.post({ t: 'end', rid, ok: true, result: result as ResultsReadResult })
+      this.grantWithheld()
     }, error => {
       if (this.streams.get(rid) !== stream || this.port !== port) return
       this.streams.delete(rid)
       this.fail(rid, error)
+      this.grantWithheld()
     })
   }
 
-  /** Credit from the worker, after it cached a page; clamped to what the stream and the port may have outstanding. */
+  /** Credit from the worker, after it cached a page; clamped to what the stream and the port may have outstanding. The
+   *  worker grants only when a page arrives, so what the limits hold back is kept and passed on as room frees up:
+   *  otherwise a stream left without credit would never receive another page. */
   private credit(rid: number, bytes: number): void {
     const stream = this.streams.get(rid)
     if (!stream?.handle) return
-    const grant = Math.min(bytes, this.limits.perStream - (stream.granted - stream.received), this.limits.perPort - this.outstanding())
-    if (grant < 1) return
+    stream.withheld = Math.min(this.limits.perStream, stream.withheld + bytes)
+    this.grant(stream)
+  }
+
+  private grant(stream: Stream): void {
+    const grant = Math.min(stream.withheld, this.limits.perStream - (stream.granted - stream.received), this.limits.perPort - this.outstanding())
+    if (!(grant >= 1) || !stream.handle) return
+    stream.withheld -= grant
     stream.granted += grant
     stream.handle.credit(grant)
+  }
+
+  private grantWithheld(): void {
+    for (const stream of this.streams.values()) if (stream.withheld > 0) this.grant(stream)
   }
 
   private closeResults(request: Extract<PortRequest, { t: 'close' }>): void {

@@ -201,6 +201,55 @@ describe('ResultClient', () => {
     await expect(handle.getWindow(0, 5)).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
   })
 
+  it('forgets released results and their windows, and every result of an earlier generation', async () => {
+    const { client, worker, handOver, serve } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handles = [3, 4, 5].map(resultId => client.open(descriptor({ resultId })))
+    const pending = handles[0].getWindow(0, 10)
+    await settle()
+    serve()
+    await pending
+    expect(handles[0].peekWindow(0, 10)).toBeDefined()
+    expect(client.trackedResults).toBe(3)
+    const closing = client.release([handles[0].key, handles[1].key])
+    await settle()
+    worker().toWorker({ t: 'end', rid: worker().fromWorker.find(request => request.t === 'close')!.rid, ok: true, result: { closed: 2, usedBytes: 0 } })
+    await closing
+    expect(client.trackedResults).toBe(1)
+    expect(handles[0].getSnapshot().state).toBe('released')
+    expect(handles[0].peekWindow(0, 10)).toBeUndefined()
+    worker().toWorker({ t: 'backend', generation: 2, status: 'ready' })
+    await settle()
+    expect(client.trackedResults).toBe(0)
+    expect(handles[2].getSnapshot().state).toBe('lost')
+    client.open(descriptor({ resultId: 6 }))
+    expect(client.trackedResults).toBe(0)
+  })
+
+  it('bounds the text of the windows a result remembers', async () => {
+    const workers: FakeWorker[] = []
+    const window = new FakeWindow()
+    const client = new ResultClient({ api: { openResultsPort: async () => ({ ok: true, value: undefined }) }, window, createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker }, windowCacheCharacters: 12 })
+    window.dispatch({ source: window, data: { type: 'varia:results-port' }, ports: [new MessageChannel().port1] })
+    await client.ready()
+    const handle = client.open(descriptor())
+    for (const first of [0, 4, 8]) {
+      const pending = handle.getWindow(first, 4)
+      await settle()
+      for (const request of workers[0].fromWorker.splice(0)) {
+        if (request.t !== 'read') continue
+        const body = encodePage({ resultId: 3, firstRow: request.firstRow, columns: [{ wire: 'text' }], rows: Array.from({ length: request.maxRows }, (_, index) => ['row ' + (request.firstRow + index)]) })
+        workers[0].toWorker({ t: 'page', rid: request.rid, seq: 1, body: body.buffer as ArrayBuffer })
+        workers[0].toWorker({ t: 'end', rid: request.rid, ok: true, result: { nextRow: request.firstRow + request.maxRows, rowsAvailable: 10, complete: true, pages: 1, rows: request.maxRows } })
+      }
+      await pending
+    }
+    // Each 4-row window holds 20 characters: only the latest stays.
+    expect([0, 4, 8].map(first => handle.peekWindow(first, 4) !== undefined)).toEqual([false, false, true])
+  })
+
   it('cancels a window when its signal aborts', async () => {
     const { client, worker, handOver } = fixture()
     handOver()

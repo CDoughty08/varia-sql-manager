@@ -137,8 +137,8 @@ export class BackendConnection {
   private readonly pending = new Map<number, Pending>()
   private readonly abandoned = new Set<number>()
   private readonly lossListeners: ((loss: Loss) => void)[] = []
-  /** Frames written before HELLO completes wait here: nothing but HELLO is written until then. */
-  private readonly queue: { frame: Uint8Array; sensitive: boolean }[] = []
+  /** Frames written before HELLO completes wait here: nothing but HELLO is written until then. `id` marks a REQUEST. */
+  private readonly queue: { frame: Uint8Array; sensitive: boolean; id?: number }[] = []
   private readonly exited: Promise<void>
   private readonly packaged: boolean
   private readonly stderrLines: string[] = []
@@ -251,7 +251,7 @@ export class BackendConnection {
     this.pending.set(id, pending)
     const backstopMs = o.backstopMs ?? 0
     if (backstopMs > 0) pending.timer = this.clock.setTimeout(() => this.backstop(pending, backstopMs), backstopMs)
-    this.write(frame, sensitive)
+    this.write(frame, sensitive, id)
     return { id, done }
   }
 
@@ -385,7 +385,7 @@ export class BackendConnection {
     if (pending) {
       this.settle(pending)
       this.abandon(pending.id)
-      this.write(encodeFrame(FrameKind.CANCEL, pending.id, cancelReasons.consumerGone), false)
+      if (!this.unqueue(pending.id)) this.write(encodeFrame(FrameKind.CANCEL, pending.id, cancelReasons.consumerGone), false)
       pending.reject(new BackendError('STREAM_PROTOCOL', sentences.invalid))
     }
     if (++this.violations >= this.limits.containedViolations) this.fatal(this.violations + ' contained violations')
@@ -396,7 +396,7 @@ export class BackendConnection {
       if (this.pending.get(pending.id) !== pending) return
       this.settle(pending)
       this.abandon(pending.id)
-      this.write(encodeFrame(FrameKind.CANCEL, pending.id, cancelReasons.deadline), false)
+      if (!this.unqueue(pending.id)) this.write(encodeFrame(FrameKind.CANCEL, pending.id, cancelReasons.deadline), false)
       pending.reject(new BackendError('TIMEOUT', sentences.timeout(Math.round(ms / 1000))))
     })
   }
@@ -421,11 +421,22 @@ export class BackendConnection {
     }, this.limits.pingMs)
   }
 
-  private write(frame: Uint8Array, sensitive: boolean): void {
+  private write(frame: Uint8Array, sensitive: boolean, id?: number): void {
     if (this.loss) { if (sensitive) frame.fill(0); return }
     if (this.hello) { this.writeNow(frame, sensitive); return }
-    this.queue.push({ frame, sensitive })
+    this.queue.push({ frame, sensitive, id })
     this.queuedBytes += frame.length
+  }
+
+  /** Drops a request main gave up on while it still waited for HELLO, so the backend never sees it; false when it was
+   *  already written. */
+  private unqueue(id: number): boolean {
+    const index = this.queue.findIndex(queued => queued.id === id)
+    if (index < 0) return false
+    const [queued] = this.queue.splice(index, 1)
+    this.queuedBytes -= queued.frame.length
+    if (queued.sensitive) queued.frame.fill(0)
+    return true
   }
 
   private writeNow(frame: Uint8Array, sensitive: boolean): void {

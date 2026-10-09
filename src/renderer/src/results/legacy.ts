@@ -42,8 +42,12 @@ export async function legacyExecute(api: Pick<VariaApi, 'execute'>, results: Res
     if (failure === undefined) {
       const handle = results.open(descriptor)
       try {
+        // Every page a window covers stays in the worker until the window is answered, so a window is sized to fit
+        // half its cache: wide or large rows are read a few at a time.
+        const rowBytes = descriptor.rowsStored > 0 ? descriptor.bytesStored / descriptor.rowsStored : 0
+        const windowRows = Math.max(1, Math.min(wire.worker.windowRows, Math.floor(wire.worker.cacheBytes / 2 / Math.max(1, rowBytes))))
         for (let first = 0; first < descriptor.rowsAvailable;) {
-          const fit = Math.min(descriptor.rowsAvailable - first, Math.floor((legacyLimits.cells - cells) / width), wire.worker.windowRows)
+          const fit = Math.min(descriptor.rowsAvailable - first, Math.floor((legacyLimits.cells - cells) / width), windowRows)
           if (fit <= 0 || characters >= legacyLimits.characters) { setHit = true; break }
           const window = await handle.getWindow(first, fit, { maxCellChars, textBudget: legacyLimits.characters - characters })
           if (window.count === 0) break

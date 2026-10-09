@@ -34,6 +34,9 @@ let resultsPort: ResultsPortHost | undefined
 const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 const files = new SqlFileStore()
 let closeApproved = false
+/** The app is quitting (before-quit went ahead), so a closed window needs no new backend. */
+let quitting = false
+let backendStopped = false
 let openMenu: Menu | null = null
 let layouts: LayoutStore
 let appearance: AppearanceService
@@ -78,14 +81,15 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
   })
 }
 
-/** A reloaded or crashed renderer can no longer address its sessions, so end them with the backend process. */
-function resetRendererState(): void {
+/** A reloaded or crashed renderer can no longer address its sessions, so end them with the backend process. Without
+ *  `relaunch` (the app is quitting) no new backend starts. */
+function resetRendererState(relaunch = true): void {
   rendererReady = false
   openMenu = null
   menuBridge.reset()
   endPreview()
-  resultsPort?.close()
-  void backend?.restart('reload')
+  resultsPort?.reset()
+  void (relaunch ? backend?.restart('reload') : backend?.stop())
   files.clear()
 }
 
@@ -236,11 +240,12 @@ function createWindow(): void {
     if (closeApproved) return
     if (rendererCanConfirm(window)) { event.preventDefault(); command('window.close'); return }
     // A crashed, hung, or unmounted workbench cannot run the unsaved-query prompts, so never trap the user.
-    if (rendererUnresponsive && dialog.showMessageBoxSync(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: 'The workbench is not responding. Unsaved queries will be lost.', buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }) !== 0) { event.preventDefault(); return }
+    if (rendererUnresponsive && dialog.showMessageBoxSync(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: 'The workbench is not responding. Unsaved queries will be lost.', buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }) !== 0) { quitting = false; event.preventDefault(); return }
     closeApproved = true
   })
-  // A closed window can no longer address its sessions (macOS keeps the app running after the last window closes).
-  window.on('closed', () => { mainWindow = null; resetRendererState() })
+  // A closed window can no longer address its sessions. Only macOS keeps the app running after its last window closes,
+  // so only there does a later window need a new backend.
+  window.on('closed', () => { mainWindow = null; resetRendererState(process.platform === 'darwin' && !quitting) })
 }
 
 app.whenReady().then(async () => {
@@ -382,7 +387,14 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
-  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); command('window.close') }
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); command('window.close'); return }
+  quitting = true
 })
-// A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is certain.
-app.on('will-quit', () => { void backend?.stop() })
+// A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is
+// certain. Electron exits as soon as will-quit returns, so the exit waits for the bounded stop (stdin end, 2 s, then
+// kill): a backend that cannot act on EOF would otherwise outlive the app, holding its sessions and their locks.
+app.on('will-quit', event => {
+  if (backendStopped || !backend) return
+  event.preventDefault()
+  void backend.stop().finally(() => { backendStopped = true; app.exit(0) })
+})

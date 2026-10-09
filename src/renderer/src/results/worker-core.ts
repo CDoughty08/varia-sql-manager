@@ -42,13 +42,36 @@ interface Waiter {
 
 const resultOf = (key: ResultKey): string => `${key.generation}:${key.resultId}`
 
+/** A page's firstRow from its header (array(7) of uints: version, resultId, firstRow, …), or undefined when the
+ *  header is not in that canonical form; decodePage validates everything properly. */
+function pageFirstRow(body: ArrayBuffer): number | undefined {
+  const bytes = new Uint8Array(body, 0, Math.min(body.byteLength, 32))
+  let at = 1
+  const uint = (): number | undefined => {
+    const tag = bytes[at]
+    if (tag === undefined) return undefined
+    if (tag < 0x80) { at += 1; return tag }
+    const size = tag === 0xcc ? 1 : tag === 0xcd ? 2 : tag === 0xce ? 4 : tag === 0xcf ? 8 : 0
+    if (size === 0 || at + 1 + size > bytes.length) return undefined
+    let value = 0
+    for (let index = 1; index <= size; index++) value = value * 256 + bytes[at + index]
+    at += 1 + size
+    return value
+  }
+  if (bytes[0] !== 0x97) return undefined
+  uint()
+  uint()
+  return uint()
+}
+
 /**
  * Pages are cached per (generation, resultId, firstRow) in an LRU bounded at 64 MiB and 512 pages; pages that a pending
- * window still needs are never evicted. Missing rows are fetched with one read per contiguous gap (4 MiB of credit),
- * reads in flight are shared, and a read nobody waits for any more is cancelled. Credit is granted only after a page
- * is decoded and cached, so a slow UI slows the stream, never the query. A page that fails validation ends its read
- * with PAGE_INVALID and is not cached; the worker keeps going. A new backend generation fails everything pending with
- * RESULT_UNAVAILABLE and drops the older generations' pages.
+ * window still needs are never evicted, so once those alone pass 64 MiB, windows that already have rows answer with
+ * them (a shorter window, as when rows are not sealed yet). Missing rows are fetched with one read per contiguous gap
+ * (4 MiB of credit); rows a read in flight will bring are not read again, and a read nobody waits for any more is
+ * cancelled. Credit is granted only after a page is decoded and cached, so a slow UI slows the stream, never the query.
+ * A page that fails validation ends its read with PAGE_INVALID and is not cached; the worker keeps going. A new backend
+ * generation fails everything pending with RESULT_UNAVAILABLE and drops the older generations' pages.
  */
 export class ResultsWorkerCore {
   private readonly post: (message: WorkerResponse, transfer?: Transferable[]) => void
@@ -148,12 +171,24 @@ export class ResultsWorkerCore {
     if (!this.port) return this.error(id, 'PORT_CLOSED', 'The results connection is not open. Reload the workbench.')
     if (id === undefined) this.prefetches.add(waiter)
     else this.waiters.set(id, waiter)
+    // Rows a read in flight covers come with it, so they are not read (and sent through main) a second time.
+    const flying = [...this.reads.values()].filter(item => !item.cancelled && item.result === result).sort((a, b) => a.firstRow - b.firstRow)
     for (const [start, end] of gaps) {
-      for (let from = start; from < end; from += this.limits.readRows) {
-        const to = Math.min(end, from + this.limits.readRows)
-        const read = [...this.reads.values()].find(item => !item.cancelled && item.result === result && item.firstRow <= from && item.end >= to) ?? this.read(key, wires, from, to)
+      let from = start
+      while (from < end) {
+        const covering = flying.find(item => item.firstRow <= from && item.end > from)
+        if (covering) {
+          covering.waiters.add(waiter)
+          waiter.reads.add(covering)
+          from = covering.end
+          continue
+        }
+        const next = flying.find(item => item.firstRow > from)
+        const to = Math.min(end, from + this.limits.readRows, next ? next.firstRow : end)
+        const read = this.read(key, wires, from, to)
         read.waiters.add(waiter)
         waiter.reads.add(read)
+        from = to
       }
     }
   }
@@ -215,6 +250,12 @@ export class ResultsWorkerCore {
   private page(rid: number, body: ArrayBuffer): void {
     const read = this.reads.get(rid)
     if (!read || read.cancelled) return
+    // A page another read already brought is credited but not decoded again.
+    const firstRow = pageFirstRow(body)
+    if (firstRow !== undefined && this.cache.has(`${read.result}:${firstRow}`)) {
+      this.send({ t: 'credit', rid, bytes: body.byteLength })
+      return
+    }
     let view: PageView
     try {
       view = decodePage(body, read.wires.map(kind => ({ wire: kind })))
@@ -227,6 +268,20 @@ export class ResultsWorkerCore {
     }
     this.store(read, view, body.byteLength)
     this.send({ t: 'credit', rid, bytes: body.byteLength })
+    if (this.cacheBytes > this.limits.cacheBytes) this.shorten()
+  }
+
+  /** The cache is over its bound with pages that pending windows pin: windows that have rows answer with those now
+   *  (shorter windows), their other reads are cancelled, and their pages may then be evicted. */
+  private shorten(): void {
+    for (const waiter of [...this.waiters.values()]) {
+      if (this.cacheBytes <= this.limits.cacheBytes) return
+      if (this.covered(waiter.result, waiter.first, waiter.count) === 0) continue
+      const reads = [...waiter.reads]
+      waiter.settle()
+      for (const read of reads) this.abandon(read)
+      this.evict()
+    }
   }
 
   private abandonRead(read: Read, code: ErrorCode, message: string): void {

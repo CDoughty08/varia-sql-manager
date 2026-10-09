@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { BackendConnection } from '../src/main/backend/connection'
 import { BackendError } from '../src/main/backend/errors'
@@ -262,6 +263,19 @@ describe('real .NET sidecar frame handling', () => {
     expect(kinds.filter(kind => kind === FrameKind.RESPONSE)).toHaveLength(3)
     expect(kinds[0]).toBe(FrameKind.HELLO)
   })
+  it('keeps running when main stops reading stdout, and exits 0 only when stdin ends', async () => {
+    // .NET's console stdout swallows broken-pipe errors, so stdin EOF is the backend's only signal that main is gone.
+    const backend = raw()
+    await backend.hello()
+    backend.child.stdout.destroy()
+    for (let index = 0; index < 10; index++) {
+      backend.write(encodeFrame(FrameKind.PING, 0, index))
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    expect(backend.child.exitCode).toBeNull()
+    backend.child.stdin.end()
+    expect(await backend.exit).toBe(0)
+  })
   it('surfaces backend error codes on BackendError', async () => {
     const error = await call(backend(), 'tables.list', { connectionId: crypto.randomUUID(), database: 'master' }).catch(value => value)
     expect(error).toBeInstanceOf(BackendError)
@@ -328,6 +342,21 @@ describe('real .NET sidecar results (test hooks)', () => {
     expect(results.map(result => result.truncated)).toEqual(['queryBudget', 'queryBudget', 'globalBudget'])
     expect(results.every(result => result.rowsRead === 50_000 && result.rowsStored < 50_000 && result.rowsAvailable === result.rowsStored)).toBe(true)
     expect(await call(connection, 'results.close', { resultIds: results.map(result => result.resultId) })).toEqual({ closed: 3, usedBytes: 0 })
+  }, 60_000)
+
+  it.runIf(process.platform === 'linux')('returns the memory of closed results to the operating system', async () => {
+    const connection = backend({ ...hooks, VARIA_RESULT_BUDGET_BYTES: String(1024 * 1024 * 1024) })
+    await connection.ready
+    const rss = () => Number(/VmRSS:\s+(\d+)/.exec(readFileSync(`/proc/${connection.pid}/status`, 'utf8'))?.[1] ?? 0) * 1024
+    const stored = await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 1_000_000 }) as ResultDescriptor
+    const peak = rss()
+    expect(await call(connection, 'results.close', { resultIds: [stored.resultId] })).toEqual({ closed: 1, usedBytes: 0 })
+    let after = rss()
+    for (let waited = 0; waited < 5000 && peak - after < stored.bytesStored / 2; waited += 100) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      after = rss()
+    }
+    expect(peak - after, `RSS ${peak >> 20} MiB with ${stored.bytesStored >> 20} MiB stored, ${after >> 20} MiB after closing`).toBeGreaterThan(stored.bytesStored / 2)
   }, 60_000)
 
   it('answers PING while every metadata slot runs a synthetic result', async () => {

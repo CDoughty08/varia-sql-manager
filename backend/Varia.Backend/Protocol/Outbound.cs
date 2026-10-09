@@ -112,7 +112,8 @@ internal sealed class Outbound
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException)
         {
-            // Main is gone (EPIPE); nobody can read anything this process would still write.
+            // Nobody can read anything this process would still write. .NET's console stdout swallows broken-pipe errors,
+            // so in the application main's exit is seen as stdin EOF instead; this covers other streams and failures.
             lock (gate) completing = true;
             stopped.Set();
             onBroken();

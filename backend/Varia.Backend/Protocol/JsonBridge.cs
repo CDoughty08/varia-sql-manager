@@ -103,10 +103,11 @@ internal static class JsonBridge
         return buffer.WrittenSpan.ToArray();
     }
 
-    public static void FromJson(ReadOnlyMemory<byte> utf8, MsgPackWriter writer)
+    /// <summary><paramref name="depth"/> is where the value sits in the body: 1 inside a RESPONSE's { result } wrapper.</summary>
+    public static void FromJson(ReadOnlyMemory<byte> utf8, MsgPackWriter writer, int depth = 0)
     {
         using var document = JsonDocument.Parse(utf8);
-        FromJson(document.RootElement, writer);
+        FromJson(document.RootElement, writer, depth);
     }
 
     /// <summary>Integral numbers within ±(2^53 − 1) become integers and other numbers float64, matching the TypeScript

@@ -2,20 +2,24 @@ namespace Varia.Backend.Results;
 
 /// <summary>A query's EVENT frames (docs/ipc.md): resultSet.opened and resultSet.closed as they happen, progress at most
 /// 10 times a second (latest value wins), and stored messages every 100 ms or 64 KiB. It never blocks the query task:
-/// emitting only queues a frame, and progress is sampled by a timer. Disposing flushes, and nothing is emitted after
-/// that, so every event precedes the query's summary. The summary stays authoritative; progress and messages may be
-/// dropped when main is not reading.</summary>
+/// emitting only queues a frame, and progress is sampled by a timer, except that a sealed page is reported at once when
+/// no progress went out in the last 100 ms, so the first rows become readable without waiting for a tick. Disposing
+/// flushes, and nothing is emitted after that, so every event precedes the query's summary. The summary stays
+/// authoritative; progress and messages may be dropped when main is not reading.</summary>
 internal sealed class QueryEventSink : IDisposable
 {
     public const int MaxProgressResults = 64;
     private const int FlushCharacters = 64 * 1024;
     private const int IntervalMs = 100;
+    // Ticks run more often than events may go out, so a report held back by the 100 ms spacing is not late by a whole period.
+    private const int TickMs = 25;
     private readonly Action<object, bool>? emit;
     private readonly object gate = new();
     private readonly List<ResultSetBuffer> open = [];
     private readonly List<string> messages = [];
     private readonly Timer? timer;
     private int characters;
+    private long lastProgress, lastFlush;
     private volatile bool dirty;
     private bool stopped;
     private int completedBatches, totalBatches, batchNumber, iteration;
@@ -24,7 +28,7 @@ internal sealed class QueryEventSink : IDisposable
     public QueryEventSink(Action<object, bool>? emit)
     {
         this.emit = emit;
-        if (emit is not null) timer = new Timer(_ => Tick(), null, IntervalMs, IntervalMs);
+        if (emit is not null) timer = new Timer(_ => Tick(), null, TickMs, TickMs);
     }
 
     public void Opened(ResultSetBuffer set)
@@ -63,6 +67,17 @@ internal sealed class QueryEventSink : IDisposable
     /// <summary>Marks rows read since the last report.</summary>
     public void RowsChanged() => dirty = true;
 
+    /// <summary>A page was sealed: reported now unless progress went out in the last 100 ms (then at the next tick).</summary>
+    public void Sealed()
+    {
+        dirty = true;
+        if (emit is null || Environment.TickCount64 - Interlocked.Read(ref lastProgress) < IntervalMs) return;
+        lock (gate)
+        {
+            if (!stopped && dirty) EmitProgress();
+        }
+    }
+
     /// <summary>A message stored in the summary (QueryMessages enforces the caps).</summary>
     public void Message(string text)
     {
@@ -81,14 +96,16 @@ internal sealed class QueryEventSink : IDisposable
         lock (gate)
         {
             if (stopped) return;
-            FlushMessages();
-            if (dirty) EmitProgress();
+            var now = Environment.TickCount64;
+            if (now - lastFlush >= IntervalMs) FlushMessages();
+            if (dirty && now - Interlocked.Read(ref lastProgress) >= IntervalMs) EmitProgress();
         }
     }
 
     private void FlushMessages()
     {
         if (messages.Count == 0) return;
+        lastFlush = Environment.TickCount64;
         Emit(new { Type = "messages", Messages = messages.ToArray() }, true);
         messages.Clear();
         characters = 0;
@@ -97,6 +114,7 @@ internal sealed class QueryEventSink : IDisposable
     private void EmitProgress()
     {
         dirty = false;
+        Interlocked.Exchange(ref lastProgress, Environment.TickCount64);
         var results = open.Skip(Math.Max(0, open.Count - MaxProgressResults)).Select(set => set.Progress())
             .Select(item => new { item.ResultId, item.RowsRead, item.RowsStored, item.RowsAvailable, item.BytesStored }).ToArray();
         Emit(new { Type = "progress", CompletedBatches = completedBatches, TotalBatches = totalBatches, BatchNumber = batchNumber, Iteration = iteration, Results = results }, true);

@@ -194,7 +194,7 @@ function strHeaderBytes(length: number): number { return length < 32 ? 1 : lengt
 
 /** Encodes a JSON-shaped value (null, booleans, numbers, strings, arrays, plain objects) canonically. */
 export function encodeControl(value: unknown, limits: ControlLimits = controlLimits): Uint8Array {
-  const writer = new MsgPackWriter()
+  const writer = new MsgPackWriter(1024)
   writeControl(writer, value, limits, 0)
   return writer.finish()
 }
@@ -230,13 +230,18 @@ function writeControl(writer: MsgPackWriter, value: unknown, limits: ControlLimi
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) throw new EncodeError('TYPE')
   const record = value as Record<string, unknown>
-  const keys = Object.keys(record).filter(key => record[key] !== undefined)
-  if (keys.length > limits.maxMapEntries) throw new EncodeError('LIMIT')
-  writer.mapHeader(keys.length)
-  for (const key of keys) {
+  const keys = Object.keys(record)
+  let count = keys.length
+  for (let i = 0; i < keys.length; i++) if (record[keys[i]] === undefined) count--
+  if (count > limits.maxMapEntries) throw new EncodeError('LIMIT')
+  writer.mapHeader(count)
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]
+    const item = record[key]
+    if (item === undefined) continue
     if (forbiddenKeys.has(key)) throw new EncodeError('KEY_FORBIDDEN')
     if (writer.string(key) > limits.maxKeyBytes) throw new EncodeError('KEY_LENGTH')
-    writeControl(writer, record[key], limits, depth + 1)
+    writeControl(writer, item, limits, depth + 1)
   }
 }
 
@@ -299,13 +304,37 @@ export class MsgPackCursor {
     const start = this.offset
     const end = start + length
     this.offset = end
-    if (length < 32) {
-      let text = ''
+    // Short ASCII strings (keys, names, codes) make up most control bodies: one fromCharCode call skips the decoder.
+    if (length <= 64) {
+      const bytes = this.bytes
       let i = start
-      for (; i < end && this.bytes[i] < 0x80; i++) text += String.fromCharCode(this.bytes[i])
-      if (i === end) return text
+      while (i < end && bytes[i] < 0x80) i++
+      if (i === end) return String.fromCharCode.apply(null, bytes.subarray(start, end) as unknown as number[])
     }
     try { return strictUtf8.decode(this.bytes.subarray(start, end)) } catch { throw new DecodeError('UTF8', at) }
+  }
+
+  /** A short ASCII map key, from a cache of recent keys when the same bytes were seen before (lists repeat their keys). */
+  key(length: number, at: number): string {
+    if (length > 16) return this.utf8(length, at)
+    this.need(length, at)
+    const bytes = this.bytes
+    const start = this.offset
+    let hash = length
+    for (let i = start; i < start + length; i++) {
+      if (bytes[i] >= 0x80) return this.utf8(length, at)
+      hash = (Math.imul(hash, 31) + bytes[i]) | 0
+    }
+    const slot = (hash >>> 0) & (keyCache.length - 1)
+    const cached = keyCache[slot]
+    if (cached !== undefined && cached.length === length) {
+      let same = true
+      for (let i = 0; i < length; i++) if (cached.charCodeAt(i) !== bytes[start + i]) { same = false; break }
+      if (same) { this.offset = start + length; return cached }
+    }
+    const key = this.utf8(length, at)
+    keyCache[slot] = key
+    return key
   }
 
   /** Any integer format; the value must be a safe integer. */
@@ -356,6 +385,7 @@ export class MsgPackCursor {
 }
 
 interface Level { array: unknown[] | undefined; map: Record<string, unknown> | undefined; key: string | undefined; remaining: number }
+const keyCache: (string | undefined)[] = new Array(512).fill(undefined)
 
 /**
  * Decodes a JSON-shaped control body: string keys only, no bin, no duplicate or prototype keys, finite numbers,
@@ -364,6 +394,8 @@ interface Level { array: unknown[] | undefined; map: Record<string, unknown> | u
  */
 export function decodeControl(bytes: Uint8Array, limits: ControlLimits = controlLimits): unknown {
   const c = new MsgPackCursor(bytes)
+  // One Level per depth, reused by every container at that depth (at most 16), not one per container.
+  const levels: Level[] = []
   const stack: Level[] = []
   for (;;) {
     const top = stack.length > 0 ? stack[stack.length - 1] : undefined
@@ -409,7 +441,12 @@ export function decodeControl(bytes: Uint8Array, limits: ControlLimits = control
       c.need(isMap ? count * 2 : count, at)
       const container = isMap ? {} : []
       if (count > 0) {
-        stack.push(isMap ? { array: undefined, map: container as Record<string, unknown>, key: undefined, remaining: count } : { array: container as unknown[], map: undefined, key: undefined, remaining: count })
+        const level = levels[stack.length] ??= { array: undefined, map: undefined, key: undefined, remaining: 0 }
+        level.array = isMap ? undefined : container as unknown[]
+        level.map = isMap ? container as Record<string, unknown> : undefined
+        level.key = undefined
+        level.remaining = count
+        stack.push(level)
         continue
       }
       value = container
@@ -435,7 +472,7 @@ function readKey(c: MsgPackCursor, limits: ControlLimits, map: Record<string, un
   const length = tag >= 0xa0 && tag <= 0xbf ? tag & 0x1f : tag === 0xd9 ? c.byte() : tag === 0xda ? c.u16() : tag === 0xdb ? c.u32() : -1
   if (length < 0) throw new DecodeError('KEY_TYPE', at)
   if (length > limits.maxKeyBytes) throw new DecodeError('KEY_LENGTH', at)
-  const key = c.utf8(length, at)
+  const key = c.key(length, at)
   if (forbiddenKeys.has(key)) throw new DecodeError('KEY_FORBIDDEN', at)
   if (Object.hasOwn(map, key)) throw new DecodeError('KEY_DUPLICATE', at)
   return key

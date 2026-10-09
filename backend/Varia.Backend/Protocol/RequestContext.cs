@@ -58,6 +58,10 @@ internal sealed class RequestContext : IDisposable
     /// <summary>The time left before the header deadline, or null when the request has none.</summary>
     public TimeSpan? Remaining => DeadlineMs == 0 ? null : TimeSpan.FromMilliseconds(Math.Max(0, DeadlineMs - (Environment.TickCount64 - started)));
 
+    /// <summary>Called when the handler's result could not be encoded (RESPONSE_TOO_LARGE), so whatever it created for main
+    /// to own, such as stored results, is released instead of being left without an owner.</summary>
+    public Action? Unsent { get; set; }
+
     /// <summary>True exactly once; the caller that wins writes the RESPONSE.</summary>
     public bool TrySettle() => Interlocked.Exchange(ref settled, 1) == 0;
 

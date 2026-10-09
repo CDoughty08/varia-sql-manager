@@ -1,5 +1,3 @@
-using System.Runtime;
-
 namespace Varia.Backend.Results;
 
 /// <summary>Why a result stopped storing rows. Execution always continues; only storage stops.</summary>
@@ -27,12 +25,13 @@ internal sealed class ResultStore
     public const long PageOverhead = 96;
     /// <summary>Reservations are taken in steps this size, so the global counter is not touched for every row.</summary>
     public const long ReserveStep = 256 * 1024;
-    private const long CompactAfterRelease = 64L * 1024 * 1024;
+    private const long CollectAfterRelease = 64L * 1024 * 1024;
     private readonly object gate = new();
     private readonly Dictionary<uint, ResultSetBuffer> sets = [];
     private readonly Func<(long Load, long Threshold)> memory;
     private uint nextId = 1;
     private long used;
+    private int collecting;
 
     /// <param name="memory">The operating system's memory load and its high-load threshold, in bytes.</param>
     public ResultStore(long globalBytes, long queryBytes, Func<(long Load, long Threshold)>? memory = null)
@@ -69,19 +68,29 @@ internal sealed class ResultStore
         return new QueryBudget(sessionId, connectionId);
     }
 
-    /// <summary>Opens a result set; its column metadata is charged at once (512 bytes plus 2 per name character and 64
-    /// per column), whatever the budget, because the descriptor exists either way.</summary>
-    public ResultSetBuffer Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires)
+    /// <summary>Opens a result set, reserving its column metadata (512 bytes plus 2 per name character and 64 per column)
+    /// like any other storage. Returns null, so the set is not kept, once the query has stopped storing or when the
+    /// metadata does not fit; the query then stops with that reason.</summary>
+    public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires)
     {
-        ResultSetBuffer set;
+        if (query.Stopped != TruncationReason.None) return null;
+        var metadata = 512 + columns.Sum(column => 2L * column.Name.Length + 64);
+        if (!TryReserve(query, metadata, false, out var reason))
+        {
+            query.Stop(reason);
+            return null;
+        }
         lock (gate)
         {
-            if (nextId == 0) throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
-            set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires);
+            if (nextId == 0)
+            {
+                Return(query, metadata);
+                throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
+            }
+            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata);
             sets[set.ResultId] = set;
+            return set;
         }
-        set.Charge(512 + columns.Sum(column => 2L * column.Name.Length + 64));
-        return set;
     }
 
     /// <summary>Reserves bytes for a query. Checks run in this order: the system's memory load (only when asked, at page
@@ -100,7 +109,7 @@ internal sealed class ResultStore
         return true;
     }
 
-    /// <summary>Charges bytes whatever the budget (metadata, and the few bytes by which a sealed page exceeds its rows' estimate).</summary>
+    /// <summary>Charges bytes whatever the budget: the few bytes by which a sealed page exceeds its rows' estimate.</summary>
     internal void Force(QueryBudget query, long bytes)
     {
         Interlocked.Add(ref used, bytes);
@@ -146,8 +155,23 @@ internal sealed class ResultStore
         }
         long freed = 0;
         foreach (var set in released) freed += set.Release();
-        // Large pages live on the large object heap; compact it once after a big release so the memory goes back.
-        if (freed > CompactAfterRelease) GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+        if (freed > CollectAfterRelease) Collect();
         return released.Count;
+    }
+
+    /// <summary>Pages are large arrays, which only a gen2 collection frees, and nothing else in the backend allocates enough
+    /// to trigger one: without it the process keeps its peak memory after results are closed and grows under store and
+    /// close churn. Releases that come together share one collection, off the caller's thread. Non-compacting while
+    /// results remain (a short pause); when the store is empty, an aggressive one also returns the freed memory to the
+    /// operating system.</summary>
+    private void Collect()
+    {
+        if (Interlocked.Exchange(ref collecting, 1) == 1) return;
+        _ = Task.Delay(100).ContinueWith(_ =>
+        {
+            Volatile.Write(ref collecting, 0);
+            if (UsedBytes == 0) GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            else GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);
+        }, TaskScheduler.Default);
     }
 }

@@ -144,6 +144,39 @@ describe('results worker core', () => {
     expect(core.cachedPages).toBe(3)
   })
 
+  it('answers a window whose pages outgrow the cache with the rows it has, instead of holding them all', () => {
+    const pageBytes = page(64, 64).byteLength
+    const { window, serve, core, reads, sent, answer } = fixture({ cacheBytes: Math.floor(pageBytes * 2.5) })
+    const id = window(0, 640)
+    serve(reads()[0].rid)
+    const result = answer(id)
+    expect(result?.type === 'window' && result.count).toBe(192)
+    expect(sent).toContainEqual({ t: 'cancel', rid: 1 })
+    expect(core.cachedBytes).toBeLessThanOrEqual(Math.floor(pageBytes * 2.5))
+    // The rest is read by the next window, as for rows not sealed yet.
+    const next = window(192, 448)
+    expect(reads().at(-1)).toMatchObject({ firstRow: 192 })
+    expect(answer(next)).toBeUndefined()
+  })
+
+  it('waits for rows a read in flight brings instead of reading them again, and decodes a repeated page once', () => {
+    const { window, reads, core, sent, answer } = fixture()
+    const first = window(0, 128)
+    const second = window(64, 128)
+    expect(reads().map(read => [read.firstRow, read.maxRows])).toEqual([[0, 128], [128, 64]])
+    const body = page(0, 64)
+    core.receive({ t: 'page', rid: 1, seq: 1, body })
+    core.receive({ t: 'page', rid: 1, seq: 2, body: page(64, 64) })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 128, rowsAvailable: 192, complete: false, pages: 2, rows: 128 } })
+    // A page that arrives again (a boundary page of an adjacent read) is credited but not cached twice.
+    core.receive({ t: 'page', rid: 2, seq: 1, body: page(64, 64) })
+    core.receive({ t: 'page', rid: 2, seq: 2, body: page(128, 64) })
+    core.receive({ t: 'end', rid: 2, ok: true, result: { nextRow: 192, rowsAvailable: 192, complete: true, pages: 2, rows: 128 } })
+    expect(core.cachedPages).toBe(3)
+    expect(sent.filter(request => request.t === 'credit')).toHaveLength(4)
+    expect([answer(first), answer(second)].map(result => result?.type === 'window' && result.count)).toEqual([128, 128])
+  })
+
   it('fails pending work when the backend generation changes, and refuses the old generation afterwards', () => {
     const { window, core, posted, serve, answer } = fixture()
     window(0, 64)

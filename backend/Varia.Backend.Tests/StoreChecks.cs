@@ -11,7 +11,8 @@ internal static class StoreChecks
     private static readonly IReadOnlyList<ResultColumn> W1Columns = [.. SyntheticRows.Columns("W1").Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))];
     private static readonly IReadOnlyList<WireKind> W1Wires = [.. SyntheticRows.Columns("W1").Select(column => column.Wire)];
 
-    private static ResultSetBuffer Open(ResultStore store, QueryBudget query, int index = 0) => store.Open(query, index, 1, 1, "rows", W1Columns, W1Wires);
+    private static ResultSetBuffer Open(ResultStore store, QueryBudget query, int index = 0) => store.Open(query, index, 1, 1, "rows", W1Columns, W1Wires)
+        ?? throw new InvalidOperationException("The result set was not kept.");
 
     /// <summary>Ingests synthetic W1 rows as a query would: rows past a failed reservation are counted, not stored.</summary>
     private static void Fill(ResultSetBuffer set, long first, long count)
@@ -81,17 +82,23 @@ internal static class StoreChecks
         set = Open(store, query);
         Fill(set, 0, 20_000);
         set.Complete();
-        var later = Open(store, query, 1);
-        Fill(later, 0, 10);
-        later.Complete();
+        var later = store.Open(query, 1, 1, 1, "rows", W1Columns, W1Wires);
         var truncated = set.Describe();
         check(truncated.Truncated == "queryBudget" && truncated.RowsRead == 20_000 && truncated.RowsStored < 20_000 && truncated.RowsStored == StoredRows(set) && truncated.RowsAvailable == truncated.RowsStored
-            && later.Describe() is { RowsRead: 10, RowsStored: 0, Truncated: "queryBudget" } && query.UsedBytes <= store.QueryBytes,
-            "one query stores at most half the budget: whole rows only, later sets of the query store nothing, and the reason is reported (" + truncated.RowsStored + " rows kept)");
+            && later is null && query.UsedBytes <= store.QueryBytes,
+            "one query stores at most half the budget: whole rows only, later sets of the query are not kept, and the reason is reported (" + truncated.RowsStored + " rows kept)");
         var other = Open(store, store.BeginQuery("s2", "c"));
         Fill(other, 0, 20_000);
         other.Complete();
         check(other.Describe() is { Truncated: "globalBudget", RowsStored: > 0 and < 20_000 } && store.UsedBytes <= store.GlobalBytes, "another query stops at the global budget");
+
+        // Column metadata is reserved like rows: a set whose metadata does not fit is not kept, and its query stops.
+        store = new ResultStore(64 * 1024, 64 * 1024);
+        query = store.BeginQuery("s", "c");
+        IReadOnlyList<ResultColumn> wide = [.. Enumerable.Range(0, 4096).Select(i => new ResultColumn("column_" + i, "int", "text"))];
+        var refused = store.Open(query, 0, 1, 1, "rows", wide, [.. wide.Select(_ => WireKind.Text)]);
+        check(refused is null && query.Stopped == TruncationReason.QueryBudget && store.UsedBytes == 0 && store.Count == 0 && store.Open(query, 1, 1, 1, "rows", W1Columns, W1Wires) is null,
+            "a result set whose column metadata exceeds the budget is not kept, and the query keeps no later sets");
 
         // Memory pressure is checked at each seal: the page just sealed is kept, nothing after it is stored.
         low = false;
@@ -125,8 +132,26 @@ internal static class StoreChecks
         check(store.ReleaseConnection("server-1") == 1 && store.Release(third.ResultId) && !store.Release(third.ResultId) && store.Count == 0 && store.UsedBytes == 0,
             "disconnecting and closing results return every byte to the budget");
 
+        Collection(check);
         Events(check);
         HostReads(check);
+    }
+
+    /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>
+    private static void Collection(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 30);
+        var set = Open(store, store.BeginQuery("s", "c"));
+        Fill(set, 0, 600_000);
+        set.Complete();
+        var held = GC.GetTotalMemory(false);
+        var collections = GC.CollectionCount(2);
+        var stored = store.UsedBytes;
+        store.Release(set.ResultId);
+        SpinWait.SpinUntil(() => GC.CollectionCount(2) > collections, 5000);
+        var after = GC.GetTotalMemory(false);
+        check(stored > 64L * 1024 * 1024 && GC.CollectionCount(2) > collections && held - after > stored / 2,
+            "releasing more than 64 MiB of results collects them (" + held / 1048576 + " MB held, " + after / 1048576 + " MB after)");
     }
 
     private static void Events(Action<bool, string> check)
@@ -137,6 +162,11 @@ internal static class StoreChecks
         using (var sink = new QueryEventSink((value, droppable) => { lock (events) events.Add((JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("type").GetString()!, droppable)); }))
         {
             sink.Opened(set);
+            Fill(set, 0, PageBuilder.FirstPageRows);
+            sink.Sealed();
+            int immediate;
+            lock (events) immediate = events.Count(item => item.Type == "progress");
+            check(set.RowsAvailable == PageBuilder.FirstPageRows && immediate == 1, "the first sealed page is reported at once, not at the next progress tick");
             sink.Progress(0, 1, 1, 1);
             for (var i = 0; i < 50; i++)
             {

@@ -89,6 +89,16 @@ describe('legacy results table', () => {
     expect(result.value.resultSets[0].truncated).toBe(true)
   })
 
+  it('sizes windows of large rows to fit the results worker cache', async () => {
+    const cells = results()
+    // 150 rows of about 2 MiB each (a large xml column): a window may cover at most half the worker's 64 MiB cache.
+    const large = descriptor(1, 150, { bytesStored: 150 * 2 * 1024 * 1024 })
+    const result = await legacyExecute(api({ ok: true, value: summary([large]) }), cells.client, options)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.value.resultSets[0].rows).toHaveLength(150)
+    expect(cells.windows.map(window => window.count)).toEqual([...Array.from({ length: 9 }, () => 16), 6])
+  })
+
   it('keeps the rows read before a failure and says some could not be loaded', async () => {
     const fixture = results()
     fixture.failWith((key, first) => key.resultId === 1 && first > 0 ? new Error('The results worker stopped. Try again.') : undefined)

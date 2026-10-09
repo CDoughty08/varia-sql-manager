@@ -77,7 +77,9 @@ interface ResultState {
   readonly wires: readonly WireKind[]
   snapshot: ResultSnapshot
   readonly listeners: Set<() => void>
-  readonly windows: Map<string, RowWindow>
+  /** Recent windows (peekWindow), oldest first, with their text length. */
+  readonly windows: Map<string, { window: RowWindow; characters: number }>
+  windowCharacters: number
   scheduled: boolean
 }
 interface Pending { resolve(message: WorkerResponse): void; reject(error: Error): void }
@@ -96,6 +98,7 @@ export class ResultClient implements Disposable {
   private readonly window: WindowLike
   private readonly now: () => number
   private readonly schedule: (callback: () => void) => void
+  private readonly windowCacheCharacters: number
   private readonly pending = new Map<number, Pending>()
   private readonly results = new Map<string, ResultState>()
   private readonly queryListeners = new Map<string, Set<(event: QueryEvent) => void>>()
@@ -112,8 +115,10 @@ export class ResultClient implements Disposable {
   private status: BackendStatus = 'starting'
   private disposed = false
 
-  constructor(o: { api: Pick<VariaApi, 'openResultsPort'>; createWorker: () => WorkerLike; window: WindowLike; now?: () => number; schedule?: (callback: () => void) => void }) {
+  /** `windowCacheCharacters` bounds the text of the windows each result remembers (default 4,000,000 characters). */
+  constructor(o: { api: Pick<VariaApi, 'openResultsPort'>; createWorker: () => WorkerLike; window: WindowLike; now?: () => number; schedule?: (callback: () => void) => void; windowCacheCharacters?: number }) {
     this.api = o.api
+    this.windowCacheCharacters = o.windowCacheCharacters ?? wire.worker.windowCharacters
     this.createWorker = o.createWorker
     this.window = o.window
     this.now = o.now ?? (() => Date.now())
@@ -128,6 +133,8 @@ export class ResultClient implements Disposable {
   /** Why results cannot be displayed, once the worker failed too often. */
   get failed(): string | undefined { return this.failure }
   get backendGeneration(): number { return this.generation }
+  /** Results this client still tracks: neither released nor from an earlier generation. */
+  get trackedResults(): number { return this.results.size }
   get backendStatus(): BackendStatus { return this.status }
 
   open(descriptor: ResultDescriptor): ResultHandle {
@@ -144,9 +151,10 @@ export class ResultClient implements Disposable {
       },
       getWindow: (first, count, o = {}) => this.fetchWindow(state, first, count, o),
       peekWindow: (first, count, colStart = 0, colEnd = state.columns.length) => {
-        const window = state.windows.get(`${first}:${count}:${colStart}:${colEnd}`)
-        if (window) { state.windows.delete(`${first}:${count}:${colStart}:${colEnd}`); state.windows.set(`${first}:${count}:${colStart}:${colEnd}`, window) }
-        return window
+        const cacheKey = `${first}:${count}:${colStart}:${colEnd}`
+        const entry = state.windows.get(cacheKey)
+        if (entry) { state.windows.delete(cacheKey); state.windows.set(cacheKey, entry) }
+        return entry?.window
       },
       prefetch: (first, count) => {
         if (state.snapshot.state === 'lost' || state.snapshot.state === 'released' || this.failure) return
@@ -182,12 +190,16 @@ export class ResultClient implements Disposable {
     for (const descriptor of summary.resultSets) this.update(this.state(descriptor), descriptor, true)
   }
 
-  /** Releases results in the backend (results.close); their pages leave the worker's cache. */
+  /** Releases results in the backend (results.close); their pages leave the worker's cache, and this client forgets
+   *  them (handles still report them released). */
   async release(keys: readonly ResultKey[]): Promise<void> {
     const byGeneration = new Map<number, number[]>()
     for (const key of keys) {
       const state = this.results.get(keyOf(key))
-      if (state) this.publish(state, { ...state.snapshot, state: state.snapshot.state === 'lost' ? 'lost' : 'released' })
+      if (state) {
+        this.publish(state, { ...state.snapshot, state: state.snapshot.state === 'lost' ? 'lost' : 'released' })
+        this.forget(state)
+      }
       byGeneration.set(key.generation, [...byGeneration.get(key.generation) ?? [], key.resultId])
     }
     for (const [generation, ids] of byGeneration) {
@@ -307,7 +319,17 @@ export class ResultClient implements Disposable {
     this.status = status
     if (generation === this.generation) return
     this.generation = generation
-    for (const state of this.results.values()) if (state.key.generation !== generation && state.snapshot.state !== 'lost') this.publish(state, { ...state.snapshot, state: 'lost' })
+    for (const state of [...this.results.values()]) {
+      if (state.key.generation === generation) continue
+      if (state.snapshot.state !== 'lost') this.publish(state, { ...state.snapshot, state: 'lost' })
+      this.forget(state)
+    }
+  }
+
+  private forget(state: ResultState): void {
+    if (this.results.get(keyOf(state.key)) === state) this.results.delete(keyOf(state.key))
+    state.windows.clear()
+    state.windowCharacters = 0
   }
 
   private queryEvent(queryId: string, event: QueryEvent): void {
@@ -326,12 +348,13 @@ export class ResultClient implements Disposable {
     const existing = this.results.get(keyOf(key))
     if (existing) return existing
     const state: ResultState = {
-      key, columns: descriptor.columns, wires: descriptor.columns.map(column => column.wire), listeners: new Set(), windows: new Map(), scheduled: false,
+      key, columns: descriptor.columns, wires: descriptor.columns.map(column => column.wire), listeners: new Set(), windows: new Map(), windowCharacters: 0, scheduled: false,
       snapshot: { rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'open', incomplete: false }
     }
-    this.results.set(keyOf(key), state)
     this.update(state, descriptor, false)
+    // A result of an earlier generation can never be read, so it is not tracked.
     if (this.generation !== 0 && key.generation !== this.generation) state.snapshot = { ...state.snapshot, state: 'lost' }
+    else this.results.set(keyOf(key), state)
     return state
   }
 
@@ -381,10 +404,20 @@ export class ResultClient implements Disposable {
     }), o.signal)
     if (response.type !== 'window') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
     const window: RowWindow = { first: response.first, count: response.count, colStart: response.colStart, colEnd: response.colEnd, text: response.text, flags: response.flags }
+    // A result released or lost meanwhile keeps nothing.
+    if (this.results.get(keyOf(state.key)) !== state) return window
     const cacheKey = `${start}:${Math.floor(count)}:${colStart}:${colEnd}`
-    state.windows.delete(cacheKey)
-    state.windows.set(cacheKey, window)
-    if (state.windows.size > windowCacheSize) state.windows.delete(state.windows.keys().next().value!)
+    let characters = 0
+    for (const text of window.text) characters += text.length
+    const replaced = state.windows.get(cacheKey)
+    if (replaced) { state.windows.delete(cacheKey); state.windowCharacters -= replaced.characters }
+    state.windows.set(cacheKey, { window, characters })
+    state.windowCharacters += characters
+    while (state.windows.size > windowCacheSize || (state.windowCharacters > this.windowCacheCharacters && state.windows.size > 1)) {
+      const [oldest, entry] = state.windows.entries().next().value!
+      state.windows.delete(oldest)
+      state.windowCharacters -= entry.characters
+    }
     return window
   }
 }

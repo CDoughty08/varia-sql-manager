@@ -24,6 +24,8 @@ internal sealed class SqlService : IRequestDispatcher
     public const string SynthesizeMethod = "debug.results.synthesize";
     private const long MaxSafeInteger = 9_007_199_254_740_991;
     private const long MemoryReportStep = 64L * 1024 * 1024;
+    // The summary must fit the 16 MiB response limit: descriptors get 12 MiB, messages (1,000,000 characters) the rest.
+    private const long MaxSummaryDescriptorBytes = 12L * 1024 * 1024;
 
     private readonly ConcurrentDictionary<string, string> connections = new();
     private readonly ConcurrentDictionary<string, RunningQuery> queries = new();
@@ -298,7 +300,10 @@ internal sealed class SqlService : IRequestDispatcher
         var iteration = 0;
         var totalBatches = batches.Sum(batch => batch.RepeatCount);
         long storedRows = 0;
-        var discardedSets = 0;
+        // Sets past maxResultSets, sets whose descriptors would not fit in the summary, and sets after the budget stopped.
+        int overflowSets = 0, oversizeSets = 0, budgetSets = 0;
+        long descriptorBytes = 0;
+        QueryBudget? budget = null;
         long recordsAffected = -1;
         QueryFailure? failure = null;
         var status = "completed";
@@ -333,7 +338,8 @@ internal sealed class SqlService : IRequestDispatcher
             var text = string.Join(Environment.NewLine, lines);
             return text.Length > 16384 ? text[..16384] + "…" : text;
         }
-        string Stopped(string reason) => errors.Count == 0 ? reason : reason + Environment.NewLine + ErrorText([]);
+        // The reason leads, and the whole text stays under the same cap as any other error text.
+        string Stopped(string reason) => errors.Count == 0 ? reason : ErrorText([reason]);
 
         try
         {
@@ -341,7 +347,7 @@ internal sealed class SqlService : IRequestDispatcher
             entered = session.TryEnter();
             if (!entered) throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
             // This query now owns the session, so the session's earlier results are released before any new row is stored.
-            var budget = store.BeginQuery(args.SessionId, args.ConnectionId);
+            budget = store.BeginQuery(args.SessionId, args.ConnectionId);
             var connection = session.Connection;
             connection.FireInfoMessageEventOnUserErrors = false;
             connection.InfoMessage += onInfo;
@@ -375,15 +381,20 @@ internal sealed class SqlService : IRequestDispatcher
                         reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, token);
                         do
                         {
-                            var keep = reader.FieldCount > 0 && sets.Count < args.MaxResultSets;
-                            if (reader.FieldCount > 0 && !keep) discardedSets++;
                             ColumnPlan? plan = null;
-                            if (keep)
+                            if (reader.FieldCount > 0)
                             {
-                                plan = ColumnPlan.From(reader);
-                                currentSet = store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires);
-                                sets.Add(currentSet);
-                                events.Opened(currentSet);
+                                if (sets.Count >= args.MaxResultSets) overflowSets++;
+                                else if (oversizeSets > 0) oversizeSets++;
+                                else if ((plan = ColumnPlan.From(reader)).DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
+                                else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires) is { } opened)
+                                {
+                                    descriptorBytes += plan.DescriptorBytes;
+                                    currentSet = opened;
+                                    sets.Add(opened);
+                                    events.Opened(opened);
+                                }
+                                else { budgetSets++; plan = null; }
                             }
                             while (true)
                             {
@@ -392,7 +403,10 @@ internal sealed class SqlService : IRequestDispatcher
                                 // pages after 200 ms without a row, so a slow statement's rows become readable.
                                 if (!read.IsCompleted && currentSet?.SealDelay is { } delay
                                     && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
+                                {
                                     currentSet.Seal();
+                                    events.Sealed();
+                                }
                                 if (!await read) break;
                                 if (currentSet is null) continue;
                                 currentSet.CountRow();
@@ -401,9 +415,11 @@ internal sealed class SqlService : IRequestDispatcher
                                 var builder = currentSet.BeginRow();
                                 if (builder is null) continue;
                                 int truncatedCells;
-                                try { truncatedCells = plan!.ReadRow(reader, builder, messages.Add); }
+                                try { truncatedCells = plan!.ReadRow(reader, builder, messages.Add, token); }
                                 catch { currentSet.AbortRow(); throw; }
+                                var sealedBefore = currentSet.SealedPages;
                                 if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
+                                if (currentSet.SealedPages != sealedBefore) events.Sealed();
                             }
                             if (currentSet is not null)
                             {
@@ -484,14 +500,17 @@ internal sealed class SqlService : IRequestDispatcher
         var output = messages.Snapshot();
         var descriptors = sets.Select(set => set.Describe()).ToList();
         var reasons = descriptors.Select(set => set.Truncated).ToHashSet();
+        if (budget?.Stopped is { } stopped and not TruncationReason.None) reasons.Add(ResultSetBuffer.Name(stopped));
         if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) output.Add("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
             output.Add("Results were truncated because the result memory budget (" + (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
         if (reasons.Contains("systemMemory")) output.Add("Results were truncated because the computer is low on memory. Execution continued.");
-        if (discardedSets > 0) output.Add("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString(CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
+        if (overflowSets > 0) output.Add("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString(CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
+        if (oversizeSets > 0) output.Add(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
         if (failure is not null && batchNumber > 0) output.Add("Stopped at batch " + batchNumber + ", repetition " + iteration + "; " + completed + " of " + totalBatches + " batch executions completed.");
-        return new(descriptors, discardedSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
+        if (context is not null) context.Unsent = () => { foreach (var set in descriptors) store.Release(set.ResultId); };
+        return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
             totalBatches, database, messages.Truncated, new ResultBudget(store.UsedBytes, store.GlobalBytes, store.QueryBytes));
     }
 
@@ -535,7 +554,8 @@ internal sealed class SqlService : IRequestDispatcher
         if (!SyntheticRows.Shapes.Contains(args.Shape) || args.Rows is < 1 or > 5_000_000) throw new RequestException("INVALID_PARAMS", "Shape must be W1, B1, or N1 with 1 to 5,000,000 rows.");
         var columns = SyntheticRows.Columns(args.Shape);
         var set = store.Open(store.BeginQuery("debug:" + Guid.NewGuid(), "debug"), 0, 1, 1, "rows",
-            [.. columns.Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))], [.. columns.Select(column => column.Wire)]);
+            [.. columns.Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))], [.. columns.Select(column => column.Wire)])
+            ?? throw new RequestException("BACKEND_ERROR", "The result memory budget is full.");
         try
         {
             for (long row = 0; row < args.Rows; row++)

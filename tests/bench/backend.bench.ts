@@ -103,8 +103,12 @@ async function pipeline(shape: 'W1' | 'B1', rows: number, o: { windowRows: numbe
     expect(result.rows).toBe(rows)
     expect(result.cells).toBe(rows * descriptor.columns.length)
     expect(result.cut).toBe(0)
-    expect(await supervisor.request('results.close', { resultIds: [descriptor.resultId] })).toMatchObject({ closed: 1 })
-    return { ...result, descriptor, eventLoopP99Ms: delay.percentile(99) / 1e6, pageBytes: posted.pageBytes, distinctBytes: posted.distinctBytes }
+    // Closing an id that was never issued closes nothing and reports the budget in use, so the difference is what this
+    // result was charged: pages, their bookkeeping and the column metadata.
+    const before = await supervisor.request('results.close', { resultIds: [2 ** 32 - 1] })
+    const closed = await supervisor.request('results.close', { resultIds: [descriptor.resultId] })
+    expect(closed).toMatchObject({ closed: 1 })
+    return { ...result, descriptor, eventLoopP99Ms: delay.percentile(99) / 1e6, pageBytes: posted.pageBytes, distinctBytes: posted.distinctBytes, chargedBytes: before.usedBytes - closed.usedBytes }
   } finally {
     await worker.terminate()
   }
@@ -118,7 +122,8 @@ it('streams 500,000 W1 rows from the store into the results worker', async () =>
     { id: 'node.w1.rowsPerSecond', value: w1.rows / (w1.elapsedMs / 1000), unit: 'rows/s', detail },
     { id: 'node.w1.mbPerSecond', value: mbPerSecond(w1.distinctBytes, w1.elapsedMs), unit: 'MB/s', detail },
     { id: 'node.w1.eventLoopP99Ms', value: w1.eventLoopP99Ms, unit: 'ms', detail: 'main thread, monitorEventLoopDelay p99' },
-    { id: 'node.storedPerWire', value: w1.descriptor.bytesStored / w1.distinctBytes, unit: '×', detail: `${w1.descriptor.bytesStored} bytes stored for ${w1.distinctBytes} bytes of distinct pages` }
+    { id: 'node.w1.sentPerDistinct', value: w1.pageBytes / w1.distinctBytes, unit: '×', detail: `${w1.pageBytes} page bytes sent for ${w1.distinctBytes} bytes of distinct pages` },
+    { id: 'node.storedPerWire', value: w1.chargedBytes / w1.distinctBytes, unit: '×', detail: `${w1.chargedBytes} bytes charged to the budget for ${w1.distinctBytes} bytes of distinct pages` }
   )
 })
 
