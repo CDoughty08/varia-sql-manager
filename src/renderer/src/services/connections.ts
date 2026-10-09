@@ -20,6 +20,8 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   get(id: string): LiveConnection | undefined { return this.getSnapshot().find(connection => connection.id === id) }
   /** Connections that can still run queries. */
   live(): LiveConnection[] { return this.getSnapshot().filter(connection => !connection.lost) }
+  /** The connection is still there and was not lost with its backend generation. */
+  isLive(id: string): boolean { const connection = this.get(id); return !!connection && !connection.lost }
   add(info: ConnectionInfo, options: ConnectionOptions): void { this.publish([...this.getSnapshot(), this.entry(info, options)]) }
   /** After a reconnect, the new connection takes the lost one's place in Object Explorer. */
   replace(oldId: string, info: ConnectionInfo, options: ConnectionOptions): void {

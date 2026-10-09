@@ -76,7 +76,7 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('connection.connect', { run: () => host.showConnect() }),
     // From a server node's menu, that server; otherwise the user picks one.
     commands.register('connection.disconnect', {
-      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!!connections.get(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (connections.isLive(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
       run: args => {
         const node = explorerNodeOf(args)
         if (node?.kind === 'server') return host.disconnect(node.connectionId)

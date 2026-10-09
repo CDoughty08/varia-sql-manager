@@ -339,6 +339,27 @@ describe('Object Explorer commands', () => {
     await running.finish()
     expect(commands.isEnabled('connection.disconnect', node)).toBe(true)
   })
+  it('leave a server lost with a backend restart alone, even when the restart comes while a command waits', async () => {
+    const { commands, documents, api, connections } = connected()
+    const columns = deferred<Awaited<ReturnType<typeof api.tableColumns>>>(), script = deferred<Awaited<ReturnType<typeof api.scriptTable>>>()
+    api.tableColumns.mockReturnValueOnce(columns.promise)
+    api.scriptTable.mockReturnValueOnce(script.promise)
+    const selecting = commands.execute('explorer.selectTopRows', orders, 'menu'), scripting = commands.execute('explorer.scriptCreateToNewQuery', orders, 'menu')
+    // The backend restarts: server-a's generation is gone, and Object Explorer shows it as lost.
+    api.push({ status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 1, queries: 0 }, retryInMs: 0 })
+    expect(connections.get('server-a')).toMatchObject({ lost: true })
+    columns.resolve({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }], truncated: false } })
+    script.resolve({ ok: true, value: { sql: 'CREATE TABLE [dbo].[Orders] (Id int);' } })
+    await Promise.all([selecting, scripting])
+    expect(documents.getSnapshot().documents).toHaveLength(0)
+    expect(api.execute).not.toHaveBeenCalled()
+    api.push(readyBackend(2))
+    const server = on({ kind: 'server', connectionId: 'server-a' })
+    for (const id of ['explorer.newQuery', 'explorer.copyName', 'connection.disconnect'] as const) expect(commands.isEnabled(id, server), id).toBe(false)
+    for (const id of ['explorer.selectTopRows', 'explorer.scriptCreateToNewQuery', 'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName'] as const) expect(commands.isEnabled(id, orders), id).toBe(false)
+    expect(await commands.execute('explorer.newQuery', server, 'menu')).toBe(false)
+    expect(documents.getSnapshot().documents).toHaveLength(0)
+  })
 })
 
 describe('Query Output commands', () => {

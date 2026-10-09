@@ -16,11 +16,12 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
 
 /**
  * Object Explorer's commands. Each acts on the node its menu was opened for (`CommandArgs.target`), on a server that is
- * still connected; Refresh without a node acts on the focused node, so F5 refreshes what has focus.
+ * still connected (not lost with a backend restart, even when the backend restarted while the menu was open or the
+ * command was waiting); Refresh without a node acts on the focused node, so F5 refreshes what has focus.
  */
 export function explorerContribution({ commands, documents, queries, connections, files, explorer, menuTargets }: Pick<Workbench, 'commands' | 'documents' | 'queries' | 'connections' | 'files' | 'explorer' | 'menuTargets'>,
   api: Pick<VariaApi, 'tableColumns' | 'scriptTable' | 'writeClipboardText'>): Disposable {
-  const live = (node: { readonly connectionId: string } | undefined) => !!node && !!connections.get(node.connectionId)
+  const live = (node: { readonly connectionId: string } | undefined) => !!node && connections.isLive(node.connectionId)
   const table = (args?: CommandArgs) => { const node = nodeOf(args, ['table']); return live(node) ? node : undefined }
   const script = async (node: Kind<'table'>) => unwrap(await api.scriptTable(node.connectionId, node.database, node.schema, node.name)).sql
   const focused = (): ExplorerNode | undefined => {
@@ -33,7 +34,7 @@ export function explorerContribution({ commands, documents, queries, connections
       when: args => live(nodeOf(args, ['server', 'database'])),
       run: args => {
         const node = nodeOf(args, ['server', 'database']), connection = node && connections.get(node.connectionId)
-        if (!node || !connection) return
+        if (!node || !connection || connection.lost) return
         documents.newQuery('', undefined, connection.id, node.kind === 'database' ? node.database : connection.database)
         // The menu returned focus to the node; the new query's editor may mount only on a later frame.
         frame(() => documents.boundEditor?.focus())
@@ -46,7 +47,7 @@ export function explorerContribution({ commands, documents, queries, connections
         const node = table(args)
         if (!node) return
         const { columns, truncated } = unwrap(await api.tableColumns(node.connectionId, node.database, node.schema, node.name))
-        if (!connections.get(node.connectionId)) return
+        if (!connections.isLive(node.connectionId)) return
         // Not dirty: the menu can always produce it again.
         documents.newQuery(selectTopRowsScript({ database: node.database, schema: node.schema, name: node.name, columns, truncated }), undefined, node.connectionId, node.database, false)
         if (queries.canExecute()) await queries.execute()
@@ -58,7 +59,7 @@ export function explorerContribution({ commands, documents, queries, connections
         const node = table(args)
         if (!node) return
         const sql = await script(node)
-        if (connections.get(node.connectionId)) documents.newQuery(sql, `${node.schema}.${node.name}.sql`, node.connectionId, node.database, true)
+        if (connections.isLive(node.connectionId)) documents.newQuery(sql, `${node.schema}.${node.name}.sql`, node.connectionId, node.database, true)
       }
     }),
     commands.register('explorer.scriptCreateToFile', { when: args => !!table(args), run: async args => { const node = table(args); if (node) await files.saveCopy(`${node.schema}.${node.name}.sql`, await script(node)) } }),
@@ -67,7 +68,7 @@ export function explorerContribution({ commands, documents, queries, connections
       when: args => live(nodeOf(args, ['server', 'database', 'table', 'serverObject'])),
       run: async args => {
         const node = nodeOf(args, ['server', 'database', 'table', 'serverObject']), connection = node && connections.get(node.connectionId)
-        if (node && connection) unwrap(await api.writeClipboardText(copyName(node, connection)))
+        if (node && connection && !connection.lost) unwrap(await api.writeClipboardText(copyName(node, connection)))
       }
     })
   ]
