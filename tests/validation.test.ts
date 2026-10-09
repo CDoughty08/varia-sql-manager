@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
-import { serverObjectKinds } from '../src/shared/contracts'
 import { portRequestSchema, queryEventSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
 import { methodPolicies } from '../src/shared/ipc/methods'
@@ -25,10 +24,11 @@ describe('IPC validation', () => {
   })
   it('passes identifiers verbatim and explains oversized scripts', () => {
     const connectionId = crypto.randomUUID()
-    expect(validateRequest('tables.list', { connectionId, database: ' padded ' })).toEqual({ connectionId, database: ' padded ' })
-    expect(() => validateRequest('tables.list', { connectionId, database: '   ' })).toThrow('Invalid request')
+    const table = { connectionId, database: ' padded ', schema: 'dbo', name: 'Orders' }
+    expect(validateRequest('tables.script', table)).toEqual(table)
+    expect(() => validateRequest('tables.script', { ...table, database: '   ' })).toThrow('Invalid request')
     // IPC can deliver a cloneable non-string whose property key coerces to a real method name.
-    expect(() => validateRequest(['tables.list'] as unknown as string, { connectionId, database: 'master' })).toThrow('Unsupported backend method')
+    expect(() => validateRequest(['tables.script'] as unknown as string, table)).toThrow('Unsupported backend method')
     const query = { connectionId, sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'x'.repeat(1_000_001), maxRows: 1000, timeoutSeconds: 30 }
     expect(() => validateRequest('query.execute', query)).toThrow('too large to execute')
   })
@@ -40,14 +40,11 @@ describe('IPC validation', () => {
     }
     expect(validateRequest('tables.columns', { ...valid, name: 'x'.repeat(128) })).toMatchObject({ name: 'x'.repeat(128) })
   })
-  it('allowlists server object categories and rejects SQL or extra fields', () => {
+  it('rejects the v1 catalog methods that Object Explorer replaced', () => {
     const connectionId = crypto.randomUUID()
-    for (const kind of serverObjectKinds) expect(validateRequest('server.objects.list', { connectionId, kind })).toEqual({ connectionId, kind })
-    for (const params of [
-      { connectionId, kind: 'sys.credentials; DROP TABLE anything' },
-      { connectionId, kind: 'serverRoles', sql: 'SELECT 1' },
-      { connectionId: 'invalid', kind: 'logins' }
-    ]) expect(() => validateRequest('server.objects.list', params)).toThrow('Invalid request')
+    expect(() => validateRequest('tables.list', { connectionId, database: 'master' })).toThrow('Unsupported backend method')
+    expect(() => validateRequest('server.objects.list', { connectionId, kind: 'logins' })).toThrow('Unsupported backend method')
+    expect(Object.hasOwn(methodPolicies, 'tables.list') || Object.hasOwn(methodPolicies, 'server.objects.list')).toBe(false)
   })
   it('takes Object Explorer loads only in their strict catalogue shape', () => {
     const connectionId = crypto.randomUUID(), requestId = crypto.randomUUID()

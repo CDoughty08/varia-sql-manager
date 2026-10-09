@@ -1,0 +1,60 @@
+name: SQL Server matrix
+
+# The .NET checks (offline, live, and the Object Explorer scratch database) against every SQL Server version that has a
+# Linux image. Manual runs only, so it costs no scheduled minutes; ci.yml already covers SQL Server 2022 on every pull
+# request. SQL Server 2016 has no Linux image: the offline checks render and lint its band, and the owner checks it in SSMS.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  backend:
+    name: SQL Server ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['2017', '2019', '2022', '2025']
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:${{ matrix.version }}-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          # A fixed development password is fine here: the container is created for this job, holds no data, and is discarded with the runner.
+          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+        ports:
+          - 1433:1433
+        # The 2019 and later images ship mssql-tools18 (which needs -C for the self-signed certificate); 2017 ships only mssql-tools.
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 20s
+    env:
+      VARIA_TEST_SQL_SERVER: localhost
+      VARIA_TEST_SQL_USER: sa
+      VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
+      # The container is disposable, so the Object Explorer checks may create and drop their marked scratch databases.
+      VARIA_TEST_SQL_SCRATCH: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - name: .NET checks (offline, live, and scratch database)
+        run: npm run backend:test

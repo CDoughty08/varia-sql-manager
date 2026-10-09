@@ -62,10 +62,6 @@ export interface ConnectionInfo {
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
 export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
-export const serverObjectKinds = ['logins', 'serverRoles', 'credentials', 'cryptographicProviders', 'audits', 'serverAuditSpecifications'] as const
-export type ServerObjectKind = typeof serverObjectKinds[number]
-export interface ServerObjectInfo { name: string; description: string }
-export interface TableInfo { schema: string; name: string }
 /** A table's columns in order; `truncated` means it has more than the 4,096 returned. */
 export interface TableColumns { columns: { name: string; dataType: string }[]; truncated: boolean }
 export interface BackendHealth {
@@ -200,8 +196,6 @@ export interface RpcMethods {
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
-  'server.objects.list': { params: { connectionId: string; kind: ServerObjectKind }; result: ServerObjectInfo[] }
-  'tables.list': { params: { connectionId: string; database: string }; result: TableInfo[] }
   'tables.script': { params: { connectionId: string; database: string; schema: string; name: string }; result: { sql: string } }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
@@ -267,8 +261,6 @@ export interface VariaApi {
   removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibrary>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
-  serverObjects(connectionId: string, kind: ServerObjectKind): Promise<ApiResult<ServerObjectInfo[]>>
-  tables(connectionId: string, database: string): Promise<ApiResult<TableInfo[]>>
   scriptTable(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<{ sql: string }>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */

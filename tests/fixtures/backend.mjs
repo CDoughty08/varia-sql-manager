@@ -5,7 +5,7 @@
 // (encodePage) within the stream's credit. Its control directory, VARIA_TEST_BACKEND_DIR, holds:
 //   calls.jsonl         one { generation, method, params } line per request, passwords redacted
 //   hold/<method>       the method waits while this file exists
-//   allow/audits        server.objects.list and explorer.children may list audits (otherwise they fail as a permission error would)
+//   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
@@ -148,14 +148,7 @@ const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
 ]
-const serverObjects = {
-  logins: [{ name: 'sa', description: 'SQL_LOGIN' }],
-  serverRoles: ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin'].map(name => ({ name, description: 'Fixed server role' })),
-  credentials: [],
-  cryptographicProviders: [{ name: 'Test EKM Provider', description: 'Enabled' }],
-  audits: [{ name: 'LoginAudit', description: 'FILE · Enabled' }],
-  serverAuditSpecifications: [{ name: 'LoginAuditSpec', description: 'Enabled' }]
-}
+const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
 // these rows in the folders that list them. Every database has dbo.Orders; Audits fails until allow/audits exists.
 const explorerProfile = { band: 16, engine: 'box' }
@@ -169,7 +162,7 @@ const explorerRows = {
     explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'CustomerName' }, 'CustomerName', { sublabel: '(nvarchar(100), null)' })
   ],
   logins: () => [explorerObject({ kind: 'login', name: 'sa' }, 'sa')],
-  serverRoles: () => serverObjects.serverRoles.map(role => explorerObject({ kind: 'serverRole', name: role.name }, role.name)),
+  serverRoles: () => serverRoles.map(name => explorerObject({ kind: 'serverRole', name }, name)),
   cryptographicProviders: () => [explorerObject({ kind: 'cryptographicProvider', name: 'Test EKM Provider' }, 'Test EKM Provider')],
   audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
   serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')]
@@ -284,10 +277,6 @@ async function workbench(id, method, params, credit) {
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   switch (method) {
     case 'databases.list': return respond(id, workbenchDatabases)
-    case 'server.objects.list':
-      if (params.kind === 'audits' && !control(join('allow', 'audits'))) return fail(id, 'SQL_ERROR', 'Test permission denied for server audits.')
-      return respond(id, serverObjects[params.kind])
-    case 'tables.list': return respond(id, [{ schema: 'dbo', name: 'Orders' }])
     case 'tables.script': return respond(id, { sql: 'CREATE TABLE dbo.Orders (Id int);' })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, explorerChildren(params))

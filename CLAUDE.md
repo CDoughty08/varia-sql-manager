@@ -26,8 +26,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 260 checks instead of 189
-  (309 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer scratch-database checks),
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 261 checks instead of 190
+  (310 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer scratch-database checks),
   and `connections-smoke.mjs` connects for real. Never print the password.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
@@ -73,6 +73,12 @@ pages, limits, error codes, display formats, benchmarks).
   (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
   `contextmenu` listener, only `.menu-layer` reaches z-index 30000, and the page cannot read the clipboard: main runs
   Paste only just after a click, key press or tap in the focused window.
+- Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
+  gates); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
+  `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
+  text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
+  metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
+  renders and checks every variant.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 
@@ -80,7 +86,9 @@ pages, limits, error codes, display formats, benchmarks).
 
 - vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
-  first; live checks follow and create only session-local temporary objects.
+  first; live checks follow and create only session-local temporary objects. They create databases (and logins) only
+  when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
+  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age).
 - UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
 - IPC performance: `tests/bench/*.bench.ts` and `scripts/ipc-bench.mjs` only measure; a new metric needs a
   `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in docs/ipc.md. Floors must
@@ -95,7 +103,8 @@ pages, limits, error codes, display formats, benchmarks).
 - CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
   every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
   manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS
-  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating.
+  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating. `sql-matrix.yml` (manual
+  runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)

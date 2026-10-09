@@ -18,7 +18,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
-        "databases.list", "server.objects.list", "tables.list", "tables.script", "tables.columns", "query.execute", "query.cancel", "query.session.close",
+        "databases.list", "tables.script", "tables.columns", "query.execute", "query.cancel", "query.session.close",
         "results.read", "results.close", "explorer.children"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -117,8 +117,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
         "connections.disconnect" => Disconnect(Read<ConnectionArgs>(parameters, json)),
         "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
-        "server.objects.list" => await ServerObjectsAsync(Read<ServerObjectArgs>(parameters, json), Token(context)),
-        "tables.list" => await TablesAsync(Read<DatabaseArgs>(parameters, json), Token(context)),
         "tables.script" => await ScriptAsync(Read<TableArgs>(parameters, json), Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
@@ -241,43 +239,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         await using var reader = await command.ExecuteReaderAsync(token);
         var result = new List<DatabaseInfo>();
         while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetBoolean(1), reader.GetBoolean(2)));
-        return result;
-    }
-
-    private async Task<List<ServerObjectInfo>> ServerObjectsAsync(ServerObjectArgs args, CancellationToken token)
-    {
-        // Fixed catalog queries keep renderer input out of SQL identifiers and expressions.
-        var sql = args.Kind switch
-        {
-            "logins" => "SELECT name, type_desc FROM sys.server_principals WHERE type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY name;",
-            "serverRoles" => "SELECT name, CASE WHEN is_fixed_role = 1 THEN 'Fixed server role' ELSE 'Server role' END FROM sys.server_principals WHERE type = 'R' ORDER BY name;",
-            "credentials" => "SELECT name, N'Credential' FROM sys.credentials ORDER BY name;",
-            "cryptographicProviders" => "SELECT name, CASE WHEN is_enabled = 1 THEN 'Enabled' ELSE 'Disabled' END FROM sys.cryptographic_providers ORDER BY name;",
-            "audits" => "SELECT name, CONCAT(type_desc, CASE WHEN is_state_enabled = 1 THEN ' · Enabled' ELSE ' · Disabled' END) FROM sys.server_audits ORDER BY name;",
-            "serverAuditSpecifications" => "SELECT name, CASE WHEN is_state_enabled = 1 THEN 'Enabled' ELSE 'Disabled' END FROM sys.server_audit_specifications ORDER BY name;",
-            _ => throw new RequestException("INVALID_PARAMS", "Unsupported server object category.")
-        };
-        await using var connection = CreateConnection(args.ConnectionId, "master");
-        await connection.OpenAsync(token);
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.CommandTimeout = 30;
-        await using var reader = await command.ExecuteReaderAsync(token);
-        var result = new List<ServerObjectInfo>();
-        while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetString(1)));
-        return result;
-    }
-
-    private async Task<List<TableInfo>> TablesAsync(DatabaseArgs args, CancellationToken token)
-    {
-        await using var connection = CreateConnection(args.ConnectionId, args.Database);
-        await connection.OpenAsync(token);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = 30;
-        command.CommandText = "SELECT s.name, t.name FROM sys.tables AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id WHERE t.is_ms_shipped = 0 ORDER BY s.name, t.name;";
-        await using var reader = await command.ExecuteReaderAsync(token);
-        var result = new List<TableInfo>();
-        while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetString(1)));
         return result;
     }
 

@@ -190,7 +190,7 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Password zeroed. |
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or a failed backend |
-| `databases.list`, `server.objects.list`, `tables.list`, `tables.script` | invoke | unary | metadata | 45 s |
+| `databases.list`, `tables.script` | invoke | unary | metadata | 45 s |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend also stops its own query after 30 s |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |

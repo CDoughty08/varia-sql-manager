@@ -17,15 +17,11 @@ internal sealed record DiscoveryArgs(string Scope);
 internal sealed record DiscoveredServer(string Server, string Version, string Source);
 internal sealed record DiscoveryResult(List<DiscoveredServer> Servers, string? Warning = null);
 internal sealed record ConnectionArgs(string ConnectionId);
-internal sealed record ServerObjectArgs(string ConnectionId, string Kind);
-internal sealed record DatabaseArgs(string ConnectionId, string Database);
 internal sealed record TableArgs(string ConnectionId, string Database, string Schema, string Name);
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10);
 internal sealed record SessionArgs(string SessionId);
 internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
-internal sealed record ServerObjectInfo(string Name, string Description);
-internal sealed record TableInfo(string Schema, string Name);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
 /// (xml, json, plan), CLR UDTs and vectors.</summary>
 internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true);

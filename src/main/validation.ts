@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import type { RpcMethod } from '../shared/contracts'
-import { serverObjectKinds } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
@@ -19,8 +18,6 @@ export const requestSchemas = {
   'connections.discover': z.object({ scope: z.enum(['local', 'network']) }).strict(),
   'connections.disconnect': z.object({ connectionId }).strict(),
   'databases.list': z.object({ connectionId }).strict(),
-  'server.objects.list': z.object({ connectionId, kind: z.enum(serverObjectKinds) }).strict(),
-  'tables.list': z.object({ connectionId, database }).strict(),
   'tables.script': z.object({ connectionId, database, schema: name, name }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
   'query.execute': z.object({

@@ -220,9 +220,10 @@ internal static class ExplorerLiveChecks
         // Tables: user tables only (history, graph and dropped ledger tables live elsewhere), in the database's case-sensitive order.
         var dbo = await Labels(db, "tables", Schema("dbo"));
         var dboTables = dbo.Where(label => label.StartsWith("dbo.", StringComparison.Ordinal)).ToList();
-        var order = await sql("SELECT N'dbo.' + t.name FROM sys.tables AS t WHERE t.schema_id = SCHEMA_ID(N'dbo') AND t.name IN (N'a', N'A', N'b', N'Doomed', N'Ünïcødé表', N'50%_off', N'50x_off', N'[x]') ORDER BY t.name;", dbName);
+        var order = await sql("SELECT N'dbo.' + t.name FROM sys.tables AS t WHERE t.schema_id = SCHEMA_ID(N'dbo') AND t.name IN (N'a', N'A', N'b', N'Doomed', N'Ünïcødé表', N'50%_off', N'50x_off', N'[x]', N'Embeddings') ORDER BY t.name;", dbName);
         var expectedDbo = new List<string> { "dbo.a", "dbo.A", "dbo.b", "dbo.Doomed", "dbo.Ünïcødé表", "dbo.50%_off", "dbo.50x_off", "dbo.[x]" };
         if (major >= 16) expectedDbo.AddRange(["dbo.LedgerAccounts (Updatable Ledger)", "dbo.LedgerEvents (Append-Only Ledger)"]);
+        if (major >= 17) expectedDbo.Add("dbo.Embeddings");
         check(dboTables.Order().SequenceEqual(expectedDbo.Order()) && dboTables.Where(label => !label.Contains("Ledger")).SequenceEqual(order.Sets[0].Select(row => row[0]!)),
             "Tables lists the dbo fixture tables in the database's case-sensitive order: " + string.Join(", ", dboTables));
         check((await Labels(db, "tables", Schema("Sales"))).Where(label => label.StartsWith("Sales.")).SequenceEqual(["Sales.Customers", "Sales.Invoices (System-Versioned)", "Sales.Orders"])

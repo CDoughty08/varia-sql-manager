@@ -161,7 +161,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row.folder .oe-label { color: var(--varia-objectExplorer-headingForeground); }
 .explorer-row.server .oe-label { font-weight: 600; }
 .explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
-.oe-sublabel { min-width: 0; flex: 0 100 auto; overflow: hidden; text-overflow: ellipsis; color: var(--varia-objectExplorer-sublabelForeground); }
+/* The sublabel takes only the space the label leaves (basis 0), so a label that fits never ellipsizes for its sublabel. */
+.oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-objectExplorer-sublabelForeground); }
 .oe-filtered, .explorer-row.progress .oe-text { color: var(--varia-objectExplorer-countForeground); }
 .explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button { color: inherit; }
 .oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

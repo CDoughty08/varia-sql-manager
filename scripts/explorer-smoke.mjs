@@ -464,7 +464,12 @@ try {
       const icon = row.querySelector('.oe-icon').getBoundingClientRect(), label = row.querySelector('.oe-label').getBoundingClientRect()
       return Math.abs((icon.top + icon.bottom) / 2 - (label.top + label.bottom) / 2)
     })
-    return { toolbar: { left: toolbar.left, right: toolbar.right, top: toolbar.top, bottom: toolbar.bottom }, width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, offsets: rows }
+    // A sublabel only takes the space its label leaves, so a label is never cut short while its sublabel still shows.
+    const clipped = [...document.querySelectorAll('.explorer-tree .explorer-row')].filter(row => {
+      const label = row.querySelector('.oe-label'), sublabel = row.querySelector('.oe-sublabel')
+      return label && sublabel && sublabel.getBoundingClientRect().width > 0 && label.scrollWidth > label.clientWidth
+    }).map(row => row.getAttribute('aria-label'))
+    return { toolbar: { left: toolbar.left, right: toolbar.right, top: toolbar.top, bottom: toolbar.bottom }, width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, offsets: rows, clipped }
   })
   expect(layout.toolbar.left).toBeGreaterThanOrEqual(0)
   expect(layout.toolbar.right).toBeLessThanOrEqual(layout.width)
@@ -473,6 +478,7 @@ try {
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.height)
   expect(layout.offsets.length).toBeGreaterThan(5)
   expect(Math.max(...layout.offsets)).toBeLessThanOrEqual(1)
+  expect(layout.clipped).toEqual([])
   for (const name of ['Connect Object Explorer', 'Disconnect', 'Stop', 'Filter Settings', 'Refresh', 'Collapse All']) await expect(toolbarButton(name)).toBeInViewport()
   await page.screenshot({ path: resolve('artifacts', 'explorer-1024.png') })
   expect(failures).toEqual([])
