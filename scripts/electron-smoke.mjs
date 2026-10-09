@@ -474,7 +474,11 @@ try {
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})
-  console.log(await page.evaluate(() => ({ title: document.title, focused: document.activeElement?.outerHTML.slice(0, 500), hasFocus: document.hasFocus(), errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })))
+  // CI keeps screenshots only as artifacts, so the log also names the open query tabs, dialogs, and alerts.
+  console.log(await page.evaluate(() => {
+    const describe = element => ({ label: element.getAttribute('aria-label') ?? document.getElementById(element.getAttribute('aria-labelledby') ?? '')?.textContent ?? null, className: String(element.className), hidden: !element.getClientRects().length, text: element.textContent.slice(0, 200), html: element.outerHTML.slice(0, 300) })
+    return { title: document.title, focused: document.activeElement?.outerHTML.slice(0, 500), hasFocus: document.hasFocus(), tabs: [...document.querySelectorAll('.query-tabs [role="tab"]')].map(tab => tab.getAttribute('aria-label')), dialogs: [...document.querySelectorAll('[role="dialog"], dialog')].map(describe), alerts: [...document.querySelectorAll('[role="alert"]')].map(describe) }
+  }))
   throw error
 } finally {
   await dialogs({ closeResponse: 1, holdSave: false, holdConfirm: false }).catch(() => {})
