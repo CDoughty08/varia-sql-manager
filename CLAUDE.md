@@ -95,7 +95,8 @@ pages, limits, error codes, display formats, benchmarks).
 
 - TypeScript: no semicolons, single quotes, 2-space indent, long lines. C#: 4-space indent, nullable enabled, warnings
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
-- One `claude/<topic>` branch per PR off `main`; squash merges; imperative commit subjects.
+- One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
+  commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
 - CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
   every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
   manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS
