@@ -417,6 +417,7 @@ internal sealed class SqlService : IRequestDispatcher
                             ColumnPlan? plan = null;
                             bool? hasLong = null;
                             var skipped = false;
+                            long transient = 0;
                             if (reader.FieldCount > 0)
                             {
                                 if (sets.Count >= args.MaxResultSets) overflowSets++;
@@ -456,6 +457,9 @@ internal sealed class SqlService : IRequestDispatcher
                                     events.Sealed();
                                 }
                                 if (!await read) break;
+                                // The reader has let go of the previous row, so a large xml value read whole is garbage now.
+                                store.Discarded(transient);
+                                transient = 0;
                                 skipped = true;
                                 if (currentSet is null) continue;
                                 currentSet.CountRow();
@@ -467,10 +471,12 @@ internal sealed class SqlService : IRequestDispatcher
                                 int truncatedCells;
                                 try { truncatedCells = plan!.ReadRow(reader, builder, messages.Add, token); }
                                 catch { currentSet.AbortRow(); throw; }
+                                transient = plan.TransientBytes;
                                 var sealedBefore = currentSet.SealedPages;
                                 if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
                                 if (currentSet.SealedPages != sealedBefore) events.Sealed();
                             }
+                            store.Discarded(transient);
                             if (currentSet is not null)
                             {
                                 currentSet.Complete();

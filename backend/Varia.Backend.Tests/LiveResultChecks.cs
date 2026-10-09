@@ -228,6 +228,24 @@ internal static class LiveResultChecks
         check(result.Status == "completed" && rows[0][0].Text == new string('é', ColumnPlan.TextCap) && rows[0][1].Text == new string('é', ColumnPlan.TextCap) && rows[0][2].Text == "7"
             && rows[1].Select(cell => cell.Text).SequenceEqual(["héllo 😀", "héllo", "7"]) && rows[2][0].Flags == PageReader.Null && rows[2][1].Flags == PageReader.Null && growth < 64L * 1024 * 1024,
             "ntext and text values are streamed up to their cap, in their encodings (" + Measured(growth, ms) + ")");
+
+        // SqlClient has no streaming reader for xml under sequential access, so each value is read whole, outside the result
+        // budget. That garbage is collected once the reader moves on: left to the runtime, eight of these values peaked at
+        // about 480 MB of managed heap, six times one of them.
+        async Task<(QueryResult Result, long Peak)> HeapPeak(string sql)
+        {
+            var before = GC.GetTotalMemory(true);
+            var peak = before;
+            using var sampler = new Timer(_ => Interlocked.Exchange(ref peak, Math.Max(Interlocked.Read(ref peak), GC.GetTotalMemory(false))), null, 0, 10);
+            var result = await run(sql, null, 1000, 10);
+            sampler.Change(Timeout.Infinite, Timeout.Infinite);
+            return (result, Math.Max(Interlocked.Read(ref peak), GC.GetTotalMemory(false)) - before);
+        }
+        const string xml = "DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), 30000000) + '</a>' AS xml); ";
+        var (one, onePeak) = await HeapPeak(xml + "SELECT @x AS doc;");
+        var (eight, eightPeak) = await HeapPeak(xml + "SELECT @x AS doc FROM (SELECT TOP (8) 1 AS n FROM sys.all_objects) AS t;");
+        check(one.Status == "completed" && eight.Status == "completed" && eight.ResultSets[0].RowsStored == 8 && 2 * eightPeak < 5 * onePeak,
+            "eight 30,000,000-character xml values, each read whole, peak at " + eightPeak / 1048576 + " MB of managed heap, against " + onePeak / 1048576 + " MB for one");
     }
 
     /// <summary>Rows that wait for a lock mid-statement are sealed after 200 ms, so they can be read before the statement

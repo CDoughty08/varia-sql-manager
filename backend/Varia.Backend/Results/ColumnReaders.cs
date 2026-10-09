@@ -29,6 +29,8 @@ internal sealed class ColumnPlan
     public const int BinaryCap = 32_766;
     public const string ShowplanColumn = "Microsoft SQL Server 2005 XML Showplan";
     private const int Chunk = 8192;
+    /// <summary>An xml cell that allocates at least this much counts toward <see cref="TransientBytes"/>.</summary>
+    private const long TransientCell = 1024 * 1024;
     private const int JsonType = 35, VectorType = 36;
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
     // SqlClient's own GetChars on xml serialises with these settings.
@@ -68,6 +70,10 @@ internal sealed class ColumnPlan
     /// 2 GB. Rows that are not stored are then read past synchronously, on a thread of their own
     /// (SqlService.SkipRowsAsync).</summary>
     public bool HasLong { get; }
+
+    /// <summary>What the last <see cref="ReadRow"/> allocated to read large xml values, which are read whole (see
+    /// <see cref="Xml"/>), about 2 bytes per character outside the result budget: garbage once the reader moves on.</summary>
+    public long TransientBytes { get; private set; }
 
     /// <summary><see cref="HasLong"/> for a set that has no plan because none of its rows are stored.</summary>
     public static bool HasLongColumns(SqlDataReader reader) => reader.GetColumnSchema().Any(column => column.IsLong == true);
@@ -153,6 +159,7 @@ internal sealed class ColumnPlan
     /// Returns the number of cells stored as truncated prefixes.</summary>
     public int ReadRow(SqlDataReader reader, PageBuilder builder, Action<string> warn, CancellationToken token = default)
     {
+        TransientBytes = 0;
         var truncated = 0;
         for (var i = 0; i < columns.Length; i++)
         {
@@ -326,14 +333,27 @@ internal sealed class ColumnPlan
     }
 
     /// <summary>xml, up to cap + 1 characters. SqlClient's GetChars on xml copies each chunk out of a StringBuilder that holds
-    /// the whole serialised node, which is quadratic in a large text node, and GetXmlReader under sequential access
-    /// misdetects the encoding of a value that starts with text (FOR XML PATH('') output). So the value is read once, in
-    /// linear time and held only while this cell is read, then serialised node by node as GetChars would, stopping at the
-    /// cap.</summary>
+    /// the whole serialised node, which is quadratic in a large text node, GetXmlReader under sequential access misdetects
+    /// the encoding of a value that starts with text (FOR XML PATH('') output), and GetStream and GetTextReader reject
+    /// xml. So GetSqlXml reads the whole value, in linear time and about 2 bytes per character (up to 4 GB for the largest
+    /// value), then it is serialised node by node as GetChars would, stopping at the cap. That memory is outside the
+    /// result budget and garbage once the reader moves past the row; <see cref="TransientBytes"/> reports it so it is
+    /// collected then rather than left to pile up across rows.</summary>
     private bool Xml(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
     {
+        var allocated = GC.GetAllocatedBytesForCurrentThread();
+        try { return Xml(reader.GetSqlXml(i), cap, builder, token); }
+        finally
+        {
+            allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            if (allocated >= TransientCell) TransientBytes += allocated;
+        }
+    }
+
+    private bool Xml(SqlXml value, int cap, PageBuilder builder, CancellationToken token)
+    {
         var sink = new CharSink(cap + 1);
-        using (var xml = reader.GetSqlXml(i).CreateReader())
+        using (var xml = value.CreateReader())
         {
             // Never closed: closing ends open elements, which would only add text past a full sink.
             var writer = XmlWriter.Create(sink, XmlOutput);

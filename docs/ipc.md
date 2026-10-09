@@ -306,7 +306,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   or one at a time), triggers one gen2 collection shortly after (pages are large arrays that nothing else would
   collect), and so does a release that empties the store once 16 MiB were released since the last aggressive one. The
   collection is aggressive (compacting, so it returns memory to the operating system) when what remains is no more than
-  what was released since the last aggressive one, and non-compacting otherwise, so its pause never copies much.
+  what was released since the last aggressive one, and non-compacting otherwise, so its pause never copies much. Large
+  xml values, read whole outside the budget (see Display formats), count as released once the reader moves past their
+  row; a row that left more than 64 MiB is collected at once, before the next row is read.
 
 Notes appended to the summary's messages:
 
@@ -538,7 +540,7 @@ unread, the next `ReadAsync` would buffer all of it, in time quadratic in its si
 | datetimeoffset(n) | n fractional digits and the offset | `2026-10-08 12:34:56.1234567 +05:30`, `2026-10-08 12:34:56 -08:00` |
 | uniqueidentifier | uppercase | `6F9619FF-8B86-D011-B42D-00C04FC964FF` |
 | char, varchar, text, nchar, nvarchar, ntext, sysname | the text; lone surrogates become U+FFFD; truncation never splits a pair | `héllo 😀` |
-| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Read once with `GetSqlXml` (linear; held only while the cell is read): `GetChars` on xml is quadratic in a large text node, and `GetXmlReader` misreads a value that starts with text | `abc`, `é<a b="1" />` |
+| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Read whole with `GetSqlXml` (linear): `GetChars` on xml is quadratic in a large text node, `GetXmlReader` misreads a value that starts with text, and `GetStream` and `GetTextReader` reject xml. The whole value is held in transient memory outside the result budget, about 2 bytes per character (up to about 4 GB for a 2 GB value), until the reader moves past its row; a row that left more than 64 MiB is collected then, so large values never pile up. Such a row fills a page, and the memory-load check at every page seal stops storing (and reading whole) later rows when the computer runs low | `abc`, `é<a b="1" />` |
 | json (SQL Server 2025) | the text, role `json`, up to 2,097,152 characters | — |
 | vector (SQL Server 2025) | float32 values, shortest form, role `vector` | `[0.1,2,-3.5]` |
 | binary, varbinary, image | `0x` + uppercase hex, up to 32,766 bytes | `0x0001FF`, `0x` |
