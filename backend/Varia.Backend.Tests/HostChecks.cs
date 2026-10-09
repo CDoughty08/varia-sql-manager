@@ -84,6 +84,14 @@ internal static class HostChecks
                 && Body(end.Value).GetProperty("result").GetProperty("pages").GetInt32() == 4 && host.ArrivalOf(end.Value) > host.ArrivalOf(fourth.Value),
                 "CREDIT resumes the stream, and its RESPONSE follows its DATA in sequence");
 
+            host.Request(8, "test.events", new { });
+            var firstEvent = host.Next(FrameKind.Event);
+            var secondEvent = host.Next(FrameKind.Event);
+            var eventsDone = host.Next(FrameKind.Response);
+            check(firstEvent?.Header.Id == 8 && Body(firstEvent.Value).GetProperty("messages")[0].GetString() == "first" && Body(secondEvent!.Value).GetProperty("type").GetString() == "resultSet.closed"
+                && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(secondEvent.Value) && host.Next(FrameKind.Event, 200) is null,
+                "a request's EVENT frames precede its RESPONSE, and an event body over 256 KiB is dropped");
+
             for (var id = 10u; id < 18; id++) host.Request(id, "test.slow", new { ms = 1500 });
             Thread.Sleep(100);
             watch.Restart();
@@ -239,7 +247,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int CancelAllCalls;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream"];
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events"];
     public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, _ => RequestLane.Control };
     public (long GlobalBytes, long QueryBytes) ResultBudget => (256L << 20, 128L << 20);
 
@@ -264,6 +272,11 @@ internal sealed class StubDispatcher : IRequestDispatcher
                     await context!.SendDataAsync(body);
                 }
                 return new { Pages = pages };
+            case "test.events":
+                context!.SendEvent(new { Type = "messages", Messages = new[] { "first" } }, true);
+                context.SendEvent(new { Type = "messages", Messages = new[] { new string('x', 300 * 1024) } }, true);
+                context.SendEvent(new { Type = "resultSet.closed" }, false);
+                return new { Sent = 3 };
             default: throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.");
         }
     }
@@ -284,11 +297,12 @@ internal sealed class HostHarness : IDisposable
     private readonly Thread hostThread;
     private long arrivals;
 
-    public HostHarness(HostOptions? options = null, Stream? output = null)
+    /// <param name="dispatcher">Replaces the stub dispatcher, for example with a SqlService.</param>
+    public HostHarness(HostOptions? options = null, Stream? output = null, Func<IRequestDispatcher>? dispatcher = null)
     {
         hostInput = new AnonymousPipeClientStream(PipeDirection.In, toHost.ClientSafePipeHandle);
         hostOutput = new AnonymousPipeClientStream(PipeDirection.Out, fromHost.ClientSafePipeHandle);
-        Host = new ProtocolHost(hostInput, output ?? hostOutput, () => { Dispatcher.Created = true; return Dispatcher; }, HostChecks.Json,
+        Host = new ProtocolHost(hostInput, output ?? hostOutput, () => { Dispatcher.Created = true; return dispatcher?.Invoke() ?? Dispatcher; }, HostChecks.Json,
             (options ?? new HostOptions()) with { Exit = code => { Exits.Enqueue(code); Exited.Set(); }, Diagnostic = _ => { } });
         hostThread = new Thread(() => Host.Run()) { IsBackground = true, Name = "test-host" };
         hostThread.Start();

@@ -50,6 +50,7 @@ export class FakeBackend extends EventEmitter {
       : method === 'system.health' ? { pid: this.pid, generation: this.generation }
       : method === 'connections.disconnect' ? { disconnected: true }
       : method === 'query.session.close' ? { closed: true }
+      : method === 'query.execute' ? { resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 } }
       : { method }
     this.send(FrameKind.RESPONSE, request.id, 0, { result })
   }

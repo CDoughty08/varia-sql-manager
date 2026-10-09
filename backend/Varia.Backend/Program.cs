@@ -13,7 +13,8 @@ var json = new JsonSerializerOptions(JsonSerializerDefaults.Web)
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
 };
-var host = new ProtocolHost(input, output, () => new SqlService(), json);
+ProtocolHost host = null!;
+host = new ProtocolHost(input, output, () => SqlService.FromEnvironment(host.Publish), json);
 AppDomain.CurrentDomain.UnhandledException += (_, e) => host.Crash(e.ExceptionObject);
 var code = 0;
 var reader = new Thread(() => code = host.Run()) { Name = "varia-ipc-reader" };

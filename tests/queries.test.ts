@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/shared/contracts'
-import { QueryService } from '../src/renderer/src/services/queries'
+import type { ApiResult, ConnectionInfo, DisplayQueryResult, VariaApi } from '../src/shared/contracts'
+import { QueryService, type QueryApi } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { EventBus } from '../src/renderer/src/core/events'
 import { deferred, documentFixture } from './fixtures/documents'
 
-const output = (patch: Partial<QueryResult> = {}): QueryResult => ({ status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false, ...patch })
+const output = (patch: Partial<DisplayQueryResult> = {}): DisplayQueryResult => ({ status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false, ...patch })
 function fixture(commandTimeout?: number) {
   const docs = documentFixture()
   const connection: ConnectionInfo = { id: 'server-a', server: 'localhost', database: 'master', serverVersion: '17', commandTimeout, generation: 1 }
   const api = {
-    execute: vi.fn<VariaApi['execute']>(async () => ({ ok: true, value: output() })),
+    execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: output() })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } }))
   }
   const queries = new QueryService(docs.documents, api, id => id === connection.id ? connection : undefined, docs.events)
@@ -24,7 +24,7 @@ describe('query orchestration', () => {
   it.each([0, 7, undefined])('uses the document session and preserves timeout %s', async timeout => {
     const { queries, queryApi, tab } = fixture(timeout)
     await queries.execute()
-    expect(queryApi.execute).toHaveBeenCalledWith(expect.objectContaining({ sessionId: tab.id, sql: 'SELECT 1', startLine: 1, timeoutSeconds: timeout ?? 0 }))
+    expect(queryApi.execute).toHaveBeenCalledWith(expect.objectContaining({ sessionId: tab.id, sql: 'SELECT 1', startLine: 1, timeoutSeconds: timeout ?? 0 }), expect.any(Function))
   })
   it('delivers events to later listeners when an earlier one throws', () => {
     const bus = new EventBus(), received: string[] = []
@@ -50,7 +50,7 @@ describe('query orchestration', () => {
   })
   it('reserves execution synchronously and routes completion back to the original tab', async () => {
     const { documents, queries, queryApi, tab, events } = fixture()
-    const pending = deferred<ApiResult<QueryResult>>()
+    const pending = deferred<ApiResult<DisplayQueryResult>>()
     queryApi.execute.mockReturnValueOnce(pending.promise)
     const first = queries.execute()
     await queries.execute()
@@ -82,7 +82,7 @@ describe('query orchestration', () => {
   })
   it('cancels the currently active execution while retaining running state until completion', async () => {
     const { documents, queries, queryApi, tab } = fixture()
-    const first = deferred<ApiResult<QueryResult>>(), second = deferred<ApiResult<QueryResult>>()
+    const first = deferred<ApiResult<DisplayQueryResult>>(), second = deferred<ApiResult<DisplayQueryResult>>()
     queryApi.execute.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
     const left = queries.execute()
     const other = documents.create('other.sql', 'SELECT 2', 'master', 'server-a'), right = queries.execute()
@@ -110,7 +110,7 @@ describe('query orchestration', () => {
   })
   it('does not let a late cancel failure overwrite a completed result', async () => {
     const { queries, queryApi, tab } = fixture()
-    const execute = deferred<ApiResult<QueryResult>>(), cancel = deferred<ApiResult<{ cancelled: boolean }>>()
+    const execute = deferred<ApiResult<DisplayQueryResult>>(), cancel = deferred<ApiResult<{ cancelled: boolean }>>()
     queryApi.execute.mockReturnValueOnce(execute.promise); queryApi.cancel.mockReturnValueOnce(cancel.promise)
     const execution = queries.execute(), cancellation = queries.cancel()
     execute.resolve({ ok: true, value: output() }); await execution
@@ -119,11 +119,25 @@ describe('query orchestration', () => {
   })
   it('ignores completion after disposal', async () => {
     const { queries, queryApi, events } = fixture()
-    const pending = deferred<ApiResult<QueryResult>>()
+    const pending = deferred<ApiResult<DisplayQueryResult>>()
     queryApi.execute.mockReturnValueOnce(pending.promise)
     const execution = queries.execute()
     queries.dispose()
     pending.resolve({ ok: true, value: output() }); await execution
     expect(events.some(event => event.type === 'query.finished')).toBe(false)
+  })
+  it('records the rows a running script has read, for that script only', async () => {
+    const { queries, queryApi, tab } = fixture()
+    const pending = deferred<ApiResult<DisplayQueryResult>>()
+    let progress: ((rowsRead: number) => void) | undefined
+    queryApi.execute.mockImplementationOnce((_options, onProgress) => { progress = onProgress; return pending.promise })
+    const execution = queries.execute()
+    const queryId = queries.getSnapshot()[tab.id].running!.queryId
+    progress!(1200)
+    expect(queries.getSnapshot()[tab.id].running).toEqual({ queryId, connectionId: 'server-a', rowsRead: 1200 })
+    pending.resolve({ ok: true, value: output() })
+    await execution
+    progress!(5000)
+    expect(queries.getSnapshot()[tab.id]).toEqual({ result: output(), error: undefined })
   })
 })

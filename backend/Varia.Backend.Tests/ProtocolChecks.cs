@@ -126,7 +126,7 @@ internal static class ProtocolChecks
             .Deserialize<ConnectOptions>(json);
         var unknown = Throws<JsonException>(() => JsonBridge.ParseControl(JsonBridge.Encode(new { sessionId = "s", extra = 1 }, json)).Deserialize<SessionArgs>(json));
         check(options is { Server: "localhost", Password: "secret", TrustServerCertificate: true } && unknown, "params transcoded from MessagePack bind to the existing records and keep unknown members rejected");
-        var summary = JsonBridge.ParseControl(JsonBridge.Encode(new QueryResult([], ["(1 rows affected)"], 9_007_199_254_740_993, 12, "completed", null, 1, 1, "master", false), json));
+        var summary = JsonBridge.ParseControl(JsonBridge.Encode(new QueryResult([], 0, ["(1 rows affected)"], 9_007_199_254_740_993, 12, "completed", null, 1, 1, "master", false, new ResultBudget(0, 1, 1)), json));
         check(summary.GetProperty("messages")[0].GetString() == "(1 rows affected)" && summary.GetProperty("recordsAffected").GetDouble() == 9_007_199_254_740_993d
             && !summary.TryGetProperty("error", out _) && summary.GetProperty("database").GetString() == "master",
             "results serialized by System.Text.Json round-trip through MessagePack, with integers beyond 2^53 as float64");

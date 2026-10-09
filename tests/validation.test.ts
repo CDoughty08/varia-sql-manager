@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
 import { serverObjectKinds } from '../src/shared/contracts'
+import { portRequestSchema, queryEventSchema } from '../src/shared/ipc/port-messages'
 
 describe('IPC validation', () => {
   it('rejects arbitrary or inherited backend method names', () => {
@@ -16,7 +17,9 @@ describe('IPC validation', () => {
     const valid = { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', maxRows: 1000, timeoutSeconds: 30 }
     expect(validateRequest('query.execute', valid)).toEqual(valid)
     expect(validateRequest('query.execute', { ...valid, timeoutSeconds: 0 })).toMatchObject({ timeoutSeconds: 0 })
-    for (const patch of [{ maxRows: 5001 }, { timeoutSeconds: -1 }, { timeoutSeconds: 86401 }, { queryId: 'invalid' }, { sessionId: 'invalid' }, { startLine: 0 }, { sql: '' }]) expect(() => validateRequest('query.execute', { ...valid, ...patch })).toThrow('Invalid request')
+    // maxRows 0 stores up to the memory budget only; maxResultSets keeps 1 to 1000 result sets.
+    for (const patch of [{ maxRows: 0 }, { maxRows: 2 ** 31 - 1 }, { maxResultSets: 1 }, { maxResultSets: 1000 }]) expect(validateRequest('query.execute', { ...valid, ...patch })).toEqual({ ...valid, ...patch })
+    for (const patch of [{ maxRows: -1 }, { maxRows: 2 ** 31 }, { maxRows: 1.5 }, { maxResultSets: 0 }, { maxResultSets: 1001 }, { timeoutSeconds: -1 }, { timeoutSeconds: 86401 }, { queryId: 'invalid' }, { sessionId: 'invalid' }, { startLine: 0 }, { sql: '' }]) expect(() => validateRequest('query.execute', { ...valid, ...patch })).toThrow('Invalid request')
   })
   it('passes identifiers verbatim and explains oversized scripts', () => {
     const connectionId = crypto.randomUUID()
@@ -35,5 +38,22 @@ describe('IPC validation', () => {
       { connectionId, kind: 'serverRoles', sql: 'SELECT 1' },
       { connectionId: 'invalid', kind: 'logins' }
     ]) expect(() => validateRequest('server.objects.list', params)).toThrow('Invalid request')
+  })
+  it('validates results port requests strictly', () => {
+    const read = { t: 'read', rid: 1, generation: 1, resultId: 1, firstRow: 0, maxRows: 65_536, credit: 16 * 1024 * 1024 }
+    expect(portRequestSchema.parse(read)).toEqual(read)
+    for (const message of [{ t: 'credit', rid: 2 ** 31 - 1, bytes: 1 }, { t: 'cancel', rid: 1 }, { t: 'close', rid: 1, generation: 3, resultIds: Array.from({ length: 1024 }, (_, index) => index + 1) }]) expect(portRequestSchema.safeParse(message).success).toBe(true)
+    for (const message of [
+      { ...read, extra: 1 }, { ...read, rid: 0 }, { ...read, rid: 2 ** 31 }, { ...read, generation: 0 }, { ...read, resultId: 2 ** 32 }, { ...read, firstRow: Number.MAX_SAFE_INTEGER + 1 },
+      { ...read, maxRows: 0 }, { ...read, maxRows: 65_537 }, { ...read, credit: 65_535 }, { ...read, credit: 16 * 1024 * 1024 + 1 }, { ...read, firstRow: 1.5 },
+      { t: 'credit', rid: 1, bytes: 0 }, { t: 'cancel', rid: 1, reason: 3 }, { t: 'close', rid: 1, generation: 1, resultIds: [] }, { t: 'close', rid: 1, generation: 1, resultIds: Array.from({ length: 1025 }, (_, index) => index + 1) },
+      { t: 'invoke', rid: 1 }, null, 'read'
+    ]) expect(portRequestSchema.safeParse(message).success, JSON.stringify(message)).toBe(false)
+  })
+  it('validates query events from the backend strictly', () => {
+    expect(queryEventSchema.safeParse({ type: 'messages', messages: ['a'] }).success).toBe(true)
+    expect(queryEventSchema.safeParse({ type: 'messages', messages: [] }).success).toBe(false)
+    expect(queryEventSchema.safeParse({ type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [], extra: true }).success).toBe(false)
+    expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor: { resultId: 1, generation: 1 } }).success).toBe(false)
   })
 })

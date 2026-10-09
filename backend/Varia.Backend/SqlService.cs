@@ -7,6 +7,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Protocol;
+using Varia.Backend.Results;
 
 namespace Varia.Backend;
 
@@ -16,8 +17,13 @@ internal sealed class SqlService : IRequestDispatcher
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
-        "databases.list", "server.objects.list", "tables.list", "tables.script", "query.execute", "query.cancel", "query.session.close"
+        "databases.list", "server.objects.list", "tables.list", "tables.script", "query.execute", "query.cancel", "query.session.close",
+        "results.read", "results.close"
     ];
+    /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
+    public const string SynthesizeMethod = "debug.results.synthesize";
+    private const long MaxSafeInteger = 9_007_199_254_740_991;
+    private const long MemoryReportStep = 64L * 1024 * 1024;
 
     private readonly ConcurrentDictionary<string, string> connections = new();
     private readonly ConcurrentDictionary<string, RunningQuery> queries = new();
@@ -25,6 +31,12 @@ internal sealed class SqlService : IRequestDispatcher
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
+    private readonly ResultStore store;
+    private readonly bool hooks;
+    private readonly Action<object>? publish;
+    private readonly Timer? memoryTimer;
+    private long reportedBytes = -1;
+    private int reportedBand;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -36,28 +48,46 @@ internal sealed class SqlService : IRequestDispatcher
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
     }
 
-    public IReadOnlyList<string> Methods => MethodNames;
+    /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
+    /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
+    /// <param name="publish">Sends a global EVENT; result memory usage is reported through it at most once a second.</param>
+    public SqlService(ResultStore? store = null, bool hooks = false, Action<object>? publish = null)
+    {
+        this.store = store ?? ResultStore.FromSystem();
+        this.hooks = hooks;
+        this.publish = publish;
+        Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
+        if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
+    }
+
+    /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
+    /// apply only with VARIA_BACKEND_TEST_HOOKS=1; main passes those variables only to unpackaged smoke runs.</summary>
+    public static SqlService FromEnvironment(Action<object>? publish)
+    {
+        var hooks = Environment.GetEnvironmentVariable("VARIA_BACKEND_TEST_HOOKS") == "1";
+        long? budget = hooks && long.TryParse(Environment.GetEnvironmentVariable("VARIA_RESULT_BUDGET_BYTES"), NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) && bytes > 0 ? bytes : null;
+        return new SqlService(ResultStore.FromSystem(budget), hooks, publish);
+    }
+
+    public IReadOnlyList<string> Methods { get; }
+    /// <summary>Stored query results (the live checks read them back through it).</summary>
+    public ResultStore Results => store;
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
-    /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots.</summary>
+    /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads
+    /// take one of 16 read slots.</summary>
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" => RequestLane.Query,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" => RequestLane.Control,
+        "results.read" => RequestLane.Results,
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "results.close" => RequestLane.Control,
+        SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
         _ => RequestLane.Metadata
     };
 
-    /// <summary>The result memory budget: a quarter of the memory available to the process (container-aware), within
-    /// 256 MiB to 2 GiB, and at most half of it for one query.</summary>
-    public (long GlobalBytes, long QueryBytes) ResultBudget
-    {
-        get
-        {
-            var global = Math.Clamp(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4, 256L << 20, 2L << 30);
-            return (global, global / 2);
-        }
-    }
+    /// <summary>The result memory budget: global, and the most one query may use.</summary>
+    public (long GlobalBytes, long QueryBytes) ResultBudget => (store.GlobalBytes, store.QueryBytes);
 
     /// <summary>The request's token: CANCEL frames and its header deadline. Live checks call without a context.</summary>
     private static CancellationToken Token(RequestContext? context) => context?.Token ?? CancellationToken.None;
@@ -84,6 +114,9 @@ internal sealed class SqlService : IRequestDispatcher
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
         "query.session.close" => CloseSession(Read<SessionArgs>(parameters, json)),
+        "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
+        "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
 
@@ -130,6 +163,7 @@ internal sealed class SqlService : IRequestDispatcher
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
+        store.ReleaseConnection(args.ConnectionId);
         // Each initial catalog has its own pool; clear every one this connection used.
         if (removed && pools.TryRemove(args.ConnectionId, out var used))
             foreach (var pooled in used.Keys)
@@ -240,7 +274,7 @@ internal sealed class SqlService : IRequestDispatcher
 
     private async Task<QueryResult> ExecuteAsync(QueryArgs args, RequestContext? context)
     {
-        if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows is < 1 or > 5000
+        if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows < 0 || args.MaxResultSets is < 1 or > 1000
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
         Name(args.Database);
@@ -251,20 +285,20 @@ internal sealed class SqlService : IRequestDispatcher
         if (!queries.TryAdd(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
         // A CANCEL frame for this request: main's backstop means its deadline passed; any other reason stops it like query.cancel.
         using var cancelled = context?.Token.Register(() => { if (context.Reason == CancelReason.Deadline) TryCancel(cancellation); else running.Cancel(); });
+        using var events = new QueryEventSink(context is null ? null : context.SendEvent);
         QuerySession? session = null;
         var entered = false;
-        var messages = new QueryMessages();
-        var sets = new List<ResultSet>();
-        ResultSet? currentSet = null;
+        var messages = new QueryMessages(events.Message);
+        var sets = new List<ResultSetBuffer>();
+        ResultSetBuffer? currentSet = null;
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
         var completed = 0;
         var batchNumber = 0;
         var iteration = 0;
-        var totalRows = 0;
-        var totalCells = 0;
-        var discardedSets = false;
-        long textBudget = 4_000_000;
+        var totalBatches = batches.Sum(batch => batch.RepeatCount);
+        long storedRows = 0;
+        var discardedSets = 0;
         long recordsAffected = -1;
         QueryFailure? failure = null;
         var status = "completed";
@@ -306,6 +340,8 @@ internal sealed class SqlService : IRequestDispatcher
             session = Session(args);
             entered = session.TryEnter();
             if (!entered) throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
+            // This query now owns the session, so the session's earlier results are released before any new row is stored.
+            var budget = store.BeginQuery(args.SessionId, args.ConnectionId);
             var connection = session.Connection;
             connection.FireInfoMessageEventOnUserErrors = false;
             connection.InfoMessage += onInfo;
@@ -327,6 +363,7 @@ internal sealed class SqlService : IRequestDispatcher
                 for (iteration = 1; iteration <= batch.RepeatCount; iteration++)
                 {
                     token.ThrowIfCancellationRequested();
+                    events.Progress(completed, totalBatches, batchNumber, iteration);
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     command.CommandTimeout = args.TimeoutSeconds == 0 ? 0 : Math.Max(1, (int)Math.Ceiling(args.TimeoutSeconds - watch.Elapsed.TotalSeconds));
@@ -334,46 +371,46 @@ internal sealed class SqlService : IRequestDispatcher
                     SqlDataReader? reader = null;
                     try
                     {
-                        reader = await command.ExecuteReaderAsync(token);
+                        // Sequential access streams each value once, in column order, so a huge value is never materialised.
+                        reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, token);
                         do
                         {
-                            var keep = reader.FieldCount > 0 && sets.Count < 10;
-                            if (reader.FieldCount > 0 && !keep) discardedSets = true;
-                            var raw = new CellMode[reader.FieldCount];
+                            var keep = reader.FieldCount > 0 && sets.Count < args.MaxResultSets;
+                            if (reader.FieldCount > 0 && !keep) discardedSets++;
+                            ColumnPlan? plan = null;
                             if (keep)
                             {
-                                var columns = new List<ColumnInfo>();
-                                for (var i = 0; i < reader.FieldCount; i++) columns.Add(new(reader.GetName(i), reader.GetDataTypeName(i)));
-                                var isPlan = columns.Count == 1 && columns[0].Name.Equals("Microsoft SQL Server 2005 XML Showplan", StringComparison.OrdinalIgnoreCase);
-                                currentSet = new(columns, batchNumber, iteration, isPlan);
+                                plan = ColumnPlan.From(reader);
+                                currentSet = store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires);
                                 sets.Add(currentSet);
+                                events.Opened(currentSet);
                             }
-                            while (await reader.ReadAsync(token))
+                            while (true)
                             {
-                                if (!keep) continue;
-                                if (totalRows >= args.MaxRows || textBudget <= 0 || totalCells + reader.FieldCount > 100_000)
-                                {
-                                    currentSet!.Truncated = true;
-                                    continue;
-                                }
-                                var row = new object?[reader.FieldCount];
-                                for (var i = 0; i < row.Length; i++)
-                                {
-                                    var value = ReadCell(reader, i, raw);
-                                    if (value is string text)
-                                    {
-                                        var cellLimit = currentSet!.Kind == "executionPlan" ? 1_000_000 : 16384;
-                                        var available = (int)Math.Max(0, Math.Min(cellLimit, textBudget));
-                                        if (text.Length > available) { value = text[..available] + "… [cell truncated]"; currentSet.Truncated = true; }
-                                        textBudget -= ((string)value).Length;
-                                    }
-                                    row[i] = value;
-                                }
-                                currentSet!.Rows.Add(row);
-                                totalRows++;
-                                totalCells += row.Length;
+                                var read = reader.ReadAsync(token);
+                                // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
+                                // pages after 200 ms without a row, so a slow statement's rows become readable.
+                                if (!read.IsCompleted && currentSet?.SealDelay is { } delay
+                                    && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
+                                    currentSet.Seal();
+                                if (!await read) break;
+                                if (currentSet is null) continue;
+                                currentSet.CountRow();
+                                events.RowsChanged();
+                                if (args.MaxRows > 0 && storedRows >= args.MaxRows) { currentSet.Skip(TruncationReason.RowLimit); continue; }
+                                var builder = currentSet.BeginRow();
+                                if (builder is null) continue;
+                                int truncatedCells;
+                                try { truncatedCells = plan!.ReadRow(reader, builder, messages.Add); }
+                                catch { currentSet.AbortRow(); throw; }
+                                if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
                             }
-                            currentSet = null;
+                            if (currentSet is not null)
+                            {
+                                currentSet.Complete();
+                                events.Closed(currentSet);
+                                currentSet = null;
+                            }
                         } while (await reader.NextResultAsync(token));
                         if (reader.RecordsAffected >= 0) recordsAffected = Math.Max(0, recordsAffected) + reader.RecordsAffected;
                     }
@@ -388,6 +425,7 @@ internal sealed class SqlService : IRequestDispatcher
                     // Like SSMS's default, a batch that raised an error stops the remaining batches.
                     if (errors.Count > 0) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
                     completed++;
+                    events.Progress(completed, totalBatches, batchNumber, iteration);
                 }
             }
         }
@@ -423,6 +461,12 @@ internal sealed class SqlService : IRequestDispatcher
         finally
         {
             queries.TryRemove(args.QueryId, out _);
+            // A set cut short keeps the rows it stored.
+            foreach (var set in sets.Where(set => set.IsOpen))
+            {
+                set.Complete();
+                events.Closed(set);
+            }
             if (entered && session is not null)
             {
                 session.Connection.FireInfoMessageEventOnUserErrors = false;
@@ -438,46 +482,93 @@ internal sealed class SqlService : IRequestDispatcher
             }
         }
         var output = messages.Snapshot();
-        if (sets.Any(set => set.Truncated)) output.Add("Results were truncated by display limits. Display limits do not stop script execution.");
-        if (discardedSets) output.Add("Only the first ten result sets are displayed. Display limits do not stop script execution.");
-        if (failure is not null && batchNumber > 0) output.Add("Stopped at batch " + batchNumber + ", repetition " + iteration + "; " + completed + " of " + batches.Sum(batch => batch.RepeatCount) + " batch executions completed.");
-        return new(sets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            batches.Sum(batch => batch.RepeatCount), database, messages.Truncated);
+        var descriptors = sets.Select(set => set.Describe()).ToList();
+        var reasons = descriptors.Select(set => set.Truncated).ToHashSet();
+        if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) output.Add("Results were truncated by display limits. Display limits do not stop script execution.");
+        if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
+            output.Add("Results were truncated because the result memory budget (" + (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes) / (1024 * 1024)
+                + " MB) is full. Execution continued; close other query results to free memory.");
+        if (reasons.Contains("systemMemory")) output.Add("Results were truncated because the computer is low on memory. Execution continued.");
+        if (discardedSets > 0) output.Add("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString(CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
+        if (failure is not null && batchNumber > 0) output.Add("Stopped at batch " + batchNumber + ", repetition " + iteration + "; " + completed + " of " + totalBatches + " batch executions completed.");
+        return new(descriptors, discardedSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
+            totalBatches, database, messages.Truncated, new ResultBudget(store.UsedBytes, store.GlobalBytes, store.QueryBytes));
     }
 
-    private enum CellMode : byte { Value, SqlValue, Bytes }
-
-    /// <summary>Falls back per column when the CLR value cannot be materialized, e.g. CLR UDTs without
-    /// Microsoft.SqlServer.Types (hierarchyid, geometry, geography) or decimals beyond System.Decimal.</summary>
-    private static object? ReadCell(SqlDataReader reader, int ordinal, CellMode[] modes)
+    /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows
+    /// still being built are not served, so the worker reads again after the next progress event.</summary>
+    private async Task<ResultsReadResult> ReadResultsAsync(ResultsReadArgs args, RequestContext? context)
     {
-        if (modes[ordinal] == CellMode.Value)
+        if (args.ResultId == 0 || args.FirstRow is < 0 or > MaxSafeInteger || args.MaxRows is < 1 or > 65_536)
+            throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
+        if (context is not { IsStream: true }) throw new RequestException("INVALID_REQUEST", "Result pages are read as a stream with credit.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var next = args.FirstRow;
+        int pages = 0, rows = 0;
+        foreach (var page in set.PagesFor(args.FirstRow, args.MaxRows))
         {
-            try { return FormatValue(reader.GetValue(ordinal)); }
-            catch (Exception error) when (error is not SqlException and not OperationCanceledException) { modes[ordinal] = CellMode.SqlValue; }
+            // A release ends the read after the page already sent.
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            await context.SendDataAsync(page.Body);
+            next = page.FirstRow + page.Rows;
+            pages++;
+            rows += page.Rows;
         }
-        if (reader.IsDBNull(ordinal)) return null;
-        if (modes[ordinal] == CellMode.SqlValue)
-        {
-            try { return Convert.ToString(reader.GetSqlValue(ordinal), CultureInfo.InvariantCulture); }
-            catch (Exception error) when (error is not SqlException and not OperationCanceledException) { modes[ordinal] = CellMode.Bytes; }
-        }
-        // SSMS also displays CLR UDT values as their serialized bytes.
-        return FormatValue(reader.GetSqlBytes(ordinal).Value);
+        var available = set.RowsAvailable;
+        return new ResultsReadResult(next, available, set.IsComplete && next >= available, pages, rows);
     }
 
-    private static object? FormatValue(object value) => value switch
+    private RequestException Unavailable(uint resultId) => store.WasReleased(resultId)
+        ? new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.")
+        : new RequestException("RESULT_NOT_FOUND", "These results do not exist.");
+
+    private ResultsCloseResult CloseResults(ResultsCloseArgs args)
     {
-        DBNull => null,
-        byte[] bytes => "0x" + Convert.ToHexString(bytes.AsSpan(0, Math.Min(bytes.Length, 8192))) + (bytes.Length > 8192 ? "… [cell truncated]" : ""),
-        DateTime date => date.ToString("O", CultureInfo.InvariantCulture),
-        DateTimeOffset date => date.ToString("O", CultureInfo.InvariantCulture),
-        long or ulong or decimal => Convert.ToString(value, CultureInfo.InvariantCulture),
-        float number when !float.IsFinite(number) => number.ToString(CultureInfo.InvariantCulture),
-        double number when !double.IsFinite(number) => number.ToString(CultureInfo.InvariantCulture),
-        bool or byte or short or int or float or double => value,
-        _ => Convert.ToString(value, CultureInfo.InvariantCulture)
-    };
+        if (args.ResultIds is not { Length: >= 1 and <= 1024 } || args.ResultIds.Contains(0u)) throw new RequestException("INVALID_PARAMS", "Between 1 and 1024 result IDs are required.");
+        var closed = args.ResultIds.Distinct().Count(store.Release);
+        return new ResultsCloseResult(closed, store.UsedBytes);
+    }
+
+    /// <summary>Stores synthetic rows (tests/fixtures shapes W1, B1, N1) through the same budgeted path as a query.</summary>
+    private ResultDescriptor Synthesize(SynthesizeArgs args, CancellationToken token)
+    {
+        if (!SyntheticRows.Shapes.Contains(args.Shape) || args.Rows is < 1 or > 5_000_000) throw new RequestException("INVALID_PARAMS", "Shape must be W1, B1, or N1 with 1 to 5,000,000 rows.");
+        var columns = SyntheticRows.Columns(args.Shape);
+        var set = store.Open(store.BeginQuery("debug:" + Guid.NewGuid(), "debug"), 0, 1, 1, "rows",
+            [.. columns.Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))], [.. columns.Select(column => column.Wire)]);
+        try
+        {
+            for (long row = 0; row < args.Rows; row++)
+            {
+                if ((row & 4095) == 0) token.ThrowIfCancellationRequested();
+                set.CountRow();
+                if (set.BeginRow() is not { } builder) continue;
+                SyntheticRows.WriteCells(args.Shape, row, builder);
+                set.TryCommitRow();
+            }
+            set.Complete();
+            return set.Describe();
+        }
+        catch
+        {
+            store.Release(set.ResultId);
+            throw;
+        }
+    }
+
+    /// <summary>A global results.memory EVENT at most once a second, when usage crosses 50, 75, 90 or 100 % of the budget
+    /// or moves by 64 MiB.</summary>
+    private void ReportMemory()
+    {
+        var used = store.UsedBytes;
+        var global = store.GlobalBytes;
+        var band = used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
+        var previous = Interlocked.Read(ref reportedBytes);
+        if (previous < 0 ? used == 0 : band == reportedBand && Math.Abs(used - previous) < MemoryReportStep) return;
+        Interlocked.Exchange(ref reportedBytes, used);
+        reportedBand = band;
+        publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
+    }
 
     private object Cancel(CancelArgs args)
     {
@@ -497,6 +588,7 @@ internal sealed class SqlService : IRequestDispatcher
         foreach (var query in queries.Values.Where(query => query.SessionId == args.SessionId)) query.Cancel();
         var removed = sessions.TryRemove(args.SessionId, out var session);
         session?.Close();
+        store.ReleaseSession(args.SessionId);
         return new { Closed = removed };
     }
 
@@ -522,11 +614,13 @@ internal sealed class SqlService : IRequestDispatcher
     public void CancelAll() { foreach (var query in queries.Values) query.Cancel(); }
     public void Dispose()
     {
+        memoryTimer?.Dispose();
         CancelAll();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();
         pools.Clear();
         connections.Clear();
+        store.ReleaseAll();
         SqlConnection.ClearAllPools();
     }
 }

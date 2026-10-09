@@ -25,6 +25,8 @@ async function start() {
   // React renders only after a theme is applied, so the first frame already has its colors.
   const theme = await ThemeService.create(window.varia, domThemeTarget(monaco))
   const workbench = createWorkbench(window.varia, monaco, theme)
+  // Smoke tests drive the results API directly (backend-smoke.mjs); main enables test mode only in unpackaged smoke runs.
+  if (window.varia.testMode) Object.assign(window, { __variaResults: workbench.results })
   const root = createRoot(document.getElementById('root')!)
   root.render(<React.StrictMode><WorkbenchProvider workbench={workbench}><App /></WorkbenchProvider></React.StrictMode>)
   // Workbench lifetime is outside React effects, including StrictMode's effect replay.

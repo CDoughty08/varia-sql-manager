@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { BackendState, ConnectionInfo, ConnectionOptions, QueryResult, VariaApi } from '../../src/shared/contracts'
+import type { BackendState, ConnectionInfo, ConnectionOptions, DisplayQueryResult, VariaApi } from '../../src/shared/contracts'
 import type { Platform } from '../../src/shared/commands/keybindings'
 import { CommandService } from '../../src/renderer/src/core/commands'
 import { ContextKeyService } from '../../src/renderer/src/core/contextkeys'
@@ -9,7 +9,7 @@ import { ConnectionService } from '../../src/renderer/src/services/connections'
 import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
 import { FileService } from '../../src/renderer/src/services/files'
-import { QueryService } from '../../src/renderer/src/services/queries'
+import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
 import { filesContribution } from '../../src/renderer/src/contributions/files'
@@ -41,7 +41,7 @@ export function backendApi(initial: BackendState = { status: 'starting', generat
     listeners
   }
 }
-export const queryOutput: QueryResult = { status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false }
+export const queryOutput: DisplayQueryResult = { status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false }
 
 /** Storage backed by a Map, for the command history. */
 export function memoryStorage(initial: Record<string, string> = {}): HistoryStorage & { readonly values: Map<string, string> } {
@@ -81,7 +81,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const doc = documentFixture()
   const api = {
     ...doc.api,
-    execute: vi.fn<VariaApi['execute']>(async () => ({ ok: true, value: queryOutput })),
+    execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
@@ -116,7 +116,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     themeContribution(workbench, api, options.timers), backendContribution(workbench)]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
-    const pending = deferred<Awaited<ReturnType<VariaApi['execute']>>>()
+    const pending = deferred<Awaited<ReturnType<QueryApi['execute']>>>()
     api.execute.mockReturnValueOnce(pending.promise)
     const running = queries.execute()
     return { finish: async () => { pending.resolve({ ok: true, value: queryOutput }); await running } }

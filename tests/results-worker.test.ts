@@ -1,0 +1,175 @@
+import { describe, expect, it } from 'vitest'
+import { ResultsWorkerCore, type WorkerLimits } from '../src/renderer/src/results/worker-core'
+import type { WorkerResponse } from '../src/renderer/src/results/worker-protocol'
+import type { WireKind } from '../src/shared/contracts'
+import type { PortRequest } from '../src/shared/ipc/port-messages'
+import { encodePage, type PageCell } from '../src/shared/ipc/wire/pages'
+
+const wires: WireKind[] = ['text', 'text', 'binary']
+const key = { generation: 1, resultId: 5 }
+/** Row r: its number, a NULL every 4th row, and two bytes. */
+const cells = (row: number): PageCell[] => [String(row), row % 4 === 3 ? null : 'name ' + row, new Uint8Array([row & 0xff, 0xab])]
+const page = (firstRow: number, rows: number, resultId = 5): ArrayBuffer => {
+  const bytes = encodePage({ resultId, firstRow, columns: wires.map(wire => ({ wire })), rows: Array.from({ length: rows }, (_, index) => cells(firstRow + index)) })
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+}
+
+function fixture(limits: Partial<WorkerLimits> = {}) {
+  const posted: WorkerResponse[] = []
+  const sent: PortRequest[] = []
+  const core = new ResultsWorkerCore({ post: message => { posted.push(message) }, limits })
+  core.attach({ postMessage: message => { sent.push(message as PortRequest) } })
+  core.receive({ t: 'backend', generation: 1, status: 'ready' })
+  let id = 1
+  const window = (first: number, count: number, patch: Record<string, unknown> = {}) => {
+    const request = { type: 'window' as const, id: id++, key, wires, first, count, colStart: 0, colEnd: 3, maxCellChars: 1024, textBudget: 1_000_000, ...patch }
+    core.handle(request)
+    return request.id
+  }
+  const reads = () => sent.filter((request): request is Extract<PortRequest, { t: 'read' }> => request.t === 'read')
+  /** Answers a read with 64-row pages covering it, up to `available` rows, then ends it. */
+  const serve = (rid: number, available = Number.POSITIVE_INFINITY) => {
+    const read = reads().find(item => item.rid === rid)!
+    let row = Math.floor(read.firstRow / 64) * 64, seq = 0
+    const end = Math.min(read.firstRow + read.maxRows, available)
+    for (; row < end; row += 64) core.receive({ t: 'page', rid, seq: ++seq, body: page(row, Math.min(64, available - row)) })
+    core.receive({ t: 'end', rid, ok: true, result: { nextRow: Math.min(row, available), rowsAvailable: available, complete: row >= available, pages: seq, rows: Math.min(row, available) - read.firstRow } })
+  }
+  const answer = (requestId: number) => posted.find(message => 'id' in message && message.id === requestId)
+  return { core, posted, sent, window, reads, serve, answer }
+}
+
+describe('results worker core', () => {
+  it('reads the missing rows once, grants credit after caching each page, and answers with display text and flags', () => {
+    const { window, reads, serve, answer, sent, core } = fixture()
+    const id = window(0, 100)
+    expect(reads()).toEqual([{ t: 'read', rid: 1, generation: 1, resultId: 5, firstRow: 0, maxRows: 100, credit: 4 * 1024 * 1024 }])
+    serve(1)
+    expect(sent.filter(request => request.t === 'credit').map(request => request.t === 'credit' && request.rid)).toEqual([1, 1])
+    const result = answer(id)
+    if (result?.type !== 'window') throw new Error('No window: ' + JSON.stringify(result))
+    expect([result.first, result.count, result.colStart, result.colEnd, result.text.length]).toEqual([0, 100, 0, 3, 300])
+    expect(result.text.slice(0, 12)).toEqual(['0', 'name 0', '0x00AB', '1', 'name 1', '0x01AB', '2', 'name 2', '0x02AB', '3', '', '0x03AB'])
+    expect([...result.flags.slice(9, 12)]).toEqual([0, 1, 0])
+    expect(core.cachedPages).toBe(2)
+    // Cached rows are answered without another read.
+    const again = window(10, 20, { colStart: 1, colEnd: 2 })
+    expect(reads()).toHaveLength(1)
+    const narrow = answer(again)
+    expect(narrow?.type === 'window' && narrow.text).toEqual(Array.from({ length: 20 }, (_, index) => (10 + index) % 4 === 3 ? '' : 'name ' + (10 + index)))
+  })
+
+  it('caps cells and the window text budget, and marks what they cut', () => {
+    const { window, serve, answer } = fixture()
+    const id = window(0, 2, { maxCellChars: 3, textBudget: 7 })
+    serve(1)
+    const result = answer(id)
+    if (result?.type !== 'window') throw new Error('No window')
+    // Row 0: '0', 'nam' (the cell cap), '0x' (no whole byte fits in 3 characters); row 1: '1', then the budget is spent.
+    expect(result.text).toEqual(['0', 'nam', '0x', '1', '', ''])
+    expect([...result.flags]).toEqual([0, 2, 2, 0, 8, 8])
+  })
+
+  it('shares reads between windows and cancels a read only when nobody waits for it', () => {
+    const { window, reads, sent, core, serve, answer } = fixture()
+    const first = window(0, 64)
+    const second = window(0, 64)
+    expect(reads()).toHaveLength(1)
+    core.handle({ type: 'cancel', id: first })
+    expect(sent.some(request => request.t === 'cancel')).toBe(false)
+    core.handle({ type: 'cancel', id: second })
+    expect(sent.filter(request => request.t === 'cancel')).toEqual([{ t: 'cancel', rid: 1 }])
+    // Pages of a cancelled read are neither cached nor credited.
+    serve(1)
+    expect(core.cachedPages).toBe(0)
+    expect(sent.some(request => request.t === 'credit')).toBe(false)
+    expect(answer(first)).toBeUndefined()
+    expect(answer(second)).toBeUndefined()
+  })
+
+  it('shrinks a window to the rows the backend has sealed so far', () => {
+    const { window, serve, answer } = fixture()
+    const id = window(0, 200)
+    serve(1, 70)
+    const result = answer(id)
+    expect(result?.type === 'window' && [result.count, result.text.length]).toEqual([70, 210])
+  })
+
+  it('bounds the cache but keeps the pages a pending window covers', () => {
+    const { window, serve, core, reads, answer } = fixture({ cachePages: 2 })
+    window(0, 64)
+    serve(1)
+    window(64, 64)
+    serve(2)
+    window(128, 64)
+    serve(3)
+    expect(core.cachedPages).toBe(2)
+    // The oldest page went first: rows 0–63 must be read again.
+    const id = window(0, 192)
+    expect(reads().at(-1)).toMatchObject({ firstRow: 0, maxRows: 64 })
+    serve(4)
+    expect(answer(id)?.type === 'window' && (answer(id) as { count: number }).count).toBe(192)
+    expect(core.cachedPages).toBe(3)
+  })
+
+  it('fails pending work when the backend generation changes, and refuses the old generation afterwards', () => {
+    const { window, core, posted, serve, answer } = fixture()
+    window(0, 64)
+    serve(1)
+    const pending = window(64, 64)
+    core.receive({ t: 'backend', generation: 2, status: 'starting' })
+    expect(answer(pending)).toEqual({ type: 'error', id: pending, code: 'RESULT_UNAVAILABLE', message: 'These results are no longer available because the SQL backend restarted.' })
+    expect(core.cachedPages).toBe(0)
+    const later = window(0, 10)
+    expect(answer(later)).toMatchObject({ type: 'error', code: 'RESULT_UNAVAILABLE' })
+    expect(posted.filter(message => message.type === 'backend').map(message => message.type === 'backend' && message.generation)).toEqual([1, 2])
+  })
+
+  it('contains an invalid page: the read ends with PAGE_INVALID, nothing is cached, and the worker keeps serving', () => {
+    const { window, core, sent, answer, serve } = fixture()
+    const id = window(0, 64)
+    const corrupt = new Uint8Array(page(0, 64))
+    corrupt[corrupt.length - 1] ^= 0xff
+    corrupt[20] = 0xff
+    core.receive({ t: 'page', rid: 1, seq: 1, body: corrupt.buffer })
+    expect(answer(id)).toMatchObject({ type: 'error', code: 'PAGE_INVALID' })
+    expect(sent.filter(request => request.t === 'cancel')).toEqual([{ t: 'cancel', rid: 1 }])
+    expect(core.cachedPages).toBe(0)
+    // A page of another result is just as invalid for this read.
+    const other = window(0, 64)
+    core.receive({ t: 'page', rid: 2, seq: 1, body: page(0, 64, 6) })
+    expect(answer(other)).toMatchObject({ type: 'error', code: 'PAGE_INVALID' })
+    const good = window(0, 64)
+    serve(3)
+    expect(answer(good)).toMatchObject({ type: 'window', count: 64 })
+  })
+
+  it('reads a full cell, closes results, forwards query events, and reports a missing port', () => {
+    const { core, window, serve, sent, posted } = fixture()
+    window(0, 64)
+    serve(1)
+    core.handle({ type: 'cell', id: 50, key, wires, row: 5, col: 1 })
+    expect(posted.at(-1)).toEqual({ type: 'cell', id: 50, text: 'name 5', isNull: false, truncated: false })
+    core.handle({ type: 'close', id: 51, generation: 1, resultIds: [5] })
+    expect(sent.at(-1)).toEqual({ t: 'close', rid: 2, generation: 1, resultIds: [5] })
+    expect(core.cachedPages).toBe(0)
+    core.receive({ t: 'end', rid: 2, ok: true, result: { closed: 1, usedBytes: 0 } })
+    expect(posted.at(-1)).toEqual({ type: 'closed', id: 51, closed: 1, usedBytes: 0 })
+    core.receive({ t: 'query', queryId: 'q', event: { type: 'messages', messages: ['hello'] } })
+    core.receive({ t: 'memory', usedBytes: 1, globalBytes: 2 })
+    expect(posted.slice(-2)).toEqual([{ type: 'query', queryId: 'q', event: { type: 'messages', messages: ['hello'] } }, { type: 'memory', usedBytes: 1, globalBytes: 2 }])
+    const detached = new ResultsWorkerCore({ post: message => { posted.push(message) } })
+    detached.handle({ type: 'window', id: 60, key, wires, first: 0, count: 1, colStart: 0, colEnd: 3, maxCellChars: 10, textBudget: 10 })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 60, code: 'PORT_CLOSED' })
+  })
+
+  it('bounds windows to 4,096 rows and 262,144 cells', () => {
+    const { window, reads } = fixture()
+    window(0, 100_000)
+    expect(reads()[0].maxRows).toBe(4096)
+    const wide = Array.from({ length: 200 }, () => 'text' as const)
+    const { core, reads: wideReads } = fixture()
+    core.handle({ type: 'window', id: 1, key, wires: wide, first: 0, count: 4096, colStart: 0, colEnd: 200, maxCellChars: 10, textBudget: 10 })
+    expect(wideReads()[0].maxRows).toBe(Math.floor(262_144 / 200))
+  })
+})

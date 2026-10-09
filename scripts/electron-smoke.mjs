@@ -1,10 +1,16 @@
 import { _electron as electron, expect } from '@playwright/test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
-const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
+// The fake backend (tests/fixtures/backend.mjs, workbench mode) speaks protocol v2 through main's real pipeline and
+// serves the SQL fixtures below as stored result pages; its control directory records calls and holds methods on cue.
+const control = await mkdtemp(resolve('artifacts', 'electron-control-'))
+await mkdir(join(control, 'hold'))
+await mkdir(join(control, 'allow'))
+const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
@@ -51,14 +57,14 @@ try {
   const page = await application.firstWindow()
   const failures = []
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok).toBe(true)
   expect(health.value.protocolVersion).toBe(2)
   // Backend failures reach the renderer with their protocol v2 error code.
   expect(await page.evaluate(() => window.varia.databases(crypto.randomUUID()))).toEqual({ ok: false, error: 'Connect to a SQL Server first.', code: 'NOT_CONNECTED' })
-  expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined' })
+  expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke, port: typeof window.varia.port, postMessage: typeof window.varia.postMessage }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined', port: 'undefined', postMessage: 'undefined' })
   expect(await application.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox'))).toBe(process.platform === 'linux' && !launchOptions.chromiumSandbox)
   await expect(page.locator('.app-header')).toHaveCount(0)
   await expect(page.getByRole('menubar', { name: 'Application menu' })).toBeVisible()
@@ -239,68 +245,8 @@ try {
   await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(1)
   await expect(page.locator('.monaco-editor')).toBeVisible()
 
-  // Stub SQL responses to exercise multi-server UI routing without external credentials.
-  await application.evaluate(({ ipcMain }, realHealth) => {
-    globalThis.variaCalls = []
-    globalThis.variaConnections = {}
-    globalThis.variaPending = {}
-    ipcMain.removeHandler('varia:request')
-    ipcMain.handle('varia:request', async (_event, method, params) => {
-      globalThis.variaCalls.push({ method, params })
-      if (method === 'system.health') return { ok: true, value: realHealth }
-      if (method === 'connections.connect') {
-        const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.test' }
-        globalThis.variaConnections[info.id] = info
-        return { ok: true, value: info }
-      }
-      if (method === 'connections.disconnect') { delete globalThis.variaConnections[params.connectionId]; return { ok: true, value: { disconnected: true } } }
-      if (method === 'databases.list') return { ok: true, value: [
-        { name: 'master', isSystem: true, isSnapshot: false },
-        { name: 'model', isSystem: true, isSnapshot: false },
-        { name: 'msdb', isSystem: true, isSnapshot: false },
-        { name: 'tempdb', isSystem: true, isSnapshot: false },
-        { name: 'AppData', isSystem: false, isSnapshot: false },
-        { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
-      ] }
-      if (method === 'server.objects.list') {
-        if (params.kind === 'audits' && !globalThis.variaAuditAllowed) return { ok: false, error: 'Test permission denied for server audits.' }
-        const objects = {
-          logins: [{ name: 'sa', description: 'SQL_LOGIN' }],
-          serverRoles: ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin'].map(name => ({ name, description: 'Fixed server role' })),
-          credentials: [],
-          cryptographicProviders: [{ name: 'Test EKM Provider', description: 'Enabled' }],
-          audits: [{ name: 'LoginAudit', description: 'FILE · Enabled' }],
-          serverAuditSpecifications: [{ name: 'LoginAuditSpec', description: 'Enabled' }]
-        }
-        return { ok: true, value: objects[params.kind] }
-      }
-      if (method === 'tables.list') return { ok: true, value: [{ schema: 'dbo', name: 'Orders' }] }
-      if (method === 'tables.script') return { ok: true, value: { sql: 'CREATE TABLE dbo.Orders (Id int);' } }
-      if (method === 'query.cancel') {
-        globalThis.variaPending[params.queryId]?.({ ok: false, error: 'The query was cancelled.' })
-        delete globalThis.variaPending[params.queryId]
-        return { ok: true, value: { cancelled: true } }
-      }
-      if (method === 'query.session.close') {
-        if (globalThis.variaHoldSessionClose) await new Promise(resolve => { globalThis.variaReleaseSessionClose = resolve })
-        return { ok: true, value: { closed: true } }
-      }
-      if (method === 'query.execute') {
-        if (params.sql.includes('BATCH_STATS_FIXTURE')) return { ok: true, value: {
-          resultSets: [{ columns: [{ name: 'retained', dataType: 'int' }], rows: [[42]], truncated: false, batchNumber: 1, iteration: 1 }],
-          messages: ['SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.', "Table '#temp'. Scan count 1, logical reads 2."], recordsAffected: -1, elapsedMs: 3,
-          status: 'failed', error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8: Must declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 1, totalBatches: 3, database: params.database, messagesTruncated: false
-        } }
-        if (params.sql.includes('XML_PLAN_FIXTURE')) return { ok: true, value: {
-          resultSets: [{ columns: [{ name: 'answer', dataType: 'int' }], rows: [[1]], truncated: false, batchNumber: 2 }, { columns: [{ name: 'Microsoft SQL Server 2005 XML Showplan', dataType: 'nvarchar' }], rows: [['<ShowPlanXML><BatchSequence><Batch /></BatchSequence></ShowPlanXML>']], truncated: false, kind: 'executionPlan', batchNumber: 2 }],
-          messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 3, totalBatches: 3, database: params.database, messagesTruncated: false
-        } }
-        if (params.sql.includes('WAIT_FOR_CANCEL')) return new Promise(resolve => { globalThis.variaPending[params.queryId] = resolve })
-        return { ok: true, value: { resultSets: [{ columns: [{ name: 'server', dataType: 'nvarchar' }, { name: 'database', dataType: 'nvarchar' }], rows: [[globalThis.variaConnections[params.connectionId].server, params.database]], truncated: false }], messages: [], recordsAffected: -1, elapsedMs: 1 } }
-      }
-      return { ok: false, error: 'Unsupported test operation.' }
-    })
-  }, health.value)
+  // Multi-server routing against the fake backend's fixtures, without external credentials.
+  const executions = async () => (await calls()).filter(call => call.method === 'query.execute')
   async function connect(server) {
     await page.getByRole('button', { name: 'Connect', exact: true }).click()
     await page.getByLabel('Server Name', { exact: true }).fill(server)
@@ -328,7 +274,7 @@ try {
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect(page.locator('.results-grid')).toContainText('server-a')
   await expect(page.locator('.results-grid')).toContainText('AppData')
-  const executed = await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'query.execute').map(call => call.params))
+  const executed = (await executions()).map(call => call.params)
   expect(executed.map(call => [call.connectionId, call.database])).toEqual([[idB, 'master'], [idA, 'AppData']])
   expect(executed.every(call => !!call.sessionId && call.startLine === 1)).toBe(true)
   expect(executed.every(call => call.timeoutSeconds === 0)).toBe(true)
@@ -341,20 +287,22 @@ try {
   await page.locator('.query-tabs').getByRole('tab', { name: tabA, exact: true }).click()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('F5')
-  await expect.poll(() => application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'query.execute').at(-1)?.params.sql)).toBe('SELECT 20;')
-  expect(await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'query.execute').at(-1).params.startLine)).toBe(3)
+  await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
+  expect((await executions()).at(-1).params.startLine).toBe(3)
   await expect(page.getByRole('button', { name: /Execute/ })).toBeEnabled()
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Control+Enter')
-  await expect.poll(() => application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'query.execute').at(-1)?.params.sql.replaceAll('\r\n', '\n'))).toBe('-- heading\nSELECT 10;\nSELECT 20;')
-  const beforeRetarget = await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'query.execute').length)
-  await application.evaluate(() => { globalThis.variaHoldSessionClose = true })
+  await expect.poll(async () => (await executions()).at(-1)?.params.sql.replaceAll('\r\n', '\n')).toBe('-- heading\nSELECT 10;\nSELECT 20;')
+  const beforeRetarget = (await executions()).length
+  const sessionCloses = async () => (await calls()).filter(call => call.method === 'query.session.close').length
+  const closesBefore = await sessionCloses()
+  await writeFile(join(control, 'hold', 'query.session.close'), '')
   await page.getByLabel('Query server', { exact: true }).selectOption(idB)
-  await expect.poll(() => application.evaluate(() => typeof globalThis.variaReleaseSessionClose)).toBe('function')
+  await expect.poll(sessionCloses).toBe(closesBefore + 1)
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('F5')
-  expect(await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'query.execute').length)).toBe(beforeRetarget)
-  await application.evaluate(() => { globalThis.variaHoldSessionClose = false; globalThis.variaReleaseSessionClose(); delete globalThis.variaReleaseSessionClose })
+  expect((await executions()).length).toBe(beforeRetarget)
+  await rm(join(control, 'hold', 'query.session.close'))
   await expect(page.getByLabel('Query server', { exact: true })).toBeEnabled()
   await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idB)
   await page.getByLabel('Query server', { exact: true }).selectOption(idA)
@@ -391,16 +339,16 @@ try {
   await heading('System Databases').click()
   await expect(folder('System Databases').locator('[data-database="master"]')).toBeHidden()
   await heading('Database Snapshots').click()
-  expect(await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'server.objects.list').length)).toBe(0)
+  expect((await calls()).filter(call => call.method === 'server.objects.list').length).toBe(0)
   await heading('Security').click()
   for (const label of ['Logins', 'Server Roles', 'Credentials', 'Cryptographic Providers', 'Audits', 'Server Audit Specifications']) await expect(heading(label)).toBeVisible()
-  expect(await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'server.objects.list').length)).toBe(0)
+  expect((await calls()).filter(call => call.method === 'server.objects.list').length).toBe(0)
   await heading('Server Roles').click()
   await expect(folder('Server Roles').getByText('sysadmin', { exact: true })).toBeVisible()
   await heading('Server Roles').click()
   await expect(folder('Server Roles').getByText('sysadmin', { exact: true })).toBeHidden()
   await heading('Server Roles').click()
-  expect(await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'server.objects.list' && call.params.kind === 'serverRoles').length)).toBe(1)
+  expect((await calls()).filter(call => call.method === 'server.objects.list' && call.params.kind === 'serverRoles').length).toBe(1)
   await heading('Logins').click()
   await expect(folder('Logins').getByText('sa', { exact: true })).toBeVisible()
   await heading('Credentials').click()
@@ -415,16 +363,16 @@ try {
   await expect(folder('Server Audit Specifications').getByText('LoginAuditSpec', { exact: true })).toBeVisible()
   await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idA)
   await expect(page.getByLabel('Query database', { exact: true })).toHaveValue('AppData')
-  await application.evaluate(() => { globalThis.variaAuditAllowed = true })
+  await writeFile(join(control, 'allow', 'audits'), '')
   await page.getByRole('button', { name: 'Refresh Object Explorer', exact: true }).click()
   await expect(folder('Audits').getByText('LoginAudit', { exact: true })).toBeVisible()
   await expect(folder('Audits').getByRole('alert')).toHaveCount(0)
-  expect(await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'server.objects.list' && call.params.kind === 'serverRoles').length)).toBe(2)
+  expect((await calls()).filter(call => call.method === 'server.objects.list' && call.params.kind === 'serverRoles').length).toBe(2)
   const explorerB = page.getByRole('region', { name: 'Server server-b', exact: true })
   await explorerB.getByRole('button', { name: 'Security', exact: true }).click()
   await explorerB.getByRole('button', { name: 'Server Roles', exact: true }).click()
   await expect(explorerB.getByText('sysadmin', { exact: true })).toBeVisible()
-  expect(await application.evaluate(() => globalThis.variaCalls.filter(call => call.method === 'server.objects.list' && call.params.kind === 'serverRoles').map(call => call.params.connectionId))).toEqual([idA, idA, idB])
+  expect((await calls()).filter(call => call.method === 'server.objects.list' && call.params.kind === 'serverRoles').map(call => call.params.connectionId)).toEqual([idA, idA, idB])
   await explorerB.getByRole('button', { name: 'Security', exact: true }).click()
   await expect(folder('Server Roles').getByText('sysadmin', { exact: true })).toBeVisible()
   for (const label of ['Logins', 'Credentials', 'Cryptographic Providers', 'Audits', 'Server Audit Specifications']) await heading(label).click()
@@ -473,7 +421,7 @@ try {
   expect(alignment.titleBarFits).toBe(true)
   await page.screenshot({ path: artifact('workbench-compact.png') })
   expect(failures).toEqual([])
-  console.log('Electron regression checks passed: integrated title bar and native controls, menu IPC and keyboard access, real .NET health, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, SSMS explorer catalogs, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
+  console.log('Electron regression checks passed: integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, SSMS explorer catalogs, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})
@@ -481,13 +429,11 @@ try {
   throw error
 } finally {
   await dialogs({ closeResponse: 1, holdSave: false, holdConfirm: false }).catch(() => {})
-  await application.evaluate(() => {
-    globalThis.variaReleaseSave?.(); globalThis.variaReleaseConfirm?.(); globalThis.variaReleaseSessionClose?.()
-    globalThis.variaHoldSessionClose = false
-    for (const resolve of Object.values(globalThis.variaPending ?? {})) resolve({ ok: false, error: 'Test cleanup' })
-  }).catch(() => {})
+  await application.evaluate(() => { globalThis.variaReleaseSave?.(); globalThis.variaReleaseConfirm?.() }).catch(() => {})
+  await rm(join(control, 'hold'), { recursive: true, force: true })
   const cleanupPage = await application.firstWindow().catch(() => undefined)
   if (cleanupPage) await expect(cleanupPage.getByRole('button', { name: 'Open', exact: true })).toBeEnabled().catch(() => {})
   await application.close()
   await rm(profile, { recursive: true, force: true })
+  await rm(control, { recursive: true, force: true })
 }

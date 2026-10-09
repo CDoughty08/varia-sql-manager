@@ -2,14 +2,20 @@ namespace Varia.Backend.Protocol;
 
 /// <summary>The only writer of stdout, on its own thread. Two lanes: control (HELLO, RESPONSE, EVENT, PONG, GOAWAY) is
 /// always drained before bulk (DATA and stream RESPONSEs), so a large page never delays an answer or a PONG. Frames go
-/// through a 64 KiB buffer that is flushed whenever both lanes are empty; larger frames pass straight through.</summary>
+/// through a 64 KiB buffer that is flushed whenever both lanes are empty; larger frames pass straight through. A DATA
+/// frame is queued as its header plus the stored page array, which is written as is, never copied.</summary>
 internal sealed class Outbound
 {
+    private readonly record struct Outgoing(byte[] Head, byte[]? Body)
+    {
+        public long Length => Head.Length + (Body?.Length ?? 0);
+    }
+
     public const int MaxDroppableFrames = 1000;
     public const long MaxDroppableBytes = 8 * 1024 * 1024;
     private readonly object gate = new();
-    private readonly Queue<byte[]> control = new();
-    private readonly Queue<byte[]> bulk = new();
+    private readonly Queue<Outgoing> control = new();
+    private readonly Queue<Outgoing> bulk = new();
     private readonly Stream output;
     private readonly Action onBroken;
     private readonly Thread thread;
@@ -43,19 +49,22 @@ internal sealed class Outbound
                 dropped++;
                 return false;
             }
-            control.Enqueue(frame);
+            control.Enqueue(new Outgoing(frame, null));
             controlBytes += frame.Length;
             Monitor.Pulse(gate);
         }
         return true;
     }
 
-    public void Bulk(byte[] frame)
+    public void Bulk(byte[] frame) => Bulk(frame, null);
+
+    /// <summary>Queues a frame given as its header and body; the body array is written as is.</summary>
+    public void Bulk(byte[] head, byte[]? body)
     {
         lock (gate)
         {
             if (completing) return;
-            bulk.Enqueue(frame);
+            bulk.Enqueue(new Outgoing(head, body));
             Monitor.Pulse(gate);
         }
     }
@@ -79,7 +88,7 @@ internal sealed class Outbound
             var dirty = false;
             while (true)
             {
-                byte[]? frame = null;
+                Outgoing frame;
                 lock (gate)
                 {
                     if (control.TryDequeue(out frame)) controlBytes -= frame.Length;
@@ -90,13 +99,14 @@ internal sealed class Outbound
                         continue;
                     }
                 }
-                if (frame is null)
+                if (frame.Head is null)
                 {
                     output.Flush();
                     dirty = false;
                     continue;
                 }
-                output.Write(frame);
+                output.Write(frame.Head);
+                if (frame.Body is not null) output.Write(frame.Body);
                 dirty = true;
             }
         }

@@ -1,6 +1,7 @@
 namespace Varia.Backend;
 
-internal sealed class QueryMessages
+/// <param name="stored">Told about each message as it is stored (for query events).</param>
+internal sealed class QueryMessages(Action<string>? stored = null)
 {
     private const int MaxMessages = 1000;
     private const int MaxCharacters = 1_000_000;
@@ -17,6 +18,7 @@ internal sealed class QueryMessages
             if (message.Length > available) { message = message[..available]; Truncated = true; }
             messages.Add(message);
             characters += message.Length;
+            stored?.Invoke(message);
         }
     }
 

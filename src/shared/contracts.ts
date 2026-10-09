@@ -69,21 +69,52 @@ export interface QueryOptions {
   database: string
   sql: string
   queryId: string
+  /** Rows stored across the script's result sets, 0..2,147,483,647; 0 stores up to the memory budget only. */
   maxRows: number
   timeoutSeconds: number
   startLine?: number
+  /** Result sets kept per script, 1..1000 (default 10); later ones are counted, not stored. */
+  maxResultSets?: number
 }
-export interface ResultSet {
-  columns: { name: string; dataType: string }[]
-  rows: (string | number | boolean | null)[][]
-  truncated: boolean
-  incomplete?: boolean
-  batchNumber?: number
-  iteration?: number
-  kind?: 'rows' | 'executionPlan'
+/** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
+export type WireKind = 'text' | 'binary'
+export interface ResultColumn {
+  name: string
+  dataType: string
+  wire: WireKind
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector'
+  maxLength?: number
+  precision?: number
+  scale?: number
+  nullable: boolean
 }
+/** Why a result stopped storing rows: execution always continues. */
+export type TruncationReason = 'rowLimit' | 'queryBudget' | 'globalBudget' | 'systemMemory'
+/**
+ * A result set kept in the backend's memory. Rows are read in pages through the results port; `rowsAvailable` counts the
+ * rows in sealed pages, which is what can be read now. A result belongs to one backend generation.
+ */
+export interface ResultDescriptor {
+  generation: number
+  resultId: number
+  index: number
+  batchNumber: number
+  iteration: number
+  kind: 'rows' | 'executionPlan'
+  columns: ResultColumn[]
+  rowsRead: number
+  rowsStored: number
+  rowsAvailable: number
+  bytesStored: number
+  truncatedCells: number
+  state: 'open' | 'complete' | 'released'
+  truncated?: TruncationReason
+  incomplete: boolean
+}
+/** The query.execute summary: the rows stay in the backend (ResultClient reads them). */
 export interface QueryResult {
-  resultSets: ResultSet[]
+  resultSets: ResultDescriptor[]
+  discardedResultSets: number
   messages: string[]
   recordsAffected: number
   elapsedMs: number
@@ -93,7 +124,33 @@ export interface QueryResult {
   totalBatches: number
   database: string
   messagesTruncated: boolean
+  budget: { usedBytes: number; globalBytes: number; queryBytes: number }
 }
+/** A result set materialised for the PR6 results table (results/legacy.ts): display text, null for NULL. */
+export interface DisplayResultSet {
+  columns: { name: string; dataType: string }[]
+  rows: (string | null)[][]
+  truncated: boolean
+  incomplete?: boolean
+  batchNumber?: number
+  iteration?: number
+  kind?: 'rows' | 'executionPlan'
+}
+export interface DisplayQueryResult extends Omit<QueryResult, 'resultSets' | 'budget' | 'discardedResultSets'> { resultSets: DisplayResultSet[] }
+/** Rows read so far for one result set of a running script. */
+export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number }
+/** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */
+export type QueryEvent =
+  | { type: 'resultSet.opened'; descriptor: ResultDescriptor }
+  | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
+  | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
+  | { type: 'messages'; messages: string[] }
+export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number }
+/** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
+export interface ResultsReadResult { nextRow: number; rowsAvailable: number; complete: boolean; pages: number; rows: number }
+export interface ResultsCloseResult { closed: number; usedBytes: number }
+/** The backend's descriptor, before main stamps its generation. */
+export type BackendResultDescriptor = Omit<ResultDescriptor, 'generation'>
 export interface RpcMethods {
   'system.health': { params: Record<string, never>; result: BackendHealth }
   'connections.connect': { params: ConnectionOptions; result: ConnectionInfo }
@@ -110,6 +167,18 @@ export interface RpcMethods {
   'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
 }
 export type RpcMethod = keyof RpcMethods
+/** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
+export interface PortMethods {
+  'results.read': { params: ResultsReadParams; result: ResultsReadResult }
+  'results.close': { params: { resultIds: number[] }; result: ResultsCloseResult }
+}
+/** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
+export interface DebugMethods {
+  'debug.results.synthesize': { params: { shape: 'W1' | 'B1' | 'N1'; rows: number }; result: BackendResultDescriptor }
+}
+/** Every method main sends to the backend. */
+export interface BackendMethods extends RpcMethods, PortMethods, DebugMethods {}
+export type BackendMethod = keyof BackendMethods
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode }
 
@@ -162,6 +231,11 @@ export interface VariaApi {
   /** Ends the current backend generation and starts the next one; main asks first when servers are connected.
    *  Resolves to false when the user cancels. */
   restartBackend(): Promise<ApiResult<boolean>>
+  /** Asks main for this page's results port. It arrives as a window message { type: 'varia:results-port' } carrying one
+   *  MessagePort, which ResultClient hands to the results worker. */
+  openResultsPort(): Promise<ApiResult<void>>
+  /** True only in unpackaged smoke runs (main passed --varia-test-mode). */
+  readonly testMode: boolean
   openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>

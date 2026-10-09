@@ -1,0 +1,45 @@
+// Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
+// (src/shared/ipc/port-messages.ts).
+import type { BackendStatus, QueryEvent, WireKind } from '../../../shared/contracts'
+import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
+
+/** A result is named by its backend generation and its id within that generation. */
+export interface ResultKey { readonly generation: number; readonly resultId: number }
+
+/** Cell flags in a window: NULL, truncated (stored prefix or display cap), read error, over the window's text budget. */
+export const FLAG_NULL = 1
+export const FLAG_TRUNCATED = 2
+export const FLAG_ERROR = 4
+export const FLAG_OVER_BUDGET = 8
+
+export interface WindowRequest {
+  readonly type: 'window'
+  readonly id: number
+  readonly key: ResultKey
+  readonly wires: readonly WireKind[]
+  readonly first: number
+  readonly count: number
+  readonly colStart: number
+  readonly colEnd: number
+  readonly maxCellChars: number
+  readonly textBudget: number
+}
+
+/** UI → worker. `attach` transfers the port main sent to the page. */
+export type WorkerRequest =
+  | { readonly type: 'attach'; readonly port: MessagePort }
+  | WindowRequest
+  | { readonly type: 'cell'; readonly id: number; readonly key: ResultKey; readonly wires: readonly WireKind[]; readonly row: number; readonly col: number }
+  | { readonly type: 'prefetch'; readonly key: ResultKey; readonly wires: readonly WireKind[]; readonly first: number; readonly count: number }
+  | { readonly type: 'cancel'; readonly id: number }
+  | { readonly type: 'close'; readonly id: number; readonly generation: number; readonly resultIds: readonly number[] }
+
+/** Worker → UI. A window's `flags` buffer is transferred. */
+export type WorkerResponse =
+  | { readonly type: 'window'; readonly id: number; readonly first: number; readonly count: number; readonly colStart: number; readonly colEnd: number; readonly text: string[]; readonly flags: Uint8Array }
+  | { readonly type: 'cell'; readonly id: number; readonly text: string; readonly isNull: boolean; readonly truncated: boolean }
+  | { readonly type: 'closed'; readonly id: number; readonly closed: number; readonly usedBytes: number }
+  | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
+  | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
+  | { readonly type: 'memory'; readonly usedBytes: number; readonly globalBytes: number }
+  | { readonly type: 'backend'; readonly generation: number; readonly status: BackendStatus }

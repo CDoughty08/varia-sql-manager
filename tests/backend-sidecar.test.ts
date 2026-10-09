@@ -6,7 +6,9 @@ import { BackendError } from '../src/main/backend/errors'
 import { backendMethods, deadlineFor } from '../src/shared/ipc/methods'
 import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/ipc/wire/frames'
 import { decodeControl, encodeControl } from '../src/shared/ipc/wire/msgpack'
-import { serverObjectKinds, type RpcMethod, type RpcMethods, type ServerObjectKind } from '../src/shared/contracts'
+import { serverObjectKinds, type BackendMethod, type BackendMethods, type ResultDescriptor, type ServerObjectKind } from '../src/shared/contracts'
+import { decodePage } from '../src/shared/ipc/wire/pages'
+import { cellText } from '../src/shared/ipc/wire/cells'
 import { fuzzSeed, mulberry32 } from './fuzz/prng'
 
 // The Release build, as CI checks it: npm run check builds it before vitest runs.
@@ -18,18 +20,19 @@ afterEach(async () => {
   await Promise.all(connections.splice(0).map(connection => connection.close()))
 })
 
-function backend(): BackendConnection {
-  const connection = new BackendConnection({ command: 'dotnet', args: [dll], cwd: process.cwd(), packaged: false }, 1)
+/** `env` adds variables for the backend, such as its test hooks. */
+function backend(env?: Record<string, string>): BackendConnection {
+  const connection = new BackendConnection({ command: 'dotnet', args: [dll], cwd: process.cwd(), env: env && { ...process.env, ...env }, packaged: false }, 1)
   connections.push(connection)
   return connection
 }
-function call<M extends RpcMethod>(connection: BackendConnection, method: M, params: RpcMethods[M]['params']): Promise<RpcMethods[M]['result']> {
-  return connection.send(method, params, deadlineFor(method, params)).done as Promise<RpcMethods[M]['result']>
+function call<M extends BackendMethod>(connection: BackendConnection, method: M, params: BackendMethods[M]['params']): Promise<BackendMethods[M]['result']> {
+  return connection.send(method, params, deadlineFor(method, params)).done as Promise<BackendMethods[M]['result']>
 }
 
 /** The backend process spoken to frame by frame, for what BackendConnection would never send. */
-function raw() {
-  const child = spawn('dotnet', [dll], { stdio: 'pipe' })
+function raw(env?: Record<string, string>) {
+  const child = spawn('dotnet', [dll], { stdio: 'pipe', env: env && { ...process.env, ...env } })
   processes.push(child)
   const parser = new FrameParser({ maxBody: 16 * 1024 * 1024, direction: 'toMain' })
   const frames: Frame[] = []
@@ -264,4 +267,81 @@ describe('real .NET sidecar frame handling', () => {
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: 'NOT_CONNECTED' })
   })
+})
+
+describe('real .NET sidecar results (test hooks)', () => {
+  const hooks = { VARIA_BACKEND_TEST_HOOKS: '1' }
+  const w1 = ['text', 'text', 'text', 'text', 'text', 'text', 'text', 'text'].map(wire => ({ wire: wire as 'text' }))
+  /** Reads a result as the worker would: credit back after each page, checking the backend never runs ahead of it. */
+  async function readAll(connection: BackendConnection, resultId: number, credit: number) {
+    const pages: { seq: number; firstRow: number; rows: number; first: string }[] = []
+    let granted = credit, received = 0, worstOverdraft = 0
+    const sent = connection.send('results.read', { resultId, firstRow: 0, maxRows: 65_536 }, { ...deadlineFor('results.read', { resultId, firstRow: 0, maxRows: 65_536 }), credit, stream: {
+      data: (seq, body) => {
+        received += body.byteLength
+        worstOverdraft = Math.max(worstOverdraft, received - granted - body.byteLength)
+        const view = decodePage(body, w1)
+        pages.push({ seq, firstRow: view.firstRow, rows: view.rowCount, first: cellText(view, 0, 0).text })
+        granted += body.byteLength
+        connection.credit(sent.id, body.byteLength)
+      }
+    } })
+    const result = await sent.done
+    return { pages, result, worstOverdraft }
+  }
+
+  it('stores synthetic rows and streams their pages in order, within credit', async () => {
+    const connection = backend(hooks)
+    expect((await connection.ready).methods).toContain('debug.results.synthesize')
+    const stored = await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 20_000 }) as ResultDescriptor
+    expect(stored).toMatchObject({ resultId: 1, rowsRead: 20_000, rowsStored: 20_000, rowsAvailable: 20_000, state: 'complete', kind: 'rows', incomplete: false })
+    expect(stored.truncated).toBeUndefined()
+    const { pages, result, worstOverdraft } = await readAll(connection, stored.resultId, 64 * 1024)
+    expect(pages.map(page => page.seq)).toEqual(pages.map((_, index) => index + 1))
+    expect(pages.every((page, index) => page.firstRow === (index === 0 ? 0 : pages[index - 1].firstRow + pages[index - 1].rows) && page.first === String(page.firstRow))).toBe(true)
+    expect(pages.reduce((sum, page) => sum + page.rows, 0)).toBe(20_000)
+    expect(worstOverdraft).toBeLessThanOrEqual(0)
+    expect(result).toEqual({ nextRow: 20_000, rowsAvailable: 20_000, complete: true, pages: pages.length, rows: 20_000 })
+    expect(await call(connection, 'results.close', { resultIds: [stored.resultId] })).toEqual({ closed: 1, usedBytes: 0 })
+    await expect(call(connection, 'results.read', { resultId: stored.resultId, firstRow: 0, maxRows: 10 })).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    const released = connection.send('results.read', { resultId: stored.resultId, firstRow: 0, maxRows: 10 }, { deadlineMs: 60_000, credit: 65_536, stream: { data: () => {} } })
+    await expect(released.done).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+  }, 60_000)
+
+  it('cancels a stream that is waiting for credit', async () => {
+    const connection = backend(hooks)
+    const stored = await call(connection, 'debug.results.synthesize', { shape: 'B1', rows: 2000 }) as ResultDescriptor
+    let pages = 0
+    const sent = connection.send('results.read', { resultId: stored.resultId, firstRow: 0, maxRows: 2000 }, { deadlineMs: 60_000, credit: 64 * 1024, stream: { data: () => { pages++ } } })
+    await new Promise(resolve => setTimeout(resolve, 300))
+    connection.cancel(sent.id, 1)
+    await expect(sent.done).rejects.toMatchObject({ code: 'CANCELLED' })
+    expect(pages).toBe(1)
+    await expect(call(connection, 'system.health', {})).resolves.toMatchObject({ protocolVersion: 2 })
+  }, 60_000)
+
+  it('truncates at the result budget (VARIA_RESULT_BUDGET_BYTES) and frees it on close', async () => {
+    const connection = backend({ ...hooks, VARIA_RESULT_BUDGET_BYTES: String(4 * 1024 * 1024) })
+    expect((await connection.ready).resultBudget).toEqual({ globalBytes: 4 * 1024 * 1024, queryBytes: 2 * 1024 * 1024 })
+    const results: ResultDescriptor[] = []
+    for (let index = 0; index < 3; index++) results.push(await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 50_000 }) as ResultDescriptor)
+    expect(results.map(result => result.truncated)).toEqual(['queryBudget', 'queryBudget', 'globalBudget'])
+    expect(results.every(result => result.rowsRead === 50_000 && result.rowsStored < 50_000 && result.rowsAvailable === result.rowsStored)).toBe(true)
+    expect(await call(connection, 'results.close', { resultIds: results.map(result => result.resultId) })).toEqual({ closed: 3, usedBytes: 0 })
+  }, 60_000)
+
+  it('answers PING while every metadata slot runs a synthetic result', async () => {
+    // Every request stores its rows, so each keeps a thread-pool thread busy (8 at a time, on the metadata slots).
+    const backend = raw({ ...hooks, VARIA_RESULT_BUDGET_BYTES: String(1024 * 1024 * 1024) })
+    await backend.hello()
+    for (let id = 1; id <= 64; id++) backend.request(id, { method: 'debug.results.synthesize', params: { shape: 'W1', rows: 25_000 } })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const started = Date.now()
+    backend.write(encodeFrame(FrameKind.PING, 0, 77))
+    expect((await backend.next(FrameKind.PONG, 5000)).arg).toBe(77)
+    const elapsed = Date.now() - started
+    const answered = backend.frames.filter(frame => frame.kind === FrameKind.RESPONSE).length
+    expect(elapsed, `PONG after ${elapsed} ms with ${answered} of 64 answered`).toBeLessThan(1000)
+    expect(answered).toBeLessThan(64)
+  }, 60_000)
 })

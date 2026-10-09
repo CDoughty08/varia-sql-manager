@@ -1,7 +1,8 @@
 import { z } from 'zod'
-import type { BackendState, LossReason, LostSummary, RpcMethod, RpcMethods } from '../../shared/contracts'
+import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor } from '../../shared/ipc/methods'
-import { PROTOCOL_VERSION, limits as wire } from '../../shared/ipc/wire/protocol'
+import { queryEventSchema, queryResultSchema } from '../../shared/ipc/port-messages'
+import { PROTOCOL_VERSION, limits as wire, type CancelReason } from '../../shared/ipc/wire/protocol'
 import { BackendConnection, systemClock, type BackendHello, type Clock, type ConnectionDeps, type Loss, type SendOptions, type SpawnSpec } from './connection'
 import { BackendError, failureMessage, sentences } from './errors'
 
@@ -25,7 +26,14 @@ export interface SupervisorDeps extends ConnectionDeps {
   unresponsiveMs?: number
   power?: PowerMonitorLike
 }
-export type RequestOptions = Pick<SendOptions, 'stream' | 'credit' | 'onEvent'>
+export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
+  /** Query events, validated and stamped with the generation; an invalid one fails the request (STREAM_PROTOCOL). */
+  onEvent?: (event: QueryEvent) => void
+  /** Only this generation may serve the request, and only while it is ready: results belong to one generation. */
+  generation?: number
+  /** The request's id once it is written, for CREDIT and CANCEL frames. */
+  onSent?: (id: number) => void
+}
 
 const connectResultSchema = z.object({ id: z.string().min(1).max(128) }).loose()
 const idOf = (params: unknown, key: 'connectionId' | 'sessionId'): string | undefined => {
@@ -33,6 +41,8 @@ const idOf = (params: unknown, key: 'connectionId' | 'sessionId'): string | unde
   return typeof value === 'string' ? value : undefined
 }
 const maxSessions = 4096
+
+const stamp = (descriptor: BackendResultDescriptor, generation: number): ResultDescriptor => ({ ...descriptor, generation })
 
 interface Retired { readonly generation: number; readonly reason: string; readonly loss?: Loss; readonly uptimeMs: number; readonly hello?: BackendHello; readonly stderr: readonly string[] }
 interface Waiter { resolve(connection: BackendConnection): void; reject(error: BackendError): void }
@@ -105,10 +115,14 @@ export class BackendSupervisor {
     this.launch()
   }
 
-  async request<M extends RpcMethod>(method: M, params: RpcMethods[M]['params'], o: RequestOptions = {}): Promise<RpcMethods[M]['result']> {
+  /** The generation whose results can be read now: the current one while it is ready. */
+  get readyGeneration(): number | undefined { return this.connection?.isReady ? this.connection.generation : undefined }
+
+  async request<M extends BackendMethod>(method: M, params: BackendMethods[M]['params'], o: RequestOptions = {}): Promise<BackendMethods[M]['result']> {
     this.start()
     const local = this.answerLocally(method, params)
-    if (local) return local.value as RpcMethods[M]['result']
+    if (local) return local.value as BackendMethods[M]['result']
+    if (o.generation !== undefined && this.readyGeneration !== o.generation) throw new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const connection = this.connection ?? await this.upcoming()
     const sessionId = method === 'query.execute' ? idOf(params, 'sessionId') : undefined
     if (sessionId !== undefined) {
@@ -116,8 +130,28 @@ export class BackendSupervisor {
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
     }
-    const result = await connection.send(method, params, { ...deadlineFor(method, params), ...o }).done
-    return this.registered(method, params, result, connection) as RpcMethods[M]['result']
+    const onEvent = o.onEvent
+    const sent = connection.send(method, params, {
+      ...deadlineFor(method, params), stream: o.stream, credit: o.credit,
+      onEvent: onEvent && (raw => {
+        const parsed = queryEventSchema.safeParse(raw)
+        if (!parsed.success) return false
+        const event = parsed.data
+        onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? { ...event, descriptor: stamp(event.descriptor, connection.generation) } : event)
+      })
+    })
+    if (sent.id) o.onSent?.(sent.id)
+    const result = await sent.done
+    return this.registered(method, params, result, connection) as BackendMethods[M]['result']
+  }
+
+  /** More credit for a results.read stream of `generation`, if that generation is still current. */
+  credit(generation: number, id: number, bytes: number): void {
+    if (this.connection?.generation === generation) this.connection.credit(id, bytes)
+  }
+
+  cancel(generation: number, id: number, reason: CancelReason): void {
+    if (this.connection?.generation === generation) this.connection.cancel(id, reason)
   }
 
   /** Ends the current generation (its sessions end with it) and starts the next one at once. A manual restart also
@@ -149,7 +183,7 @@ export class BackendSupervisor {
   }
 
   /** Requests that need no backend: cleanup of what a lost generation held, and refusals. */
-  private answerLocally(method: RpcMethod, params: unknown): { value: unknown } | undefined {
+  private answerLocally(method: BackendMethod, params: unknown): { value: unknown } | undefined {
     const unavailable = this.closing || this.snapshot.status === 'failed'
     const connectionId = idOf(params, 'connectionId')
     if (method === 'connections.disconnect' && (unavailable || (connectionId !== undefined && this.lost.has(connectionId)))) return { value: { disconnected: false } }
@@ -172,7 +206,7 @@ export class BackendSupervisor {
     return new Promise((resolve, reject) => { this.waiting.push({ resolve, reject }) })
   }
 
-  private registered(method: RpcMethod, params: unknown, result: unknown, connection: BackendConnection): unknown {
+  private registered(method: BackendMethod, params: unknown, result: unknown, connection: BackendConnection): unknown {
     if (method === 'connections.connect') {
       const parsed = connectResultSchema.safeParse(result)
       if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
@@ -181,6 +215,13 @@ export class BackendSupervisor {
       else this.markLost(parsed.data.id)
       return { ...parsed.data, generation: connection.generation }
     }
+    // The summary's descriptors name results this generation holds; main stamps the generation on them.
+    if (method === 'query.execute') {
+      const parsed = queryResultSchema.safeParse(result)
+      if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
+      return { ...parsed.data, resultSets: parsed.data.resultSets.map(descriptor => stamp(descriptor, connection.generation)) }
+    }
+    if (method === 'debug.results.synthesize') return stamp(result as BackendResultDescriptor, connection.generation)
     if (method === 'connections.disconnect') { const id = idOf(params, 'connectionId'); if (id !== undefined) this.live.delete(id) }
     if (method === 'query.session.close') { const id = idOf(params, 'sessionId'); if (id !== undefined) this.sessions.delete(id) }
     return result

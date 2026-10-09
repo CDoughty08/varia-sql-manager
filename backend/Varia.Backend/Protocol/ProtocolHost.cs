@@ -173,7 +173,7 @@ internal sealed class ProtocolHost
             Respond(header.Id, Error("BUSY", "The backend is busy. Retry after a running operation finishes."), stream: credit is not null);
             return null;
         }
-        var context = new RequestContext(header.Id, method, dispatcher!.LaneOf(method), header.Arg, credit, Cancelled, SendData);
+        var context = new RequestContext(header.Id, method, dispatcher!.LaneOf(method), header.Arg, credit, Cancelled, SendData, SendEvent);
         contexts[header.Id] = context;
         var task = Task.Run(() => HandleAsync(context, body, start, length));
         work[task] = 0;
@@ -324,7 +324,27 @@ internal sealed class ProtocolHost
         else outbound.Control(frame);
     }
 
-    private void SendData(RequestContext context, uint sequence, byte[] body) => outbound.Bulk(Frames.Encode(FrameKind.Data, context.Id, sequence, body));
+    private void SendData(RequestContext context, uint sequence, byte[] body)
+    {
+        var header = new byte[FrameHeader.Size];
+        new FrameHeader(FrameKind.Data, (uint)body.Length, context.Id, sequence).Write(header);
+        outbound.Bulk(header, body);
+    }
+
+    private void SendEvent(RequestContext context, object value, bool droppable) => Event(context.Id, value, droppable);
+
+    /// <summary>A global EVENT (id 0), such as results.memory. Always droppable.</summary>
+    public void Publish(object value) => Event(0, value, droppable: true);
+
+    private void Event(uint id, object value, bool droppable)
+    {
+        byte[] body;
+        try { body = JsonBridge.Encode(value, json); }
+        catch (InvalidOperationException) { return; }
+        // Events are best effort and bounded at the source; the summary carries everything that matters.
+        if (body.Length > ProtocolLimits.EventBody || Volatile.Read(ref exitCode) >= 0) return;
+        outbound.Control(Frames.Encode(FrameKind.Event, id, 0, body), droppable);
+    }
 
     private int Fatal(string code, string message, int exit, string? diagnostic, bool supported = false)
     {

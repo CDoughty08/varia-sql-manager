@@ -95,11 +95,24 @@ describe('BackendConnection malformed input', () => {
     expect(await loss).toMatchObject({ reason: 'protocol', detail: '8 contained violations' })
   })
   it('passes query events to their request and contains an undecodable one', async () => {
-    const connection = fake('events')
+    const global: unknown[] = []
+    const connection = fake('events', { onGlobalEvent: event => { global.push(event) } })
     const events: unknown[] = []
-    const { done } = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0, onEvent: event => events.push(event) })
+    const { done } = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0, onEvent: event => { events.push(event) } })
     expect(await failure(done)).toMatchObject({ code: 'STREAM_PROTOCOL' })
     expect(events).toEqual([{ type: 'messages', messages: ['first'] }])
+    expect(global).toEqual([{ type: 'results.memory', usedBytes: 1, globalBytes: 2 }])
+    expect(connection.lost).toBeUndefined()
+  })
+  it('fails a request whose event its listener rejects as invalid', async () => {
+    const connection = fake('events')
+    const events: unknown[] = []
+    const { done } = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0, onEvent: event => { events.push(event); return false } })
+    expect(await failure(done)).toMatchObject({ code: 'STREAM_PROTOCOL', message: sentences.invalid })
+    // The request ended at the first event; the undecodable one after it is a late frame.
+    expect(events).toHaveLength(1)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(connection.lateFrames).toBe(1)
   })
 })
 

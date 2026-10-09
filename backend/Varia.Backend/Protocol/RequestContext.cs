@@ -14,6 +14,7 @@ internal sealed class RequestContext : IDisposable
     private readonly CancellationTokenSource source = new();
     private readonly CancellationTokenRegistration registration;
     private readonly Action<RequestContext, uint, byte[]>? sendData;
+    private readonly Action<RequestContext, object, bool>? sendEvent;
     private readonly object gate = new();
     private readonly long started = Environment.TickCount64;
     private int settled;
@@ -23,7 +24,7 @@ internal sealed class RequestContext : IDisposable
     private TaskCompletionSource? creditWaiter;
 
     public RequestContext(uint id, string method, RequestLane lane, uint deadlineMs, long? credit = null,
-        Action<RequestContext>? cancelled = null, Action<RequestContext, uint, byte[]>? sendData = null)
+        Action<RequestContext>? cancelled = null, Action<RequestContext, uint, byte[]>? sendData = null, Action<RequestContext, object, bool>? sendEvent = null)
     {
         Id = id;
         Method = method;
@@ -32,6 +33,7 @@ internal sealed class RequestContext : IDisposable
         IsStream = credit is not null;
         this.credit = credit ?? 0;
         this.sendData = sendData;
+        this.sendEvent = sendEvent;
         registration = source.Token.Register(() =>
         {
             // A header deadline cancels with no reason recorded; claim it, so a later CANCEL cannot relabel the outcome.
@@ -74,7 +76,8 @@ internal sealed class RequestContext : IDisposable
     }
 
     /// <summary>Sends one DATA frame once credit is positive. Credit may go negative by at most this one frame, so a
-    /// page larger than the credit never deadlocks the stream. Throws OperationCanceledException when cancelled.</summary>
+    /// page larger than the credit never deadlocks the stream. The body array is written as is (a stored page is not
+    /// copied), so it must not change afterwards. Throws OperationCanceledException when cancelled.</summary>
     public async ValueTask SendDataAsync(byte[] body)
     {
         if (sendData is null || !IsStream) throw new InvalidOperationException("DATA frames belong to stream requests.");
@@ -96,6 +99,13 @@ internal sealed class RequestContext : IDisposable
             }
             await wait.WaitAsync(Token).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Queues an EVENT frame for this request (query events). Events after the answer are dropped, so they always
+    /// precede it; a droppable event may also be dropped while main is not reading.</summary>
+    public void SendEvent(object value, bool droppable)
+    {
+        if (!IsSettled) sendEvent?.Invoke(this, value, droppable);
     }
 
     private void WakeCreditWaiter()

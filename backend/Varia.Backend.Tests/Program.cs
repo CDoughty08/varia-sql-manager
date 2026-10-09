@@ -63,6 +63,7 @@ catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requ
 ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
+StoreChecks.Run(Check);
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
@@ -84,6 +85,8 @@ var info = await Call<ConnectionInfo>("connections.connect", Live("master"));
 var sessionId = Guid.NewGuid().ToString();
 Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master") =>
     Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine));
+// Rows stay in the backend's result store; read them back as the results worker would, from the stored pages.
+List<string?[]> RowsOf(ResultDescriptor set) => LiveResultChecks.RowsOf(service.Results, set);
 QueryResult result;
 try
 {
@@ -93,7 +96,7 @@ try
     Check(result.Status == "completed", "zero timeout allows execution without a deadline");
     result = await Run("SET STATISTICS TIME, IO ON;\nGO\nCREATE TABLE #VariaBatchTest (id int);\nINSERT #VariaBatchTest VALUES (1);\nGO\nINSERT #VariaBatchTest VALUES (2);\nGO 2\nSELECT COUNT(*) AS count FROM #VariaBatchTest;\nGO");
     Check(result.Status == "completed" && result.CompletedBatches == 5, "batches and repeats execute on one session");
-    Check(Convert.ToInt32(result.ResultSets.Last().Rows[0][0]) == 3, "temporary table persists across GO");
+    Check(Convert.ToInt32(RowsOf(result.ResultSets.Last())[0][0]) == 3, "temporary table persists across GO");
     Check(result.Messages.Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)) && result.Messages.Any(value => value.Contains("logical reads", StringComparison.OrdinalIgnoreCase)), "TIME and IO messages reach output");
     result = await Run("SELECT COUNT(*) FROM #VariaBatchTest;");
     Check(result.Status == "completed" && result.Messages.Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)), "SET options and temp tables persist across Execute calls");
@@ -103,11 +106,11 @@ try
     Check(result.Status == "failed" && result.Error?.Message.Contains("Line 22") == true, "variables are batch scoped and selected-text line offsets are mapped");
     Check(result.CompletedBatches == 1 && !result.Messages.Any(value => value.Contains("SHOULD_NOT_RUN")), "later batches stop on error");
     result = await Run("SELECT 42 AS retained; PRINT 'before error';\nGO\nTHROW 51000, 'expected failure', 1;\nGO\nPRINT 'SHOULD_NOT_RUN';");
-    Check(result.Status == "failed" && result.ResultSets[0].Rows.Count == 1 && result.Messages.Contains("before error"), "partial results and messages survive later batch errors");
+    Check(result.Status == "failed" && RowsOf(result.ResultSets[0]).Count == 1 && result.Messages.Contains("before error"), "partial results and messages survive later batch errors");
     result = await Run("SET STATISTICS TIME, IO OFF;\nGO\nSELECT * FROM #VariaBatchTest;");
     Check(result.Status == "completed" && !result.Messages.Any(value => value.Contains("logical reads", StringComparison.OrdinalIgnoreCase)), "statistics OFF applies to subsequent batches");
     result = await Run("SET STATISTICS XML ON;\nGO\nSELECT COUNT(*) AS planned FROM #VariaBatchTest;\nGO\nSET STATISTICS XML OFF;");
-    Check(result.Status == "completed" && result.ResultSets.Any(set => set.Kind == "executionPlan" && Convert.ToString(set.Rows[0][0])!.Contains("ShowPlanXML")), "STATISTICS XML preserves raw plan output");
+    Check(result.Status == "completed" && result.ResultSets.Any(set => set.Kind == "executionPlan" && Convert.ToString(RowsOf(set)[0][0])!.Contains("ShowPlanXML")), "STATISTICS XML preserves raw plan output");
     result = await Run("SET STATISTICS PROFILE ON;\nGO\nSELECT COUNT(*) AS profiled FROM #VariaBatchTest;\nGO\nSET STATISTICS PROFILE OFF;");
     Check(result.Status == "completed" && result.ResultSets.Any(set => set.Columns.Any(column => column.Name == "Rows") && set.Columns.Any(column => column.Name == "Executes")), "STATISTICS PROFILE returns additional result sets");
     result = await Run("SET SHOWPLAN_XML ON;\nGO\nSELECT COUNT(*) AS estimated FROM #VariaBatchTest;\nGO\nSET SHOWPLAN_XML OFF;");
@@ -118,39 +121,39 @@ try
         Check(result.Status == "completed" && result.ResultSets.Count > 0 && result.ResultSets.All(set => set.Kind == "rows"), mode + " preserves estimated plan result sets");
     }
     result = await Run("SELECT 1 AS before_error; SELECT 1/0 AS failed;\nSELECT 2 AS after_error; PRINT 'after statement error';\nGO\nPRINT 'SHOULD_NOT_RUN';", startLine: 5);
-    Check(result.Status == "failed" && result.ResultSets.Any(set => set.Columns[0].Name == "after_error" && set.Rows.Count == 1) && result.Messages.Contains("after statement error"),
+    Check(result.Status == "failed" && result.ResultSets.Any(set => set.Columns[0].Name == "after_error" && RowsOf(set).Count == 1) && result.Messages.Contains("after statement error"),
         "statement-level errors leave the rest of the batch to SQL Server, as in SSMS");
     Check(result.Error?.Message.Contains("Msg 8134") == true && result.Error.Message.Contains("Line 5") && result.CompletedBatches == 0 && !result.Messages.Contains("SHOULD_NOT_RUN"),
         "a batch with a statement-level error reports its mapped line and stops later batches");
     result = await Run("SELECT hierarchyid::GetRoot() AS h, geography::Point(1, 2, 4326) AS g, CAST(NULL AS hierarchyid) AS n, CAST(12345678901234567890123456789012345678 AS decimal(38,0)) AS d;");
-    Check(result.Status == "completed" && Convert.ToString(result.ResultSets[0].Rows[0][0]) == "0x" && Convert.ToString(result.ResultSets[0].Rows[0][1])!.StartsWith("0xE6100000")
-        && result.ResultSets[0].Rows[0][2] is null && Convert.ToString(result.ResultSets[0].Rows[0][3]) == "12345678901234567890123456789012345678",
+    Check(result.Status == "completed" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "0x" && Convert.ToString(RowsOf(result.ResultSets[0])[0][1])!.StartsWith("0xE6100000")
+        && RowsOf(result.ResultSets[0])[0][2] is null && Convert.ToString(RowsOf(result.ResultSets[0])[0][3]) == "12345678901234567890123456789012345678",
         "CLR UDT values and decimals beyond System.Decimal are displayed instead of failing the script");
     result = await Run("DECLARE @i int = 0; WHILE @i < 50 BEGIN SELECT 1/0; SET @i += 1; END");
     Check(result.Status == "failed" && result.Error?.Message.Contains("and 30 more errors") == true, "errors repeated by a running batch are counted, not accumulated");
     result = await Run("SELECT id, 10 / (id - 5) AS v FROM (VALUES (1), (2), (3), (4), (5), (6)) AS t(id);");
-    Check(result.Status == "failed" && result.ResultSets[0].Incomplete && result.ResultSets[0].Rows.Count < 6, "a result set cut short by a statement error is marked incomplete");
+    Check(result.Status == "failed" && result.ResultSets[0].Incomplete && RowsOf(result.ResultSets[0]).Count < 6, "a result set cut short by a statement error is marked incomplete");
     // RAISERROR WITH NOWAIT flushes the buffered error to the client before the batch waits.
     result = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:00:05';", timeout: 1);
     Check(result.Status == "timedOut" && result.Error?.Message.Contains("Msg 8134") == true, "errors raised before a timeout are still reported");
     result = await Run("SELECT 1;", database: "VariaDatabaseThatDoesNotExist");
     Check(result.Status == "failed" && result.Error?.Message.Contains("Msg 911") == true, "a missing target database fails before any batch runs");
     result = await Run("SELECT DB_NAME();");
-    Check(result.Status == "completed" && Convert.ToString(result.ResultSets[0].Rows[0][0]) == "master", "the session recovers after a failed database change");
+    Check(result.Status == "completed" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "master", "the session recovers after a failed database change");
     result = await Run("SELECT 1 AS a;\nGO\nSELECT * FROM dbo.VariaTableThatDoesNotExist;");
     Check(result.Status == "failed" && result.ResultSets.Count == 1 && result.Error?.Message.Contains("Msg 208") == true, "compile errors in later batches keep earlier output");
     result = await Run("RAISERROR ('expected informational message', 10, 1); PRINT 'expected print';");
     Check(result.Status == "completed" && result.Messages.Contains("expected informational message") && result.Messages.Contains("expected print"), "low severity informational messages do not become errors");
     result = await Run("USE tempdb;\nGO\nSELECT DB_NAME();");
-    Check(result.Status == "completed" && result.Database == "tempdb" && Convert.ToString(result.ResultSets[0].Rows[0][0]) == "tempdb", "USE persists across batches and returns the new database context");
+    Check(result.Status == "completed" && result.Database == "tempdb" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "tempdb", "USE persists across batches and returns the new database context");
     result = await Run("SELECT DB_NAME();", database: result.Database);
-    Check(result.Database == "tempdb" && Convert.ToString(result.ResultSets[0].Rows[0][0]) == "tempdb", "returned database context persists across Execute calls");
+    Check(result.Database == "tempdb" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "tempdb", "returned database context persists across Execute calls");
     result = await Run("USE master; THROW 51000, 'expected context failure', 1;", database: "tempdb");
     Check(result.Status == "failed" && result.Database == "master", "database context is retained even when a later statement fails");
     result = await Run("BEGIN TRANSACTION; INSERT #VariaBatchTest VALUES (9);\nGO\nSELECT @@TRANCOUNT AS openTransactions, COUNT(*) AS count FROM #VariaBatchTest;");
-    Check(result.Status == "completed" && Convert.ToInt32(result.ResultSets[0].Rows[0][0]) == 1 && Convert.ToInt32(result.ResultSets[0].Rows[0][1]) == 4, "GO does not commit an explicit transaction");
+    Check(result.Status == "completed" && Convert.ToInt32(RowsOf(result.ResultSets[0])[0][0]) == 1 && Convert.ToInt32(RowsOf(result.ResultSets[0])[0][1]) == 4, "GO does not commit an explicit transaction");
     result = await Run("SELECT @@TRANCOUNT; ROLLBACK; SELECT COUNT(*) FROM #VariaBatchTest;");
-    Check(result.Status == "completed" && Convert.ToInt32(result.ResultSets[0].Rows[0][0]) == 1 && Convert.ToInt32(result.ResultSets[1].Rows[0][0]) == 3, "transactions persist between Execute calls until explicitly ended");
+    Check(result.Status == "completed" && Convert.ToInt32(RowsOf(result.ResultSets[0])[0][0]) == 1 && Convert.ToInt32(RowsOf(result.ResultSets[1])[0][0]) == 3, "transactions persist between Execute calls until explicitly ended");
     var lockSession = Guid.NewGuid().ToString();
     var lockName = "VariaLockTest-" + lockSession;
     result = await Run($"BEGIN TRANSACTION; EXEC sp_getapplock @Resource = '{lockName}', @LockMode = 'Exclusive', @LockOwner = 'Transaction';", lockSession);
@@ -158,11 +161,11 @@ try
     await Call<object>("query.session.close", new SessionArgs(lockSession));
     // The probe opens in tempdb so it cannot reuse a pooled session connection, then locks in master.
     result = await Run($"USE master; BEGIN TRANSACTION; DECLARE @granted int; EXEC @granted = sp_getapplock @Resource = '{lockName}', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 3000; SELECT @granted; ROLLBACK;", Guid.NewGuid().ToString(), database: "tempdb");
-    Check(result.Status == "completed" && Convert.ToInt32(result.ResultSets[0].Rows[0][0]) >= 0, "closing a tab rolls back its open transaction and releases its locks");
+    Check(result.Status == "completed" && Convert.ToInt32(RowsOf(result.ResultSets[0])[0][0]) >= 0, "closing a tab rolls back its open transaction and releases its locks");
     try { await Run("INSERT #VariaBatchTest VALUES (9);\nGO\nSELECT 1;\nGO 0"); throw new Exception("Invalid script executed"); }
     catch (RequestException error) { Check(error.Code == "INVALID_SCRIPT", "invalid GO fails preflight"); }
     result = await Run("SELECT COUNT(*) FROM #VariaBatchTest;");
-    Check(result.Status == "completed" && Convert.ToInt32(result.ResultSets[0].Rows[0][0]) == 3, "invalid GO executes none of the earlier batches");
+    Check(result.Status == "completed" && Convert.ToInt32(RowsOf(result.ResultSets[0])[0][0]) == 3, "invalid GO executes none of the earlier batches");
     var slowId = Guid.NewGuid().ToString();
     var slow = Run("SELECT 7 AS retained;\nGO\nWAITFOR DELAY '00:00:10';\nGO\nPRINT 'SHOULD_NOT_RUN';", query: slowId);
     await Task.Delay(400);
@@ -174,10 +177,11 @@ try
     result = await Run("WAITFOR DELAY '00:00:00.700';\nGO\nWAITFOR DELAY '00:00:00.700';\nGO\nPRINT 'SHOULD_NOT_RUN';", timeout: 1);
     Check(result.Status == "timedOut" && result.CompletedBatches == 1, "one deadline covers the entire script");
     result = await Run("SELECT TOP (10) object_id FROM sys.all_objects;\nGO 2\nPRINT 'after display cap';", maxRows: 2);
-    Check(result.Status == "completed" && result.ResultSets.Sum(set => set.Rows.Count) == 2 && result.Messages.Contains("after display cap"), "display limits do not skip later SQL");
+    Check(result.Status == "completed" && result.ResultSets.Sum(set => RowsOf(set).Count) == 2 && result.Messages.Contains("after display cap"), "display limits do not skip later SQL");
     await Call<object>("query.session.close", new SessionArgs(sessionId));
     result = await Run("SELECT * FROM #VariaBatchTest;");
     Check(result.Status == "failed", "closing a tab removes temporary objects and session state");
+    await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }
 finally { await Call<object>("connections.disconnect", new ConnectionArgs(info.Id)); }

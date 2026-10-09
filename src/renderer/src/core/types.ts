@@ -1,4 +1,4 @@
-import type { QueryResult } from '../../../shared/contracts'
+import type { DisplayQueryResult } from '../../../shared/contracts'
 
 export type { CommandId } from '../../../shared/commands/catalog'
 export interface Disposable { dispose(): void }
@@ -10,5 +10,5 @@ export type WorkbenchEvent =
   | { type: 'documents.activated'; tabId: string }
   | { type: 'documents.closed'; tabId: string }
   | { type: 'query.started'; tabId: string; queryId: string }
-  | { type: 'query.finished'; tabId: string; queryId: string; result?: QueryResult; error?: string }
+  | { type: 'query.finished'; tabId: string; queryId: string; result?: DisplayQueryResult; error?: string }
 export interface ExternalStore<T> { getSnapshot(): T; subscribe(listener: () => void): () => void }

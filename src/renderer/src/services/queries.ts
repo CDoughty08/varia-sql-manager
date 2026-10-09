@@ -1,11 +1,17 @@
-import type { ConnectionInfo, QueryResult, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, ConnectionInfo, DisplayQueryResult, QueryOptions, VariaApi } from '../../../shared/contracts'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { DocumentService } from './documents'
 
-export interface RunningQuery { readonly queryId: string; readonly connectionId: string }
-export interface QueryState { readonly running?: RunningQuery; readonly result?: QueryResult; readonly error?: string }
+/** `rowsRead` counts rows read so far across the script's result sets (progress events). */
+export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly rowsRead?: number }
+export interface QueryState { readonly running?: RunningQuery; readonly result?: DisplayQueryResult; readonly error?: string }
+/** Executes a script and materialises its results (results/legacy.ts), reporting rows read while it runs. */
+export interface QueryApi {
+  execute(options: QueryOptions, onProgress?: (rowsRead: number) => void): Promise<ApiResult<DisplayQueryResult>>
+  cancel: VariaApi['cancel']
+}
 export type QuerySnapshot = Readonly<Record<string, QueryState>>
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'The operation failed.'
 export const newSessionMessage = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted, so its SET options, temporary tables, and open transaction no longer exist.'
@@ -13,7 +19,7 @@ type QueryConnection = ConnectionInfo & { readonly lost?: true }
 
 export class QueryService extends SnapshotStore<QuerySnapshot> implements Disposable {
   private disposed = false
-  constructor(private documents: DocumentService, private api: Pick<VariaApi, 'execute' | 'cancel'>, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus) { super({}) }
+  constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus) { super({}) }
   isRunning(id: string): boolean { return !!this.getSnapshot()[id]?.running }
   isConnectionRunning(id: string): boolean { return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id) }
   canExecute(): boolean {
@@ -38,10 +44,14 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const queryId = crypto.randomUUID(), tabId = document.id
     // Reserve before the first await so repeated commands cannot start a second script.
     this.update(tabId, { running: { queryId, connectionId: connection.id } })
-    let result: QueryResult | undefined, error: string | undefined
+    let result: DisplayQueryResult | undefined, error: string | undefined
+    const progress = (rowsRead: number) => {
+      const state = this.getSnapshot()[tabId]
+      if (!this.disposed && state?.running?.queryId === queryId && state.running.rowsRead !== rowsRead) this.update(tabId, { ...state, running: { ...state.running, rowsRead } })
+    }
     try {
       this.events.emit({ type: 'query.started', tabId, queryId })
-      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId, maxRows: 1000, timeoutSeconds: connection.commandTimeout ?? 0 })
+      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId, maxRows: 1000, timeoutSeconds: connection.commandTimeout ?? 0 }, progress)
       if (!response.ok) throw new Error(response.error)
       result = response.value
     } catch (failure) { error = errorText(failure) }

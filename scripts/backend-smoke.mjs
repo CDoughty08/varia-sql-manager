@@ -4,7 +4,8 @@ import { join, resolve } from 'node:path'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
-// and reconnected. Main honours VARIA_TEST_BACKEND, VARIA_BACKEND_LIVENESS_MS, and __variaTest only in smoke runs.
+// and reconnected; and the UI's responsiveness while a million stored rows are read through the results worker.
+// Main honours VARIA_TEST_BACKEND, VARIA_BACKEND_LIVENESS_MS, __variaTest, and test mode only in smoke runs.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 const lostQuery = 'The SQL backend stopped while this script was running. It was not re-run.'
@@ -85,7 +86,8 @@ async function bannerInViewport() {
 try {
   // 1. The real backend: protocol 2, its versions, and Ready from main's state.
   step = 'real backend'
-  await launch()
+  // The real backend with its test hooks: debug.results.synthesize stores rows without a SQL Server.
+  await launch({ VARIA_BACKEND_TEST_HOOKS: '1' })
   await expect(statusBar()).toContainText(/\.NET 10\..* · Ready/, { timeout: 30000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok && health.value.protocolVersion).toBe(2)
@@ -96,6 +98,48 @@ try {
   expect(first.state.pid).toBe(first.pid)
   expect(await page.evaluate(() => typeof window.varia.restartBackend)).toBe('function')
   await expect(banner()).toHaveCount(0)
+
+  // 7. Responsiveness: a million stored rows read window by window through the results worker. Pages are decoded off
+  // the UI thread, so the UI thread never blocks for long (generous bounds: CI machines are slow and shared).
+  step = 'responsiveness'
+  expect(await page.evaluate(() => ({ testMode: window.varia.testMode, results: typeof window.__variaResults }))).toEqual({ testMode: true, results: 'object' })
+  const synthesized = await app.evaluate(() => globalThis.__variaTest.synthesize('W1', 1000000))
+  expect(synthesized).toMatchObject({ generation: 1, state: 'complete', rowsRead: 1000000, columns: expect.arrayContaining([expect.objectContaining({ name: 'id', wire: 'text' })]) })
+  expect(synthesized.rowsAvailable).toBeGreaterThan(100000)
+  const responsiveness = await page.evaluate(async descriptor => {
+    const longTasks = []
+    const observer = new PerformanceObserver(list => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
+    observer.observe({ type: 'longtask' })
+    // Animation frames, and a timer heartbeat in case the hidden smoke window produces no frames.
+    let frames = 0, frameGap = 0, timerGap = 0, running = true
+    let lastFrame = performance.now(), lastTick = performance.now()
+    const frame = now => { frames++; frameGap = Math.max(frameGap, now - lastFrame); lastFrame = now; if (running) requestAnimationFrame(frame) }
+    requestAnimationFrame(frame)
+    const tick = () => { const now = performance.now(); timerGap = Math.max(timerGap, now - lastTick); lastTick = now; if (running) setTimeout(tick, 16) }
+    setTimeout(tick, 16)
+    const handle = window.__variaResults.open(descriptor)
+    const started = performance.now()
+    let rows = 0, first = []
+    for (let row = 0; row < descriptor.rowsAvailable; row += 4096) {
+      const window_ = await handle.getWindow(row, 4096)
+      if (row === 0) first = window_.text.slice(0, 8)
+      rows += window_.count
+    }
+    const elapsed = performance.now() - started
+    running = false
+    await new Promise(resolve => setTimeout(resolve, 50))
+    observer.disconnect()
+    await handle.close()
+    return { rows, elapsed: Math.round(elapsed), longTasks, frames, frameGap: Math.round(frameGap), timerGap: Math.round(timerGap), first, visibility: document.visibilityState }
+  }, synthesized)
+  console.log(`Read ${responsiveness.rows} rows in ${responsiveness.elapsed} ms (${Math.round(responsiveness.rows / responsiveness.elapsed * 1000)} rows/s); long tasks ${JSON.stringify(responsiveness.longTasks)}; ${responsiveness.frames} frames, largest frame gap ${responsiveness.frameGap} ms, largest timer gap ${responsiveness.timerGap} ms (${responsiveness.visibility} window).`)
+  expect(responsiveness.rows).toBe(synthesized.rowsAvailable)
+  expect(responsiveness.first).toEqual(['0', 'Customer 0000000000 GmbH', '2026-01-01 00:00:00.0000000', '0.00', '00000000-0000-4A1F-9C2E-00C04FC90000', expect.stringMatching(/^Note 0: /), '1', '0'])
+  expect(responsiveness.longTasks.filter(duration => duration > 250)).toEqual([])
+  expect(responsiveness.longTasks.length).toBeLessThanOrEqual(2)
+  // A window that was never shown may get frames only once a second; then the timer heartbeat measures the UI thread.
+  expect(responsiveness.frames >= responsiveness.elapsed / 100 ? responsiveness.frameGap : responsiveness.timerGap).toBeLessThanOrEqual(500)
+  console.log('Responsiveness passed: a million synthetic rows read through the results worker without blocking the UI.')
 
   step = 'reload'
   // 6. A workbench reload ends the generation with the page that owned it; the new page shows no banner.

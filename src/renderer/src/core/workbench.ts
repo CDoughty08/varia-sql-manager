@@ -8,6 +8,9 @@ import { FileService } from '../services/files'
 import { EditorOptionsService } from '../services/editor-options'
 import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
+import { ResultClient } from '../results/ResultClient'
+import { legacyExecute } from '../results/legacy'
+import ResultsWorker from '../results/results.worker.ts?worker'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { filesContribution } from '../contributions/files'
@@ -38,6 +41,8 @@ export interface Workbench extends Disposable {
   readonly queries: QueryService
   readonly connections: ConnectionService
   readonly backend: BackendStateService
+  /** Stored query results, read through the results worker. */
+  readonly results: ResultClient
   readonly files: FileService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
@@ -48,7 +53,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService()
   const backend = new BackendStateService(api, connections)
   const documents = new DocumentService((sql, uri) => monaco.editor.createModel(sql, 'sql', monaco.Uri.parse(uri)), api, events)
-  const queries = new QueryService(documents, api, id => connections.get(id), events)
+  const results = new ResultClient({ api, createWorker: () => new ResultsWorker(), window })
+  const queries = new QueryService(documents, { execute: (options, onProgress) => legacyExecute(api, results, options, onProgress), cancel: queryId => api.cancel(queryId) }, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)
   const targets = new TargetService(documents, queries, connections, files, api)
   const quickInput = new QuickInputService(domFocusAdapter(documents))
@@ -59,13 +65,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, quickInput, documents, queries, connections, backend, files, targets, editorOptions, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, quickInput, documents, queries, connections, backend, results, files, targets, editorOptions, theme, dispose: () => {
     if (disposed) return
     disposed = true
     // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
     listener.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); backend.dispose(); connections.dispose(); editorOptions.dispose(); theme.dispose(); events.dispose()
+    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); documents.dispose(); backend.dispose(); connections.dispose(); editorOptions.dispose(); theme.dispose(); events.dispose()
   } }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench), editorContribution(workbench), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench)]
   // Capture on window runs before Monaco's own listeners, the title bar's document listener, and React's handlers.

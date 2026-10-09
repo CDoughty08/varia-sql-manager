@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -6,6 +6,7 @@ import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec } from './backend/spawn-spec'
 import { installTestHooks } from './backend/test-hooks'
+import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
@@ -16,7 +17,8 @@ import { NativeMenuBridge } from './native-menu'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
-import type { ApiResult, RpcMethod, RpcMethods } from '../shared/contracts'
+import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
+import { memoryEventSchema } from '../shared/ipc/port-messages'
 import type { CommandId } from '../shared/commands/catalog'
 import { menuForMnemonic, menubarIds } from '../shared/commands/menus'
 import { sanitizeLabel } from '../shared/theme/format'
@@ -27,6 +29,9 @@ const rendererFile = join(here, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
+let resultsPort: ResultsPortHost | undefined
+// Test seams (fake backend, liveness override, __variaTest, the renderer test-mode flag) exist only in unpackaged smoke runs.
+const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 const files = new SqlFileStore()
 let closeApproved = false
 let openMenu: Menu | null = null
@@ -79,6 +84,7 @@ function resetRendererState(): void {
   openMenu = null
   menuBridge.reset()
   endPreview()
+  resultsPort?.close()
   void backend?.restart('reload')
   files.clear()
 }
@@ -173,7 +179,7 @@ function createWindow(): void {
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1' }
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: testSeams ? ['--varia-test-mode'] : [] }
   })
   const window = mainWindow, contents = window.webContents
   if (process.platform !== 'darwin') {
@@ -240,7 +246,6 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   if (!primaryInstance) return
   const root = app.getAppPath()
-  const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
   const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN
   const liveness = Number.isInteger(livenessMs) && livenessMs >= 200 ? { unresponsiveMs: livenessMs, limits: { pingMs: Math.floor(livenessMs / 4) } } : {}
@@ -249,10 +254,18 @@ app.whenReady().then(async () => {
     // Frame kinds, ids and lengths only; never bodies.
     trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined,
     power: powerMonitor,
+    onGlobalEvent: event => {
+      const memory = memoryEventSchema.safeParse(event)
+      if (memory.success) resultsPort?.memory(memory.data.usedBytes, memory.data.globalBytes)
+    },
     ...liveness
   })
-  backend.onState(state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state) })
-  if (testSeams) installTestHooks(backend)
+  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
+  backend.onState(state => {
+    results.backendState(state)
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
+  })
+  if (testSeams) installTestHooks(backend, results)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
@@ -263,6 +276,12 @@ app.whenReady().then(async () => {
   nativeTheme.on('updated', () => appearance.systemChanged())
   handle('varia:backend-state-get', () => backend.state)
   handle('varia:backend-restart', () => restartBackend())
+  // The port reaches only the trusted main frame; its messages are validated by ResultsPortHost.
+  ipcMain.handle('varia:results-port-open', (event): ApiResult<void> => {
+    if (!trusted(event) || !event.senderFrame) return { ok: false, error: 'Untrusted IPC sender.' }
+    try { results.open(event.senderFrame); return { ok: true, value: undefined } }
+    catch (error) { return { ok: false, error: errorMessage(error, 'The results connection could not be opened.') } }
+  })
   handle('varia:theme-state', () => appearance.state)
   handle('varia:theme-set', value => chooseTheme(value))
   // Results that arrive after a later preview, a choice, or a renderer reset are dropped.
@@ -316,7 +335,10 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      const result = await backend.request(method as RpcMethod, validated as never)
+      // A script's events reach the results worker; its results become readable by this renderer.
+      const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
+      const result = await backend.request(method as RpcMethod, validated as never, queryId === undefined ? {} : { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) })
+      if (queryId !== undefined) results.own((result as QueryResult).resultSets)
       if (method === 'connections.connect') {
         try { await connectionStore.remember(validated as RpcMethods['connections.connect']['params']) }
         catch { (result as RpcMethods['connections.connect']['result']).historyWarning = 'Connected successfully, but recent connections could not be saved.' }

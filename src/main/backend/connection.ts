@@ -4,7 +4,7 @@ import { FrameKind, FrameParser, ProtocolError, encodeFrame, type ParsedFrame } 
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../../shared/ipc/wire/msgpack'
 import { PROTOCOL_VERSION, cancelReasons, errorCodes, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import { backendMethods, methodPolicies } from '../../shared/ipc/methods'
-import type { RpcMethod } from '../../shared/contracts'
+import type { BackendMethod } from '../../shared/contracts'
 import { BackendError, failureMessage, sentences } from './errors'
 
 export interface SpawnSpec {
@@ -54,6 +54,8 @@ export interface ConnectionDeps {
   appVersion?: string
   /** Main's timers run before it polls I/O, so a backstop first yields one turn for an answer already in the pipe. */
   yieldTurn?: (callback: () => void) => void
+  /** Global EVENT bodies (id 0), decoded under the control limits but otherwise unchecked. */
+  onGlobalEvent?: (event: unknown) => void
 }
 
 /** Why a generation ended. `closed` means main closed it; every other reason is unexpected. */
@@ -69,7 +71,8 @@ export interface SendOptions {
   backstopMs?: number
   credit?: number
   stream?: StreamSink
-  onEvent?: (event: unknown) => void
+  /** Each EVENT for this request; returning false rejects it as invalid (a contained violation). */
+  onEvent?: (event: unknown) => boolean | void
   sensitive?: boolean
 }
 
@@ -86,11 +89,11 @@ const knownCodes: ReadonlySet<string> = new Set(errorCodes)
 
 interface Pending {
   readonly id: number
-  readonly method: RpcMethod
+  readonly method: BackendMethod
   readonly resolve: (value: unknown) => void
   readonly reject: (error: BackendError) => void
   readonly stream?: StreamSink
-  readonly onEvent?: (event: unknown) => void
+  readonly onEvent?: (event: unknown) => boolean | void
   timer?: unknown
   granted: number
   received: number
@@ -129,6 +132,7 @@ export class BackendConnection {
   private readonly limits: ConnectionLimits
   private readonly trace: ((line: string) => void) | undefined
   private readonly yieldTurn: (callback: () => void) => void
+  private readonly onGlobalEvent: ((event: unknown) => void) | undefined
   private readonly parser: FrameParser
   private readonly pending = new Map<number, Pending>()
   private readonly abandoned = new Set<number>()
@@ -157,6 +161,7 @@ export class BackendConnection {
     this.limits = { ...connectionLimits, ...deps.limits }
     this.trace = deps.trace
     this.yieldTurn = deps.yieldTurn ?? (callback => { setImmediate(callback) })
+    this.onGlobalEvent = deps.onGlobalEvent
     this.parser = new FrameParser({ maxBody: this.limits.responseBody, direction: 'toMain' })
     this.packaged = spec.packaged
     this.startedAt = this.lastFrameAt = this.clock.now()
@@ -210,7 +215,7 @@ export class BackendConnection {
 
   /** Writes one REQUEST (queued until HELLO completes). `done` settles exactly once: with the RESPONSE, or with a
    *  local error (limits, backstop TIMEOUT, STREAM_PROTOCOL, BACKEND_LOST). */
-  send(method: RpcMethod, params: unknown, o: SendOptions): { id: number; done: Promise<unknown> } {
+  send(method: BackendMethod, params: unknown, o: SendOptions): { id: number; done: Promise<unknown> } {
     const refuse = (code: ErrorCode, message: string) => ({ id: 0, done: Promise.reject(new BackendError(code, message)) })
     if (this.loss) return refuse('BACKEND_LOST', method === 'query.execute' ? sentences.lostQuery : sentences.lost)
     const policy = methodPolicies[method]
@@ -303,8 +308,12 @@ export class BackendConnection {
   /** RESPONSE, EVENT and DATA frames, by request id. */
   private route(frame: ParsedFrame): void {
     const id = frame.id
-    // EVENT id 0 is a global event (results.memory, from commit 4 on); nothing consumes one yet.
-    if (id === 0 && frame.kind === FrameKind.EVENT) return
+    // A global event (results.memory) is advisory: an undecodable one is dropped, never fatal.
+    if (id === 0 && frame.kind === FrameKind.EVENT) {
+      const event = frame.oversize ? undefined : decoded(frame.body)
+      if (event) this.onGlobalEvent?.(event.value)
+      return
+    }
     if (id === 0 || id >= this.nextId) return this.fatal(`${frameNames[frame.kind]} for unissued id ${id}`)
     if (this.abandoned.has(id)) { this.lateFrames++; return }
     const pending = this.pending.get(id)
@@ -318,7 +327,10 @@ export class BackendConnection {
     }
     const body = decoded(frame.body)
     if (!body) return this.contained(pending)
-    if (frame.kind === FrameKind.EVENT) { pending.onEvent?.(body.value); return }
+    if (frame.kind === FrameKind.EVENT) {
+      if (pending.onEvent?.(body.value) === false) this.contained(pending)
+      return
+    }
     const value = body.value
     const keys = value !== null && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : []
     if (keys.length !== 1) return this.contained(pending)

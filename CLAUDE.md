@@ -30,7 +30,9 @@ README.md documents user-facing behaviour, limits, and the protocol.
   Every `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
   `--no-sandbox`); only root, as in cloud sessions, runs without it. Only in unpackaged smoke runs, main also honours
   `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
-  takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, and `globalThis.__variaTest` (kill, states).
+  takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `globalThis.__variaTest` (kill, states,
+  synthesize), the renderer's test mode (`window.__variaResults`), and passes the backend `VARIA_BACKEND_TEST_HOOKS`
+  (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`.
 
 ## Architecture invariants
 

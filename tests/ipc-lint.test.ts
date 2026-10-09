@@ -36,13 +36,26 @@ describe('IPC wire lint', () => {
   it('honours the backend test seams only in unpackaged smoke runs', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
     expect(main).toContain("const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged")
-    expect(main.match(/installTestHooks\(|VARIA_BACKEND_LIVENESS_MS/g)).toHaveLength(2)
-    expect(main).toContain('if (testSeams) installTestHooks(backend)')
+    expect(main.match(/installTestHooks\(|VARIA_BACKEND_LIVENESS_MS|--varia-test-mode/g)).toHaveLength(3)
+    expect(main).toContain('if (testSeams) installTestHooks(backend, results)')
     expect(main).toContain('const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN')
+    expect(main).toContain("additionalArguments: testSeams ? ['--varia-test-mode'] : []")
     // The fake backend is chosen in the spawn spec, after the packaged branch and only for smoke tests.
     const spec = readFileSync(join('src', 'main', 'backend', 'spawn-spec.ts'), 'utf8')
     expect(spec.indexOf('if (o.packaged) return')).toBeLessThan(spec.indexOf('VARIA_TEST_BACKEND :'))
     expect(spec).toContain('const fake = o.smokeTest ? o.env?.VARIA_TEST_BACKEND : undefined')
+    // The backend's own hooks (synthetic results, a budget override) are removed from its environment outside smoke runs.
+    expect(spec.match(/withoutTestHooks\(o\.env\)/g)).toHaveLength(2)
+    expect(spec).toContain('delete copy.VARIA_BACKEND_TEST_HOOKS')
+    expect(spec).toContain('delete copy.VARIA_RESULT_BUDGET_BYTES')
+  })
+  it('forwards result pages to the renderer only as exact-size ArrayBuffers', () => {
+    const port = readFileSync(join('src', 'main', 'backend', 'results-port.ts'), 'utf8')
+    const pages = [...port.matchAll(/t: 'page'[^}]*\}/g)].map(match => match[0])
+    expect(pages.length).toBeGreaterThan(0)
+    for (const page of pages) expect(page).toMatch(/body: toExactArrayBuffer\(/)
+    // Main never decodes DATA: the page codec stays out of main.
+    for (const file of files(join('src', 'main'))) expect(readFileSync(file, 'utf8').includes('wire/pages'), file).toBe(false)
   })
   it('never imports the differential-test MessagePack library from application code', () => {
     for (const file of files('src')) expect(readFileSync(file, 'utf8').includes('@msgpack/msgpack'), file).toBe(false)

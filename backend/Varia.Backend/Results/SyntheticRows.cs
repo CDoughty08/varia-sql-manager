@@ -56,6 +56,13 @@ internal static class SyntheticRows
     public static void Write(string shape, long row, PageBuilder builder)
     {
         builder.BeginRow();
+        WriteCells(shape, row, builder);
+        builder.CommitRow();
+    }
+
+    /// <summary>Appends one row's cells to a row the caller began and will commit.</summary>
+    public static void WriteCells(string shape, long row, PageBuilder builder)
+    {
         switch (shape)
         {
             case "W1": WriteW1(row, builder); break;
@@ -63,7 +70,6 @@ internal static class SyntheticRows
             case "N1": WriteN1(row, builder); break;
             default: throw new ArgumentOutOfRangeException(nameof(shape));
         }
-        builder.CommitRow();
     }
 
     private static void Integer(PageBuilder builder, long value) => builder.EndFormatted(CellFormat.WriteInteger(builder.BeginFormatted(), value));

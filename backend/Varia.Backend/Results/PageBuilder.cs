@@ -61,6 +61,8 @@ internal sealed class PageBuilder
     /// <summary>Approximate encoded size of the committed rows: cell bytes plus offsets.</summary>
     public long ByteCount => dataBytes + 4L * columns.Length * (rows + 1);
     public bool IsFull => rows >= MaxRows || ByteCount >= SealBytes;
+    /// <summary>Cell bytes the open row has added so far.</summary>
+    public long OpenRowBytes => next < 0 ? 0 : rowBytes;
     /// <summary>Bytes held by the builder's buffers, for memory accounting.</summary>
     public long WorkingBytes => columns.Sum(column => (long)column.Data.Length + 4L * column.Offsets.Length + (column.Nulls?.Length ?? 0) + (column.Truncated?.Length ?? 0) + (column.Errors?.Length ?? 0));
 

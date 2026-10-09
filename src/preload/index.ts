@@ -38,6 +38,8 @@ const api: VariaApi = {
     return () => { ipcRenderer.removeListener('varia:backend-state', listener) }
   },
   restartBackend: () => ipcRenderer.invoke('varia:backend-restart'),
+  openResultsPort: () => ipcRenderer.invoke('varia:results-port-open'),
+  testMode: process.argv.includes('--varia-test-mode'),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),
@@ -70,3 +72,6 @@ const api: VariaApi = {
   }
 }
 contextBridge.exposeInMainWorld('varia', api)
+// The results port goes to the page itself (window message, then ResultClient hands it to the results worker); no port,
+// postMessage or invoke is ever exposed on window.varia.
+ipcRenderer.on('varia:results-port', event => { window.postMessage({ type: 'varia:results-port' }, '*', event.ports) })

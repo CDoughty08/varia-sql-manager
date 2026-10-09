@@ -221,9 +221,10 @@ try {
       ] }
       if (method === 'server.objects.list' || method === 'tables.list') return { ok: true, value: [] }
       if (method === 'query.session.close') return { ok: true, value: { closed: true } }
+      // Rows live in the backend's result store, which a stub does not have; the summary's messages carry the target.
       if (method === 'query.execute') return { ok: true, value: {
-        resultSets: [{ columns: [{ name: 'server', dataType: 'nvarchar' }, { name: 'database', dataType: 'nvarchar' }], rows: [[globalThis.variaConnections[params.connectionId].server, params.database]], truncated: false }],
-        messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false
+        resultSets: [], discardedResultSets: 0, messages: [`Executed on ${globalThis.variaConnections[params.connectionId].server} in ${params.database}`],
+        recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }
       } }
       return { ok: false, error: 'Unsupported test operation.' }
     })
@@ -264,7 +265,7 @@ try {
   await textbox().focus()
   await page.keyboard.press('F5')
   await expect.poll(() => calls('query.execute')).toBe(executed + 1)
-  await expect(page.locator('.results-grid')).toContainText('AppData')
+  await expect(page.locator('.messages')).toContainText('Executed on server-a in AppData')
   // F8 moves focus to Object Explorer, as in SSMS, so the F5 after it refreshes rather than executes.
   await textbox().focus()
   const refreshed = await calls('databases.list'), ran = await calls('query.execute')

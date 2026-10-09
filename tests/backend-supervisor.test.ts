@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { BackendState } from '../src/shared/contracts'
+import type { BackendState, QueryEvent } from '../src/shared/contracts'
+import { FrameKind } from '../src/shared/ipc/wire/frames'
 import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
@@ -320,5 +321,48 @@ describe('smoke-test backends', () => {
     const calls = (await readFile(join(directory, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { generation: number; method: string; params: { password?: string } })
     expect(calls.map(call => [call.generation, call.method])).toEqual([[1, 'connections.connect'], [1, 'query.execute']])
     expect(calls[0].params.password).toBe('<redacted>')
+  })
+})
+
+describe('BackendSupervisor results', () => {
+  it('stamps the generation on a script\'s results and events, and reads them only from that generation', async () => {
+    const value = supervisor('workbench')
+    const info = await value.request('connections.connect', options)
+    const events: QueryEvent[] = []
+    const result = await value.request('query.execute', { ...query('tab-1'), connectionId: info.id }, { onEvent: event => { events.push(event) } })
+    expect(result.resultSets).toEqual([expect.objectContaining({ generation: 1, resultId: 1, rowsAvailable: 1, state: 'complete' })])
+    expect(events.map(event => event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? [event.type, event.descriptor.generation] : [event.type])).toEqual([['resultSet.opened', 1], ['resultSet.closed', 1]])
+    const pages: ArrayBuffer[] = []
+    let id = 0
+    const params = { resultId: 1, firstRow: 0, maxRows: 10 }
+    const read = await value.request('results.read', params, { generation: 1, credit: 65_536, stream: { data: (_seq, body) => { pages.push(body) } }, onSent: sent => { id = sent } })
+    expect(read).toEqual({ nextRow: 1, rowsAvailable: 1, complete: true, pages: 1, rows: 1 })
+    expect(pages).toHaveLength(1)
+    expect(id).toBeGreaterThan(0)
+    expect(await failure(value.request('results.read', params, { generation: 2, credit: 65_536, stream: { data: () => {} } }))).toMatchObject({ code: 'RESULT_UNAVAILABLE', message: sentences.resultUnavailable })
+    await value.restart('manual')
+    expect(await failure(value.request('results.close', { resultIds: [1] }, { generation: 1 }))).toMatchObject({ code: 'RESULT_UNAVAILABLE' })
+  })
+  it('fails a script whose summary or events are invalid, and stamps synthetic results', async () => {
+    const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+    value.start()
+    await settle(8)
+    const events: QueryEvent[] = []
+    const script = failure(value.request('query.execute', query('tab-1'), { onEvent: event => { events.push(event) } }))
+    await settle(8)
+    const request = last().requests.at(-1)!
+    last().send(FrameKind.EVENT, request.id, 0, { type: 'messages', messages: ['ok'] })
+    last().send(FrameKind.RESPONSE, request.id, 0, { result: { resultSets: [], messages: [] } })
+    expect(await script).toMatchObject({ code: 'BACKEND_ERROR', message: sentences.invalid })
+    expect(events).toEqual([{ type: 'messages', messages: ['ok'] }])
+    const second = failure(value.request('query.execute', query('tab-2'), { onEvent: () => {} }))
+    await settle(8)
+    last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, { type: 'progress', results: 'many' })
+    expect(await second).toMatchObject({ code: 'STREAM_PROTOCOL' })
+    const synthetic = value.request('debug.results.synthesize', { shape: 'W1', rows: 1 })
+    await settle(8)
+    const descriptor = { resultId: 4, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [], rowsRead: 1, rowsStored: 1, rowsAvailable: 1, bytesStored: 1, truncatedCells: 0, state: 'complete', incomplete: false }
+    last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: descriptor })
+    expect(await synthetic).toEqual({ ...descriptor, generation: 1 })
   })
 })
