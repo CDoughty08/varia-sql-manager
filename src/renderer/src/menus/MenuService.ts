@@ -87,6 +87,8 @@ export class MenuService implements Disposable {
   readonly access: MenubarAccess
   private owned = false
   private replacing = false
+  /** The menubar took the keyboard because Tab or Shift+Tab reached one of its buttons, so Tab also leaves it onward. */
+  private tabbedIn = false
   /** Where focus goes back to: captured when the menus take the keyboard. */
   private restoreTarget: unknown
   /** The latest focus outside the menus, the menubar, and the quick input. */
@@ -133,6 +135,12 @@ export class MenuService implements Disposable {
   /** A key press while the menus own the keyboard; 'passthrough' lets the workbench dispatch it after they closed. */
   handleKeyDown(event: KeyDownEvent): 'consumed' | 'passthrough' {
     if (!this.ownsKeyboard()) return 'passthrough'
+    // The browser moves focus on from the button in the page's order, as from any control, instead of back to where it
+    // came from: otherwise Tab would bounce between the menubar and the control before it.
+    if (this.tabbedIn && event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey && !this.controller.view.levels.length) {
+      this.close('focus')
+      return 'passthrough'
+    }
     // Holding F10 must not toggle the menubar on every repeat.
     const result = event.repeat && event.key === 'F10' ? 'consumed' : this.controller.key(menuKey(event, this.options.platform))
     if (result === 'consumed') { event.preventDefault(); event.stopPropagation() }
@@ -203,14 +211,23 @@ export class MenuService implements Disposable {
       if (!inside(pointer.target, '.menu-layer .menu-item')) this.controller.pointerUp(-1, -1, { x: pointer.clientX, y: pointer.clientY }, pointer.button)
     })
     const scroll = (event: Event) => guard(() => { if (this.controller.view.levels.length && !inside(event.target, '.menu')) this.close('scroll') })
+    // Alt with the wheel scrolls faster in the editor; it is not an Alt tap.
+    const wheel = (event: Event) => { guard(() => this.access.disarm()); scroll(event) }
     const resize = () => guard(() => this.close('resize'))
     const blur = () => guard(() => { this.access.disarm(); this.close('blur') })
     const visibility = () => guard(() => { if (target.document.visibilityState === 'hidden') this.close('blur') })
     const focusIn = (event: Event) => guard(() => {
-      // Tab and Shift+Tab reach the menubar's button too: the menubar then takes the keyboard, as after F10, and gives
-      // focus back to where it came from.
+      // Focus moving while Alt is down was something else (a window manager's Alt+drag moves it out and back).
+      this.access.disarm()
+      // Tab and Shift+Tab reach the menubar's buttons too: the menubar then takes the arrow and access keys, as after F10.
       const menubar = menubarButton(event.target)
-      if (menubar) { if (!this.ownsKeyboard() && this.accessAllowed()) this.controller.focusMenubar(menubar); return }
+      if (menubar) {
+        if (!this.ownsKeyboard() && this.accessAllowed()) { this.controller.focusMenubar(menubar); this.tabbedIn = true }
+        return
+      }
+      // Focus left the focused menubar without a key or a press (assistive technology, a script): keys follow focus.
+      const { levels, menubar: bar } = this.controller.view
+      if (bar.focused && !levels.length && !inside(event.target, '.menu-layer')) this.close('focus')
       const focused = this.options.focus.capture()
       if (focused !== undefined) this.lastFocus = focused
     })
@@ -218,7 +235,7 @@ export class MenuService implements Disposable {
     const contextMenu = (event: Event) => guard(() => this.openFromEvent(event as MouseEvent))
     target.addEventListener('pointerdown', pointerDown, options)
     target.addEventListener('pointerup', pointerUp, options)
-    target.addEventListener('wheel', scroll, options)
+    target.addEventListener('wheel', wheel, options)
     target.addEventListener('scroll', scroll, options)
     target.addEventListener('focusin', focusIn, options)
     target.addEventListener('contextmenu', contextMenu)
@@ -228,7 +245,7 @@ export class MenuService implements Disposable {
     const detach = () => {
       target.removeEventListener('pointerdown', pointerDown, options)
       target.removeEventListener('pointerup', pointerUp, options)
-      target.removeEventListener('wheel', scroll, options)
+      target.removeEventListener('wheel', wheel, options)
       target.removeEventListener('scroll', scroll, options)
       target.removeEventListener('focusin', focusIn, options)
       target.removeEventListener('contextmenu', contextMenu)
@@ -310,11 +327,12 @@ export class MenuService implements Disposable {
     void this.options.commands.execute(item.id, item.args, 'menu')
   }
   private closed(reason: CloseReason): void {
+    this.tabbedIn = false
     this.marked?.removeAttribute('data-menu-target')
     this.marked = undefined
     // Activation restores focus itself, just before its command; a menu replacing this one keeps the original target.
     if (reason === 'replace') { this.replacing = true; return }
-    if (reason !== 'activate') this.options.focus.restore(this.restoreTarget)
+    if (reason !== 'activate' && reason !== 'focus') this.options.focus.restore(this.restoreTarget)
   }
   dispose(): void {
     this.detach?.()

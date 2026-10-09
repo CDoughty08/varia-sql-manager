@@ -555,6 +555,20 @@ describe('command palette', () => {
     await commands.execute('layout.reset', undefined, 'menu')
     expect(quickInput.visible).toBe(false)
   })
+  it.each(platforms)('stays open for Select All and Delete from the menu on %s, which then act on its input', async platform => {
+    const { key, quickInput, focus, commands, documents, api } = palette({ platform })
+    documents.create('a.sql', 'SELECT 7;', 'master')
+    await key('workbench.showCommands')
+    focus.focused = 'quick input'
+    quickInput.filter('>abc')
+    // ⌘A in the input on macOS arrives as the menu bar's Select All, and Edit › Delete runs from there too.
+    await expect(commands.execute('edit.selectAll', undefined, 'menu')).resolves.toBe(true)
+    await expect(commands.execute('edit.delete', undefined, 'menu')).resolves.toBe(true)
+    expect(quickInput.visible).toBe(true)
+    expect(focus.restored).toEqual([])
+    // The editor does not have focus, so Electron's roles act on the focused input.
+    expect(api.runRole.mock.calls).toEqual([['selectAll'], ['delete']])
+  })
   it('runs Undo and Redo behind an open dialog only on its text fields, never on the editor behind it', async () => {
     const { commands, documents } = palette({ platform: 'darwin' })
     // The menu (⌘Z on macOS) runs them while a dialog is open; shell.ts reads the DOM focus and whether a dialog is open.

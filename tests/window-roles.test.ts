@@ -49,20 +49,23 @@ describe('window roles', () => {
       expect(calls).toEqual([])
     }
   })
-  it('pastes only just after the user clicked or pressed a key, and runs every other role regardless', () => {
+  it('pastes only just after the user clicked, tapped, or pressed a key, and runs every other role regardless', () => {
     const { window, calls } = fakeWindow()
-    expect(() => runRole('paste', window, () => false)).toThrow('Paste runs only from a click or a key press in the window.')
+    // The refusal names the key that still pastes, for activations main never sees (a screen reader's).
+    expect(() => runRole('paste', window, () => false, 'win32')).toThrow('Paste needs a click, tap, or key press in the window. Press Ctrl+V to paste.')
+    expect(() => runRole('paste', window, () => false, 'darwin')).toThrow('Press ⌘V to paste.')
     for (const role of rendererRoles.filter(role => role !== 'paste')) runRole(role, window, () => false)
     expect(calls).not.toContain('paste')
     expect(calls).toContain('cut')
   })
-  it('counts clicks and key presses as the user acting for a second, but not pointer moves or wheel turns', () => {
+  it('counts clicks, taps, and key presses as the user acting for a second, but not pointer moves, swipes, or wheel turns', () => {
     let now = 5000
     const activation = new UserActivation(() => now)
     expect(activation.recent()).toBe(false)
-    for (const type of ['mouseMove', 'mouseEnter', 'mouseWheel', 'gestureScrollBegin', 'contextMenu', 'undefined']) activation.note(type)
+    for (const type of ['mouseMove', 'mouseEnter', 'mouseWheel', 'gestureScrollBegin', 'gestureScrollUpdate', 'gestureFlingStart', 'touchMove', 'touchCancel', 'contextMenu', 'undefined']) activation.note(type)
     expect(activation.recent()).toBe(false)
-    for (const type of ['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'keyUp', 'char']) {
+    // A tap reaches main as touchStart, gestureTapDown, touchEnd, gestureShowPress, then gestureTap.
+    for (const type of ['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'keyUp', 'char', 'touchEnd', 'gestureTap']) {
       const fresh = new UserActivation(() => now)
       fresh.note(type)
       expect(fresh.recent(), type).toBe(true)

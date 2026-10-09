@@ -15,8 +15,11 @@ export const rendererRoleSchema = z.enum(rendererRoles)
 /** Electron's zoom roles step by half a level and are not clamped, so custom menus and the palette do the same. */
 const zoomStep = 0.5
 
-/** Input types that are the user acting: a press or release of a mouse button or a key, never a pointer just moving. */
-const activationInputs: ReadonlySet<string> = new Set(['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'keyUp', 'char'])
+/**
+ * Input types that are the user acting: a press or release of a mouse button or a key, or a tap (its touch release and
+ * the tap gesture, as Chromium's own user activation counts it), never a pointer or finger just moving or scrolling.
+ */
+const activationInputs: ReadonlySet<string> = new Set(['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'keyUp', 'char', 'touchEnd', 'gestureTap'])
 /** How recent that input must be for Paste: a menu's Paste runs within milliseconds of the click or key that chose it. */
 export const userActivationMs = 1000
 /**
@@ -34,11 +37,12 @@ export class UserActivation {
  * Runs an Electron role for the renderer's custom menus and palette, exactly as the native role item would: the editing
  * roles act on the focused element, and Reload still asks before discarding unsaved queries. Only these fixed methods
  * of the trusted window run; quitting is not a role here, because the renderer runs its own close flow. Paste reads the
- * system clipboard, which the page itself may not, so it runs only while `userActivated` (a click or key just now).
+ * system clipboard, which the page itself may not, so it runs only while `userActivated` (a click, tap, or key just
+ * now). A screen reader's activation reaches main as no input at all, so the refusal names the key that still pastes.
  */
-export function runRole(value: unknown, window: RoleWindow, userActivated: () => boolean): void {
+export function runRole(value: unknown, window: RoleWindow, userActivated: () => boolean, platform: NodeJS.Platform = process.platform): void {
   const role: RendererRole = rendererRoleSchema.parse(value)
-  if (role === 'paste' && !userActivated()) throw new Error('Paste runs only from a click or a key press in the window.')
+  if (role === 'paste' && !userActivated()) throw new Error(`Paste needs a click, tap, or key press in the window. Press ${platform === 'darwin' ? '⌘V' : 'Ctrl+V'} to paste.`)
   const contents = window.webContents
   switch (role) {
     case 'cut': contents.cut(); break

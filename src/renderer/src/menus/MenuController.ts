@@ -5,7 +5,8 @@ import { browserTimers, type Timers } from '../core/timers'
 import { inSafeTriangle, type Anchor, type Point, type Rect } from './geometry'
 import type { ResolvedCommandItem, ResolvedMenuItem } from './resolve'
 
-export type CloseReason = 'escape' | 'activate' | 'outside' | 'blur' | 'resize' | 'scroll' | 'tab' | 'replace' | 'command' | 'dispose'
+/** Why the menus closed; 'focus' means focus has already moved elsewhere by itself, so it is not returned. */
+export type CloseReason = 'escape' | 'activate' | 'outside' | 'blur' | 'resize' | 'scroll' | 'tab' | 'replace' | 'command' | 'dispose' | 'focus'
 /** One open menu. `active` is -1 (pointer-opened, or the pointer left) or the index of a non-separator item. */
 export interface MenuLevel { readonly id: string; readonly label: string; readonly items: readonly ResolvedMenuItem[]; readonly active: number; readonly anchor: Anchor }
 export interface MenuView {

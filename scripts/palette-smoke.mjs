@@ -153,6 +153,18 @@ try {
   await expect(combobox('Command Palette')).not.toHaveValue('>abc')
   await expect(combobox('Command Palette')).toBeFocused()
   expect(await editorText()).toContain('SELECT\u00a07;')
+  // So do Select All and Delete, which the macOS menu bar runs as commands (\u2318A in the input arrives that way): main
+  // sends their ids as it does there, and they select and delete the palette's text, not the editor's.
+  await page.keyboard.type('def')
+  const field = widget().getByRole('combobox')
+  const sendCommand = id => application.evaluate(({ BrowserWindow }, command) => BrowserWindow.getAllWindows()[0].webContents.send('varia:command', command), id)
+  await sendCommand('edit.selectAll')
+  await expect.poll(() => field.evaluate(input => input.value.length > 0 && input.selectionStart === 0 && input.selectionEnd === input.value.length)).toBe(true)
+  await expect(field).toBeFocused()
+  await sendCommand('edit.delete')
+  await expect(field).toHaveValue('')
+  await expect(widget()).toHaveCount(1)
+  expect(await editorText()).toContain('SELECT\u00a07;')
   await page.keyboard.press('Escape')
 
   // 6. A disabled command explains itself and keeps the palette open.

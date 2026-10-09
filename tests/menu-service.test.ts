@@ -215,11 +215,12 @@ describe('menu window listeners', () => {
     attached.dispose()
     expect(fake.listeners.size).toBe(0)
   })
-  it('cancels a bare Alt tap on a pointer press or blur, and remembers focus outside the menus', () => {
+  it('cancels a bare Alt tap on a pointer press, the wheel, focus moving, or blur, and remembers focus outside the menus', () => {
     const { menus, state, order } = setup()
     const fake = fakeWindow()
     menus.attach(fake.window)
-    for (const type of ['pointerdown', 'blur']) {
+    // Alt+wheel scrolls the editor faster; a window manager's Alt+drag moves focus out of the page and back.
+    for (const type of ['pointerdown', 'wheel', 'focusin', 'blur']) {
       menus.noteKeyDown(key('Alt'))
       fake.fire(type, { target: element() })
       menus.handleKeyUp(key('Alt'))
@@ -234,7 +235,7 @@ describe('menu window listeners', () => {
     menus.close('escape')
     expect(order).toEqual(['closed', 'restore server field'])
   })
-  it('takes the keyboard when Tab reaches a menubar button, and gives focus back to where it came from', () => {
+  it('takes the keyboard when Tab reaches a menubar button, and lets Tab move on from it', () => {
     const { menus, state, order } = setup()
     const fake = fakeWindow()
     menus.attach(fake.window)
@@ -254,10 +255,46 @@ describe('menu window listeners', () => {
     menus.handleKeyDown(key('Escape'))
     menus.handleKeyDown(key('Escape'))
     expect(order).toEqual(['closed', 'restore toolbar button'])
+    // Tab and Shift+Tab leave it as from any control: the browser moves focus on from the button, and nothing moves it
+    // back, also after a menu opened and closed back to the button.
+    for (const tab of [key('Tab'), key('Tab', { shift: true })]) {
+      order.length = 0
+      fake.fire('focusin', { target: button('file') })
+      menus.handleKeyDown(key('ArrowDown'))
+      menus.handleKeyDown(key('Escape'))
+      expect(menus.controller.view.menubar.focused).toBe('file')
+      expect(menus.handleKeyDown(tab)).toBe('passthrough')
+      expect([tab.prevented, tab.stopped, menus.ownsKeyboard()]).toEqual([false, false, false])
+      expect(order).toEqual(['closed'])
+    }
+    // Reached with F10 instead, the menubar gives focus back on Tab, as on Escape.
+    order.length = 0
+    menus.handleAccessKey('f10', key('F10'))
+    const tab = key('Tab')
+    expect(menus.handleKeyDown(tab)).toBe('consumed')
+    expect(order).toEqual(['closed', 'restore toolbar button'])
     // Not behind a dialog.
     state.modal = true
     fake.fire('focusin', { target: button('view') })
     expect(menus.ownsKeyboard()).toBe(false)
+  })
+  it('lets the keys follow focus that leaves the focused menubar by itself, and leaves focus there', () => {
+    const { menus, order } = setup()
+    const fake = fakeWindow()
+    menus.attach(fake.window)
+    menus.handleAccessKey('f10', key('F10'))
+    // Its own menus keep it.
+    fake.fire('focusin', { target: element('.menu-layer') })
+    expect(menus.ownsKeyboard()).toBe(true)
+    // A screen reader or a script focuses the editor.
+    fake.fire('focusin', { target: element() })
+    expect(menus.ownsKeyboard()).toBe(false)
+    expect(order).toEqual(['closed'])
+    expect(menus.handleKeyDown(key('q'))).toBe('passthrough')
+    // An open menu keeps the keyboard until it closes.
+    menus.handleAccessKey('alt+q', key('q', { alt: true }))
+    fake.fire('focusin', { target: element() })
+    expect(menus.controller.view.menubar.open).toBe('query')
   })
   it('clears its timers and listeners when disposed', () => {
     const { menus, pending } = setup()

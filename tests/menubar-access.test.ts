@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Platform } from '../src/shared/commands/keybindings'
-import { MenubarAccess, trackWindowFocus, type AltKeyEvent } from '../src/renderer/src/menus/menubar'
+import { altTapMs, MenubarAccess, trackWindowFocus, type AltKeyEvent } from '../src/renderer/src/menus/menubar'
 
 type FakeKey = AltKeyEvent & { prevented: boolean }
 function key(value: string, modifiers: { ctrl?: boolean; shift?: boolean; meta?: boolean; repeat?: boolean; altGraph?: boolean } = {}): FakeKey {
@@ -37,6 +37,13 @@ describe('bare Alt', () => {
       expect(up.prevented).toBe(false)
       expect(access.getSnapshot().altHeld).toBe(false)
     }
+  })
+  it('is not a tap when Alt was held down for long: a window manager\'s Alt+drag, or Alt+wheel on Linux, which repeats no modifiers', () => {
+    const access = new MenubarAccess('linux')
+    const at = (value: string, timeStamp: number) => Object.assign(key(value), { timeStamp })
+    const held = tap(access, undefined, at('Alt', 5000), at('Alt', 5000 + altTapMs + 1))
+    expect([held.fired, held.up.prevented, access.getSnapshot().altHeld]).toEqual([false, false, false])
+    expect(tap(access, undefined, at('Alt', 9000), at('Alt', 9000 + altTapMs)).fired).toBe(true)
   })
   it('ignores Alt with Ctrl, Shift, Meta, or AltGr, and auto-repeat', () => {
     const access = new MenubarAccess('linux')

@@ -199,6 +199,39 @@ try {
   await expect(menubarItem('Edit')).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(connectButton).toBeFocused()
+  // Tab and Shift+Tab also move on from the menubar in the page's order, as from any control: Shift+Tab from Edit wraps
+  // to the window's last control, and from there Tab reaches File and then the toolbar.
+  await page.keyboard.press('Shift+Tab')
+  await expect(menubarItem('File')).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(menubarItem('Edit')).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect.poll(() => page.evaluate(() => {
+    const element = document.activeElement
+    return !!element && element !== document.body && !element.closest('.title-bar, .toolbar')
+  })).toBe(true)
+  await page.keyboard.press('Tab')
+  await expect(menubarItem('File')).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(connectButton).toBeFocused()
+  // Focus moved off the menubar without a key or a press (a screen reader, a script) takes the keys with it.
+  await textbox().focus()
+  await page.keyboard.press('F10')
+  await expect(menubarItem('File')).toBeFocused()
+  await textbox().focus()
+  await page.keyboard.type('q')
+  await expect(openMenus()).toHaveCount(0)
+  await expect.poll(editorText).toBe('xyzq')
+  // With no query open, leaving the menubar has nowhere to take focus back to, so the button lets it go.
+  await choose('Window', 'Close All Documents')
+  await expect(tabs()).toHaveCount(0)
+  await page.keyboard.press('F10')
+  await expect(menubarItem('File')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect.poll(() => page.evaluate(() => !document.activeElement?.closest('.title-bar-menus'))).toBe(true)
+  await choose('File', 'New Query')
+  await choose('File', 'New Query')
+  await expect(tabs()).toHaveCount(2)
   await textbox().focus()
   console.log('Menus checks: F10, Tab, arrow keys, access keys, and Escape.')
 
@@ -210,6 +243,16 @@ try {
   expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMenuBarVisible())).toBe(false)
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
+  // Alt with the wheel scrolls the editor faster; releasing Alt then leaves focus in the editor.
+  const editorBox = await page.locator('.monaco-editor .overflow-guard').boundingBox()
+  await page.mouse.move(editorBox.x + editorBox.width / 2, editorBox.y + 20)
+  await page.keyboard.down('Alt')
+  await page.mouse.wheel(0, 120)
+  await page.keyboard.up('Alt')
+  // A tap would move focus on the release's task; one task later it has stayed.
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 50)))
+  await expect(textbox()).toBeFocused()
+  await expect(menubar()).toHaveAttribute('data-mnemonics', 'hidden')
   await page.keyboard.press('Alt+v')
   await expect(menu('View')).toBeVisible()
   await page.keyboard.press('Alt+w')
@@ -306,6 +349,22 @@ try {
     field.remove()
     return { ok: result.ok, value }
   })).toEqual({ ok: false, value: '' })
+  // A tap is the user acting, as a click is: Edit › Paste chosen by touch pastes (Windows touch screens).
+  await application.evaluate(({ clipboard }) => clipboard.writeText('pasted-by-touch'))
+  await typeSql('abc')
+  await page.keyboard.press('Control+A')
+  const touch = await page.context().newCDPSession(page)
+  const tapOn = async locator => {
+    const box = await locator.boundingBox(), point = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) }
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] })
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+  await tapOn(menubarItem('Edit'))
+  await expect(menu('Edit')).toBeVisible()
+  await tapOn(menu('Edit').getByRole('menuitem', { name: 'Paste', exact: true }))
+  await expect.poll(editorText).toBe('pasted-by-touch')
+  await expect(page.locator('.global-error')).toHaveCount(0)
+  await touch.detach()
   await textbox().focus()
 
   // In forced colors (Windows High Contrast), only the active item and the open menubar button are marked, and the
@@ -326,6 +385,21 @@ try {
   expect([...new Set(forced.outlines)]).toEqual(['none'])
   expect(forced.separator).not.toBe(forced.menu)
   expect(forced.open).not.toBe(forced.closed)
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  // A focused disabled item (Change Database… without a connection) keeps GrayText on the menu's Canvas, outlined.
+  await page.keyboard.press('Alt+q')
+  await page.keyboard.press('ArrowDown')
+  const changeDatabase = menu('Query').getByRole('menuitem', { name: 'Change Database…', exact: true })
+  await expect(changeDatabase).toBeFocused()
+  await expect(changeDatabase).toHaveAttribute('aria-disabled', 'true')
+  const disabled = await changeDatabase.evaluate(element => {
+    const style = getComputedStyle(element)
+    return { background: style.backgroundColor, menu: getComputedStyle(element.closest('.menu')).backgroundColor, color: style.color, outline: style.outlineStyle }
+  })
+  expect(disabled.background).toBe(disabled.menu)
+  expect(disabled.color).not.toBe(disabled.background)
+  expect(disabled.outline).not.toBe('none')
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   await page.emulateMedia({ forcedColors: null })
@@ -353,7 +427,8 @@ try {
   expect(overlays).toEqual([expect.objectContaining({ color: expect.stringMatching(/^#[0-9a-f]{6}$/), symbolColor: expect.stringMatching(/^#[0-9a-f]{6}$/) }), expect.objectContaining({ color: expect.stringMatching(/^#[0-9a-f]{6}$/) })])
   console.log('Menus checks: Cut and Paste in the editor through roles, no Paste the page runs alone, zoom roles, forced colors, and the inactive title bar.')
 
-  // 6. Ctrl+R toggles the results pane, as in SSMS, from the page and from the operating system; nothing reloads.
+  // 6. Ctrl+R toggles the results pane, as in SSMS; nothing reloads. The operating system's keys are pressed after step 14,
+  // in a shown window, where the hidden menu's accelerators work.
   await page.evaluate(() => { window.variaSentinel = 42 })
   await typeSql('SELECT 2;')
   const outputTab = page.locator('[data-pane-tab="output"]')
@@ -365,12 +440,7 @@ try {
   await expect.poll(() => nativeItem('view.toggleResultsPane')).toMatchObject({ checked: false })
   await page.keyboard.press('Control+R')
   await expect(outputTab).toBeVisible()
-  await nativeKey('R', ['control'])
-  await expect(outputTab).toHaveCount(0)
-  await nativeKey('R', ['control'])
-  await expect(outputTab).toBeVisible()
   await page.keyboard.press('Control+Shift+R')
-  await nativeKey('R', ['control', 'shift'])
   // Window › Show Results Pane is the same toggle, checked while the pane shows.
   await menubarItem('Window').click(fast)
   const showResults = menu('Window').getByRole('menuitemcheckbox', { name: 'Show Results Pane', exact: true })
@@ -751,6 +821,20 @@ try {
   await cell(0, 0).click(fast)
   await cell(2, 1).click({ modifiers: ['Shift'], force: true })
   await expect(selected()).toHaveCount(6)
+  // In forced colors (Windows High Contrast) the selection shows in the system's selection colors, focused or not.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const shade = locator => locator.evaluate(element => {
+    for (let node = element; node; node = node.parentElement) {
+      const color = getComputedStyle(node).backgroundColor
+      if (color !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(color)) return color
+    }
+    return ''
+  })
+  expect(await shade(cell(0, 0))).not.toBe(await shade(cell(0, 2)))
+  await textbox().focus()
+  expect(await shade(cell(0, 0))).not.toBe(await shade(cell(0, 2)))
+  await page.emulateMedia({ forcedColors: null })
+  await grid.focus()
   await cell(1, 1).click({ button: 'right', force: true })
   await expect(selected()).toHaveCount(6)
   await page.screenshot({ path: resolve('artifacts', 'menus-grid-dark.png') })
@@ -922,8 +1006,21 @@ try {
     await nativeKey(key, modifiers)
     await expect.poll(zoomLevel, `${modifiers.join('+')}+${key}`).toBe(level)
   }
+  // Ctrl+R from the operating system toggles the results pane here too, and neither it nor Ctrl+Shift+R reaches a reload
+  // key of that menu: the page and its unsaved queries stay (a reload would ask about them first).
+  await page.evaluate(() => { window.variaSentinel = 43 })
+  await expect(outputTab).toBeVisible()
+  await nativeKey('R', ['control'])
+  await expect(outputTab).toHaveCount(0)
+  await nativeKey('R', ['control'])
+  await expect(outputTab).toBeVisible()
+  await nativeKey('R', ['control', 'shift'])
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 300)))
+  expect((await page.evaluate(() => window.varia.health())).ok).toBe(true)
+  expect(await page.evaluate(() => window.variaSentinel)).toBe(43)
+  expect(await application.evaluate(() => globalThis.variaReloadPrompts)).toBe(0)
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide())
-  console.log('Menus checks: Electron\'s zoom keys in a shown window, Ctrl+Shift+= included.')
+  console.log('Menus checks: Electron\'s zoom keys in a shown window, Ctrl+Shift+= included, and Ctrl+R and Ctrl+Shift+R there, which reload nothing.')
 
   // 15. Native context menus, as macOS shows them: main builds each from command ids and sends back the request's token
   // with the chosen id. The custom style refuses them; the app is relaunched with the native style, Electron's popups

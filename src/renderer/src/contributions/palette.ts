@@ -9,10 +9,11 @@ export type QuickAccessMode = '>' | '?' | ''
 export const quickAccessMode = (value: string): QuickAccessMode => value.startsWith('>') ? '>' : value.startsWith('?') ? '?' : ''
 const recentLimit = 10
 /**
- * Commands that leave an open quick input alone: its own keys, and Undo and Redo, which act on the focused text field.
- * On macOS ⌘Z in the input arrives as the Edit menu's Undo, and closing first would undo the editor instead.
+ * Commands that leave an open quick input alone: its own keys, and the Edit commands that act on the focused text field.
+ * On macOS ⌘Z and ⌘A in the input arrive as the Edit menu's Undo and Select All (as does Edit › Delete), and closing
+ * first would act on the editor instead.
  */
-const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'edit.undo', 'edit.redo'])
+const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'edit.undo', 'edit.redo', 'edit.selectAll', 'edit.delete'])
 type Picker = Omit<QuickPickOptions<QuickPickItem>, 'value' | 'prefix' | 'onDidChangeValue' | 'onDidHide'>
 export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'>
 

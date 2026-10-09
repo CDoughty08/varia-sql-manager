@@ -73,7 +73,7 @@ The title bar holds **File**, **Edit**, **View**, **Query**, and **Window**. On 
 
 ### Keyboard and mouse
 
-- **F10** or a tap of **Alt** moves focus to the menu bar and underlines the access keys, as does reaching it with **Tab** or **Shift+Tab**; **Alt+F**, **Alt+E**, **Alt+V**, **Alt+Q**, and **Alt+W** open a menu directly. These keys also work from the command palette, which closes. In the editor's find widget **Alt+W** still toggles Whole Word, and while a dialog is open the menu bar stays closed.
+- **F10** or a tap of **Alt** moves focus to the menu bar and underlines the access keys, as does reaching it with **Tab** or **Shift+Tab**, which then move on from it as from any other control; **Alt+F**, **Alt+E**, **Alt+V**, **Alt+Q**, and **Alt+W** open a menu directly. These keys also work from the command palette, which closes. In the editor's find widget **Alt+W** still toggles Whole Word, and while a dialog is open the menu bar stays closed.
 - In the menu bar, **←** and **→** move between menus and **↓**, **Enter**, or **Space** opens one. In a menu, **↑** and **↓** move (**Home** and **End** jump to the ends), **→** opens a submenu or the next menu, **←** closes a submenu or opens the previous menu, and **Enter** or **Space** runs the item. An underlined letter runs its item; when several items share it, each press moves to the next. Other letters find an item by the start of its name.
 - **Escape** closes one menu at a time, then returns focus to where it was, so a command acts on the editor, field, or node you came from. **Tab**, **F10**, a tap of **Alt**, a click elsewhere, scrolling outside the menu, resizing the window, or switching to another window closes every open menu. A **Ctrl** shortcut closes the menu and still runs, so **Ctrl+S** saves.
 - With the mouse, click a menu and then an item, or press on a menu, drag to an item, and release. Hovering over a submenu opens it after a moment; while the pointer moves toward an open submenu, it stays open.
@@ -103,7 +103,7 @@ A server offers Connect…, Disconnect (that server, without asking which), New 
 - The results grid copies its selected cells as tab-separated text, one line per row: NULL becomes `NULL`, line breaks and tabs inside a value become spaces, and lines end with CRLF on Windows and LF elsewhere. **Copy with Headers** (**Ctrl+Shift+C**) adds a line of column names, with "(No column name)" for unnamed columns. **Ctrl+C**, **Edit → Copy**, and the menu's Copy copy the same text.
 - In Messages and the XML plan, Copy copies the selected text.
 - **Copy Name** copies a server's name as you connected to it, or an object's bracket-quoted name (`[AppData]`, `[dbo].[Orders]`). **Copy Full Path** copies a saved query's file path.
-- The workbench writes to the clipboard through Electron's main process and cannot read it: Paste is the operating system's paste into the focused editor or field, and the main process runs it for a menu only just after a click or key press in the focused window.
+- The workbench writes to the clipboard through Electron's main process and cannot read it: Paste is the operating system's paste into the focused editor or field, and the main process runs it for a menu only just after a click, tap, or key press in the focused window. A screen reader or voice control activating a menu's Paste sends no such input, so that Paste is refused with a reminder that **Ctrl+V** (**⌘V** on macOS) pastes; the shortcut always works, as do macOS's native menus.
 
 ### macOS
 

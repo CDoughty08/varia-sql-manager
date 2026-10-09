@@ -50,6 +50,7 @@ export class FakeElement {
   selectionStart?: number | null
   selectionEnd?: number | null
   isContentEditable = false
+  isConnected = true
   textContent = ''
   constructor(readonly ownerDocument: FakeDocument, tag: string, init: { className?: string; attributes?: Record<string, string> } & Partial<Pick<FakeElement, 'type' | 'value' | 'readOnly' | 'disabled' | 'selectionStart' | 'selectionEnd' | 'isContentEditable' | 'textContent'>> = {}) {
     const { className, attributes, ...properties } = init
@@ -84,6 +85,7 @@ export class FakeElement {
   hasAttribute(name: string): boolean { return this.attributes.has(name) }
   getBoundingClientRect(): Rect { return this.rect }
   focus(): void { this.focusCalls++; this.ownerDocument.activeElement = this }
+  blur(): void { if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = null }
   /** As the element type the code under test expects. */
   get dom(): HTMLElement { return this as unknown as HTMLElement }
 }

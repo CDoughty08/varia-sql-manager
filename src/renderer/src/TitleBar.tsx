@@ -19,6 +19,9 @@ export default function TitleBar({ title }: { title: string }) {
   const [overlayVisible, setOverlayVisible] = useState(false)
   const { focused, open } = view.menubar
   const dropdown = view.source === 'menubar' ? view.levels[0] : undefined
+  // Tab enters the menubar at File. A button that keeps focus after the menus let go (Tab on its way out) stays the tab
+  // stop, so the browser moves on from it, not from File.
+  const [holdsFocus, setHoldsFocus] = useState<MenubarId | null>(null)
 
   // The focused menubar button holds keyboard focus while no menu is open (F10, Alt, or Escape from a menu).
   useLayoutEffect(() => {
@@ -34,7 +37,8 @@ export default function TitleBar({ title }: { title: string }) {
   }, [])
 
   const button = (id: MenubarId, label: string, mnemonic: string) => <button key={id} id={'menubar-' + id} data-menu={id} role="menuitem" aria-haspopup="menu"
-    aria-expanded={open === id} aria-controls={open === id ? dropdown?.id : undefined} tabIndex={(focused ?? 'file') === id ? 0 : -1} className={open === id ? 'active' : ''}
+    aria-expanded={open === id} aria-controls={open === id ? dropdown?.id : undefined} tabIndex={(focused ?? holdsFocus ?? 'file') === id ? 0 : -1} className={open === id ? 'active' : ''}
+    onFocus={() => setHoldsFocus(id)} onBlur={() => setHoldsFocus(current => current === id ? null : current)}
     // Pressing a menubar button never moves focus: Cut or Undo in its menu acts on the editor or field focused before.
     onPointerDown={event => { event.preventDefault(); if (event.button === 0) menus.controller.menubarPointerDown(id, point(event)) }}
     onPointerEnter={() => menus.controller.menubarPointerEnter(id)}

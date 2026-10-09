@@ -39,8 +39,9 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 [data-mnemonics="visible"] .menu-mnemonic { text-decoration: underline; text-decoration-skip-ink: none; }
 /* Above the docking guides (15000), the quick input (19000), and dialogs (20000): text fields in dialogs get menus too. */
 .menu-layer { position: fixed; inset: 0; pointer-events: none; z-index: 30000; }
-.menu { position: fixed; pointer-events: auto; min-width: 200px; max-width: min(480px, 100vw - 8px); padding: 4px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 16px var(--varia-widget-shadow); font: 12px var(--varia-font-ui); -webkit-app-region: no-drag; user-select: none; outline: none; }
-.menu-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 20px; align-items: center; height: 24px; white-space: nowrap; cursor: default; outline: 1px solid transparent; outline-offset: -1px; }
+/* Items share the menu's columns (subgrid), so shortcuts start at one x, as in SSMS. */
+.menu { position: fixed; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 20px; align-content: start; pointer-events: auto; min-width: 200px; max-width: min(480px, 100vw - 8px); padding: 4px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 16px var(--varia-widget-shadow); font: 12px var(--varia-font-ui); -webkit-app-region: no-drag; user-select: none; outline: none; }
+.menu-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; height: 24px; white-space: nowrap; cursor: default; outline: 1px solid transparent; outline-offset: -1px; }
 .menu-item[data-active] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline-color: var(--varia-menu-selectionBorder); }
 .menu-item[aria-disabled="true"] { color: var(--varia-disabledForeground); }
 .menu-item[aria-disabled="true"] .menu-gutter { opacity: .5; }
@@ -49,7 +50,7 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .menu-keybinding { padding-left: 32px; color: var(--varia-descriptionForeground); }
 .menu-item[data-active] .menu-keybinding { color: inherit; }
 .menu-chevron { display: grid; place-items: center; }
-.menu-separator { height: 1px; margin: 4px 8px 4px 28px; background: var(--varia-menu-separatorBackground); }
+.menu-separator { grid-column: 1 / -1; height: 1px; margin: 4px 8px 4px 28px; background: var(--varia-menu-separatorBackground); }
 /* What an open context menu is for: a query tab, a panel tab, or an Object Explorer node. */
 [data-menu-target] { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 @media (forced-colors: active) {
@@ -58,6 +59,8 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
   .menu-item, .title-bar-menus button { outline: none; }
   .menu-item[data-active], .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: Highlight; color: HighlightText; forced-color-adjust: none; }
   .menu-item[aria-disabled="true"] { color: GrayText; }
+  /* A focused disabled item keeps GrayText legible on Canvas, with an outline for the focus. */
+  .menu-item[data-active][aria-disabled="true"] { background: Canvas; color: GrayText; outline: 1px solid Highlight; outline-offset: -1px; }
   .menu-separator { background: CanvasText; forced-color-adjust: none; }
 }
 .status-dot, .dirty-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
@@ -203,6 +206,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .grid-scroll:not(:focus-within) .results-grid td.selected { background: var(--varia-resultsGrid-inactiveSelectionBackground); color: inherit; }
 .results-grid td.selected .null-value { color: inherit; }
 .grid-scroll:focus-within .results-grid td.active-cell { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
+@media (forced-colors: active) {
+  /* Forced colors drop the selection's backgrounds; the system's selection colors show which cells Copy takes. */
+  .results-grid td.selected, .grid-scroll:not(:focus-within) .results-grid td.selected { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .grid-scroll:focus-within .results-grid td.selected.active-cell { outline-color: HighlightText; }
+}
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .truncation { font-size: 11px; color: var(--varia-resultsGrid-truncationForeground); padding: 10px 15px; }
 .messages { overflow: auto; padding: 10px 20px; color: var(--varia-resultsMessages-foreground); }
