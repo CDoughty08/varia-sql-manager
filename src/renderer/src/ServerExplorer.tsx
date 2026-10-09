@@ -226,8 +226,10 @@ export const LostServer = memo(function LostServer({ connection, canRemove, onRe
   const accent = useConnectionAccent(connection.color)
   // Disabled while the backend is not ready: connecting would only wait or fail.
   const canReconnect = useCommandEnabled('connection.reconnect')
+  // The whole section, buttons included, so Shift+F10 on either button opens the lost server's menu.
+  const target = useNodeTarget<HTMLElement>(() => ({ kind: 'lostServer', connectionId: connection.id }))
   const name = connection.displayName || connection.server
-  return <section className="server-section lost-server" aria-label={'Server ' + connection.server} style={{ borderLeft: accent ? `3px solid ${accent}` : undefined }}>
+  return <section ref={target} className="server-section lost-server" aria-label={'Server ' + connection.server} style={{ borderLeft: accent ? `3px solid ${accent}` : undefined }}>
     <div className="server-row">
       <span className="lost-server-label" title={connection.server + ' — the connection was lost when the SQL backend restarted'}><span className="codicon codicon-debug-disconnect" aria-hidden="true" /><span className="node-label">{name} — connection lost</span></span>
     </div>

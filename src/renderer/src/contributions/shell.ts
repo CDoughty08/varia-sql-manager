@@ -46,6 +46,7 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo', args?
 }
 
 const paneOf = (args?: CommandArgs): PaneId | undefined => args?.target?.kind === 'dockTab' ? args.target.pane : undefined
+const lostNodeOf = (args?: CommandArgs) => { const node = explorerNodeOf(args); return node?.kind === 'lostServer' ? node : undefined }
 const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { const pane = paneOf(args); if (pane) action(pane) }
 
 /**
@@ -86,15 +87,25 @@ export function shellContribution({ commands, documents, files, quickInput, conn
         })
       }
     }),
-    // The active query's lost connection first; otherwise the user picks among the lost ones.
-    commands.register('connection.reconnect', { run: () => {
-      const active = documents.active?.connectionId ? connections.get(documents.active.connectionId) : undefined
-      if (active?.lost) return host.reconnect(active.id)
-      quickInput.show({
-        ariaLabel: 'Reconnect', placeholder: 'Select a lost connection to reconnect', noun: 'servers',
-        items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.reconnect(item.id)
-      })
-    } }),
+    // A lost server node's connection, else the active query's lost connection; otherwise the user picks among the lost ones.
+    commands.register('connection.reconnect', {
+      when: args => { const node = lostNodeOf(args); return !node || !!connections.get(node.connectionId)?.lost },
+      run: args => {
+        const node = lostNodeOf(args)
+        if (node) return host.reconnect(node.connectionId)
+        const active = documents.active?.connectionId ? connections.get(documents.active.connectionId) : undefined
+        if (active?.lost) return host.reconnect(active.id)
+        quickInput.show({
+          ariaLabel: 'Reconnect', placeholder: 'Select a lost connection to reconnect', noun: 'servers',
+          items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.reconnect(item.id)
+        })
+      }
+    }),
+    // Only from a lost server node's menu, like the node's Remove button.
+    commands.register('connection.remove', {
+      when: args => { const node = lostNodeOf(args); return !!node && !!connections.get(node.connectionId)?.lost },
+      run: args => { const node = lostNodeOf(args); if (node && connections.get(node.connectionId)?.lost) return host.disconnect(node.connectionId) }
+    }),
     commands.register('pane.float', { when: args => located(args, 'grid'), run: onPane(pane => host.floatPane(pane)) }),
     commands.register('pane.dock', { when: args => located(args, 'floating'), run: onPane(pane => host.dockPane(pane)) }),
     commands.register('pane.close', { when: args => !!paneOf(args) && !located(args, 'closed'), run: onPane(pane => host.closePane(pane)) })

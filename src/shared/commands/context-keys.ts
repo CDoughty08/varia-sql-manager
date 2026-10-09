@@ -40,8 +40,8 @@ export const contextKeys = {
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
   explorerNode: {
-    type: 'enum', scope: 'target', menu: 'explorer.context', description: "The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object.",
-    values: ['background', 'server', 'databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'database', 'tablesFolder', 'table', 'securityFolder', 'serverObjectsFolder', 'serverObject', '']
+    type: 'enum', scope: 'target', menu: 'explorer.context', description: "The kind of Object Explorer node the menu is for: the empty area ('background'), a server, a server whose connection was lost ('lostServer'), folder, database, table, or server-level object.",
+    values: ['background', 'server', 'lostServer', 'databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'database', 'tablesFolder', 'table', 'securityFolder', 'serverObjectsFolder', 'serverObject', '']
   },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', 'plan', ''], description: 'The Query Output view the menu is for: a results grid, the messages, or an execution plan.' },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel whose tab the menu is for is floating.' }

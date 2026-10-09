@@ -68,6 +68,7 @@ Query
     &Connect…  ++++
     &Disconnect  -+--
     Disconnect &All Queries  -++-
+    &Reconnect…  ----
     ---
     C&hange Connection…  ++--
   Change &Database…  Ctrl+U  -+--

@@ -48,14 +48,16 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
 /**
  * Every context menu for each kind of target, resolved in the same states: the editor, a saved and an unsaved query's
  * tab, a docked and a floating panel's tab, text fields that are editable, read-only, a password, or empty, every
- * kind of Object Explorer node (on server-a, which connects in the second state), and Query Output's views of a query
- * that ran before (on server-r, gone since): its grid with and without selected cells, and Messages and the XML plan
- * with and without selected text.
+ * kind of Object Explorer node (on server-a, which connects in the second state, and server-l, lost with a backend
+ * restart before the first state), and Query Output's views of a query that ran before (on server-r, gone since): its grid
+ * with and without selected cells, and Messages and the XML plan with and without selected text.
  */
 async function resolveContexts(platform: Platform): Promise<{ labels: string[]; snapshots: (readonly ResolvedMenuItem[])[][] }> {
   const fixture = workbenchFixture({ platform })
   cleanups.push(fixture.dispose)
   fixture.api.push(readyBackend())
+  // From a backend generation that has ended, so it is lost.
+  fixture.connections.add(connectionInfo('server-l', 0), connectionOptions)
   const ran = fixture.documents.create('ran.sql', 'SELECT 3', 'master', 'server-r')
   fixture.connections.add(connectionInfo('server-r'), connectionOptions)
   fixture.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, resultSets: [
@@ -76,7 +78,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ['a docked panel\'s tab', { kind: 'dockTab', pane: 'explorer', floating: false }], ['a floating panel\'s tab', { kind: 'dockTab', pane: 'output', floating: true }],
     ['a text field with selected text', field({})], ['a read-only text field', field({ readOnly: true })], ['a password field', field({ secret: true })],
     ['an empty text field', field({ empty: true, hasSelection: false, canUndo: false })],
-    ['Object Explorer\'s empty area', node({ kind: 'background' })], ['a server', node({ kind: 'server', ...server })],
+    ['Object Explorer\'s empty area', node({ kind: 'background' })], ['a server', node({ kind: 'server', ...server })], ['a lost server', node({ kind: 'lostServer', connectionId: 'server-l' })],
     ...(['databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'securityFolder'] as const).map((kind): [string, MenuTarget] => [`the ${kind} node`, node({ kind, ...server })]),
     ['a database', node({ kind: 'database', ...database })], ['a Tables folder', node({ kind: 'tablesFolder', ...database })],
     ['a table', node({ kind: 'table', ...database, schema: 'dbo', name: 'Orders' })], ['a server object folder', node({ kind: 'serverObjectsFolder', ...server, objectKind: 'logins' })],

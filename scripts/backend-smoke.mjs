@@ -236,6 +236,17 @@ try {
   expect(recorded.filter(call => call.generation === 2).map(call => call.method)).not.toContain('query.execute')
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1])
   expect(JSON.stringify(recorded)).not.toContain('smoke-password-marker')
+  // The lost row has its own menu, not the empty area's: from a right-click, or Shift+F10 on one of its buttons.
+  const explorerMenu = page.getByRole('menu', { name: 'Object Explorer', exact: true }), explorerLabels = explorerMenu.locator('.menu-item .menu-label')
+  await page.locator('.lost-server .lost-server-label').click({ button: 'right' })
+  await expect(explorerLabels).toHaveText(['Reconnect…', 'Remove'])
+  await page.keyboard.press('Escape')
+  await expect(explorerMenu).toHaveCount(0)
+  await page.locator('.lost-server').getByRole('button', { name: /^Remove/ }).focus()
+  await page.keyboard.press('Shift+F10')
+  await expect(explorerLabels).toHaveText(['Reconnect…', 'Remove'])
+  await page.keyboard.press('Escape')
+  await expect(explorerMenu).toHaveCount(0)
   await size(1024, 700)
   await bannerInViewport()
   await page.screenshot({ path: resolve('artifacts', 'backend-restart.png') })
@@ -259,7 +270,7 @@ try {
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])
   await banner().getByRole('button', { name: 'Dismiss', exact: true }).click()
   await expect(banner()).toHaveCount(0)
-  console.log('Crash during execute passed: BACKEND_LOST, lost Explorer row, Execute hint, restart with a new pid, nothing re-run, and Reconnect with the new-session line.')
+  console.log('Crash during execute passed: BACKEND_LOST, lost Explorer row and its menu, Execute hint, restart with a new pid, nothing re-run, and Reconnect with the new-session line.')
 
   // A manual restart asks first while servers are connected, and resets the breaker.
   step = 'manual restart'

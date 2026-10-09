@@ -32,7 +32,7 @@ describe('menu model', () => {
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
-      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', '-', 'query.changeConnection'])
+      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
     }
     expect(buildMenuModel('file', 'win32').at(-1)).toMatchObject({ id: 'window.close', title: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
@@ -163,8 +163,8 @@ describe('mnemonics', () => {
 describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
     // The editor menu's Connection submenu is Query › Connection.
-    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'query.changeConnection',
-      'query.disconnect', 'query.disconnectAll'])
+    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.reconnect',
+      'query.changeConnection', 'query.disconnect', 'query.disconnectAll'])
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.float', 'pane.dock', 'pane.close'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
@@ -294,7 +294,7 @@ describe('menu state', () => {
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.scriptCreateToNewQuery',
-      'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart']
+      'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart', 'connection.remove']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

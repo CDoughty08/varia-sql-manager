@@ -5,10 +5,10 @@ import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 
-/** An Object Explorer node a context menu can be for; 'background' is the empty area below the servers. */
+/** An Object Explorer node a context menu can be for; 'background' is the empty area below the servers, 'lostServer' a server lost with a backend restart. */
 export type ExplorerNode =
   | { readonly kind: 'background' }
-  | { readonly kind: 'server'; readonly connectionId: string }
+  | { readonly kind: 'server' | 'lostServer'; readonly connectionId: string }
   | { readonly kind: 'databasesFolder' | 'systemDatabasesFolder' | 'snapshotsFolder' | 'securityFolder'; readonly connectionId: string }
   | { readonly kind: 'database' | 'tablesFolder'; readonly connectionId: string; readonly database: string }
   | { readonly kind: 'table'; readonly connectionId: string; readonly database: string; readonly schema: string; readonly name: string }
