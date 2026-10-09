@@ -1,6 +1,6 @@
 import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contracts'
 import { cloudEngineEditions, explorerLimits, filterProperties, folderSpecs, kindSpecs, parentKinds, type FolderId, type NodeKind } from '../../../shared/explorer/catalog.ts'
-import { insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
+import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { onUnexpectedError } from '../core/errors'
 import type { EventBus } from '../core/events'
@@ -53,8 +53,10 @@ export interface ExplorerServiceOptions {
 /** How a first page replaces the children: `keep` reuses static folders (and their state), `replace` collapses everything. */
 type PageMode = 'keep' | 'replace' | 'more'
 interface Running { readonly task: LoadTask; readonly mode: PageMode }
+/** How far a folder's rows had got when a refresh began: put back if the refresh stops or fails. */
+interface HeldPaging { readonly cursor: string | undefined; readonly capped: boolean; readonly total: number | undefined }
 /** What the service remembers about a node beyond what rows show. */
-interface NodeState { pendingMode?: 'keep' | 'replace'; retryMode?: 'keep' | 'replace'; budgetExempt?: boolean; loadingTimer?: unknown }
+interface NodeState { pendingMode?: 'keep' | 'replace'; retryMode?: 'keep' | 'replace'; budgetExempt?: boolean; loadingTimer?: unknown; held?: HeldPaging }
 
 const serverRef: ExplorerNodeRef = { type: 'object', object: { kind: 'server' } }
 const numbers = new Intl.NumberFormat('en-US')
@@ -92,7 +94,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private roots: number[] = []
   private readonly rootByConnection = new Map<string, number>()
   private readonly running = new Map<number, Running>()
-  /** Expanded nodes whose load an ancestor's collapse stopped; they resume when visible again. */
+  /**
+   * Expanded nodes whose load an ancestor's collapse, refresh or filter change stopped: they resume when visible again
+   * and no ancestor is loading its first page, and Stop marks them stopped.
+   */
   private readonly stalled = new Set<number>()
   /** Per connection, by the folder's refKey. */
   private readonly filters = new Map<string, Map<string, ExplorerFilter>>()
@@ -101,6 +106,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** Detached nodes to delete, as lists walked in place, so a 100,000-row folder is not copied first. */
   private graveyard: { readonly list: readonly TreeNode[]; next: number }[] = []
   private sweeping = false
+  /** False once an eviction scan could not get below the budget, until a collapse or a new selection frees a node. */
+  private evictable = true
   private nextId = 1
   private clock = 0
   private selected?: number
@@ -152,6 +159,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!node?.expanded) return
     node.expanded = false
     node.rev++
+    this.evictable = true
     this.abortWithin(new Set([node.id]), 'collapse')
     if (this.selected !== undefined && this.selected !== id && this.within(rowOwner(this.selected), id)) this.selected = id
     this.invalidate()
@@ -174,6 +182,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.abortWithin(undefined, 'collapse', task => !roots.has(task.nodeId))
     for (const node of this.nodes.values()) if (node.expanded && node.parent !== 0) { node.expanded = false; node.rev++ }
     this.stalled.clear()
+    this.evictable = true
     if (this.selected !== undefined) {
       let node = this.nodes.get(rowOwner(this.selected))
       while (node && node.parent !== 0 && !roots.has(node.parent)) node = this.nodes.get(node.parent)
@@ -198,7 +207,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     for (const [id, running] of [...this.running]) { this.running.delete(id); this.loader.abort(running.task); this.reverted(id, running, 'stop') }
     for (const id of this.stalled) {
       const node = this.nodes.get(id)
-      if (!node) continue
+      if (!node || !this.attached(node)) continue
       if (node.more === 'auto' && node.cursor) node.more = 'stopped'
       else if (node.load === 'none') {
         this.state(node).pendingMode = undefined
@@ -222,10 +231,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (node.expanded) this.loadMore(node, 'user')
     } else if (node.load === 'error' && (kind === RowKind.Error || kind === RowKind.Node)) {
       if (node.error?.action === 'refreshParent') { this.refresh(this.missingParent(node).id); return }
+      const mode = this.state(node).retryMode ?? 'keep'
       node.error = undefined
       node.load = 'none'
+      if (mode === 'replace') this.holdPaging(node)
       node.rev++
-      this.loadFirst(node, this.state(node).retryMode ?? 'keep', 'user')
+      this.loadFirst(node, mode, 'user')
     }
     this.invalidate()
   }
@@ -248,6 +259,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.lastUsed = ++this.clock
     if (this.selected === id) return
     this.selected = id
+    this.evictable = true
     if (this.dirty) this.flush()
     else this.publish({ ...this.getSnapshot(), version: ++this.version, selected: id })
     this.updateContext()
@@ -333,6 +345,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.abortWithin(new Set([node.id]), 'detach')
     this.detach(node, node.children?.filter(child => child.kind !== 'folder') ?? [])
     Object.assign(node, { total: undefined, cursor: undefined, more: 'none', error: undefined, load: 'none', hasChildren: true, expanded: true })
+    this.state(node).held = undefined
     node.lastUsed = ++this.clock
     node.rev++
     this.loadFirst(node, 'keep', 'user')
@@ -340,8 +353,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
   }
 
-  /** The text of a synthetic row. */
-  rowText(rowId: number): string {
+  /** The text of a synthetic row, as shown: names and server messages in it get `displayText`'s markers. */
+  rowText(rowId: number): string { return displayText(this.syntheticText(rowId)) }
+  private syntheticText(rowId: number): string {
     const node = this.nodes.get(rowOwner(rowId))
     if (!node) return ''
     const loaded = node.children?.length ?? 0, total = Math.max(node.total ?? 0, loaded)
@@ -459,7 +473,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     for (const id of [...this.stalled]) {
       const node = this.nodes.get(id)
       if (!node || !node.expanded || !this.attached(node)) { this.stalled.delete(id); continue }
-      if (!this.visible(node)) continue
+      if (!this.visible(node) || this.reloadingAbove(node)) continue
       this.stalled.delete(id)
       this.ensureLoading(node, 'background')
     }
@@ -525,6 +539,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
       if (root && (outcome.ok ? error.code === 'CONNECTION_LOST' : outcome.connectionLost)) { root.connectionError = error; root.rev++ }
     }
+    // Loads below a refreshed or filtered folder waited for its first page: gone with the old rows, or resumed now.
+    if (running.mode !== 'more' && this.stalled.size) this.resumeStalled()
     this.enforceBudget()
     this.invalidate()
   }
@@ -532,7 +548,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const selectedKey = mode === 'replace' && this.selected !== undefined && this.selected !== node.id && this.within(rowOwner(this.selected), node.id) ? this.keyOf(rowOwner(this.selected)) : undefined
     const truncated = this.replaceChildren(node, wires, mode === 'replace' ? 'replace' : 'keep')
     const state = this.state(node)
-    state.pendingMode = state.retryMode = undefined
+    state.pendingMode = state.retryMode = state.held = undefined
     Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none' })
     node.rev++
     if (selectedKey !== undefined) this.selected = node.children!.find(child => refKey(child.connectionId, child.ref) === selectedKey)?.id ?? node.id
@@ -562,6 +578,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       state.pendingMode = undefined
       node.load = 'error'
       node.more = 'none'
+      if (mode === 'replace') this.restorePaging(node)
     }
     node.error = error
     node.rev++
@@ -712,21 +729,25 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.abortWithin(new Set([node.id]), 'detach')
     const state = this.state(node)
     state.budgetExempt = undefined
-    Object.assign(node, { cursor: undefined, more: 'none', error: undefined })
+    this.holdPaging(node)
+    node.error = undefined
     if (node.load === 'error') node.load = node.children?.length ? 'loaded' : 'none'
     if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
     if (node.expanded) this.loadFirst(node, 'replace', 'user')
     else {
       this.detach(node, node.children ?? [])
       Object.assign(node, { children: undefined, total: undefined, staticCount: 0, load: 'none' })
-      state.pendingMode = state.retryMode = undefined
+      state.pendingMode = state.retryMode = state.held = undefined
     }
     node.rev++
     const scope: RefreshScope = node.kind === 'server' ? 'server' : node.folder && databaseFolders.has(node.folder) ? 'databases' : 'other'
     try { this.events.emit({ type: 'explorer.refreshed', connectionId: node.connectionId, scope }) } catch (error) { onUnexpectedError(error) }
   }
 
-  /** Aborts the loads of `roots` and everything below them (or those `predicate` picks) and puts their nodes back. */
+  /**
+   * Aborts the loads of `roots` and everything below them (or those `predicate` picks) and puts their nodes back. Loads
+   * strictly below a collapsed, refreshed or filtered root wait in `stalled`.
+   */
   private abortWithin(roots: ReadonlySet<number> | undefined, reason: 'collapse' | 'stop' | 'detach', predicate?: (task: LoadTask) => boolean): void {
     for (const [id, running] of [...this.running]) {
       if (predicate && !predicate(running.task)) continue
@@ -734,8 +755,31 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.running.delete(id)
       this.loader.abort(running.task)
       this.reverted(id, running, reason)
-      if (reason === 'collapse' && !roots?.has(id) && this.nodes.get(id)?.expanded) this.stalled.add(id)
+      const below = reason === 'collapse' ? !roots?.has(id) : reason === 'detach' && !!roots && !roots.has(id)
+      if (below && this.nodes.get(id)?.expanded) this.stalled.add(id)
     }
+  }
+  /** An ancestor is loading its first page (a refresh or filter change), which may replace this node. */
+  private reloadingAbove(node: TreeNode): boolean {
+    for (let current = node.parent ? this.nodes.get(node.parent) : undefined; current; current = current.parent ? this.nodes.get(current.parent) : undefined) {
+      const running = this.running.get(current.id)
+      if (running && running.mode !== 'more') return true
+    }
+    return false
+  }
+  /** A refresh hides how far the old rows had got (cursor, cap) until its first page replaces them. */
+  private holdPaging(node: TreeNode): void {
+    if (node.children?.length && (node.cursor || node.more === 'capped')) this.state(node).held = { cursor: node.cursor, capped: node.more === 'capped', total: node.total }
+    Object.assign(node, { cursor: undefined, more: 'none' })
+  }
+  /** A refresh that stopped or failed: the old rows say again how far they had got, stopped rather than loading. */
+  private restorePaging(node: TreeNode): void {
+    const state = this.states.get(node.id), held = state?.held
+    if (!held) return
+    state.held = undefined
+    if (!node.children?.length) return
+    node.total = held.total
+    if (held.cursor) { node.cursor = held.cursor; node.more = 'stopped' } else if (held.capped) node.more = 'capped'
   }
   private abortWhere(predicate: (task: LoadTask) => boolean): void { this.abortWithin(undefined, 'detach', predicate) }
   /** A node whose load was aborted: a first page is needed again (old rows stay), or a stopped folder says so. */
@@ -747,7 +791,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (reason === 'stop') node.more = 'stopped'
     } else if (reason === 'stop') {
       this.state(node).pendingMode = undefined
-      if (node.children?.length) node.load = 'loaded'
+      if (node.children?.length) { node.load = 'loaded'; this.restorePaging(node) }
       else { node.load = 'none'; node.expanded = false }
     } else node.load = 'none'
     node.rev++
@@ -817,6 +861,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * nodes and the selection's ancestors keep theirs. True when the tree is back below the budget.
    */
   private evict(): boolean {
+    // Every page arrives here while the tree is over budget: scanning 250,000 nodes again would find nothing new.
+    if (!this.evictable) return this.size < this.limits.nodeBudget
     const target = Math.max(0, this.limits.nodeBudget - this.limits.pageSize)
     const keep = new Set<number>()
     for (let node = this.selected === undefined ? undefined : this.nodes.get(rowOwner(this.selected)); node; node = node.parent ? this.nodes.get(node.parent) : undefined) keep.add(node.id)
@@ -831,15 +877,16 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.detach(node, node.children ?? [])
       Object.assign(node, { children: undefined, total: undefined, cursor: undefined, staticCount: 0, load: 'none', more: 'none', error: undefined })
       const state = this.state(node)
-      state.pendingMode = state.retryMode = state.budgetExempt = undefined
+      state.pendingMode = state.retryMode = state.budgetExempt = state.held = undefined
       node.rev++
     }
+    if (this.size > target) this.evictable = false
     return this.size < this.limits.nodeBudget
   }
 
   // Publishing
 
-  private announce(text: string): void { this.announcement = { text, id: ++this.announcements } }
+  private announce(text: string): void { this.announcement = { text: displayText(text), id: ++this.announcements } }
   private invalidate(): void {
     if (this.disposed) return
     this.dirty = true

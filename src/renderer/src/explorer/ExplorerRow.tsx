@@ -25,7 +25,7 @@ export interface RowProps {
   /** The node, for node rows; its `rev` makes a changed node render again. */
   readonly node: TreeNode | undefined
   readonly rev: number
-  /** A synthetic row's text. */
+  /** A synthetic row's text, already through `displayText` (ExplorerService.rowText). */
   readonly text: string
   readonly selected: boolean
   /** The row has a name to drag into a query. */
@@ -53,7 +53,7 @@ export function rowTooltip(node: TreeNode): string {
   const name = node.lost ? `${node.label} (connection lost)` : node.sublabel ? `${node.label} ${node.sublabel}` : node.label
   const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
   const error = node.error ?? node.connectionError
-  return clip([displayText(name), kind, node.detail && displayText(node.detail), node.lost ? lostSentence : node.status && statusSentences[node.status], error && `Could not load: ${error.message}`].filter(Boolean).join('\n'))
+  return clip([displayText(name), kind, node.detail && displayText(node.detail), node.lost ? lostSentence : node.status && statusSentences[node.status], error && `Could not load: ${displayText(error.message)}`].filter(Boolean).join('\n'))
 }
 /** The row's accessible name: the label and sublabel as shown, then its state. */
 export function rowName(node: TreeNode): string {
@@ -93,7 +93,7 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
     const icon = kind === RowKind.Error || kind === RowKind.MoreError ? 'error' : kind === RowKind.Loading || kind === RowKind.More ? 'loading' : 'info'
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
       aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}>
-      {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><span className={`codicon codicon-${icon}`} /></span><span className="oe-text">{text}</span>
+      {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><span className={`codicon codicon-${icon}`} /></span><bdi className="oe-text">{text}</bdi>
     </div>
   }
   const expandable = node.hasChildren && !node.lost, folder = node.kind === 'folder', root = node.parent === 0

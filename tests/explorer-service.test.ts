@@ -343,6 +343,16 @@ describe('ExplorerService: errors', () => {
     expect(f.labels().filter(label => label.includes('dbo.T'))).toEqual(['        dbo.T0', '        dbo.T2'])
     expect(f.explorer.getSnapshot().selected).toBe(tables)
   })
+  it('shows names and server text in error rows and announcements with visible markers', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    f.state.failNext = failure('NOT_FOUND', 'dbo.txt.\u202eexe\u202c\nfake line no longer exists.')
+    await f.open('Databases')
+    const shown = 'dbo.txt.⟨U+202E⟩exe⟨U+202C⟩⟨U+000A⟩fake line no longer exists.'
+    expect(f.labels()).toContain(`[${shown} Press Enter to refresh server-a.example.]`)
+    expect(f.explorer.getSnapshot().announcement?.text).toBe(`Could not load Databases: ${shown}`)
+  })
   it('states a non-retryable error without a retry hint', async () => {
     const f = fixture()
     f.connect()
@@ -451,6 +461,82 @@ describe('ExplorerService: refresh', () => {
     expect(f.find('AppData')).not.toBe(app)
     expect(f.explorer.node(databases)!.load).toBe('loaded')
   })
+  it('stops a folder that was loading pages below a refresh that is stopped, or resumes it when the refresh fails', async () => {
+    const isApp = (params: ExplorerChildrenParams) => params.node.type === 'object' && params.node.object.kind === 'database' && params.node.object.name === 'AppData'
+    for (const outcome of ['stop', 'fail'] as const) {
+      const f = fixture()
+      f.state.tables = Array.from({ length: 10 }, (_, index) => `dbo.T${index}`)
+      f.state.pageSize = 3
+      f.connect()
+      await settle()
+      f.hold(isPage('tables'))
+      const tables = await f.open('Databases', 'AppData', 'Tables')
+      expect(f.labels()).toContain('[Loading… 4 of 11]')
+      f.hold(isApp)
+      f.explorer.refresh(f.find('AppData'))
+      await settle()
+      // Until the refresh answers, the folder's old rows stay and nothing below it loads.
+      expect(f.sent.filter(entry => isPage('tables')(entry.params) && !entry.settled)).toHaveLength(0)
+      if (outcome === 'stop') {
+        f.explorer.stop()
+        await settle()
+        expect(f.labels()).toContain('[Stopped after 4 of 11 items. Press Enter to continue loading.]')
+        expect(f.labels()).not.toContain('[Loading… 4 of 11]')
+        expect(f.explorer.context.getSnapshot().explorerLoading).toBe(false)
+        f.unhold()
+        f.explorer.continueLoading(syntheticId(tables, RowKind.Stopped))
+      } else {
+        f.release(isApp, failure('DATABASE_UNAVAILABLE', 'Database AppData is not available.'))
+        await settle()
+        expect(f.labels()).toContain('[Refresh failed: Database AppData is not available. Press Enter to retry.]')
+        expect(f.sent.filter(entry => isPage('tables')(entry.params) && !entry.settled).map(entry => entry.params.cursor)).toEqual(['v1.tables.3'])
+        f.unhold()
+        f.release(isPage('tables'))
+      }
+      await settle()
+      expect(f.explorer.node(tables)).toMatchObject({ more: 'none', cursor: undefined })
+      expect(f.explorer.node(tables)!.children).toHaveLength(11)
+    }
+  })
+  it('puts back how far a folder had got when its refresh is stopped before the first page', async () => {
+    const f = fixture({ folderCap: 8 })
+    f.state.tables = Array.from({ length: 10 }, (_, index) => `dbo.T${index}`)
+    f.state.pageSize = 3
+    f.connect()
+    await settle()
+    f.hold(isPage('tables'))
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    f.explorer.stop()
+    await settle()
+    const stopped = '[Stopped after 4 of 11 items. Press Enter to continue loading.]'
+    expect(f.labels()).toContain(stopped)
+    f.unhold()
+    f.hold(isFolder('tables'))
+    f.explorer.refresh(tables)
+    f.explorer.stop()
+    await settle()
+    expect(f.explorer.node(tables)).toMatchObject({ more: 'stopped', cursor: 'v1.tables.3', total: 11, load: 'loaded' })
+    expect(f.labels()).toContain(stopped)
+    // A capped folder keeps saying it is capped.
+    f.unhold()
+    f.explorer.continueLoading(syntheticId(tables, RowKind.Stopped))
+    await settle()
+    const capped = '[Showing the first 8 of 11 items in Tables. Use Filter Settings to narrow the list.]'
+    expect(f.labels()).toContain(capped)
+    f.hold(isFolder('tables'))
+    f.explorer.refresh(tables)
+    expect(f.labels()).not.toContain(capped)
+    f.explorer.stop()
+    await settle()
+    expect(f.labels()).toContain(capped)
+    // A refresh that fails puts it back too, below its error row.
+    f.unhold()
+    f.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.labels()).toContain('[Refresh failed: Another session holds a lock on this metadata. Press Enter to retry.]')
+    expect(f.labels()).toContain(capped)
+  })
   it('refreshes every server when nothing is selected, and drops a stale answer', async () => {
     const f = fixture()
     f.connect('server-a')
@@ -526,6 +612,26 @@ describe('ExplorerService: stop, budget and eviction', () => {
     f.explorer.expand(security)
     await settle()
     expect(f.labels()).toContain('    Logins')
+  })
+  it('scans for nodes to evict once while nothing can be evicted, and again after a collapse', async () => {
+    const f = fixture({ nodeBudget: 16 })
+    f.state.tables = Array.from({ length: 30 }, (_, index) => `dbo.T${index}`)
+    f.state.pageSize = 4
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    expect(f.explorer.node(tables)!.more).toBe('paused')
+    const scans = vi.spyOn(f.explorer.table as Map<number, unknown>, 'values')
+    f.explorer.continueLoading(syntheticId(tables, RowKind.Paused))
+    await settle()
+    // Seven more pages arrived over the budget; none of them walked the node table again.
+    expect(f.explorer.node(tables)!.children).toHaveLength(31)
+    expect(scans).not.toHaveBeenCalled()
+    f.explorer.collapse(tables)
+    f.explorer.select(f.find('Security'))
+    await f.open('Security')
+    expect(scans).toHaveBeenCalled()
+    expect(f.explorer.node(tables)).toMatchObject({ children: undefined, load: 'none' })
   })
   it('pauses background loading when nothing can be evicted, and continues on Enter', async () => {
     const f = fixture({ nodeBudget: 16, pageSize: 2 })

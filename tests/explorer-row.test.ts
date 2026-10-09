@@ -34,6 +34,8 @@ describe('Object Explorer rows', () => {
     expect(rowTooltip(node({ kind: 'database', label: 'Legacy', status: 'unavailable' }))).toBe('Legacy\nDatabase\nThe database is not available. Bring it online, then refresh Databases.')
     expect(rowTooltip(node({ kind: 'server', label: 'crash-server', sublabel: '(SQL Server 16.0)', lost: true })))
       .toBe('crash-server (connection lost)\nServer\nThe connection was lost when the SQL backend restarted. Reconnect, or remove the server.')
+    expect(rowTooltip(node({ load: 'error', error: { code: 'NOT_FOUND', message: 'dbo.a\u202eb\nc no longer exists.', retryable: false } })))
+      .toBe('dbo.Orders\nTable\nCould not load: dbo.a⟨U+202E⟩b⟨U+000A⟩c no longer exists.')
     const long = rowTooltip(node({ detail: 'x'.repeat(2000) }))
     expect(long).toHaveLength(512)
     expect(long.endsWith('…')).toBe(true)
