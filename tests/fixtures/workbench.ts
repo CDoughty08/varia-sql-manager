@@ -131,6 +131,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
     explorerChildren: vi.fn<VariaApi['explorerChildren']>(async params => ({ ok: true, value: explorerAnswer(params) })),
     explorerCancel: vi.fn<VariaApi['explorerCancel']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    scriptObjects: vi.fn<VariaApi['scriptObjects']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
+    cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     ...backendApi()
   }
   const { documents, events } = doc

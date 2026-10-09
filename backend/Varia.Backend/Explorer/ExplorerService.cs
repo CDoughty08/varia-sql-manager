@@ -3,6 +3,7 @@ using System.Data;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.SqlClient;
+using Varia.Backend.Common;
 
 namespace Varia.Backend.Explorer;
 
@@ -40,20 +41,9 @@ internal sealed class ExplorerService : IDisposable
 {
     private readonly IExplorerHost host;
     private readonly ExplorerCatalog catalog;
-    private readonly ConcurrentDictionary<string, Running> running = new(StringComparer.Ordinal);
+    private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim total;
-
-    private sealed class Running(string connectionId, CancellationTokenSource source)
-    {
-        public string ConnectionId { get; } = connectionId;
-        public bool Forgotten { get; private set; }
-        public void Forget()
-        {
-            Forgotten = true;
-            try { source.Cancel(); } catch (ObjectDisposedException) { /* Finished concurrently. */ }
-        }
-    }
 
     public ExplorerService(IExplorerHost host, ExplorerOptions? options = null, ExplorerCatalog? catalog = null)
     {
@@ -61,6 +51,7 @@ internal sealed class ExplorerService : IDisposable
         Options = options ?? new ExplorerOptions();
         this.catalog = catalog ?? ExplorerCatalog.Current;
         total = new SemaphoreSlim(Options.Total);
+        running = new RequestRegistry(Options.MaxRegistered, "Object Explorer");
     }
 
     public ExplorerOptions Options { get; }
@@ -77,10 +68,8 @@ internal sealed class ExplorerService : IDisposable
         var real = server.Explorer(catalog);
         var profile = Options.ForceBand is { } band ? real with { Band = band } : real;
         ExplorerRefs.CheckServed(request, catalog, profile);
-        if (running.Count >= Options.MaxRegistered) throw new RequestException("BUSY", "Too many Object Explorer requests are running. Retry after some finish.");
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
-        var entry = new Running(request.ConnectionId, source);
-        if (!running.TryAdd(request.RequestId, entry)) throw new RequestException("DUPLICATE_REQUEST", "This Object Explorer request is already running.");
+        var entry = running.Register(request.RequestId, request.ConnectionId, source);
         try
         {
             // A request cancelled before it ran (a CANCEL frame read right after its REQUEST) takes no slot.
@@ -94,19 +83,19 @@ internal sealed class ExplorerService : IDisposable
             if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
             return new([], watch.ElapsedMilliseconds, Error: ExplorerErrors.Create("TIMEOUT", Subject(request), request.Database));
         }
-        finally { ((ICollection<KeyValuePair<string, Running>>)running).Remove(new(request.RequestId, entry)); }
+        finally { running.Unregister(request.RequestId, entry); }
     }
 
     /// <summary>Cancels a disconnected connection's requests and drops its gate.</summary>
     public void Forget(string connectionId)
     {
-        foreach (var entry in running.Values.Where(entry => entry.ConnectionId == connectionId)) entry.Forget();
+        running.Forget(connectionId);
         gates.TryRemove(connectionId, out _);
     }
 
     public void Dispose()
     {
-        foreach (var entry in running.Values) entry.Forget();
+        running.ForgetAll();
         gates.Clear();
     }
 

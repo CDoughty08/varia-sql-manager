@@ -173,7 +173,7 @@ describe('scripting catalogue', () => {
       expect(preflights[row.preflight], nodeName(node)).toContain(node.kind)
     }
     expect(Object.fromEntries(nodeKinds.flatMap(kind => scriptKindSpecs[kind]?.phase === 'pr5' && pr5(kind).objectTypes ? [[kind, pr5(kind).objectTypes]] : []))).toEqual({
-      view: ['V'], procedure: ['P', 'PC'], function: ['FN', 'IF', 'TF', 'FS', 'FT', 'AF'], rule: ['R'], default: ['D']
+      view: ['V'], procedure: ['P', 'PC', 'X', 'RF'], function: ['FN', 'IF', 'TF', 'FS', 'FT', 'AF'], rule: ['R'], default: ['D']
     })
     expect(new Set(Object.values(urns))).toEqual(new Set(smoUrnTypes))
     expect(Object.keys(preflights).sort()).toEqual([...preflightIds].sort())

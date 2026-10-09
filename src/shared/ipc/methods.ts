@@ -44,6 +44,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.close': control,
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
+  // The backend answers its own 55 s budget as a TIMEOUT value, inside this deadline; main cancels it from the renderer (varia:scripting-cancel).
+  'scripting.script': { kind: 'unary', lane: 'metadata', deadlineMs: 60_000 },
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
 

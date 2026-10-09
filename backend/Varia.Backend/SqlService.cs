@@ -9,17 +9,19 @@ using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
+using Varia.Backend.Scripting;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher, IExplorerHost
+internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "databases.list", "tables.script", "tables.columns", "query.execute", "query.cancel", "query.session.close",
-        "results.read", "results.close", "explorer.children"
+        "results.read", "results.close", "explorer.children",
+        "scripting.script"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -34,6 +36,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
     private readonly ExplorerService explorer;
+    private readonly ScriptingService scripting;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
@@ -63,6 +66,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         explorer = new ExplorerService(this);
+        scripting = new ScriptingService(this);
         if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
     }
 
@@ -80,6 +84,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
     public ResultStore Results => store;
     /// <summary>Object Explorer's node provider (the checks set its test options).</summary>
     public ExplorerService Explorer => explorer;
+    /// <summary>Script As (the checks set its test options).</summary>
+    public ScriptingService Scripting => scripting;
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
     /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads
@@ -125,6 +131,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
+        "scripting.script" => await scripting.ScriptAsync(Read<ScriptArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -175,6 +182,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
         profiles.TryRemove(args.ConnectionId, out _);
         explorer.Forget(args.ConnectionId);
+        scripting.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
@@ -207,17 +215,26 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         return new SqlConnection(builder.ConnectionString);
     }
 
-    ServerProfile IExplorerHost.Profile(string connectionId) =>
+    ServerProfile IExplorerHost.Profile(string connectionId) => Profile(connectionId);
+    ServerProfile IScriptingHost.Profile(string connectionId) => Profile(connectionId);
+
+    private ServerProfile Profile(string connectionId) =>
         connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
 
     /// <summary>Object Explorer's own pool: the connection's settings under a distinct program name (as SSMS does), so its
     /// READ UNCOMMITTED and LOCK_TIMEOUT never reach query tabs, SMO or databases.list. It keeps the login's initial
     /// catalog (contained-database users), and is cleared with the connection's other pools on disconnect.</summary>
-    SqlConnection IExplorerHost.Connection(string connectionId, string? database)
+    SqlConnection IExplorerHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Object Explorer");
+
+    /// <summary>Scripting's own pool, for the same reasons: its READ COMMITTED, LOCK_TIMEOUT 10 s and SMO's USE never
+    /// reach the other pools, and each job restores its database before the connection returns to the pool.</summary>
+    SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Scripting");
+
+    private SqlConnection PoolConnection(string connectionId, string? database, string suffix)
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = true, CommandTimeout = 30 };
-        var name = builder.ApplicationName + " - Object Explorer";
+        var name = builder.ApplicationName + suffix;
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
         if (database is not null) builder.InitialCatalog = database;
         if (pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
@@ -698,11 +715,16 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         }
     }
 
-    public void CancelAll() { foreach (var query in queries.Values) query.Cancel(); }
+    public void CancelAll()
+    {
+        foreach (var query in queries.Values) query.Cancel();
+        scripting.CancelAll();
+    }
     public void Dispose()
     {
         memoryTimer?.Dispose();
         explorer.Dispose();
+        scripting.Dispose();
         CancelAll();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();

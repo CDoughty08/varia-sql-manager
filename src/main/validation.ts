@@ -3,6 +3,7 @@ import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
+import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
 const name = z.string().min(1).max(128).refine(value => value.trim().length > 0)
@@ -28,7 +29,8 @@ export const requestSchemas = {
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
   'query.session.close': z.object({ sessionId: z.uuid() }).strict(),
-  'explorer.children': explorerChildrenParamsSchema
+  'explorer.children': explorerChildrenParamsSchema,
+  'scripting.script': scriptRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 export function validateRequest(method: string, params: unknown): unknown {

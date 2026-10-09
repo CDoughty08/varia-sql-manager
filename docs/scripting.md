@@ -95,7 +95,7 @@ CREATE, S = SELECT, I = INSERT, U = UPDATE, Del = DELETE, E = EXECUTE, Mod = Mod
 
 Children are scripted only below these parents: `key` below `table`; `constraint` below `table`; `trigger` below `table` or `view`; `index` below `table` or `view`; `statistic` below `table` or `view`. A table type's keys, constraints and indexes are not.
 
-Module preflights find the object by these `sys.objects.type` codes: `view`: V; `procedure`: P, PC; `function`: FN, IF, TF, FS, FT, AF; `rule`: R; `default`: D.
+Module preflights find the object by these `sys.objects.type` codes: `view`: V; `procedure`: P, PC, X, RF; `function`: FN, IF, TF, FS, FT, AF; `rule`: R; `default`: D.
 
 Deferred, with no Script submenu yet (key material, binaries or external integrations): `cryptographicProvider`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `externalDataSource`, `externalFileFormat`, `table` (`droppedLedger`), `view` (`droppedLedger`), `procedure` (`extended`), `procedure` (`replicationFilter`).
 

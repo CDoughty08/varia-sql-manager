@@ -198,6 +198,7 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
+| `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
 **A backend method is added in five places:** `RpcMethods` (`src/shared/contracts.ts`); `requestSchemas`
@@ -213,6 +214,10 @@ cancel that reaches main before the load was written is sent right after it; one
 60 s (1,024 ids), and that load is then refused with `CANCELLED`. A running `requestId` sent again is
 `DUPLICATE_REQUEST`. Catalog failures (permission, access, a missing object, a lock, the 40 s budget, a lost connection)
 are not envelope errors but `result.error` values with their own codes, so each tree node shows its own failure.
+
+**Scripting cancellation** works the same way (`ScriptingRequests`, `varia:scripting-cancel`, 1–64 ids, 256 tombstones
+for 60 s). The backend sends an attention for the statement SMO has in flight, answers at once, and keeps the job's
+gate (2 per connection, 4 in all) until its thread ends; scripting failures are `result.error` values (docs/scripting.md).
 
 ## Streams and credits
 

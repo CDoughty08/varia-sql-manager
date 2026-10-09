@@ -106,7 +106,8 @@ export interface ScriptKindSpec {
   readonly urn: SmoUrnType
   readonly subtypeUrns?: Partial<Record<NodeSubtype, SmoUrnType>>
   readonly preflight: PreflightId
-  /** `sys.objects.type` codes a `module` preflight looks the object up by. */
+  /** `sys.objects.type` codes a `module` preflight looks the object up by. They include deferred subtypes' codes, so
+   *  the backend's own subtype answers NOT_SUPPORTED for them rather than NOT_FOUND. */
   readonly objectTypes?: readonly string[]
   /** The verbs of a node without a subtype, and of subtypes `subtypeVerbs` does not list. */
   readonly verbs: VerbRow
@@ -172,7 +173,8 @@ const kindData: { readonly [K in NodeKind]?: Data | typeof later } = {
   },
   synonym: plain('synonym', 'Synonym', 'schemaObject'),
   procedure: {
-    title: 'procedure', urn: 'StoredProcedure', preflight: 'module', objectTypes: ['P', 'PC'], verbs: verbRow([...moduleVerbs, 'execute']),
+    // The System Stored Procedures folder lists extended (X) and replication-filter (RF) procedures as `system`.
+    title: 'procedure', urn: 'StoredProcedure', preflight: 'module', objectTypes: ['P', 'PC', 'X', 'RF'], verbs: verbRow([...moduleVerbs, 'execute']),
     subtypeVerbs: { extended: later, replicationFilter: later }, modifiable: ['sql']
   },
   // Without a subtype a function gets the table-valued row: the verbs every T-SQL function offers, with EXECUTE greyed.

@@ -7,6 +7,7 @@ import type { MenuStyle } from './menu-style'
 import type { ErrorCode } from './ipc/wire/protocol'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
+import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -203,6 +204,7 @@ export interface RpcMethods {
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
   'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
+  'scripting.script': { params: ScriptRequest; result: ScriptResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
@@ -269,6 +271,11 @@ export interface VariaApi {
   /** Cancels Object Explorer loads by their `requestId`s (1–256); `cancelled` counts those still running. A load cancelled
    *  this way answers `CANCELLED`. */
   explorerCancel(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Scripts one Object Explorer object (Script As). Failures the user can act on come back as `result.error`. */
+  scriptObjects(params: ScriptRequest): Promise<ApiResult<ScriptResult>>
+  /** Cancels scripting requests by their `requestId`s (1–64); `cancelled` counts those still running. A request
+   *  cancelled this way answers `CANCELLED`. */
+  cancelScripting(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>
