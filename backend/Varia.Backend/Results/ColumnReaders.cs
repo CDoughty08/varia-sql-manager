@@ -65,7 +65,8 @@ internal sealed class ColumnPlan
     /// <summary>Today's rule: a single column named "Microsoft SQL Server 2005 XML Showplan" is an execution plan.</summary>
     public bool IsPlan { get; }
     /// <summary>Whether the set has a long column (max types, text, ntext, image, xml, CLR types), whose values can reach
-    /// 2 GB. A row that is not stored is then read past synchronously (SqlService.ExecuteAsync).</summary>
+    /// 2 GB. Rows that are not stored are then read past synchronously, on a thread of their own
+    /// (SqlService.SkipRowsAsync).</summary>
     public bool HasLong { get; }
 
     /// <summary><see cref="HasLong"/> for a set that has no plan because none of its rows are stored.</summary>

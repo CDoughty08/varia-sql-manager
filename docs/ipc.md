@@ -516,9 +516,10 @@ against SQL Server by the live type matrix. Reads use `CommandBehavior.Sequentia
 each column once, in order, with a reader chosen once per result set from the schema table. A long value is kept up to
 its cap and the rest is read past in 8,192-unit chunks (text and ntext through `GetTextReader`: `GetChars` reads their
 whole value). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
-kept) are read past with a synchronous `Read` when their set has a long column. Either way, nothing near a huge value's
-size is held, and a cancel stops it: left unread, the next `ReadAsync` would buffer all of it, in time quadratic in its
-size.
+kept) are read past with a synchronous `Read` when their set has a long column, on a dedicated thread: that `Read` also
+waits for the server's next row (a lock, a slow plan), and on thread-pool threads a few such queries delayed every other
+request, cancels included, by seconds. Either way, nothing near a huge value's size is held, and a cancel stops it: left
+unread, the next `ReadAsync` would buffer all of it, in time quadratic in its size.
 
 | SQL type | Display | Samples |
 | --- | --- | --- |

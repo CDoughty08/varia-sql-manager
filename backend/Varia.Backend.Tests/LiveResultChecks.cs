@@ -102,6 +102,8 @@ internal static class LiveResultChecks
 
             // maxRows 0 stores rows up to the budget only.
             await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close);
+            await SkipOffPool(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close,
+                () => service.DispatchAsync("system.health", JsonSerializer.SerializeToElement(new { }, json), json));
 
             var cancelled = await Cancelled(CancelReason.User);
             check(cancelled.Status == "cancelled" && cancelled.Error?.Code == "CANCELLED", "a user CANCEL frame cancels the script");
@@ -275,6 +277,76 @@ internal static class LiveResultChecks
         {
             await close(locker);
             await close(reader);
+            await run("DROP TABLE IF EXISTS " + table + ";");
+        }
+    }
+
+    /// <summary>A row that is not stored, in a set with a long column, is read past with a synchronous Read, which blocks
+    /// its thread while the server is slow to send the next row. Such queries waiting on a lock must leave the thread pool
+    /// free: on pool threads they delayed every other request, cancels included, by one to three seconds while the pool
+    /// slowly added threads.</summary>
+    private static async Task SkipOffPool(Action<bool, string> check, ResultStore store, JsonSerializerOptions json, Func<string, Task<QueryResult>> run,
+        Func<string, RequestContext?, string?, int, Task<QueryResult>> runIn, Func<string, Task> close, Func<Task<object>> health)
+    {
+        var table = "##varia_skip_" + Guid.NewGuid().ToString("N");
+        await run("CREATE TABLE " + table + " (id int PRIMARY KEY, doc nvarchar(max)); INSERT " + table + " SELECT TOP (1500) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'x' FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
+        var locker = Guid.NewGuid().ToString();
+        // More readers than the pool has threads, so that blocking them would need new ones.
+        var readers = Enumerable.Range(0, Math.Max(2 * Environment.ProcessorCount, ThreadPool.ThreadCount + Environment.ProcessorCount)).Select(_ =>
+        {
+            var opened = new List<uint>();
+            var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) =>
+            {
+                var item = JsonSerializer.SerializeToElement(value, json);
+                if (item.GetProperty("type").GetString() == "resultSet.opened") lock (opened) opened.Add(item.GetProperty("descriptor").GetProperty("resultId").GetUInt32());
+            });
+            return (Session: Guid.NewGuid().ToString(), Context: context, Opened: opened);
+        }).ToList();
+        int Skipping() => readers.Count(reader => { lock (reader.Opened) return reader.Opened.Count > 0 && store.Find(reader.Opened[0])?.RowsRead > 100; });
+        var running = new List<Task<QueryResult>>();
+        try
+        {
+            await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 1500;", null, locker, 0);
+            running.AddRange(readers.Select(reader => runIn("SELECT id, doc FROM " + table + " ORDER BY id;", reader.Context, reader.Session, 100)));
+            // Requests arrive as they do in the host, whose reader thread hands each one to the pool with Task.Run. The pool
+            // adds threads within seconds, so they are timed while the readers start skipping and for a second after.
+            var waits = new List<long>();
+            var skipping = 0;
+            long cancelWait = 0;
+            var sinceCancel = new Stopwatch();
+            await Task.Factory.StartNew(() =>
+            {
+                var watch = Stopwatch.StartNew();
+                var probe = new Stopwatch();
+                long settled = -1;
+                while (watch.ElapsedMilliseconds < 20_000 && (settled < 0 || watch.ElapsedMilliseconds - settled < 1000))
+                {
+                    probe.Restart();
+                    Task.Run(health).Wait();
+                    waits.Add(probe.ElapsedMilliseconds);
+                    if (settled < 0 && (skipping = Skipping()) == readers.Count) settled = watch.ElapsedMilliseconds;
+                    Thread.Sleep(50);
+                }
+                sinceCancel.Start();
+                Task.Run(() =>
+                {
+                    cancelWait = sinceCancel.ElapsedMilliseconds;
+                    foreach (var reader in readers) reader.Context.Cancel(CancelReason.User);
+                }).Wait();
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            var results = await Task.WhenAll(running);
+            var cancelMs = sinceCancel.ElapsedMilliseconds;
+            check(skipping == readers.Count && waits.Max() < 250 && cancelWait < 250 && cancelMs < 2000 && results.All(result => result.Status == "cancelled"),
+                readers.Count + " queries skipping rows with long values while they wait on a lock leave the thread pool free (" + skipping + " skipping; system.health at most "
+                + waits.Max() + " ms over " + waits.Count + " calls; cancel started after " + cancelWait + " ms, all cancelled after " + cancelMs + " ms)");
+        }
+        finally
+        {
+            await runIn("ROLLBACK;", null, locker, 0);
+            await Task.WhenAll(running.Select(task => task.ContinueWith(_ => { }, TaskScheduler.Default)));
+            foreach (var reader in readers) reader.Context.Dispose();
+            await close(locker);
+            foreach (var reader in readers) await close(reader.Session);
             await run("DROP TABLE IF EXISTS " + table + ";");
         }
     }

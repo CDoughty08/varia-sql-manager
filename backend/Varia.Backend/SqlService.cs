@@ -433,10 +433,9 @@ internal sealed class SqlService : IRequestDispatcher
                             }
                             while (true)
                             {
-                                bool more;
-                                // ReadAsync would skip the long values of a row that was not stored by buffering all of them,
-                                // in time quadratic in their size and deaf to the token; a synchronous Read skips them in
-                                // linear time, and Cancel stops it. Rows already stored become readable first.
+                                // A row is not stored only for reasons that last for the rest of the set, so once one has been
+                                // skipped the rest of a set with a long column is read past in one go; rows already stored
+                                // become readable first.
                                 if (skipped && (hasLong ??= plan?.HasLong ?? ColumnPlan.HasLongColumns(reader)))
                                 {
                                     if (currentSet?.SealDelay is not null)
@@ -444,23 +443,19 @@ internal sealed class SqlService : IRequestDispatcher
                                         currentSet.Seal();
                                         events.Sealed();
                                     }
-                                    token.ThrowIfCancellationRequested();
-                                    using (token.Register(command.Cancel)) more = reader.Read();
+                                    await SkipRowsAsync(reader, command, currentSet, events, token);
+                                    break;
                                 }
-                                else
+                                var read = reader.ReadAsync(token);
+                                // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
+                                // pages after 200 ms without a row, so a slow statement's rows become readable.
+                                if (!read.IsCompleted && currentSet?.SealDelay is { } delay
+                                    && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
                                 {
-                                    var read = reader.ReadAsync(token);
-                                    // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
-                                    // pages after 200 ms without a row, so a slow statement's rows become readable.
-                                    if (!read.IsCompleted && currentSet?.SealDelay is { } delay
-                                        && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
-                                    {
-                                        currentSet.Seal();
-                                        events.Sealed();
-                                    }
-                                    more = await read;
+                                    currentSet.Seal();
+                                    events.Sealed();
                                 }
-                                if (!more) break;
+                                if (!await read) break;
                                 skipped = true;
                                 if (currentSet is null) continue;
                                 currentSet.CountRow();
@@ -644,6 +639,25 @@ internal sealed class SqlService : IRequestDispatcher
         reportedBand = band;
         publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
     }
+
+    /// <summary>Reads past the rest of a result set that stores no more rows and has a long column, counting its rows.
+    /// ReadAsync would skip each long value by buffering all of it, in time quadratic in its size and deaf to the token; a
+    /// synchronous Read skips it in linear time, and Cancel stops it. That Read also blocks while the server is slow to
+    /// send the next row (a lock, a slow plan, a remote server), so it runs on a thread of its own: on pool threads, a
+    /// few such queries delayed every other request, cancels included, by seconds.</summary>
+    private static Task SkipRowsAsync(SqlDataReader reader, SqlCommand command, ResultSetBuffer? set, QueryEventSink events, CancellationToken token) =>
+        Task.Factory.StartNew(() =>
+        {
+            using var cancel = token.Register(command.Cancel);
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!reader.Read()) return;
+                if (set is null) continue;
+                set.CountRow();
+                events.RowsChanged();
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private object Cancel(CancelArgs args)
     {
