@@ -644,11 +644,18 @@ try {
   await page.keyboard.press('Control+R')
   await expect(outputTab).toHaveCount(0)
   const editorArea = () => page.locator('.monaco-editor .overflow-guard').boundingBox()
-  // Dockview and Monaco follow the new size on a later frame; on a 1024-pixel screen the window was already that wide,
-  // so the editor's height shows when the layout has caught up.
-  await expect.poll(async () => { const box = await editorArea(); return box.x + box.width <= 1024 && box.y + box.height <= 700 && box.y + box.height > 580 }).toBe(true)
-  const text = await editorArea()
+  // Dockview and Monaco follow the new size on later frames, which come once a second in the hidden window; on a
+  // 1024-pixel screen the window was already that wide, so the editor's height shows when the layout has caught up. A
+  // box that fits can still be an intermediate one, so the corner is taken from two equal measurements, and the press
+  // waits until that point is on the editor.
+  let text = null
+  await expect.poll(async () => {
+    const box = await editorArea(), same = JSON.stringify(box) === JSON.stringify(text)
+    text = box
+    return same && box.x + box.width <= 1024 && box.y + box.height <= 700 && box.y + box.height > 580
+  }).toBe(true)
   const corner = { x: Math.round(text.x + text.width - 30), y: Math.round(text.y + text.height - 20) }
+  await expect.poll(() => page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.monaco-editor .overflow-guard'), corner)).toBe(true)
   await page.mouse.click(corner.x, corner.y, { button: 'right' })
   await expect(editorMenu).toBeVisible()
   const flipped = await editorMenu.boundingBox()
