@@ -309,8 +309,8 @@ internal static class LiveResultChecks
         var table = "##varia_skip_" + Guid.NewGuid().ToString("N");
         await run("CREATE TABLE " + table + " (id int PRIMARY KEY, doc nvarchar(max)); INSERT " + table + " SELECT TOP (1500) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'x' FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
         var locker = Guid.NewGuid().ToString();
-        // More readers than the pool has threads, so that blocking them would need new ones.
-        var readers = Enumerable.Range(0, Math.Max(2 * Environment.ProcessorCount, ThreadPool.ThreadCount + Environment.ProcessorCount)).Select(_ =>
+        // More readers than the pool has threads, so that blocking them would need many new ones.
+        var readers = Enumerable.Range(0, ThreadPool.ThreadCount + 2 * Environment.ProcessorCount).Select(_ =>
         {
             var opened = new List<uint>();
             var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) =>
@@ -324,6 +324,8 @@ internal static class LiveResultChecks
         var running = new List<Task<QueryResult>>();
         try
         {
+            // Sessions log in first, so the timed part is only the readers' queries.
+            foreach (var reader in readers) await runIn("SELECT 1;", null, reader.Session, 0);
             await runIn("BEGIN TRANSACTION; SELECT id FROM " + table + " WITH (XLOCK, ROWLOCK) WHERE id = 1500;", null, locker, 0);
             running.AddRange(readers.Select(reader => runIn("SELECT id, doc FROM " + table + " ORDER BY id;", reader.Context, reader.Session, 100)));
             // Requests arrive as they do in the host, whose reader thread hands each one to the pool with Task.Run. The pool
