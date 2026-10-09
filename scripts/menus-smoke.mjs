@@ -796,7 +796,8 @@ try {
   // Earlier steps shrank the window, so the output panel may be short. Every row must show: Playwright scrolls a cell
   // into view before pressing it, and that scroll would close a menu the press had just opened.
   const outputTop = (await page.locator('.output-panel').boundingBox()).y
-  const sashes = await Promise.all((await page.locator('.dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash.dv-enabled').all()).map(sash => sash.boundingBox()))
+  // With the output at its minimum height its sash is dv-maximum rather than dv-enabled: it can still move up.
+  const sashes = await Promise.all((await page.locator('.dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash:not(.dv-disabled)').all()).map(sash => sash.boundingBox()))
   const above = sashes.filter(box => box && box.y < outputTop).sort((a, b) => b.y - a.y)[0]
   await page.mouse.move(above.x + above.width / 2, above.y + above.height / 2)
   await page.mouse.down()
