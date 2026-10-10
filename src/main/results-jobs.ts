@@ -8,6 +8,7 @@ import { cancelReasons, limits as wire, type CancelReason } from '../shared/ipc/
 import type { StreamSink } from './backend/connection'
 import { BackendError, sentences } from './backend/errors'
 import type { BackendSupervisor } from './backend/supervisor'
+import { sanitizeFileName } from './file-names'
 import { resultsCopyRequestSchema, resultsSaveRequestSchema } from './validation'
 
 /** What Save Results As writes (owner decision 1, recommended default): a header row, CSV with NULL as an empty field (an
@@ -37,11 +38,6 @@ export const jobSentences = {
     IS_DIRECTORY: `${fileName} is a folder.`
   } as Partial<Record<string, string>>)[token] ?? `${fileName} could not be written.`)
 } as const
-
-/** Characters no file name may hold on any platform become '_', as do bidirectional controls, which can disguise an extension. */
-export function sanitizeFileName(name: string): string {
-  return name.replace(/[\\/:*?"<>|\x00-\x1f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, '_').slice(0, wire.jobs.suggestedName)
-}
 
 /** The format an extension chooses; any other extension, or none, keeps the requested format. */
 export function formatFromPath(path: string): ResultsFormat | undefined { return formatsByExtension[extname(path).toLowerCase()] }
@@ -190,7 +186,7 @@ export class ResultsJobHost {
     try {
       this.check(request.generation, request.resultId)
       const requested = request.format ?? this.lastFormat ?? 'csv'
-      const name = sanitizeFileName(request.suggestedName) + '.' + extensions[requested]
+      const name = sanitizeFileName(request.suggestedName + '.' + extensions[requested])
       const order: ResultsFormat[] = [requested, ...(['csv', 'tsv', 'json'] as const).filter(format => format !== requested)]
       const selection = await this.deps.showSaveDialog({
         title: 'Save Grid Results', defaultPath: join(this.lastDir ?? this.deps.documentsDir(), name),

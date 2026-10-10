@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { exportDefaults, formatFromPath, jobSentences, removeExportLeftovers, ResultsJobHost, sanitizeFileName, supervisorJobs, type JobHostDeps, type JobsBackend } from '../src/main/results-jobs'
+import { exportDefaults, formatFromPath, jobSentences, removeExportLeftovers, ResultsJobHost, supervisorJobs, type JobHostDeps, type JobsBackend } from '../src/main/results-jobs'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { BackendSupervisor } from '../src/main/backend/supervisor'
 import type { ResultsCopyParams, ResultsExportParams, ResultsJobProgress, ResultsJobResult } from '../src/shared/contracts'
@@ -151,6 +151,18 @@ describe('ResultsJobHost save', () => {
     calls[0].resolve(done)
     expect(await saving).toEqual({ ...done, fileName: 'out.csv', format: 'csv' })
   })
+  it('suggests a name with Script As\'s rules, whatever the tab name holds', async () => {
+    // C1 controls, the BOM, separators, bidi controls, a reserved Windows stem, and a name too long in UTF-8 bytes.
+    const cases: [string, string][] = [
+      ['Q\u0085uery\ufeff1\u2028-Result1', 'Q_uery_1_-Result1.csv'], ['a/b:c\u202egpj.\u2066x-Result1', 'a_b_c_gpj._x-Result1.csv'],
+      ['CON', '_CON.csv'], ['データ'.repeat(40) + '-Result1', 'データ'.repeat(26) + '.csv']
+    ]
+    for (const [suggestedName, expected] of cases) {
+      const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: true }))
+      expect(await host({ showSaveDialog: dialog }).jobs.save(saveRequest({ format: 'csv', suggestedName }))).toBeNull()
+      expect(dialog.mock.calls[0][0].defaultPath, suggestedName).toBe(join('/home/me/Documents', expected))
+    }
+  })
   it('reports a save as soon as its file is chosen, and names the file (never the path) in every report', async () => {
     const { jobs, calls, progress, tick } = host()
     const request = saveRequest()
@@ -172,8 +184,6 @@ describe('ResultsJobHost save', () => {
   it('chooses the format from the extension, keeps the requested one otherwise, and remembers the folder and format', async () => {
     expect([formatFromPath('/a/b.CSV'), formatFromPath('/a/b.txt'), formatFromPath('/a/b.tsv'), formatFromPath('/a/b.tab'), formatFromPath('/a/b.json'), formatFromPath('/a/b.xlsx'), formatFromPath('/a/b')])
       .toEqual(['csv', 'tsv', 'tsv', 'tsv', 'json', undefined, undefined])
-    expect(sanitizeFileName('x'.repeat(200))).toHaveLength(128)
-    expect(sanitizeFileName('a/b:c\u202egpj.\u2066x')).toBe('a_b_c_gpj._x')
     const paths = ['/data/out.json', '/data/out.dat']
     const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: false, filePath: paths.shift() }))
     const { jobs, calls } = host({ showSaveDialog: dialog })
