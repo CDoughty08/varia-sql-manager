@@ -448,7 +448,9 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   extension (any other extension keeps the requested format, and none is appended, so the dialog's overwrite
   confirmation stays valid), checks ownership again, and returns only the file's
   name; `EXPORT_FAILED` tokens become sentences naming only that name. `varia:results-job-cancel` sends CANCEL reason 1;
-  a page reload or closed window cancels with reason 3. Paths come only from the dialog, never from the renderer, and
+  a page reload or closed window cancels with reason 3. Main shows the page's file dialogs and prompts one at a time
+  (`src/main/dialog-queue.ts`): a Script As File… dialog asked for while Save Grid Results is open waits for it, where
+  Windows and Linux would show it over the first. Paths come only from the dialog, never from the renderer, and
   reach only the backend.
 
 ## Results port and results worker

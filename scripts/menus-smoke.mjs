@@ -744,6 +744,29 @@ try {
   await expect.poll(() => readFile(scriptFile, 'utf8').catch(() => null)).toBe(createScript)
   expect(await application.evaluate(() => globalThis.variaSaveDialogs.map(path => path.split(/[\\/]/).at(-1)))).toEqual(['dbo.Orders.sql'])
   await expect(tabs()).toHaveCount(tabCount)
+  // One native dialog at a time: a script for File… that arrives while Save Grid Results is still open waits for it,
+  // rather than opening a second modal dialog over it, and the page stays busy with it until then.
+  await rm(scriptFile)
+  await application.evaluate(({ dialog }, path) => {
+    globalThis.variaSaveDialogs = []
+    dialog.showSaveDialog = async (_window, options) => {
+      globalThis.variaSaveDialogs.push(options.title)
+      if (options.title !== 'Save Grid Results') return { canceled: false, filePath: path }
+      await new Promise(resolve => { globalThis.variaReleaseGridSave = resolve })
+      return { canceled: true }
+    }
+  }, scriptFile)
+  await page.locator('[data-result-grid] .rg-row[aria-rowindex="2"] .rg-c[aria-colindex="2"]').first().click()
+  await page.keyboard.press('Control+S')
+  await expect.poll(() => application.evaluate(() => globalThis.variaSaveDialogs)).toEqual(['Save Grid Results'])
+  await scriptTo('File…')
+  await expect(page.locator('.toolbar').getByRole('button', { name: 'Open', exact: true })).toBeDisabled()
+  await page.waitForTimeout(500)
+  expect(await application.evaluate(() => globalThis.variaSaveDialogs)).toEqual(['Save Grid Results'])
+  await application.evaluate(() => globalThis.variaReleaseGridSave())
+  await expect.poll(() => readFile(scriptFile, 'utf8').catch(() => null)).toBe(createScript)
+  expect(await application.evaluate(() => globalThis.variaSaveDialogs)).toEqual(['Save Grid Results', 'Save SQL query'])
+  await expect(page.locator('.toolbar').getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
   // Refresh on Tables reloads that folder only. Tables can be filtered (explorer-smoke.mjs covers Filter Settings).
   const tables = await row(...ordersPath.slice(0, -1)), stale = await (await row(...ordersPath)).getAttribute('id')
   const listed = { tables: await loads('tables'), databases: await loads('databases') }

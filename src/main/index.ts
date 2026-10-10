@@ -10,6 +10,7 @@ import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
+import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest } from './validation'
 import { SqlFileStore, fileKinds, saveFileSchema } from './sql-files'
@@ -44,6 +45,8 @@ let resultsJobs: ResultsJobHost | undefined
 // Test seams (fake backend, liveness override, __variaTest, the renderer test-mode flag) exist only in unpackaged smoke runs.
 const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 const files = new SqlFileStore()
+// The file dialogs and prompts the page asks for, one at a time: a dialog asked for while another is open waits for it.
+const oneDialog = dialogQueue()
 let closeApproved = false
 /** The app is quitting (before-quit went ahead), so a closed window needs no new backend. */
 let quitting = false
@@ -120,7 +123,7 @@ async function restartBackend(): Promise<boolean> {
   const count = backend.connectionCount()
   const window = mainWindow
   if (count > 0 && window && !window.isDestroyed()) {
-    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true })
+    const { response } = await oneDialog(() => dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true }))
     if (response !== 0) return false
   }
   await backend.restart('manual')
@@ -291,7 +294,7 @@ app.whenReady().then(async () => {
   const jobs = resultsJobs = new ResultsJobHost({
     backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), platform: process.platform,
     writeClipboard: text => clipboard.writeText(text), documentsDir: () => app.getPath('documents'),
-    showSaveDialog: options => mainWindow ? dialog.showSaveDialog(mainWindow, options) : Promise.resolve({ canceled: true }),
+    showSaveDialog: options => oneDialog<{ canceled: boolean; filePath?: string }>(() => mainWindow && !mainWindow.isDestroyed() ? dialog.showSaveDialog(mainWindow, options) : Promise.resolve({ canceled: true })),
     progress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:results-job', progress) }
   })
   const scriptingRequests = new ScriptingRequests(backend)
@@ -340,12 +343,12 @@ app.whenReady().then(async () => {
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
   handle('varia:layout-import', async () => {
-    const selection = await dialog.showOpenDialog(mainWindow!, { title: 'Load workspace layout', filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['openFile'] })
+    const selection = await oneDialog(() => dialog.showOpenDialog(mainWindow!, { title: 'Load workspace layout', filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['openFile'] }))
     return selection.canceled || !selection.filePaths[0] ? null : layouts.import(selection.filePaths[0])
   })
   handle('varia:layout-export', async value => {
     const layout = parseWorkspaceLayout(value)
-    const selection = await dialog.showSaveDialog(mainWindow!, { title: 'Save workspace layout', defaultPath: join(app.getPath('documents'), 'workspace.varia-layout.json'), filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] })
+    const selection = await oneDialog(() => dialog.showSaveDialog(mainWindow!, { title: 'Save workspace layout', defaultPath: join(app.getPath('documents'), 'workspace.varia-layout.json'), filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] }))
     if (selection.canceled || !selection.filePath) return false
     await layouts.export(selection.filePath, layout)
     return true
@@ -388,7 +391,7 @@ app.whenReady().then(async () => {
   handle('varia:results-job-cancel', value => jobs.cancel(value))
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   handle('varia:files-open', async () => {
-    const selected = await dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] })
+    const selected = await oneDialog(() => dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }))
     if (selected.canceled) return []
     return Promise.all(selected.filePaths.map(path => files.read(path)))
   })
@@ -397,7 +400,8 @@ app.whenReady().then(async () => {
     let selectedPath: string | undefined
     if (!options.fileId || options.saveAs) {
       const safeName = sanitizeFileName(options.name)
-      const selection = await dialog.showSaveDialog(mainWindow!, { title: kind.title, defaultPath: options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName), filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] })
+      const defaultPath = options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName)
+      const selection = await oneDialog(() => dialog.showSaveDialog(mainWindow!, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }))
       if (selection.canceled || !selection.filePath) return null
       selectedPath = selection.filePath
     }
@@ -410,7 +414,7 @@ app.whenReady().then(async () => {
   handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
-    const response = await dialog.showMessageBox(mainWindow!, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true })
+    const response = await oneDialog(() => dialog.showMessageBox(mainWindow!, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true }))
     return (['save', 'discard', 'cancel'] as const)[response.response]
   })
   ipcMain.handle('varia:close-window', event => {
