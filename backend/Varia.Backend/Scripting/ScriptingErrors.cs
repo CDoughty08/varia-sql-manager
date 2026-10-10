@@ -18,7 +18,8 @@ internal static class ScriptingErrors
     public const int MaxMessage = 2048, MaxDisplay = 400, MaxServerText = 300, MaxDetail = 1024, MaxState = 200;
     private static readonly int[] Blocked = [1222, 1205];
     private static readonly int[] Permission = [229, 230, 262, 297, 300, 15151, 15247];
-    private static readonly int[] Unavailable = [916, 4060, 922, 924, 926, 927, 942, 945, 952, 976, 978];
+    // 923: restricted to db_owner, dbcreator and sysadmin (RESTRICTED_USER).
+    private static readonly int[] Unavailable = [916, 4060, 922, 923, 924, 926, 927, 942, 945, 952, 976, 978];
     private static readonly int[] Lost = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060];
 
     /// <summary>A name as the renderer's displayText() shows it: controls, separators, bidi marks, the BOM and unpaired

@@ -241,6 +241,9 @@ internal static class ScriptingChecks
         check(verbs.All(item => Changed(baseline, Read(SmoOptionsMapper.Map(dto, item.Verb, Box2022, true).Options)).SequenceEqual(item.Changed)), "each DDL verb sets only its own SMO flag");
         check(SmoOptionsMapper.Passes(ScriptVerb.DropAndCreate).SequenceEqual([ScriptVerb.Drop, ScriptVerb.Create]) && SmoOptionsMapper.Passes(ScriptVerb.Alter).SequenceEqual([ScriptVerb.Alter]),
             "DROP And CREATE is a DROP pass and then a CREATE pass");
+        check(SmoOptionsMapper.Walk(ScriptVerb.Create) == DependencyType.Parents && SmoOptionsMapper.Walk(ScriptVerb.CreateOrAlter) == DependencyType.Children
+            && SmoOptionsMapper.Walk(ScriptVerb.Drop) == DependencyType.Children && SmoOptionsMapper.Walk(ScriptVerb.Alter) is null,
+            "dependent objects are what a CREATE refers to, what refers to the object for CREATE OR ALTER and DROP, and nothing for ALTER, as SMO 181 walks them");
         try { SmoOptionsMapper.Map(dto, ScriptVerb.DropAndCreate, Box2022, true); check(false, "DROP And CREATE mapped to one pass"); }
         catch (InvalidOperationException) { check(true, "DROP And CREATE is never mapped as one SMO pass"); }
         check(!SmoOptionsMapper.Map(dto, ScriptVerb.Create, Box2022, true, cloud: true).Options.IncludeDatabaseContext, "a cloud database writes no USE");
@@ -341,13 +344,52 @@ internal static class ScriptingChecks
             && HeaderGuard.Closed("/****** Script for SelectTopNRows command from SSMS  ******/\r\nCREATE VIEW v AS SELECT TOP (1000) 1 AS one")
             && HeaderGuard.Closed("/****** a ******/\r\nCREATE PROCEDURE p AS SELECT 1 /* x */") && HeaderGuard.Closed("CREATE PROCEDURE p AS SELECT 1 /****** x */ ******/"),
             "a whole comment batch, a header, and definitions with comments of their own pass the comment check");
-        var entity = (string database, string name, string server) => new Urn("Server[@Name='" + server + "']/Database[@Name='" + database + "']/UnresolvedEntity[@Name='" + name + "' and @Schema='dbo']");
+        // A module's stored text may itself start and end with such a comment; it passes as the definition of an object the
+        // script creates, which must be its first statement and the script's only one of that object, in a batch nothing
+        // splits. Check for object existence writes a procedure's CREATE as an empty stub and then an ALTER, and wraps other
+        // definitions in sp_executesql strings, which count.
+        var scripted = new ScriptedObjects();
+        scripted.Add("StoredProcedure", "p");
+        scripted.Add("StoredProcedure", "it's");
+        scripted.Add("View", "v");
+        scripted.Add("DdlTrigger", "ddl");
+        const string stub = "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[p]') AND type in (N'P', N'PC'))\r\nBEGIN\r\n"
+            + "EXEC dbo.sp_executesql @statement = N'CREATE PROCEDURE [dbo].[p] AS' \r\nEND";
+        bool Passes(params string[] batches) => HeaderGuard.Closed(batches, module => scripted.Defines(module, triggers: false));
+        bool WithTriggers(params string[] batches) => HeaderGuard.Closed(batches, module => scripted.Defines(module, triggers: true));
+        const string banner = "/****** Nightly load ******/\r\n", end = "\r\n/****** End ******/";
+        check(Passes("USE [db]", "SET ANSI_NULLS ON", banner + "CREATE PROCEDURE [dbo].[p] AS SELECT 1;" + end)
+            && Passes(Header("p") + "\r\n" + banner + "-- note\r\n/* a /* nested */ comment */ CREATE OR ALTER VIEW [dbo].[v]  AS \r\nSELECT 1 AS one;" + end)
+            && Passes(banner + "ALTER PROC [p] AS SELECT 1;" + end) && Passes(banner + "CREATE TRIGGER [ddl] ON DATABASE FOR CREATE_TABLE AS SELECT 1;" + end)
+            && WithTriggers(banner + "CREATE OR ALTER TRIGGER [dbo].[tr] ON [dbo].[v] INSTEAD OF INSERT AS SET NOCOUNT ON;" + end)
+            && Passes("USE [db]", stub, banner + "ALTER PROCEDURE [dbo].[p] AS SELECT 1;" + end, "DROP PROCEDURE [dbo].[p]"),
+            "a definition of an object the script creates passes the comment check with a banner at both ends");
+        check(!Passes("IF NOT EXISTS (SELECT * FROM sys.views WHERE object_id = OBJECT_ID(N'[dbo].[v]'))\r\nEXECUTE dbo.sp_executesql N'\r\nCREATE VIEW [dbo].[v] AS SELECT 1'",
+                banner + "ALTER VIEW [dbo].[v] AS SELECT 2;" + end)
+            && !Passes("EXEC dbo.sp_executesql @statement = N'ALTER PROCEDURE [dbo].[it''s] AS SELECT 1'", banner + "CREATE PROCEDURE [dbo].[it's] AS SELECT 2;" + end)
+            && !Passes(stub.Replace("AS'", "AS SELECT 2'", StringComparison.Ordinal), banner + "ALTER PROCEDURE [dbo].[p] AS SELECT 1;" + end),
+            "a second definition of the module, also inside an sp_executesql string, fails it");
+        check(!Passes(banner + "CREATE PROCEDURE [dbo].[q] AS SELECT 1;" + end) && !Passes(banner + "CREATE VIEW [dbo].[p] AS SELECT 1;" + end)
+            && !Passes(banner + "CREATE PROCEDURE [dbo].[p] AS SELECT 1;" + end, "CREATE PROCEDURE [dbo].[p] AS SELECT 2;")
+            && !Passes(banner + "CREATE PROCEDURE [dbo].[p] AS SELECT 1\r\nGO\r\nDROP TABLE t" + end) && !Passes("/****** Future : x*/ CREATE TRIGGER [evil] ON DATABASE FOR DROP_TABLE AS ROLLBACK; /* ******/")
+            && !Passes(banner + "CREATE OR ALTER TRIGGER [dbo].[tr] ON [dbo].[v] INSTEAD OF INSERT AS SET NOCOUNT ON;" + end)
+            && !WithTriggers(banner + "CREATE TRIGGER [dbo].[tr] ON [dbo].[t] AFTER INSERT AS SET NOCOUNT ON;" + end) && !Passes("/****** Future : x */ DROP TABLE t /* ******/")
+            && !Passes("/****** Future : x /* CREATE PROCEDURE [dbo].[p] AS SELECT 1; ******/") && broken.All(batch => !Passes(batch)),
+            "one that creates something else, a module the script does not create or creates twice, or that a GO splits fails it, as does every broken comment");
+        check(HeaderGuard.Defines("/* a /* b */ c */ -- d\r\n  create   or   alter proc [s].[a]]b] AS SELECT 1") is { Keyword: "PROCEDURE", Statement: "[s].[a]]b]", Name: "a]b", On: null }
+            && HeaderGuard.Defines("CREATE TRIGGER [x] ON [dbo].[t]]1] AFTER INSERT AS SELECT 1") is { Keyword: "TRIGGER", Name: "x", On: "t]1" }
+            && HeaderGuard.Defines("/* open CREATE PROCEDURE [p] AS SELECT 1") is null && HeaderGuard.Defines("SET ANSI_NULLS ON") is null
+            && HeaderGuard.Defines("CREATE TABLE [dbo].[p] (id int)") is null && HeaderGuard.Defines("-- only a comment") is null,
+            "the statement a batch starts with is read past its comments, which nest, with SMO's bracketed names");
+        var entity = (string database, string name, string server) => new Urn("Server[@Name='" + server + "']/Database[@Name='" + database.Replace("'", "''") + "']/UnresolvedEntity[@Name='"
+            + name.Replace("'", "''") + "' and @Schema='dbo']");
         var target = new Urn("Server[@Name='srv']/Database[@Name='Sales']/StoredProcedure[@Name='p' and @Schema='dbo']");
         check(SmoScriptRunner.UnresolvedWarning([entity("Sales", "x*/ DROP TABLE t /*", "srv"), entity("Archive", "a\r\nb", "SRV"), entity("Remote", "t", "ls")], target)
-                == "The script does not create objects that a definition in it refers to but that do not exist or are on a linked server, which SQL Server Management Objects cannot "
-                + "script: dbo.x*/ DROP TABLE t /* in database Sales, dbo.a⟨U+000D⟩⟨U+000A⟩b in database Archive, dbo.t in database Remote on server ls."
-            && SmoScriptRunner.UnresolvedWarning([.. Enumerable.Range(0, 5).Select(i => entity("Sales", "t" + i, "srv"))], target).EndsWith("dbo.t2 in database Sales and 2 more.", StringComparison.Ordinal),
-            "the warning names the unresolved references as messages show names, with their database and a linked server, three at most");
+                == "The script does not create objects that a definition in it refers to but that SQL Server Management Objects could not resolve (they do not exist, you cannot see "
+                + "them, or they are named with a server): dbo.x*/ DROP TABLE t /* in database Sales, dbo.a⟨U+000D⟩⟨U+000A⟩b in database Archive, dbo.t in database Remote on server ls."
+            && SmoScriptRunner.UnresolvedWarning([.. Enumerable.Range(0, 5).Select(i => entity("Sales", "t" + i, "srv"))], target).EndsWith("dbo.t2 in database Sales and 2 more.", StringComparison.Ordinal)
+            && SmoScriptRunner.UnresolvedWarning([entity("o's", "it's missing", "srv")], target).EndsWith(": dbo.it's missing in database o's.", StringComparison.Ordinal),
+            "the warning names the unresolved references as messages show names (an apostrophe once), with their database and a linked server, three at most");
         check(SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\r\nGO\r\nDROP TABLE t") && SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\n:r other.sql")
             && !SmoScriptRunner.Splits("CREATE PROC p AS SELECT N'\r\nGO\r\n' /*\nGO\n*/") && !SmoScriptRunner.Splits("CREATE TABLE [a\r\nGO\r\nb] (id int)"),
             "a definition is flagged when the query window would split it at a GO or refuse a SQLCMD line, never for GO inside quotes, comments or names");
@@ -364,7 +406,8 @@ internal static class ScriptingChecks
         var codes = new (int Number, byte Severity, string Code)[]
         {
             (1222, 16, "BLOCKED"), (1205, 13, "BLOCKED"), (-2, 11, "TIMEOUT"), (229, 14, "PERMISSION_DENIED"), (15151, 16, "PERMISSION_DENIED"), (15247, 16, "PERMISSION_DENIED"),
-            (916, 14, "DATABASE_UNAVAILABLE"), (4060, 11, "DATABASE_UNAVAILABLE"), (942, 14, "DATABASE_UNAVAILABLE"), (978, 14, "DATABASE_UNAVAILABLE"), (911, 16, "NOT_FOUND"),
+            (916, 14, "DATABASE_UNAVAILABLE"), (4060, 11, "DATABASE_UNAVAILABLE"), (923, 14, "DATABASE_UNAVAILABLE"), (942, 14, "DATABASE_UNAVAILABLE"), (978, 14, "DATABASE_UNAVAILABLE"),
+            (911, 16, "NOT_FOUND"),
             (10054, 20, "CONNECTION_LOST"), (233, 16, "CONNECTION_LOST"), (50000, 20, "CONNECTION_LOST"), (208, 16, "SQL_ERROR"), (102, 15, "SQL_ERROR")
         };
         check(codes.All(item => ScriptingErrors.SqlCode(item.Number, item.Severity) == item.Code), "SQL Server errors map to scripting codes (spec C9)");

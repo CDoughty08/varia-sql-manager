@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Varia.Backend.Scripting;
 
 /// <summary>SMO writes "/****** Object:  Table [dbo].[T]    Script Date: … ******/" with names unescaped, so a name
@@ -9,8 +11,9 @@ namespace Varia.Backend.Scripting;
 /// lines, in any shape. SMO 181 already writes "?" for a name containing */; the guard does not rely on it. A script
 /// without headers is not guarded: SMO writes none then, and what remains is the definitions' stored text.
 /// SMO also writes comments as batches of their own, with headers on or off: <see cref="Unresolved"/>, which
-/// SmoScriptRunner leaves out, and any other that <see cref="Closed"/> refuses when a name breaks it.</summary>
-internal static class HeaderGuard
+/// SmoScriptRunner leaves out, and any other that <see cref="Closed(IReadOnlyList{string}, Func{Module, bool})"/>
+/// refuses when a name breaks it.</summary>
+internal static partial class HeaderGuard
 {
     public const string Opening = "/****** Object:";
     private const string Closing = "******/";
@@ -24,14 +27,106 @@ internal static class HeaderGuard
 
     /// <summary>Whether a batch SMO writes as a comment of its own is still one: a batch that opens with "/****** " and
     /// ends with " ******/", as SMO's comment batches do, must be a single comment on a single line that closes only
-    /// at its end, with no other comment delimiter in it. Any other batch passes (a definition's own text, however
-    /// its comments look, is not SMO's to break).</summary>
+    /// at its end, with no other comment delimiter in it. Any other batch passes.</summary>
     public static bool Closed(string batch)
     {
         var text = batch.TrimEnd();
         if (!text.StartsWith("/****** ", StringComparison.Ordinal) || !text.EndsWith(" " + Closing, StringComparison.Ordinal)) return true;
         return text.IndexOfAny(['\r', '\n', '\u2028', '\u2029']) < 0 && text.IndexOf("*/", 2, StringComparison.Ordinal) == text.Length - 2
             && text.IndexOf("/*", 2, StringComparison.Ordinal) < 0;
+    }
+
+    /// <summary>Whether every batch passes <see cref="Closed(string)"/>, or is the definition of a module the script
+    /// creates or alters: a module's stored text, which SMO keeps as is, may start and end with comments shaped like
+    /// SMO's. Such a batch passes only when its first statement creates or alters a module <paramref name="scripted"/>
+    /// accepts, the query window would not split it (that statement must be alone in its batch, so everything after it
+    /// is the module's own body), and no other batch creates or alters that module: SMO writes each definition once.</summary>
+    public static bool Closed(IReadOnlyList<string> batches, Func<Module, bool> scripted)
+    {
+        for (var index = 0; index < batches.Count; index++)
+        {
+            if (Closed(batches[index])) continue;
+            if (Defines(batches[index]) is not { } module || !scripted(module) || SmoScriptRunner.Splits(batches[index])) return false;
+            for (var other = 0; other < batches.Count; other++)
+                if (other != index && Mentions(batches[other], module.Statement)) return false;
+        }
+        return true;
+    }
+
+    [GeneratedRegex(@"(?:CREATE|ALTER)\s+(?:OR\s+ALTER\s+)?(?:PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER|DEFAULT|RULE)\s+(?<statement>(?:\[(?:[^\]]|\]\])*\]\.)?\[(?:[^\]]|\]\])*\])"
+        + @"(?<stub>\s+AS'(?!'))?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ModuleMention();
+
+    /// <summary>Whether a batch creates or alters the module SMO names so anywhere in it: as a statement, or inside the
+    /// sp_executesql string Check for object existence wraps a definition in, where apostrophes are doubled. The empty
+    /// stub SMO creates there before a procedure's definition (as an ALTER) is not one.</summary>
+    private static bool Mentions(string batch, string statement)
+    {
+        var quoted = statement.Replace("'", "''", StringComparison.Ordinal);
+        foreach (Match match in ModuleMention().Matches(batch))
+            if (!match.Groups["stub"].Success && match.Groups["statement"].Value is var named && (named == statement || named == quoted)) return true;
+        return false;
+    }
+
+    /// <summary>A module's CREATE, ALTER or CREATE OR ALTER as SMO writes it: the statement keyword (PROCEDURE for
+    /// PROC), the name as written (bracketed, schema-qualified or not), the name itself, and the table or view after ON.</summary>
+    public sealed record Module(string Keyword, string Statement, string Name, string? On);
+
+    /// <summary>The statement keyword SMO writes for a module of a URN type, or null for a type with no T-SQL definition.</summary>
+    public static string? Keyword(string urnType) => urnType switch
+    {
+        "StoredProcedure" => "PROCEDURE",
+        "UserDefinedFunction" => "FUNCTION",
+        "View" => "VIEW",
+        "Trigger" or "DdlTrigger" => "TRIGGER",
+        "Default" => "DEFAULT",
+        "Rule" => "RULE",
+        _ => null
+    };
+
+    [GeneratedRegex(@"\G(?:CREATE\s+OR\s+ALTER|CREATE|ALTER)\s+(?<keyword>PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER|DEFAULT|RULE)\s+(?<statement>(?:\[(?:[^\]]|\]\])*\]\.)?\[(?<name>(?:[^\]]|\]\])*)\])"
+        + @"(?:\s+ON\s+(?:\[(?:[^\]]|\]\])*\]\.)?\[(?<on>(?:[^\]]|\]\])*)\])?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ModuleStatement();
+
+    /// <summary>The module a batch creates or alters: its first statement after leading comments and white space, with
+    /// bracketed names as SMO writes them. Null for any other batch, or one whose leading comment does not close.</summary>
+    public static Module? Defines(string batch)
+    {
+        if (Code(batch) is not (>= 0 and var at) || ModuleStatement().Match(batch, at) is not { Success: true } match) return null;
+        var keyword = match.Groups["keyword"].Value.ToUpperInvariant();
+        static string Unquote(string name) => name.Replace("]]", "]", StringComparison.Ordinal);
+        return new(keyword == "PROC" ? "PROCEDURE" : keyword, match.Groups["statement"].Value, Unquote(match.Groups["name"].Value),
+            match.Groups["on"].Success ? Unquote(match.Groups["on"].Value) : null);
+    }
+
+    /// <summary>Where a batch's code starts: after white space, -- comments and /* */ comments, which nest in T-SQL. −1
+    /// when there is no code or a comment does not end.</summary>
+    private static int Code(string text)
+    {
+        var at = 0;
+        while (at < text.Length)
+        {
+            if (char.IsWhiteSpace(text[at])) at++;
+            else if (text.AsSpan(at).StartsWith("--"))
+            {
+                var end = text.IndexOfAny(['\r', '\n'], at);
+                if (end < 0) return -1;
+                at = end;
+            }
+            else if (text.AsSpan(at).StartsWith("/*"))
+            {
+                var depth = 0;
+                do
+                {
+                    if (at + 1 >= text.Length) return -1;
+                    if (text[at] == '/' && text[at + 1] == '*') { depth++; at += 2; }
+                    else if (text[at] == '*' && text[at + 1] == '/') { depth--; at += 2; }
+                    else at++;
+                } while (depth > 0);
+            }
+            else return at;
+        }
+        return -1;
     }
 
     public static bool Safe(string text)

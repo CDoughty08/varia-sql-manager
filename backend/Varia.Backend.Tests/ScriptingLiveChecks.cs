@@ -441,6 +441,7 @@ internal static partial class ScriptingLiveChecks
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
         await SchemaLockAsync(check, service, client, json, Schema("table", "dbo", "Victim"), db);
         await DefinitionsAsync(check, client, Schema);
+        await VerbsAsync(check, client, sql, scratch);
         await UnresolvedAsync(check, client, sql, scratch);
         await DependentDatabasesAsync(check, service, client, sql, scratch);
         await OldHeadersAsync(check, client, sql, db);
@@ -529,8 +530,97 @@ internal static partial class ScriptingLiveChecks
         check(Ok(drop) && drop.Warnings.Count == 0, "its DROP carries no warning");
     }
 
-    private static string UnresolvedWarning(params string[] names) => "The script does not create objects that a definition in it refers to but that do not exist or are on "
-        + "a linked server, which SQL Server Management Objects cannot script: " + string.Join(", ", names) + ".";
+    /// <summary>The objects Generate script for dependent objects and Script triggers check follow what SMO 181 scripts for
+    /// each verb: a CREATE adds what the object refers to, an ALTER nothing, a CREATE OR ALTER what refers to the object
+    /// (and a view's triggers). So an encrypted, oversized or unreachable object SMO does not read refuses nothing, and one
+    /// it reads is named before it does. A view's CREATE OR ALTER keeps its SET batches with the option on.</summary>
+    private static async Task VerbsAsync(Action<bool, string> check, Client client, Func<string, string, Task<SqlRun>> sql, ScratchDatabase scratch)
+    {
+        var db = scratch.Name;
+        ObjectRefDto Schema(string kind, string name) => new(kind, db, "dbo", name);
+        var dependents = client.Options with { GenerateDependentObjects = true };
+        var failed = new List<string>();
+        // vSecret is over an encrypted function and vLarge over one larger than 8 MB; neither has anything over it.
+        foreach (var name in new[] { "vSecret", "vLarge" })
+            foreach (var verb in new[] { "alter", "createOrAlter" })
+            {
+                var with = await client.Script(Schema("view", name), verb, dependents);
+                var without = await client.Script(Schema("view", name), verb);
+                if (!Ok(with) || !Ok(without) || Normalize(with.Text!) != Normalize(without.Text!) || with.Warnings.Count > 0
+                    || !with.Text!.Contains("SET ANSI_NULLS ON" + NL + "GO", StringComparison.Ordinal) || !with.Text.Contains("SET QUOTED_IDENTIFIER ON" + NL + "GO", StringComparison.Ordinal))
+                    failed.Add(name + " " + verb + ": " + (with.Error?.Message ?? without.Error?.Message ?? GoldenText.FirstDifference(Normalize(without.Text ?? ""), Normalize(with.Text ?? ""))));
+            }
+        check(failed.Count == 0, "with Generate script for dependent objects, a view's ALTER and CREATE OR ALTER over an encrypted or oversized function equal its scripts "
+            + "without the option, SET batches included: " + string.Join("; ", failed));
+
+        // A view over a function in a database that is offline: SMO's walk enters that database for the CREATE only.
+        var offline = scratch.Offline;
+        SqlRun? created = null;
+        if ((await sql("ALTER DATABASE [" + offline + "] SET ONLINE;", "master")).Status == "completed")
+        {
+            try
+            {
+                if ((await sql("CREATE FUNCTION dbo.fn_OfflineDependent () RETURNS TABLE AS RETURN SELECT 1 AS One;", offline)).Status == "completed")
+                    created = await sql("CREATE VIEW dbo.vOfflineDependent AS SELECT One FROM [" + offline + "].dbo.fn_OfflineDependent();", db);
+            }
+            finally { await sql("ALTER DATABASE [" + offline + "] SET OFFLINE WITH ROLLBACK IMMEDIATE;", "master"); }
+        }
+        var view = Schema("view", "vOfflineDependent");
+        var refused = await client.Script(view, "create", dependents);
+        var altered = await client.Script(view, "alter", dependents);
+        var either = await client.Script(view, "createOrAlter", dependents);
+        check(created?.Status == "completed" && refused.Error is { Code: "DATABASE_UNAVAILABLE" } && refused.Error.Message.Contains(offline, StringComparison.Ordinal)
+            && Ok(altered) && altered.Text!.Contains("ALTER VIEW [dbo].[vOfflineDependent]", StringComparison.Ordinal)
+            && Ok(either) && either.Text!.Contains("CREATE OR ALTER VIEW [dbo].[vOfflineDependent]", StringComparison.Ordinal),
+            "a view over an offline database's function is refused for CREATE with the option, and its ALTER and CREATE OR ALTER script: "
+            + (created?.Error ?? refused.Error?.Message) + " / " + (altered.Error?.Message ?? either.Error?.Message));
+
+        // fn_Parent is under an encrypted view and fn_ParentLarge under one over 8 MB: their CREATE OR ALTER brings that view
+        // in, so it is named before SMO reads it; their CREATE, ALTER and DROP And CREATE do not.
+        var bytes = (await sql("SELECT DATALENGTH(definition) FROM sys.sql_modules WHERE object_id = OBJECT_ID(N'dbo.vLargeChild');", db)).Scalar;
+        var allocated = GC.GetTotalAllocatedBytes(true);
+        var encryptedChild = await client.Script(Schema("function", "fn_Parent"), "createOrAlter", dependents);
+        var largeChild = await client.Script(Schema("function", "fn_ParentLarge"), "createOrAlter", dependents);
+        allocated = GC.GetTotalAllocatedBytes(true) - allocated;
+        check(encryptedChild.Error is { Code: "ENCRYPTED", Retryable: false } && encryptedChild.Error.Message == "dbo.vEncryptedChild is encrypted (WITH ENCRYPTION), so dbo.fn_Parent cannot "
+                + "be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again."
+            && largeChild.Error is { Code: "TOO_LARGE" } && largeChild.Error.Message == "The definition of dbo.vLargeChild is larger than 8 MB, which Varia cannot open. Turn off "
+                + "Generate script for dependent objects in Tools › Options › Scripting and try again."
+            && long.Parse(bytes!, CultureInfo.InvariantCulture) > 8_000_000 && allocated < 48_000_000,
+            "a CREATE OR ALTER with the option names a view over the function that is encrypted or over 8 MB before SMO loads it (" + bytes + " bytes, "
+            + allocated / 1_000_000 + " MB allocated): " + encryptedChild.Error?.Message + " " + largeChild.Error?.Message);
+        failed.Clear();
+        foreach (var name in new[] { "fn_Parent", "fn_ParentLarge" })
+            foreach (var verb in new[] { "create", "alter", "dropAndCreate" })
+            {
+                var result = await client.Script(Schema("function", name), verb, dependents);
+                if (!Ok(result) || Regex.IsMatch(result.Text!, @"(CREATE|ALTER) VIEW \[dbo\]\.\[v(Encrypted|Large)Child\]"))
+                    failed.Add(name + " " + verb + ": " + (result.Error?.Message ?? "the view under it is in the script"));
+            }
+        check(failed.Count == 0, "the function's CREATE, ALTER and DROP And CREATE with the option script without the view under it: " + string.Join("; ", failed));
+
+        // Script triggers: SMO's ALTER of a view writes the view alone, its CREATE and CREATE OR ALTER its triggers too.
+        var triggers = client.Options with { ScriptTriggers = true };
+        var secretTrigger = Schema("view", "vSecretTrigger");
+        var alterTriggers = await client.Script(secretTrigger, "alter", triggers);
+        var createTriggers = await client.Script(secretTrigger, "create", triggers);
+        var eitherTriggers = await client.Script(secretTrigger, "createOrAlter", triggers);
+        const string secret = "Trigger TR_vSecretTrigger of dbo.vSecretTrigger is encrypted (WITH ENCRYPTION), so dbo.vSecretTrigger cannot be scripted with Script triggers on. "
+            + "Turn it off in Tools › Options › Scripting and try again.";
+        check(Ok(alterTriggers) && alterTriggers.Text!.Contains("ALTER VIEW [dbo].[vSecretTrigger]", StringComparison.Ordinal)
+            && !alterTriggers.Text.Contains("TR_vSecretTrigger", StringComparison.Ordinal) && createTriggers.Error?.Message == secret && eitherTriggers.Error?.Message == secret,
+            "with Script triggers, a view's encrypted trigger refuses its CREATE and CREATE OR ALTER but not its ALTER: "
+            + (alterTriggers.Error?.Message ?? createTriggers.Error?.Message + " / " + eitherTriggers.Error?.Message));
+        // The trigger also refers to the view, so Generate script for dependent objects brings it into the CREATE OR ALTER.
+        var childTrigger = await client.Script(secretTrigger, "createOrAlter", dependents);
+        check(childTrigger.Error is { Code: "ENCRYPTED" } && childTrigger.Error.Message == "dbo.TR_vSecretTrigger is encrypted (WITH ENCRYPTION), so dbo.vSecretTrigger cannot be "
+                + "scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again."
+            && Ok(await client.Script(secretTrigger, "create", dependents)) && Ok(await client.Script(secretTrigger, "alter", dependents)),
+            "with Generate script for dependent objects, a view's encrypted trigger is named for its CREATE OR ALTER, and its CREATE and ALTER script: " + childTrigger.Error?.Message);
+    }
+
+    private static string UnresolvedWarning(params string[] names) => "The script does not create objects that a definition in it refers to but that SQL Server Management "
+        + "Objects could not resolve (they do not exist, you cannot see them, or they are named with a server): " + string.Join(", ", names) + ".";
 
     /// <summary>Generate script for dependent objects reaching references SMO cannot resolve (scripting-extra.sql): SMO
     /// writes a comment batch for each that holds the name as is, with headers on or off. The script leaves those out
@@ -662,7 +752,8 @@ internal static partial class ScriptingLiveChecks
     {
         var failed = new List<string>();
         var verbs = new (string Verb, string Keyword)[] { ("create", "CREATE"), ("alter", "ALTER"), ("createOrAlter", "CREATE OR ALTER"), ("dropAndCreate", "CREATE") };
-        foreach (var name in new[] { "usp_OldHeader", "usp_OldHeaderLine", "usp_LeadingHeader", "usp_HeaderTrailing", "usp_HeaderBanner", "usp_HeaderNoDate", "usp_HeaderSameLine" })
+        foreach (var name in new[] { "usp_OldHeader", "usp_OldHeaderLine", "usp_LeadingHeader", "usp_HeaderTrailing", "usp_HeaderBanner", "usp_HeaderNoDate", "usp_HeaderSameLine",
+            "usp_Banners", "usp_HeaderBoth" })
         {
             var target = new ObjectRefDto("procedure", db, "dbo", name);
             var header = "/****** Object:  StoredProcedure [dbo].[" + name + "]    Script Date: ";
@@ -700,6 +791,51 @@ internal static partial class ScriptingLiveChecks
         }
         check(failed.Count == 0, "a definition holding an old SSMS header of any shape scripts as stored with every DDL verb, with headers on or off, also as a trigger "
             + "or dependent object: " + string.Join("; ", failed));
+
+        // Definitions with a banner at both ends, shaped like a comment batch of SMO's: as the object scripted, as a trigger
+        // Script triggers brings in, and as a function or view Generate script for dependent objects brings in (the
+        // function under the view for CREATE, the view over the function for CREATE OR ALTER, where SMO writes the view's
+        // header on its definition's batch).
+        failed.Clear();
+        const string end = "\r\n/****** End ******/";
+        var trigger = new ObjectRefDto("trigger", db, Name: "TR_Banners", Parent: new ParentRefDto("table", "dbo", "BannerTrigger"));
+        var function = new ObjectRefDto("function", db, "dbo", "fn_Banners");
+        var over = new ObjectRefDto("view", db, "dbo", "vBanners");
+        foreach (var headers in new[] { true, false })
+        {
+            var options = client.Options with { IncludeHeaders = headers };
+            var cases = new List<(string Label, ObjectRefDto Target, string Verb, ScriptingOptionsDto Options, string[] Contains)>();
+            foreach (var (verb, keyword) in verbs)
+            {
+                cases.Add(("trigger", trigger, verb, options, ["/****** Audit ******/\r\n" + keyword + " TRIGGER [dbo].[TR_Banners] ON [dbo].[BannerTrigger]", "SET NOCOUNT ON;" + end]));
+                cases.Add(("function", function, verb, options, ["/****** Helper ******/\r\n" + keyword + " FUNCTION [dbo].[fn_Banners]", "SELECT 1 AS One;" + end]));
+                cases.Add(("view", over, verb, options, [keyword + " VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end]));
+                // Check for object existence writes a procedure's CREATE as a stub and then an ALTER, a trigger's ALTER as
+                // is, and the other definitions inside sp_executesql strings.
+                var existence = options with { CheckExistence = true };
+                cases.Add(("procedure with existence checks", new ObjectRefDto("procedure", db, "dbo", "usp_Banners"), verb, existence,
+                    ["/****** Nightly load ******/\r\n", "SELECT 1 AS one;" + end]));
+                cases.Add(("trigger with existence checks", trigger, verb, existence, ["/****** Audit ******/\r\n", "SET NOCOUNT ON;" + end]));
+                cases.Add(("function with existence checks", function, verb, existence, ["/****** Helper ******/\r\n", "SELECT 1 AS One;" + end]));
+            }
+            foreach (var verb in new[] { "create", "dropAndCreate" })
+            {
+                cases.Add(("table with Script triggers", new ObjectRefDto("table", db, "dbo", "BannerTrigger"), verb, options with { ScriptTriggers = true },
+                    ["/****** Audit ******/\r\nCREATE TRIGGER [dbo].[TR_Banners]", "SET NOCOUNT ON;" + end]));
+                cases.Add(("view with dependent objects", over, verb, options with { GenerateDependentObjects = true },
+                    ["/****** Helper ******/\r\nCREATE FUNCTION [dbo].[fn_Banners]", "SELECT 1 AS One;" + end, "CREATE VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end]));
+            }
+            cases.Add(("function with dependent objects", function, "createOrAlter", options with { GenerateDependentObjects = true },
+                ["CREATE OR ALTER FUNCTION [dbo].[fn_Banners]", "CREATE OR ALTER VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end]));
+            foreach (var (label, target, verb, extra, contains) in cases)
+            {
+                var result = await client.Script(target, verb, extra);
+                if (!Ok(result) || contains.Any(text => !result.Text!.Contains(text, StringComparison.Ordinal)) || result.Warnings.Count > 0 || !Framed(result.Text!))
+                    failed.Add(label + " " + verb + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
+            }
+        }
+        check(failed.Count == 0, "a definition with a banner comment at both ends scripts as stored with every DDL verb, with headers on or off, also as a trigger or "
+            + "dependent object: " + string.Join("; ", failed));
         var secret = new ObjectRefDto("databaseTrigger", db, Name: "trg_SecretDdl");
         var encrypted = await client.Script(secret, "create");
         check(encrypted.Error is { Code: "ENCRYPTED" } && encrypted.Error.Message == "trg_SecretDdl is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work."

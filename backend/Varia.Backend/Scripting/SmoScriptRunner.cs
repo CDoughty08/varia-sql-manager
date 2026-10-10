@@ -67,17 +67,21 @@ internal sealed class SmoScriptRunner
         var smo = Server();
         var urn = new Urn(UrnBuilder.Build(smo.Urn.Value, target.Kind, target.Row.Urn, target.Ref, target.ParentUrnType, target.Column));
         var dependencies = dto.GenerateDependentObjects && SmoOptionsMapper.Dependencies(target.Row.Urn, target.ParentUrnType, target.Ref.Database is null);
-        if (SmoOptionsMapper.Passes(verb).Any(pass => pass != ScriptVerb.Drop)) CheckDefinitions(smo, urn, target, dto, dependencies, max);
+        // The pass that reads definitions: CREATE (DROP And CREATE's second pass too), ALTER or CREATE OR ALTER.
+        var reading = SmoOptionsMapper.Passes(verb)[^1];
+        var scripted = new ScriptedObjects();
+        scripted.Add(target.Row.Urn, target.Ref.Name);
+        if (reading != ScriptVerb.Drop) CheckDefinitions(smo, urn, target, dto, reading, dependencies ? SmoOptionsMapper.Walk(reading) : null, max, scripted);
         if (verb == ScriptVerb.Alter)
         {
             // Without Touch, SMO writes nothing for ALTER (sqltoolsservice does the same).
             (smo.GetSmoObject(urn) ?? throw new SmoObjectMissingException()).Touch();
         }
         var unresolved = new List<Urn>();
-        var batches = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, dependencies, warnings, unresolved);
+        var batches = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, dependencies, warnings, unresolved, scripted);
         if (dto.IncludeHeaders && !batches.All(HeaderGuard.Safe))
         {
-            var plain = Run(smo, urn, target, verb, dto, max, headers: false, dependencies, warnings, unresolved);
+            var plain = Run(smo, urn, target, verb, dto, max, headers: false, dependencies, warnings, unresolved, scripted);
             if (!HeaderGuard.Aligned(batches, plain))
             {
                 batches = plain;
@@ -85,8 +89,9 @@ internal sealed class SmoScriptRunner
             }
         }
         // The last line of defence for a comment kind SMO may add: none of its comment batches may hold a name that ends
-        // the comment early or breaks it over lines.
-        if (!batches.All(HeaderGuard.Closed)) throw new ScriptRefusedException(BrokenComment);
+        // the comment early or breaks it over lines. A definition of an object the script creates keeps its own text,
+        // whose comments may look like SMO's at both ends.
+        if (!HeaderGuard.Closed(batches, module => scripted.Defines(module, dto.ScriptTriggers))) throw new ScriptRefusedException(BrokenComment);
         if (unresolved.Count > 0 && UnresolvedWarning(unresolved, urn) is var notice && !warnings.Contains(notice)) warnings.Add(notice);
         var text = new StringBuilder();
         foreach (var batch in batches)
@@ -101,14 +106,17 @@ internal sealed class SmoScriptRunner
     /// <summary>The preflight bounds the target's own definition; Script triggers and Generate script for dependent
     /// objects make SMO read other modules too, which are bounded here before SMO runs (spec F: no definition over
     /// 8,000,000 bytes reaches managed memory, and none that could not fit in the script together). The dependencies are
-    /// SMO's own walk, which the scripter repeats, and may lie in other databases (three-part names, synonyms). SMO reads
-    /// no definition for a reference it could not resolve (a missing object or database) or one on a linked server, so
-    /// neither is checked: it writes a comment for each instead, which <see cref="Run"/> leaves out.</summary>
-    private void CheckDefinitions(Server smo, Urn urn, ResolvedTarget target, ScriptingOptionsDto dto, bool dependencies, long max)
+    /// SMO's own walk in the direction the pass takes (<see cref="SmoOptionsMapper.Walk"/>: none for ALTER), which the
+    /// scripter repeats, and may lie in other databases (three-part names, synonyms). SMO reads no definition for a
+    /// reference it could not resolve (a missing object or database) or one on a linked server, so neither is checked: it
+    /// writes a comment for each instead, which <see cref="Run"/> leaves out. The walk's objects go to
+    /// <paramref name="scripted"/>.</summary>
+    private void CheckDefinitions(Server smo, Urn urn, ResolvedTarget target, ScriptingOptionsDto dto, ScriptVerb pass, DependencyType? walk, long max, ScriptedObjects scripted)
     {
-        // A table's or view's triggers come with the object itself, not with one of its indexes or keys.
-        var triggered = dto.ScriptTriggers && target.Kind is "table" or "view";
-        if (target.Ref.Database is not { } database || !triggered && !dependencies) return;
+        // A table's or view's triggers come with the object itself, not with one of its indexes or keys; SMO's ALTER of a
+        // view writes the view alone.
+        var triggered = dto.ScriptTriggers && target.Kind is "table" or "view" && pass != ScriptVerb.Alter;
+        if (target.Ref.Database is not { } database || !triggered && walk is null) return;
         var objects = new Dictionary<(string Database, string Schema, string Name), bool>();
         // SQL Server compares database names in its own collation, so a three-part name may spell the target's database
         // differently; such a dependent is in the target's database, not another one.
@@ -120,13 +128,13 @@ internal sealed class SmoScriptRunner
             objects[key] = triggers || objects.GetValueOrDefault(key);
         }
         if (target.Ref is { Schema: { } schema, Name: { } name }) Add(database, schema, name, triggered);
-        if (dependencies)
+        if (walk is { } direction)
         {
             BeforeDependencies?.Invoke(database);
             var walker = new DependencyWalker(smo);
             walker.DiscoveryProgress += (_, _) => token.ThrowIfCancellationRequested();
             List<Urn> nodes;
-            try { nodes = [.. walker.WalkDependencies(walker.DiscoverDependencies(new[] { urn }, DependencyType.Parents)).Select(node => node.Urn)]; }
+            try { nodes = [.. walker.WalkDependencies(walker.DiscoverDependencies(new[] { urn }, direction)).Select(node => node.Urn)]; }
             catch (Exception error) when (ScriptingErrors.UnavailableText(error) is { } text)
             {
                 // The walk enters the target's database again (USE) after the preflight read it: when that database is the
@@ -137,9 +145,14 @@ internal sealed class SmoScriptRunner
             }
             var server = urn.GetAttribute("Name", "Server");
             foreach (var node in nodes)
-                if (node.Type != "UnresolvedEntity" && string.Equals(node.GetAttribute("Name", "Server"), server, StringComparison.OrdinalIgnoreCase)
-                    && node.GetAttribute("Schema") is { } s && node.GetAttribute("Name") is { } n && node.GetAttribute("Name", "Database") is { } db)
+            {
+                if (node.Type == "UnresolvedEntity" || !string.Equals(node.GetAttribute("Name", "Server"), server, StringComparison.OrdinalIgnoreCase)
+                    || node.GetAttribute("Name") is not { } n) continue;
+                scripted.Add(node.Type, n);
+                // What refers to the object includes DML triggers, schema objects in their table's or view's schema.
+                if ((node.GetAttribute("Schema") ?? (node.Type == "Trigger" ? node.Parent.GetAttribute("Schema") : null)) is { } s && node.GetAttribute("Name", "Database") is { } db)
                     Add(db, s, n, dto.ScriptTriggers && node.Type is "Table" or "View");
+            }
         }
         // A trigger target is no schema object; the preflight read its definition's size.
         var total = target.Ref.Schema is null ? target.DefinitionBytes ?? 0 : 0;
@@ -223,7 +236,7 @@ internal sealed class SmoScriptRunner
 
     /// <summary>The warning for the references SMO could not resolve, whose comments <see cref="Run"/> left out: up to three
     /// of them by name (shown as Object Explorer shows names), with their database, and their server when it is a linked
-    /// one.</summary>
+    /// one. SMO resolves no reference that is missing, that the login cannot see, or that names a server (even this one).</summary>
     internal static string UnresolvedWarning(IReadOnlyList<Urn> entities, Urn target)
     {
         var server = target.GetAttribute("Name", "Server");
@@ -236,8 +249,8 @@ internal sealed class SmoScriptRunner
             return entity.GetAttribute("Name", "Database") is { Length: > 0 } database ? name + " in database " + ScriptingErrors.Display(database) + at : name + at;
         }
         var names = string.Join(", ", entities.Take(3).Select(Name)) + (entities.Count > 3 ? " and " + (entities.Count - 3).ToString(CultureInfo.InvariantCulture) + " more" : "");
-        return "The script does not create objects that a definition in it refers to but that do not exist or are on a linked server, which SQL Server Management "
-            + "Objects cannot script: " + names + ".";
+        return "The script does not create objects that a definition in it refers to but that SQL Server Management Objects could not resolve (they do not exist, "
+            + "you cannot see them, or they are named with a server): " + names + ".";
     }
 
     /// <summary>Kinds whose script lists child collections. Without prefetch SMO reads each column's and each index's
@@ -278,9 +291,10 @@ internal sealed class SmoScriptRunner
     /// <summary>SMO's batches for every pass of the verb, unframed, at most <paramref name="max"/> characters in all. The
     /// comment SMO writes as a batch for each reference it could not resolve is left out: it holds the referenced name
     /// unescaped, so a name could end it and run the rest as SQL. Which batches those are comes from SMO itself (its
-    /// progress event for the unresolved entity), and each one's URN is added to <paramref name="unresolved"/>.</summary>
+    /// progress event for the unresolved entity), and each one's URN is added to <paramref name="unresolved"/>. The objects
+    /// SMO reports creating go to <paramref name="scripted"/> (it reports none for ALTER or CREATE OR ALTER).</summary>
     private List<string> Run(Server smo, Urn urn, ResolvedTarget target, ScriptVerb verb, ScriptingOptionsDto dto, long max, bool headers, bool dependencies, List<string> warnings,
-        List<Urn> unresolved)
+        List<Urn> unresolved, ScriptedObjects scripted)
     {
         var batches = new List<string>();
         long total = 0;
@@ -294,14 +308,18 @@ internal sealed class SmoScriptRunner
             if (pass != ScriptVerb.Drop && LedgerSubtypes.Contains(target.Subtype) && SmoOptionsMapper.Known.First(item => item.Value == mapped.Target).Number < 160)
                 throw new UnsupportedVersionException("Ledger tables and views need SQL Server 2022 or later.");
             foreach (var warning in mapped.Warnings) if (!warnings.Contains(warning)) warnings.Add(warning);
-            // Prefetch over a dependency list reads every table's columns for each type and XML schema collection in it
-            // (over 30 s in a database with 2,500 tables); without it the list scripts in about a second.
-            var scripter = new Scripter(smo) { Options = mapped.Options, PrefetchObjects = PrefetchKinds.Contains(target.Kind) && !dependencies };
+            // Prefetch over a CREATE's or DROP's dependency list reads every table's columns for each type and XML schema
+            // collection in it (over 30 s in a database with 2,500 tables); without it the list scripts in about a second.
+            // ALTER walks nothing, and CREATE OR ALTER only what refers to the object (no type is among them); there SMO 181
+            // needs prefetch to write a view's SET ANSI_NULLS and SET QUOTED_IDENTIFIER.
+            var prefetch = PrefetchKinds.Contains(target.Kind) && (!dependencies || pass is ScriptVerb.Alter or ScriptVerb.CreateOrAlter);
+            var scripter = new Scripter(smo) { Options = mapped.Options, PrefetchObjects = prefetch };
             scripter.ScriptingProgress += (_, _) => token.ThrowIfCancellationRequested();
             var comments = new List<(string Text, Urn Entity)>();
             scripter.ScriptingProgress += (_, progress) =>
             {
                 if (progress.Current is { Type: "UnresolvedEntity" } entity) comments.Add((HeaderGuard.Unresolved(entity.ToString()), entity));
+                else if (progress.Current is { } current && pass != ScriptVerb.Drop) scripted.Add(current.Type, current.GetAttribute("Name"));
             };
             var written = 0;
             foreach (var batch in scripter.EnumScript(new[] { urn }))
@@ -331,6 +349,28 @@ internal sealed class SmoScriptRunner
         }
         return batches;
     }
+}
+
+/// <summary>The objects a script creates or alters, as far as Varia knows them: the target, the objects of the dependency
+/// walk, and those SMO reports creating. A batch shaped like SMO's own comment passes the comment check only as the
+/// definition of one of them (<see cref="HeaderGuard.Closed(IReadOnlyList{string}, Func{HeaderGuard.Module, bool})"/>).</summary>
+internal sealed class ScriptedObjects
+{
+    private readonly HashSet<(string Keyword, string Name)> modules = [];
+    private readonly HashSet<string> parents = new(StringComparer.Ordinal);
+
+    /// <param name="urnType">The object's URN type, as SMO and the catalogue name it.</param>
+    public void Add(string urnType, string? name)
+    {
+        if (name is null) return;
+        if (HeaderGuard.Keyword(urnType) is { } keyword) modules.Add((keyword, name));
+        if (urnType is "Table" or "View") parents.Add(name);
+    }
+
+    /// <summary>Whether the statement defines one of these modules or, with Script triggers, a trigger on one of these
+    /// tables or views (SMO reports no object it writes for CREATE OR ALTER).</summary>
+    public bool Defines(HeaderGuard.Module module, bool triggers) => modules.Contains((module.Keyword, module.Name))
+        || triggers && module.Keyword == "TRIGGER" && module.On is { } on && parents.Contains(on);
 }
 
 /// <summary>SMO wrote no batch for the verb, or for one pass of DROP And CREATE.</summary>

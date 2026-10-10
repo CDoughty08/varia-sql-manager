@@ -98,6 +98,17 @@ internal static class SmoOptionsMapper
     /// is a DROP pass followed by a CREATE pass, as SSMS writes it; SmoScriptRunner drops the second pass's leading USE.</summary>
     public static IReadOnlyList<ScriptVerb> Passes(ScriptVerb verb) => verb == ScriptVerb.DropAndCreate ? [ScriptVerb.Drop, ScriptVerb.Create] : [verb];
 
+    /// <summary>Which way SMO 181's Scripter walks dependencies for a pass with WithDependencies (SmoDependencyDiscoverer
+    /// takes parents only for CREATE): a CREATE adds the objects the target refers to, a CREATE OR ALTER or a DROP the
+    /// objects that refer to it, and an ALTER nothing (ScriptMaker scripts it alone).</summary>
+    public static DependencyType? Walk(ScriptVerb pass) => pass switch
+    {
+        ScriptVerb.Create => DependencyType.Parents,
+        ScriptVerb.CreateOrAlter or ScriptVerb.Drop => DependencyType.Children,
+        ScriptVerb.Alter => null,
+        _ => throw new InvalidOperationException("SMO scripts " + pass + " in passes: " + string.Join(", ", Passes(pass)))
+    };
+
     /// <summary>The server's own version, edition and engine type (spec B8).</summary>
     private static (SqlServerVersion, DatabaseEngineEdition, DatabaseEngineType) FromServer(ServerProfile profile, List<string> warnings)
     {

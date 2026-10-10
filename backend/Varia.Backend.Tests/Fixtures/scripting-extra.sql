@@ -170,6 +170,40 @@ EXEC (@sql);
 GO
 CREATE VIEW dbo.vHeaderBanner AS SELECT One FROM dbo.fn_HeaderBanner();
 GO
+-- Definitions with a banner comment at both ends, shaped like a comment batch of SMO's own: a procedure (one also under an
+-- old SSMS header), a trigger, and a function with a view over it that ends with one. SMO keeps them as stored.
+DECLARE @crlf nchar(2) = NCHAR(13) + NCHAR(10);
+DECLARE @sql nvarchar(max) = N'/****** Nightly load ******/' + @crlf + N'CREATE PROCEDURE dbo.usp_Banners AS SELECT 1 AS one;' + @crlf + N'/****** End ******/';
+EXEC (@sql);
+SET @sql = N'/****** Object:  StoredProcedure [dbo].[old]    Script Date: 1/1/2010 ******/' + @crlf + N'CREATE PROCEDURE dbo.usp_HeaderBoth AS SELECT 1 AS one;' + @crlf
+    + N'/****** End of dbo.usp_HeaderBoth ******/';
+EXEC (@sql);
+CREATE TABLE dbo.BannerTrigger (id int NULL);
+SET @sql = N'/****** Audit ******/' + @crlf + N'CREATE TRIGGER dbo.TR_Banners ON dbo.BannerTrigger AFTER INSERT AS SET NOCOUNT ON;' + @crlf + N'/****** End ******/';
+EXEC (@sql);
+SET @sql = N'/****** Helper ******/' + @crlf + N'CREATE FUNCTION dbo.fn_Banners () RETURNS TABLE AS RETURN SELECT 1 AS One;' + @crlf + N'/****** End ******/';
+EXEC (@sql);
+GO
+DECLARE @sql nvarchar(max) = N'CREATE VIEW dbo.vBanners AS SELECT One FROM dbo.fn_Banners();' + NCHAR(13) + NCHAR(10) + N'/****** End ******/';
+EXEC (@sql);
+GO
+-- Functions under a view that is encrypted or over 8 MB: Generate script for dependent objects brings such a view into
+-- the function's CREATE OR ALTER (what refers to the object), not into its CREATE or ALTER.
+CREATE FUNCTION dbo.fn_Parent () RETURNS TABLE AS RETURN SELECT 1 AS One;
+GO
+CREATE VIEW dbo.vEncryptedChild WITH ENCRYPTION AS SELECT One FROM dbo.fn_Parent();
+GO
+CREATE FUNCTION dbo.fn_ParentLarge () RETURNS TABLE AS RETURN SELECT 1 AS One;
+GO
+DECLARE @sql nvarchar(max) = N'CREATE VIEW dbo.vLargeChild AS SELECT One FROM dbo.fn_ParentLarge()' + NCHAR(10) + N'/*'
+    + REPLICATE(CONVERT(nvarchar(max), N'-'), 3999950) + N'*/' + NCHAR(10);
+EXEC (@sql);
+GO
+-- A view with an encrypted trigger: Script triggers brings it into the view's CREATE and CREATE OR ALTER, not its ALTER.
+CREATE VIEW dbo.vSecretTrigger AS SELECT 1 AS One;
+GO
+CREATE TRIGGER dbo.TR_vSecretTrigger ON dbo.vSecretTrigger WITH ENCRYPTION INSTEAD OF INSERT AS SET NOCOUNT ON;
+GO
 -- A procedure over a database that does not exist: SMO's dependency walk lists the table as unresolved.
 CREATE PROCEDURE dbo.usp_NoDatabase AS SELECT * FROM varia_no_such_database.dbo.t;
 GO

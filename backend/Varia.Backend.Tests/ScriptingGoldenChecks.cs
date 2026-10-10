@@ -306,6 +306,35 @@ internal static partial class ScriptingLiveChecks
                     + "Scripting and try again.", StringComparison.Ordinal) && Ok(await limited.Script(elsewhere, "create")),
                 "a dependent in a database the login cannot open is named, with the option to turn off, and the view scripts without it: "
                 + (function.Error ?? view.Error ?? unavailable.Error?.Message));
+            // SMO walks nothing for ALTER, and for CREATE OR ALTER only what refers to the view, so neither needs that database.
+            var dependents = limited.Options with { GenerateDependentObjects = true };
+            var alter = await limited.Script(elsewhere, "alter", dependents);
+            var either = await limited.Script(elsewhere, "createOrAlter", dependents);
+            check(Ok(alter) && alter.Text!.Contains("ALTER VIEW [dbo].[vElsewhere]", StringComparison.Ordinal) && Ok(either)
+                && either.Text!.Contains("CREATE OR ALTER VIEW [dbo].[vElsewhere]", StringComparison.Ordinal),
+                "with the option, the view's ALTER and CREATE OR ALTER script without opening that database: " + (alter.Error?.Message ?? either.Error?.Message));
+
+            // RESTRICTED_USER (error 923) shuts out a login that is not db_owner: the database is named as unavailable, as the
+            // object's own, or as a dependent's with the option to turn off.
+            var restricted = await sql("CREATE USER " + user + " FOR LOGIN " + user + ";\nGRANT VIEW DEFINITION TO " + user + ";\nGRANT SELECT ON sys.sql_expression_dependencies TO "
+                + user + ";\nGO\nCREATE VIEW dbo.vRestricted AS SELECT dbo.fn_Elsewhere() AS x;", copy);
+            var mode = await sql("ALTER DATABASE [" + copy + "] SET RESTRICTED_USER WITH ROLLBACK IMMEDIATE;", "master");
+            ScriptResult own, dependent;
+            try
+            {
+                own = await limited.Script(new ObjectRefDto("view", copy, "dbo", "vRestricted"), "create");
+                dependent = await limited.Script(elsewhere, "create", dependents);
+            }
+            finally { await sql("ALTER DATABASE [" + copy + "] SET MULTI_USER WITH ROLLBACK IMMEDIATE;", "master"); }
+            check(restricted.Status == "completed" && mode.Status == "completed" && own.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true }
+                && own.Error.Message.StartsWith("Database " + copy + " is not available (", StringComparison.Ordinal) && own.Error.Message.Contains("restricted", StringComparison.Ordinal)
+                && own.Error.Message.EndsWith("), so dbo.vRestricted cannot be scripted.", StringComparison.Ordinal)
+                && dependent.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && dependent.Error.Message.Contains(copy, StringComparison.Ordinal)
+                && dependent.Error.Message.Contains("restricted", StringComparison.Ordinal) && !dependent.Error.Message.StartsWith("Database " + scratch.Name, StringComparison.Ordinal)
+                && dependent.Error.Message.EndsWith("), so dbo.vElsewhere cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › "
+                    + "Scripting and try again.", StringComparison.Ordinal) && Ok(await limited.Script(elsewhere, "create", dependents)),
+                "a database in RESTRICTED_USER mode is DATABASE_UNAVAILABLE, named as the object's own or, with the option to turn off, as a dependent's, and the view "
+                + "scripts once it is open again: " + (restricted.Error ?? mode.Error ?? own.Error?.Message + " / " + dependent.Error?.Message));
         }
         finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(reader.Id), json), json); }
     }
