@@ -252,7 +252,7 @@ describe('result selection service', () => {
   /** Two tabs that have run, with two result sets in t1 and one in t2, and the adapter over their grids' view state. */
   function selections() {
     const events = new EventBus(), client = fakeResultClient()
-    const results = new ResultsService({ client, api: { copyResults: async () => ({ ok: false, error: 'unused' }), cancelResultsJob: async () => ({ ok: true, value: { cancelled: false } }), onResultsJob: () => () => {} }, events, frame: callback => callback() })
+    const results = new ResultsService({ client, api: { copyResults: async () => ({ ok: false, error: 'unused' }), saveResults: async () => ({ ok: false, error: 'unused' }), cancelResultsJob: async () => ({ ok: true, value: { cancelled: false } }), onResultsJob: () => () => {} }, events, frame: callback => callback() })
     for (const [tabId, sets] of [['t1', [descriptor(1), descriptor(2, { index: 1 })]], ['t2', [descriptor(3, { index: 0 })]]] as const) {
       results.begin(tabId, 'q-' + tabId)
       results.finish(tabId, 'q-' + tabId, { summary: summaryOf([...sets]) })

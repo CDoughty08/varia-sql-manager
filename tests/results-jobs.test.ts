@@ -136,6 +136,24 @@ describe('ResultsJobHost save', () => {
     calls[0].resolve(done)
     expect(await saving).toEqual({ ...done, fileName: 'out.csv', format: 'csv' })
   })
+  it('reports a save as soon as its file is chosen, and names the file (never the path) in every report', async () => {
+    const { jobs, calls, progress, tick } = host()
+    const request = saveRequest()
+    const saving = jobs.save(request)
+    await settle()
+    expect(progress).toEqual([{ jobId: request.jobId, kind: 'save', rowsDone: 0, rowsTotal: 0, bytes: 0, fileName: 'out.csv' }])
+    // The throttle counts from that first report.
+    calls[0].onProgress({ type: 'job.progress', rowsDone: 5, rowsTotal: 10, bytes: 50 })
+    tick(250)
+    calls[0].onProgress({ type: 'job.progress', rowsDone: 8, rowsTotal: 10, bytes: 80 })
+    expect(progress.slice(1)).toEqual([{ jobId: request.jobId, kind: 'save', rowsDone: 8, rowsTotal: 10, bytes: 80, fileName: 'out.csv' }])
+    calls[0].resolve(done)
+    await saving
+    // A cancelled dialog reports nothing.
+    const cancelled = host({ showSaveDialog: async () => ({ canceled: true }) })
+    await cancelled.jobs.save(saveRequest())
+    expect(cancelled.progress).toEqual([])
+  })
   it('chooses the format from the extension, keeps the requested one otherwise, and remembers the folder and format', async () => {
     expect([formatFromPath('/a/b.CSV'), formatFromPath('/a/b.txt'), formatFromPath('/a/b.tsv'), formatFromPath('/a/b.tab'), formatFromPath('/a/b.json'), formatFromPath('/a/b.xlsx'), formatFromPath('/a/b')])
       .toEqual(['csv', 'tsv', 'tsv', 'tsv', 'json', undefined, undefined])

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ResultsJobProgress, ResultsJobResult, VariaApi } from '../src/shared/contracts'
+import type { ApiResult, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultsService, resultLimits } from '../src/renderer/src/results/ResultsService'
 import { selectAll } from '../src/renderer/src/grid/selection'
@@ -15,6 +15,7 @@ function fixture() {
   let ids = 0
   const api = {
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false } })),
+    saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, fileName: 'SQLQuery1-Result1.csv', format: 'csv' as const } })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
@@ -225,6 +226,128 @@ describe('results service', () => {
     client.lose()
     expect(await service.copy('t1', 0, false)).toBe('These results are no longer available because the SQL backend restarted.')
     expect(api.copyResults).not.toHaveBeenCalled()
+  })
+  it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
+    const { api, service, tab, timers, flush, progress } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, rowsRead: 5, rowsStored: 5, rowsAvailable: 5 })]) })
+    const pending = deferred<ApiResult<SavedResults | null>>()
+    api.saveResults.mockReturnValueOnce(pending.promise)
+    const saving = service.saveAs('t1', 1, 'SQLQuery1')
+    // The renderer names the result and suggests a name; main asks for the path and remembers the last format.
+    expect(api.saveResults).toHaveBeenCalledWith({ jobId: 'job-1', generation: 1, resultId: 2, suggestedName: 'SQLQuery1-Result2' })
+    flush()
+    expect(tab().jobs).toEqual([expect.objectContaining({ jobId: 'job-1', kind: 'save', index: 1, rowsDone: 0, rowsTotal: 5, visible: false })])
+    // While the dialog is open there is no strip, however long it stays open, and Escape has nothing to cancel.
+    timers.advance(5000)
+    flush()
+    expect(tab().jobs[0]).toMatchObject({ visible: false })
+    expect(service.cancelTabJob('t1')).toBe(false)
+    const report = (rowsDone: number, rowsTotal: number) => { for (const listener of progress) listener({ jobId: 'job-1', kind: 'save', rowsDone, rowsTotal, bytes: rowsDone * 10, fileName: 'out.csv' }) }
+    report(0, 0)
+    timers.advance(299)
+    flush()
+    expect(tab().jobs[0]).toMatchObject({ visible: false, fileName: 'out.csv', rowsTotal: 5 })
+    timers.advance(1)
+    report(3, 5)
+    flush()
+    expect(tab().jobs[0]).toMatchObject({ visible: true, rowsDone: 3, rowsTotal: 5 })
+    pending.resolve({ ok: true, value: { rows: 5, bytes: 50, truncatedCells: 1, partial: false, fileName: 'out.csv', format: 'csv' } })
+    expect(await saving).toBeUndefined()
+    flush()
+    expect(tab()).toMatchObject({ jobs: [], jobNotice: 'Saved 5 rows to out.csv. 1 value was truncated.' })
+    timers.advance(300)
+    expect(tab().announcement).toBe('Saved 5 rows to out.csv. 1 value was truncated.')
+    timers.advance(8000)
+    flush()
+    expect(tab().jobNotice).toBe('')
+    // A cancelled dialog says nothing; a cancelled save says the file was not written.
+    api.saveResults.mockResolvedValueOnce({ ok: true, value: null })
+    expect(await service.saveAs('t1', 0, 'SQLQuery1')).toBeUndefined()
+    flush()
+    expect(tab().jobNotice).toBe('')
+    api.saveResults.mockResolvedValueOnce({ ok: false, code: 'CANCELLED', error: 'The operation was cancelled.' })
+    expect(await service.saveAs('t1', 0, 'SQLQuery1')).toBeUndefined()
+    flush()
+    expect(tab().jobNotice).toBe('Saving was cancelled. The file was not written.')
+  })
+  it('returns why a save could not run: main\'s and the backend\'s sentences as they are, anything else prefixed', async () => {
+    const { api, client, service } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
+    for (const [code, error] of [['JOB_BUSY', 'Another Save Results As is in progress. Wait for it to finish or cancel it.'], ['EXPORT_FAILED', 'Could not save the results: access to out.csv is denied.'],
+      ['RESULT_UNAVAILABLE', 'These results were closed before they could be saved.'], ['RESULT_OPEN', 'Save the results after this result set finishes loading.']] as const) {
+      api.saveResults.mockResolvedValueOnce({ ok: false, code, error })
+      expect(await service.saveAs('t1', 0, 'q'), code).toBe(error)
+    }
+    api.saveResults.mockResolvedValueOnce({ ok: false, code: 'BACKEND_LOST', error: 'The SQL backend stopped before answering.' })
+    expect(await service.saveAs('t1', 0, 'q')).toBe('Could not save the results: The SQL backend stopped before answering.')
+    // Sets still loading, lost or closed never reach main.
+    api.saveResults.mockClear()
+    service.begin('t1', 'q2')
+    client.emit('q2', { type: 'resultSet.opened', descriptor: descriptor(3, { state: 'open' }) })
+    expect(await service.saveAs('t1', 0, 'q')).toBe('Save the results after this result set finishes loading.')
+    service.finish('t1', 'q2', { summary: summaryOf([descriptor(3)]) })
+    client.lose()
+    expect(await service.saveAs('t1', 0, 'q')).toBe('These results are no longer available because the SQL backend restarted.')
+    expect(await service.saveAs('t1', 5, 'q')).toBeUndefined()
+    expect(api.saveResults).not.toHaveBeenCalled()
+  })
+  it('keeps a save running when the tab runs again or closes, and cancels it from its strip, Escape, or disposal', async () => {
+    const { api, service, tab, flush, progress } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
+    const pending = deferred<ApiResult<SavedResults | null>>()
+    api.saveResults.mockReturnValueOnce(pending.promise)
+    const saving = service.saveAs('t1', 0, 'SQLQuery1')
+    for (const listener of progress) listener({ jobId: 'job-1', kind: 'save', rowsDone: 0, rowsTotal: 0, bytes: 0, fileName: 'out.csv' })
+    // The backend leases the result, so running the query again neither cancels the save nor hides its strip.
+    service.begin('t1', 'q2')
+    flush()
+    expect(api.cancelResultsJob).not.toHaveBeenCalled()
+    expect(tab().jobs).toEqual([expect.objectContaining({ jobId: 'job-1', kind: 'save', fileName: 'out.csv' })])
+    expect(service.cancelTabJob('t2')).toBe(false)
+    expect(service.cancelTabJob('t1')).toBe(true)
+    expect(api.cancelResultsJob).toHaveBeenLastCalledWith('job-1')
+    service.cancelJob('job-1')
+    expect(api.cancelResultsJob).toHaveBeenCalledTimes(2)
+    service.release('t1')
+    expect(api.cancelResultsJob).toHaveBeenCalledTimes(2)
+    pending.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, fileName: 'out.csv', format: 'csv' } })
+    expect(await saving).toBeUndefined()
+    // Disposal (the window reloading) cancels a save still running.
+    service.begin('t1', 'q3')
+    service.finish('t1', 'q3', { summary: summaryOf([descriptor(4)]) })
+    api.saveResults.mockReturnValueOnce(new Promise(() => {}))
+    void service.saveAs('t1', 0, 'SQLQuery1')
+    service.dispose()
+    expect(api.cancelResultsJob).toHaveBeenLastCalledWith('job-2')
+  })
+  it('publishes which tabs have results to save or close, only when that changes', () => {
+    const { client, service, flush } = fixture()
+    const seen: Readonly<Record<string, true>>[] = []
+    service.context.subscribe(() => seen.push(service.context.getSnapshot()))
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open' }) })
+    flush()
+    client.emit('q1', { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 1, rowsRead: 9, rowsStored: 9, rowsAvailable: 9, bytesStored: 1 }] })
+    flush()
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
+    service.begin('t2', 'q2')
+    service.finish('t2', 'q2', { summary: summaryOf([]) })
+    expect(seen).toEqual([{ t1: true }])
+    service.closeResults('t1')
+    expect(seen.at(-1)).toEqual({})
+    service.begin('t1', 'q3')
+    service.finish('t1', 'q3', { summary: summaryOf([descriptor(2)]) })
+    expect(seen.at(-1)).toEqual({ t1: true })
+    service.release('t1')
+    expect(seen.at(-1)).toEqual({})
+    service.begin('t3', 'q4')
+    client.emit('q4', { type: 'resultSet.opened', descriptor: descriptor(3, { state: 'open' }) })
+    service.finish('t3', 'q4', { error: 'The SQL backend stopped.', code: 'BACKEND_LOST' })
+    expect(seen.at(-1)).toEqual({})
+    expect(seen).toHaveLength(4)
   })
   it('routes Select All to the mounted grid, else to the view state', () => {
     const { service } = fixture()

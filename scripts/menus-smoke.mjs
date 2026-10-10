@@ -828,7 +828,7 @@ try {
   await expect(grid.getByRole('columnheader').nth(2)).toContainText('(No column name)')
   // A right-click selects the cell under it first; Copy copies its value.
   await cell(1, 2).click({ button: 'right', force: true })
-  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Select All'])
+  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
   await expect(selected()).toHaveCount(1)
   await expect(cell(1, 2)).toHaveClass(/is-sel/)
   await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click(fast)

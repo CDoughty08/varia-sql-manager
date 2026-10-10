@@ -12,12 +12,16 @@ export function focusedOutput(menuTargets: Pick<MenuTargetService, 'targetFor'>)
   return hit?.target.kind === 'output' ? hit.target : undefined
 }
 
+/** "SQLQuery1" for SQLQuery1.sql: the start of Save Results As's suggested file name. */
+const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
+
 /**
- * Copy, Copy with Headers, and Select All in Query Output. A grid copies its selected cells through the backend
- * (ResultsService.copy: SSMS's tab-separated text, with Windows line breaks on Windows); Messages copy the text selected
- * in them. The commands act on the menu's target, else on the view that has focus (Ctrl+C, Ctrl+Shift+C, Edit › Copy).
+ * Copy, Copy with Headers, Select All, Save Results As and Close Results in Query Output. A grid copies its selected
+ * cells through the backend (ResultsService.copy: SSMS's tab-separated text, with Windows line breaks on Windows);
+ * Messages copy the text selected in them. The commands act on the menu's target, else on the view that has focus
+ * (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had focus.
  */
-export function outputContribution({ commands, results, menuTargets }: Pick<Workbench, 'commands' | 'results' | 'menuTargets'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+export function outputContribution({ commands, results, menuTargets, documents }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
   /** The grid's result set, while its results are still readable. */
   const grid = (target: OutputTarget | undefined) => {
@@ -48,6 +52,18 @@ export function outputContribution({ commands, results, menuTargets }: Pick<Work
         if (failure) commands.reportError(failure)
       }
     }),
+    commands.register('output.saveResultsAs', {
+      run: async args => {
+        const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
+        const tab = results.getSnapshot()[tabId]
+        if (!tab?.sets.length) return
+        const index = target?.view === 'grid' ? target.resultIndex : Math.min(results.viewState(tabId).focusedIndex, tab.sets.length - 1)
+        const name = documents.getSnapshot().documents.find(document => document.id === tabId)?.name ?? ''
+        const failure = await results.saveAs(tabId, index, baseName(name))
+        if (failure) commands.reportError(failure)
+      }
+    }),
+    commands.register('output.closeResults', { run: () => { const tabId = documents.getSnapshot().activeId; if (tabId) results.closeResults(tabId) } }),
     commands.register('output.selectAll', {
       when: args => {
         const target = targetOf(args)

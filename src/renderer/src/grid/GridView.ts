@@ -10,7 +10,7 @@ import { gridLimits as g } from './constants'
 import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
-import { initialWidth, measureCharWidth, typeHintChars } from './measure'
+import { fitWidth, initialWidth, measureCharWidth, typeHintChars } from './measure'
 import { applyWheel, ensureVisible, normalizeWheel, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
@@ -30,6 +30,8 @@ interface RowSlot {
 }
 interface HeaderSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; sel: boolean; shown: boolean; left: number; width: number }
 interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: number; x: number; y: number; dragging: boolean; readonly hit: GridHit; readonly modifiers: boolean }
+/** A column border being dragged: the width follows the pointer once a frame, and Escape puts `width0` back. */
+interface Resize { readonly pointerId: number; readonly column: number; readonly x0: number; readonly width0: number; readonly wasUserSized: boolean; x: number; applied: number }
 /** What the React shell shows under the grid: a failed tile read, or a grid that stopped after repeated failures. */
 export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean }
 
@@ -48,7 +50,7 @@ export interface GridViewOptions {
   onSelection(selection: GridSelection): void
   /** Ctrl+C, and Edit › Copy (the copy event): runs Copy. */
   onCopy(): void
-  /** Escape outside a drag: cancels the tab's copy; false when there was none. */
+  /** Escape outside a drag or resize: cancels the tab's copy or save; false when there was none. */
   onEscape(): boolean
   onStatus(status: GridStatus): void
   onError(error: unknown): void
@@ -61,8 +63,9 @@ export interface GridViewOptions {
  * view. Rows and cells live in slots reused by index (row r in slot r mod n); a cell's look is one class string and its
  * text a persistent Text node, written only when they change. Up to the scroll cap the scroller is native; past it the
  * view maps a cap-tall scroller onto the rows (scroll.ts). Exactly one animation frame is pending at a time; a frame
- * reads the scroller first and writes after. Every frame and listener is contained: after 3 failures in a row the grid
- * stops and its shell offers Retry.
+ * reads the scroller first and writes after. Widths live in the grid's saved state: the first rows size the columns
+ * once, and after that only the user does, by dragging a header's border or double-clicking it to fit. Every frame and
+ * listener is contained: after 3 failures in a row the grid stops and its shell offers Retry.
  */
 export class GridView {
   private readonly o: GridViewOptions
@@ -105,6 +108,10 @@ export class GridView {
   private disposed = false
   private wheelAttached = false
   private drag: Drag | undefined
+  private resizing: Resize | undefined
+  private resizeHover = false
+  private fitting: AbortController | undefined
+  private lastRange: VisibleRange | undefined
   private activeEl: HTMLElement | undefined
   private hovered: HTMLElement | undefined
   private ariaAt = Number.NEGATIVE_INFINITY
@@ -168,6 +175,7 @@ export class GridView {
       switch (action.type) {
         case 'copy': this.o.onCopy(); return true
         case 'escape':
+          if (this.resizing) { this.endResize(true); return true }
           if (this.drag) { this.endDrag(); return true }
           return this.o.onEscape()
         case 'open': {
@@ -212,6 +220,8 @@ export class GridView {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.fitting?.abort()
+    this.resizing = undefined
     this.cancelFrame?.()
     this.cancelFrame = undefined
     this.data.dispose()
@@ -285,7 +295,8 @@ export class GridView {
     on(this.root, 'mousedown', event => this.mouseDown(event))
     on(this.root, 'pointermove', event => this.pointerMove(event))
     on(this.root, 'pointerup', event => this.pointerUp(event))
-    on(this.root, 'lostpointercapture', () => { if (this.drag) this.endDrag() })
+    on(this.root, 'lostpointercapture', () => { if (this.resizing) this.endResize(false); if (this.drag) this.endDrag() })
+    on(this.root, 'dblclick', event => this.doubleClick(event))
     on(this.root, 'pointerover', event => this.hover(event.target))
     // Chromium enables Edit › Copy without a text selection only when beforecopy is cancelled; the copy event then runs Copy.
     const beforeCopy = (event: Event) => event.preventDefault()
@@ -354,8 +365,11 @@ export class GridView {
     if (!press || !point.inside) return
     let hit = this.hitAt(point.x, point.y)
     if (!hit) return
-    // Resizing comes with Save Results As; until then a press on a header's border selects its column.
-    if (hit.kind === 'resize') hit = { kind: 'column', column: hit.column }
+    if (hit.kind === 'resize') {
+      if (press === 'primary') { this.startResize(event.pointerId, point.x, hit.column); return }
+      // A right-press on a border is a press on its column, which the menu then acts on.
+      hit = { kind: 'column', column: hit.column }
+    }
     const add = press === 'primary' && (this.o.platform === 'darwin' ? event.metaKey : event.ctrlKey)
     this.select(pressSelection(this.o.state.selection, hit, { resultIndex: this.o.resultIndex, shift: event.shiftKey, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
     if (press !== 'primary' || hit.kind === 'corner') return
@@ -364,8 +378,16 @@ export class GridView {
   }
 
   private pointerMove(event: PointerEvent): void {
+    const resize = this.resizing
+    if (resize) {
+      if (event.pointerId !== resize.pointerId) return
+      resize.x = this.point(event).x
+      this.schedule()
+      return
+    }
     const drag = this.drag
-    if (!drag || event.pointerId !== drag.pointerId) return
+    if (!drag) { this.hoverBorder(event); return }
+    if (event.pointerId !== drag.pointerId) return
     const point = this.point(event)
     drag.x = point.x
     drag.y = point.y
@@ -374,6 +396,7 @@ export class GridView {
   }
 
   private pointerUp(event: PointerEvent): void {
+    if (this.resizing) { if (event.pointerId === this.resizing.pointerId) this.endResize(false); return }
     const drag = this.drag
     if (!drag || event.pointerId !== drag.pointerId) return
     this.endDrag()
@@ -384,6 +407,86 @@ export class GridView {
     const drag = this.drag
     this.drag = undefined
     if (drag && this.root.hasPointerCapture?.(drag.pointerId)) { try { this.root.releasePointerCapture(drag.pointerId) } catch { /* Already released. */ } }
+  }
+
+  /** The column-resize cursor over a header's border. Only header moves read the layout, so moving over cells costs nothing. */
+  private hoverBorder(event: PointerEvent): void {
+    let over = false
+    if ((event.target as Element | null)?.closest?.('.rg-head')) {
+      const point = this.point(event)
+      over = point.inside && point.y < g.headerHeight && this.hitAt(point.x, point.y)?.kind === 'resize'
+    }
+    if (over === this.resizeHover) return
+    this.resizeHover = over
+    this.root.classList.toggle('rg-border-hover', over)
+  }
+
+  /** A press on a header's right border: the column follows the pointer (a new resize stops a running fit). */
+  private startResize(pointerId: number, x: number, column: number): void {
+    this.fitting?.abort()
+    this.fitting = undefined
+    const userSized = this.o.state.userSized ??= new Set()
+    this.resizing = { pointerId, column, x0: x, width0: this.layout.width(column), wasUserSized: userSized.has(column), x, applied: x }
+    userSized.add(column)
+    this.root.classList.add('rg-resizing')
+    try { this.root.setPointerCapture(pointerId) } catch { /* A synthetic pointer has nothing to capture. */ }
+  }
+  /** Ends a resize; `restore` (Escape) puts the width back. A press that moved nothing does not count as sizing. */
+  private endResize(restore: boolean): void {
+    const resize = this.resizing
+    if (!resize) return
+    this.resizing = undefined
+    this.root.classList.remove('rg-resizing')
+    if (restore) this.layout.setWidth(resize.column, resize.width0)
+    if (!resize.wasUserSized && this.layout.width(resize.column) === resize.width0) this.o.state.userSized?.delete(resize.column)
+    if (this.root.hasPointerCapture?.(resize.pointerId)) { try { this.root.releasePointerCapture(resize.pointerId) } catch { /* Already released. */ } }
+    this.schedule()
+  }
+  /** Once a frame while resizing: the dragged border's column takes the pointer's offset, within [32, 3,000]. */
+  private resizeStep(): void {
+    const resize = this.resizing
+    if (!resize || resize.x === resize.applied) return
+    resize.applied = resize.x
+    this.layout.setWidth(resize.column, resize.width0 + resize.x - resize.x0)
+  }
+
+  /** A double-click on a header's border fits its column. */
+  private doubleClick(event: MouseEvent): void {
+    if (event.button !== 0) return
+    const point = this.point(event)
+    if (!point.inside || point.y >= g.headerHeight) return
+    const hit = this.hitAt(point.x, point.y)
+    if (hit?.kind === 'resize') this.fit(hit.column)
+  }
+  /**
+   * Fits a column to its header and the widest display text of its first 4,096 rows and the rows in view, measured by
+   * the worker; a resize or another fit started meanwhile wins.
+   */
+  private fit(column: number): void {
+    this.fitting?.abort()
+    const abort = this.fitting = new AbortController()
+    const rows = this.rows(), top = Math.min(g.measureFitRows, rows), range = this.lastRange
+    const measures = top > 0 ? [this.o.handle.measure(0, top, column, column + 1, abort.signal)] : []
+    if (range && range.lastRow >= top) {
+      const first = Math.max(top, range.firstRow)
+      measures.push(this.o.handle.measure(first, range.lastRow - first + 1, column, column + 1, abort.signal))
+    }
+    const done = () => { if (this.fitting === abort) this.fitting = undefined }
+    Promise.all(measures).then(results => {
+      if (abort.signal.aborted || this.disposed) return
+      done()
+      let chars = 0
+      for (const result of results) chars = Math.max(chars, result.widths[0] ?? 0)
+      const userSized = this.o.state.userSized ??= new Set()
+      userSized.add(column)
+      this.layout.setWidth(column, fitWidth(this.headerWidth(columnTitle(this.o.descriptor.columns[column].name)), chars, this.charWidth))
+      this.schedule()
+    }, error => {
+      if (abort.signal.aborted || this.disposed) return
+      done()
+      // A full results port has room again shortly; a released or lost result is shown as such by its shell.
+      if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fit(column) }, g.busyRetryMs)
+    })
   }
 
   /** At most once a frame while dragging: extends the selection, and scrolls when the pointer is past the cells. */
@@ -549,6 +652,7 @@ export class GridView {
     this.measureColumns(rows)
 
     // Then writes: sizes, scroll offsets, the row container.
+    this.resizeStep()
     const rowHeader = rowHeaderWidth(rows, this.charWidth)
     let columnsMoved = false
     if (rowHeader !== this.rowHeader) {
@@ -591,7 +695,7 @@ export class GridView {
     if (containerY !== this.containerY) { this.containerY = containerY; this.rowsEl.style.transform = `translateY(${containerY}px)` }
 
     this.dragStep()
-    const range = visibleRange({ top: virtualTop, left, width, height }, rows, this.layout, rowHeader)
+    const range = this.lastRange = visibleRange({ top: virtualTop, left, width, height }, rows, this.layout, rowHeader)
     // An empty result still shows its column headers.
     const headerRange = rows > 0 ? range : visibleRange({ top: 0, left, width, height }, 1, this.layout, rowHeader)
     const bodyRows = Math.ceil(Math.max(0, height - g.headerHeight) / g.rowHeight)

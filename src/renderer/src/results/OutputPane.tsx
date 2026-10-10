@@ -23,7 +23,8 @@ function useTicker(running: boolean): number {
 
 function jobText(job: ResultJob): string {
   const percent = job.rowsTotal > 0 ? Math.min(100, Math.floor(job.rowsDone / job.rowsTotal * 100)) : 0
-  return `Copying… ${percent}% (${formatCount(job.rowsDone)} of ${formatCount(job.rowsTotal)} rows)`
+  const done = `${percent}% (${formatCount(job.rowsDone)} of ${formatCount(job.rowsTotal)} rows)`
+  return job.kind === 'save' ? `Saving${job.fileName ? ' ' + job.fileName : ''}… ${done}` : `Copying… ${done}`
 }
 
 /** The status line, from the run's state; elapsed time ticks while it runs. */
@@ -35,8 +36,8 @@ function statusLine(tab: TabResults, now: number): string {
 
 /**
  * Query Output for the active query: Results (stacked grids, once a set exists) and Messages tabs, the status line, the
- * copy strip, and one live region for the pane. Results switch automatically (Messages until a set opens, Messages
- * again when the run fails) until the user picks a tab.
+ * copy and save strips (and how the last save ended), and one live region for the pane. Results switch automatically
+ * (Messages until a set opens, Messages again when the run fails) until the user picks a tab.
  */
 function OutputPane({ tabId, connected, hint }: Props) {
   const { results } = useWorkbench()
@@ -55,6 +56,8 @@ function OutputPane({ tabId, connected, hint }: Props) {
       </div>
       {tab && <small className="output-status" data-status={tab.status}>{statusLine(tab, now)}</small>}
       {jobs.map(job => <div key={job.jobId} className="job-strip" role="status"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
+      {/* The live region below announces it; this is the visible copy. */}
+      {tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
     </div>
     {!tab ? <div className="output-empty"><strong>Query results</strong><p>{hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>
       : view === 'results' ? tab.status === 'closed' ? <div className="output-empty"><p>Results were closed to free memory. Execute the query again to see them.</p></div> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />

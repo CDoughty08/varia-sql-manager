@@ -155,11 +155,15 @@ output.context, for a results grid with selected cells
   Copy with &Headers  ⇧⌘C  ++++
   ---
   Select &All  ⌘A  ++++
+  ---
+  Sa&ve Results As…  ⌘S  ----
 output.context, for a results grid without
   &Copy  ⌘C  ----
   Copy with &Headers  ⇧⌘C  ----
   ---
   Select &All  ⌘A  ++++
+  ---
+  Sa&ve Results As…  ⌘S  ----
 output.context, for Messages with selected text
   &Copy  ⌘C  ++++
   ---

@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (75)
+## Commands (77)
 
 ### File
 
@@ -16,7 +16,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
-| Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
+| Save | `file.save` | Ctrl+S (`!outputGridFocus`) | Ctrl+S (`!outputGridFocus`) | ⌘S (`!outputGridFocus`) | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
 | Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
 | Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
 | Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
@@ -77,6 +77,8 @@ keys it uses are listed below.
 | Copy (not in the palette) | `output.copy` | Ctrl+C * (`outputGridFocus`) | Ctrl+C * (`outputGridFocus`) | ⌘C * (`outputGridFocus`) | Always | Query Output context menu › Copy |
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A * (`outputGridFocus`) | Ctrl+A * (`outputGridFocus`) | ⌘A * (`outputGridFocus`) | Always | Query Output context menu › Select All |
+| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | `hasResults` | Query Output context menu › Save Results As… |
+| Close Results | `output.closeResults` | — | — | — | `hasResults && !queryRunning` | — |
 
 ### Connection
 
@@ -310,6 +312,7 @@ Right-click the results grid, Messages, or an XML plan, or press Shift+F10 or th
 | `1_copy` | **C**opy | `output.copy` | Always |
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
+| `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 
 #### Panel tab context menu (`dockTab.context`)
 
@@ -335,7 +338,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (38)
+## Context keys (39)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -364,6 +367,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
 | `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
+| `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |

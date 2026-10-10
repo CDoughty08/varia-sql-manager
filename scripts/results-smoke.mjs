@@ -1,8 +1,9 @@
 // The results grid against the fake backend's synthetic result sets (`-- varia-fake:` scripts, tests/fixtures/backend):
-// streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, Messages,
-// lifecycle, the memory indicator, the grid's menu, styling, panes and tabs. No assertion depends on absolute pixel sizes.
+// streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, column resizing,
+// Save Results As, Messages, lifecycle, the memory indicator, the grid's menu, styling, panes and tabs. No assertion
+// depends on absolute pixel sizes.
 import { _electron as electron, expect } from '@playwright/test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 
@@ -21,7 +22,7 @@ const child = application.process()
 const watchdog = setTimeout(() => { console.error('Results suite exceeded its time limit.'); child?.kill(); process.exit(1) }, 900_000)
 const page = await application.firstWindow()
 page.setDefaultTimeout(30000)
-const failures = []
+const failures = [], cleanups = []
 page.on('pageerror', error => failures.push(error.message))
 
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
@@ -397,6 +398,127 @@ try {
   await tooLarge.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
   console.log('Results checks: selection by clicks, Shift, drag, Ctrl and headers; copies by keys, Edit › Copy, with headers, long and too large.')
 
+  // 7. Resize: a header's right border follows the pointer (its cells with it), Escape puts it back, a drag narrows the
+  // column without selecting it, and a double-click fits the column to its widest value.
+  await run('-- varia-fake: sets=W1*400')
+  await expect(cell(0, 1)).toHaveText(w1(0)[1])
+  const widthOf = locator => locator.evaluate(element => element.getBoundingClientRect().width)
+  const clipped = () => cell(0, 1).evaluate(element => element.scrollWidth > element.clientWidth)
+  // The first rows size the columns once they arrive; the border is found after that.
+  let nameBox
+  await expect.poll(async () => { const now = JSON.stringify(await header('name').boundingBox()), same = now === nameBox; nameBox = now; return same }, { intervals: [100] }).toBe(true)
+  nameBox = JSON.parse(nameBox)
+  const initial = nameBox.width, border = { x: nameBox.x + nameBox.width - 1, y: nameBox.y + nameBox.height / 2 }
+  expect(await clipped()).toBe(false)
+  await page.mouse.move(border.x, border.y)
+  await expect(grid()).toHaveClass(/rg-border-hover/)
+  await page.mouse.down()
+  await page.mouse.move(border.x + 50, border.y, { steps: 5 })
+  await expect.poll(() => widthOf(header('name'))).toBeCloseTo(initial + 50, 0)
+  expect(await widthOf(cell(0, 1))).toBeCloseTo(initial + 50, 0)
+  await page.keyboard.press('Escape')
+  await page.mouse.up()
+  await expect.poll(() => widthOf(header('name'))).toBeCloseTo(initial, 0)
+  await page.mouse.move(border.x, border.y)
+  await page.mouse.down()
+  await page.mouse.move(border.x - initial, border.y, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(() => widthOf(header('name'))).toBeLessThan(initial / 2)
+  expect(await clipped()).toBe(true)
+  expect(await grid().locator('.rg-ch.sel').count()).toBe(0)
+  const narrowed = await header('name').boundingBox()
+  await page.mouse.dblclick(narrowed.x + narrowed.width - 1, narrowed.y + narrowed.height / 2)
+  await expect.poll(() => widthOf(header('name'))).toBeCloseTo(initial, 0)
+  expect(await clipped()).toBe(false)
+  await page.mouse.move(border.x, border.y + 200)
+  await expect(grid()).not.toHaveClass(/rg-border-hover/)
+  console.log('Results checks: a column border resizes its column, Escape restores it, and a double-click fits it.')
+
+  // 8. Save Results As: the grid's menu writes CSV through main's dialog, the extension picks tab-delimited text or JSON,
+  // Ctrl+S in the grid opens the dialog, a long save shows its strip and Escape cancels it leaving no file, and a save
+  // outlives running the query again (the backend leases its result).
+  const saveDir = await mkdtemp(resolve('artifacts', 'results-save-'))
+  cleanups.push(() => rm(saveDir, { recursive: true, force: true }))
+  await application.evaluate(({ dialog }) => {
+    globalThis.variaSave = { paths: [], dialogs: [] }
+    dialog.showSaveDialog = async (_window, options) => {
+      globalThis.variaSave.dialogs.push(options)
+      const filePath = globalThis.variaSave.paths.shift()
+      return filePath ? { canceled: false, filePath } : { canceled: true }
+    }
+  })
+  const choose = path => application.evaluate((_, value) => { globalThis.variaSave.paths.push(value) }, path)
+  const lastDialog = () => application.evaluate(() => globalThis.variaSave.dialogs.at(-1))
+  const files = async () => (await readdir(saveDir)).sort()
+  const notice = page.locator('.job-notice')
+  const w1Rows = count => Array.from({ length: count }, (_, row) => shapes.W1.row(row))
+  // Independent of the backend's writers: CSV quotes only where needed and leaves NULL empty; TSV writes NULL.
+  const csvField = value => value === null ? '' : value === '' || /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value
+  await choose(join(saveDir, 'w1.csv'))
+  await cell(1, 1).click({ button: 'right' })
+  const saveItem = page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: 'Save Results As…', exact: true })
+  await saveItem.click()
+  await expect(notice).toHaveText('Saved 400 rows to w1.csv.')
+  expect(await lastDialog()).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/SQLQuery1-Result1\.csv$/) })
+  expect(await readFile(join(saveDir, 'w1.csv'), 'utf8')).toBe('﻿' + [w1Names, ...w1Rows(400)].map(row => row.map(csvField).join(',') + '\r\n').join(''))
+  await choose(join(saveDir, 'w1.txt'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(notice).toHaveText('Saved 400 rows to w1.txt.')
+  expect(await lastDialog()).toMatchObject({ defaultPath: expect.stringMatching(/SQLQuery1-Result1\.csv$/) })
+  expect(await readFile(join(saveDir, 'w1.txt'), 'utf8')).toBe('﻿' + [w1Names, ...w1Rows(400)].map(row => row.map(value => value ?? 'NULL').join('\t') + '\r\n').join(''))
+  await choose(join(saveDir, 'w1.json'))
+  await page.keyboard.press('Control+S')
+  await expect(notice).toHaveText('Saved 400 rows to w1.json.')
+  // The last format chosen is offered first.
+  expect(await lastDialog()).toMatchObject({ defaultPath: expect.stringMatching(/SQLQuery1-Result1\.txt$/), filters: [expect.objectContaining({ name: 'Text (Tab delimited)' }), expect.anything(), expect.anything(), expect.anything()] })
+  const json = await readFile(join(saveDir, 'w1.json'), 'utf8')
+  expect(json.startsWith('[\n{')).toBe(true)
+  const objects = JSON.parse(json)
+  expect(objects).toHaveLength(400)
+  expect(objects[4]).toMatchObject({ id: 4, name: w1(4)[1], key: w1(4)[4], active: false, score: null })
+  // A cancelled dialog writes nothing and says nothing.
+  await page.keyboard.press('Control+S')
+  await expect.poll(async () => (await application.evaluate(() => globalThis.variaSave.dialogs.length))).toBe(4)
+  expect(await files()).toEqual(['w1.csv', 'w1.json', 'w1.txt'])
+  // A save held after its first page shows its strip; Escape in the grid cancels it, and neither the file nor its
+  // temporary file is left.
+  await run('-- varia-fake: sets=W1*5000')
+  await writeFile(join(control, 'hold', 'results.export'), '')
+  await choose(join(saveDir, 'held.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(page.locator('.job-strip[role="status"]')).toContainText(/^Saving held\.csv… \d+% \([\d,]+ of 5,000 rows\)/)
+  await expect.poll(async () => (await files()).some(name => name.endsWith('.tmp'))).toBe(true)
+  await page.screenshot({ path: resolve('artifacts', 'results-saving.png') })
+  await page.keyboard.press('Escape')
+  await expect(notice).toHaveText('Saving was cancelled. The file was not written.')
+  await expect.poll(files).toEqual(['w1.csv', 'w1.json', 'w1.txt'])
+  // Running the query again releases the result, but the save goes on with its strip and finishes the file.
+  await choose(join(saveDir, 'kept.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(page.locator('.job-strip[role="status"]')).toContainText('Saving kept.csv…')
+  await run('-- varia-fake: sets=M1*1')
+  await expect(page.locator('.job-strip[role="status"]')).toContainText('Saving kept.csv…')
+  await rm(join(control, 'hold', 'results.export'))
+  await expect(notice).toHaveText('Saved 5,000 rows to kept.csv.', { timeout: 30000 })
+  await expect(page.locator('.job-strip[role="status"]')).toHaveCount(0)
+  expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
+  expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
+  // Close Results (from the palette) frees the results and their windows; Messages stay.
+  await textbox().focus()
+  await page.keyboard.press('F1')
+  await page.keyboard.type('close results')
+  await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.output-empty')).toHaveText('Results were closed to free memory. Execute the query again to see them.')
+  await expect(page.locator('[data-result-grid]')).toHaveCount(0)
+  await expect.poll(async () => (await stats()).client.uiWindows).toBe(0)
+  await outputTab(/^Messages/).click()
+  await expect(page.locator('.messages')).toContainText('Completion time:')
+  console.log('Results checks: Save Results As writes CSV, tab-delimited text and JSON, shows a cancellable strip, and outlives running again; Close Results frees the results.')
+
   // 10. Messages stream while the script runs; errors are red and in order; the completion time and the error badge.
   await writeFile(join(control, 'hold', 'query.execute'), '')
   await run('-- varia-fake: sets=N1*10 messages=3 errors=2 hold', { running: true })
@@ -458,7 +580,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await outputMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Copy', 'Copy with Headers', 'Select All'])
+  expect(await outputMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
   await page.keyboard.press('Escape')
   await cell(3, 2).click({ button: 'right' })
   await expect(outputMenu).toBeVisible()
@@ -491,9 +613,19 @@ try {
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
   console.log('Results checks: NULL, truncated, failed and selected cells take their theme tokens, and a theme change keeps the grid\'s nodes.')
 
-  // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll and selection; a
-  // tab switch restores both.
+  // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
+  // resized column; a tab switch restores all three.
   await run('-- varia-fake: sets=W1*2000')
+  await expect(cell(0, 1)).toHaveText(w1(0)[1])
+  let idBox
+  await expect.poll(async () => { const now = JSON.stringify(await header('id').boundingBox()), same = now === idBox; idBox = now; return same }, { intervals: [100] }).toBe(true)
+  idBox = JSON.parse(idBox)
+  await page.mouse.move(idBox.x + idBox.width - 1, idBox.y + idBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(idBox.x + idBox.width + 39, idBox.y + idBox.height / 2, { steps: 4 })
+  await page.mouse.up()
+  const resized = idBox.width + 40
+  await expect.poll(() => widthOf(header('id'))).toBeCloseTo(resized, 0)
   await cell(0, 0).click()
   for (let press = 0; press < 3; press++) await page.keyboard.press('PageDown')
   const scrollTop = () => scroller().evaluate(element => element.scrollTop)
@@ -513,12 +645,14 @@ try {
   await expect(page.locator('.output-panel')).toBeVisible()
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
+  expect(await widthOf(header('id'))).toBeCloseTo(resized, 0)
   await page.keyboard.press('Control+N')
   await expect(queryTabs()).toHaveCount(2)
   await queryTabs().first().click()
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
-  console.log('Results checks: F6 goes to the results and back; Ctrl+R and tab switches keep scroll and selection.')
+  await expect.poll(() => widthOf(header('id'))).toBeCloseTo(resized, 0)
+  console.log('Results checks: F6 goes to the results and back; Ctrl+R and tab switches keep scroll, selection and column widths.')
 
   // 11 (continued). A backend crash makes the shown results unavailable, without a page error.
   await writeFile(join(control, 'crash-next'), '')
@@ -557,7 +691,7 @@ try {
   }
   await page.screenshot({ path: resolve('artifacts', 'results-small.png') })
   expect(failures).toEqual([])
-  console.log('Results checks passed: streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, Messages, lifecycle, memory, the menu, styling, F6, Ctrl+R, tabs and a small window.')
+  console.log('Results checks passed: streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, resizing, Save Results As, Messages, lifecycle, memory, the menu, styling, F6, Ctrl+R, tabs and a small window.')
 } catch (error) {
   await page.screenshot({ path: resolve('artifacts', 'results-failure.png') }).catch(() => {})
   throw error
@@ -567,4 +701,5 @@ try {
   child?.kill()
   await rm(profile, { recursive: true, force: true }).catch(() => {})
   await rm(control, { recursive: true, force: true }).catch(() => {})
+  for (const cleanup of cleanups) await cleanup().catch(() => {})
 }

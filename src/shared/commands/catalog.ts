@@ -94,7 +94,8 @@ export const commandCatalog = {
   },
   'file.save': {
     title: 'Save', category: 'File', icon: 'save', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+s' }], menus: [{ menu: 'file', group: '1_file', order: 3, mnemonic: 's' }, { menu: 'documentTab.context', group: '1_save', order: 1, mnemonic: 's' }]
+    // In a results grid, Ctrl+S saves its results (SSMS).
+    keybindings: [{ key: 'mod+s', when: '!outputGridFocus' }], menus: [{ menu: 'file', group: '1_file', order: 3, mnemonic: 's' }, { menu: 'documentTab.context', group: '1_save', order: 1, mnemonic: 's' }]
   },
   'file.saveAs': {
     title: 'Save As…', category: 'File', icon: 'save-as', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
@@ -393,6 +394,17 @@ export const commandCatalog = {
   'output.selectAll': {
     title: 'Select All', category: 'Query', palette: false,
     keybindings: [{ key: 'mod+a', when: 'outputGridFocus', native: true }], menus: [{ menu: 'output.context', group: '2_select', order: 1, mnemonic: 'a' }]
+  },
+  // The grid the menu was opened for, else the focused grid, else the grid that last had focus (the only one, often).
+  'output.saveResultsAs': {
+    title: 'Save Results As…', category: 'Query', icon: 'save-as', keywords: ['export', 'csv', 'json', 'tab', 'grid'], precondition: 'hasResults',
+    unavailableHint: 'Execute a query that returns results first.',
+    keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid'" }]
+  },
+  // Frees the active query's results in the backend; Messages stay.
+  'output.closeResults': {
+    title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: 'hasResults && !queryRunning',
+    unavailableHint: 'There are no results to close, or the query is still running.'
   },
   // A panel tab's menu: the panel comes from the menu's target, so these have no keys and are not in the palette.
   'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },

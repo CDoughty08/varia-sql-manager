@@ -231,7 +231,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-toolbar small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .output-toolbar button { padding: 12px; }
 .output-toolbar .output-status { flex: 1; min-width: 0; text-align: right; }
-.job-strip { display: flex; flex-shrink: 0; align-items: center; gap: 6px; font-size: 10px; color: var(--varia-descriptionForeground); white-space: nowrap; }
+.job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: 10px; color: var(--varia-descriptionForeground); white-space: nowrap; }
+.job-strip span, .job-notice { overflow: hidden; text-overflow: ellipsis; }
+.job-strip.job-notice { display: block; }
+.job-strip button { flex-shrink: 0; }
 .output-toolbar .job-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: 3px; color: var(--varia-foreground); font-size: 10px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Stacked result sets: absolutely placed grids and splitters in a scrolling stack (ResultsStack). */
@@ -252,6 +255,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch:hover, .rg-corner:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-ch.unnamed { color: var(--varia-resultsGrid-headerDescriptionForeground); }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
+.rg.rg-border-hover .rg-head, .rg.rg-border-hover .rg-head *, .rg.rg-resizing, .rg.rg-resizing * { cursor: col-resize; }
 .rg-rows { position: absolute; top: 0; left: 0; }
 .rg-row { position: absolute; left: 0; height: 20px; contain: strict; }
 .rg-row.odd { background: var(--varia-resultsGrid-alternateRowBackground); }

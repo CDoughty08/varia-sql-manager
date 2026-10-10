@@ -164,6 +164,10 @@ describe('context keys', () => {
     // The active query's server was disconnected; a stale running entry for another tab does not count.
     expect(computeContextKeys({ ...base, documents: { ...documents, activeId: 'b' }, queries: running, connections: [connectionInfo('server-a')] })).toMatchObject({ activeDocumentConnected: false, queryRunning: false })
     expect(computeContextKeys({ ...base, documents: snapshot({ documents: [doc('a')], activeId: 'missing' }) })).toMatchObject({ hasActiveDocument: false })
+    // Results are the active query's own.
+    expect(computeContextKeys({ ...base, documents, results: { a: true } })).toMatchObject({ hasResults: true })
+    expect(computeContextKeys({ ...base, documents, results: { b: true } })).toMatchObject({ hasResults: false })
+    expect(computeContextKeys({ ...base, documents })).toMatchObject({ hasResults: false })
   })
   it('derive focus keys from the focused element', () => {
     const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editable?: boolean; grid?: boolean } = {}): FocusElement & { tag: string } => ({

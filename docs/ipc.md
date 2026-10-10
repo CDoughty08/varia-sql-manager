@@ -410,7 +410,9 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   0x80070027, errno 28), `NOT_FOUND` (a missing folder), `IS_DIRECTORY`, otherwise `IO`.
 - **Progress.** Both send droppable `{ type: 'job.progress', rowsDone, rowsTotal, bytes }` EVENTs at most every 250 ms;
   main validates them (`jobProgressSchema`) and pushes `varia:results-job { jobId, kind, rowsDone, rowsTotal, bytes }`
-  at most 4 times a second.
+  at most 4 times a second. A save's pushes also carry `fileName` (the chosen file's name, never its path), and main
+  pushes one as soon as the dialog closes, so the renderer's strip ("Saving {fileName}…") starts from the export, not
+  from the dialog.
 - **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts }` and
   `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128 }` are `trusted()`, strictly
   validated, and checked against `ResultsPortHost.owns(generation, resultId)` and the ready generation

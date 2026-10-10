@@ -3,7 +3,7 @@ import type { MessageEntry, QueryEvent, QueryResult, ResultDescriptor, ResultsJo
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
-import type { Disposable } from '../core/types'
+import type { Disposable, ExternalStore } from '../core/types'
 import { gridLimits as g } from '../grid/constants'
 import { copyPlan, selectAll, type GridSelection } from '../grid/selection'
 import type { ResultClient, ResultHandle } from './ResultClient'
@@ -12,10 +12,13 @@ import { completionSentence, formatCount, plural } from './status'
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'timedOut' | 'lost' | 'closed'
 /** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
 export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle }
-/** A copy (or, later, a save) of one result set. Its strip shows once it has run for 300 ms (`visible`). */
+/**
+ * A copy or save of one result set. Its strip shows once it has run for 300 ms (`visible`); a save's clock starts when
+ * main reports its file (`fileName`), after the save dialog closed.
+ */
 export interface ResultJob {
   readonly jobId: string; readonly kind: 'copy' | 'save'; readonly index: number; readonly label: string
-  readonly rowsDone: number; readonly rowsTotal: number; readonly startedAt: number; readonly visible: boolean
+  readonly rowsDone: number; readonly rowsTotal: number; readonly startedAt: number; readonly visible: boolean; readonly fileName?: string
 }
 /** What the output pane shows for one query tab. */
 export interface TabResults {
@@ -23,6 +26,8 @@ export interface TabResults {
   readonly messages: readonly MessageEntry[]; readonly messagesTruncated: boolean; readonly rowsRead: number
   readonly completedBatches: number; readonly totalBatches: number; readonly summary?: QueryResult; readonly error?: string
   readonly view: 'results' | 'messages'; readonly manualView: boolean; readonly jobs: readonly ResultJob[]; readonly announcement: string
+  /** How the last save ended ("Saved 400 rows to results.csv."), shown in the toolbar for a few seconds; '' otherwise. */
+  readonly jobNotice: string
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -56,6 +61,7 @@ interface Run {
   manualView: boolean
   jobs: ResultJob[]
   announcement: string
+  jobNotice: string
   subscription?: Disposable
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
@@ -64,6 +70,10 @@ interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 export const resultLimits = { sets: 1000, messages: 1001 } as const
 const unavailable = 'These results are no longer available because the SQL backend restarted.'
 const closedResults = 'These results were closed. Execute the query again to see them.'
+const stillLoading = 'Save the results after this result set finishes loading.'
+const saveCancelled = 'Saving was cancelled. The file was not written.'
+/** Main's and the backend's own sentences for a save; anything else is prefixed. */
+const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
 const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
 const runStatus = (summary: QueryResult): RunStatus => summary.status
 
@@ -75,7 +85,7 @@ const runStatus = (summary: QueryResult): RunStatus => summary.status
  */
 export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
   private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>
-  private readonly api: Pick<VariaApi, 'copyResults' | 'cancelResultsJob' | 'onResultsJob'>
+  private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
   private readonly frame: (callback: () => void) => void
   private readonly timers: Timers
   private readonly now: () => number
@@ -86,12 +96,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly dirty = new Set<string>()
   private readonly announcements = new Map<string, unknown>()
   private readonly subscriptions: (() => void)[] = []
+  private readonly noticeTimers = new Map<string, unknown>()
   private copying: RunningJob | undefined
+  /** Saves by job id: main allows one per window, but a second request must not lose track of the first. */
+  private readonly saves = new Map<string, RunningJob>()
+  private readonly contextStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
+  /** The tabs whose results can be saved or closed (`hasResults`); it publishes only when that set of tabs changes. */
+  readonly context: ExternalStore<Readonly<Record<string, true>>> = this.contextStore
   private scheduled = false
   private disposed = false
 
   constructor(o: {
-    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>; api: Pick<VariaApi, 'copyResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
+    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
     frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string
   }) {
     super({})
@@ -106,14 +122,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
-   *  run's events are followed from now on (before the script is sent). */
+   *  run's events are followed from now on (before the script is sent). A running save goes on (the backend leases its
+   *  result), so its strip moves to the new run. */
   begin(tabId: string, queryId: string): void {
     if (this.disposed) return
     this.disposeRun(tabId)
+    this.clearJobNotice(tabId)
     this.views.set(tabId, { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
     const run: Run = {
       queryId, startedAt: this.now(), status: 'running', sets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
-      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, jobs: [], announcement: ''
+      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, jobs: this.savesOf(tabId), announcement: '', jobNotice: ''
     }
     run.subscription = this.client.onQueryEvent(queryId, event => this.event(tabId, run, event))
     this.runs.set(tabId, run)
@@ -151,8 +169,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.publishNow(tabId)
   }
 
-  /** The tab closed: its results are released and forgotten. */
+  /** The tab closed: its results are released and forgotten (a running save still finishes its file). */
   release(tabId: string): void {
+    this.clearJobNotice(tabId)
     this.disposeRun(tabId)
     this.views.delete(tabId)
     const timer = this.announcements.get(tabId)
@@ -259,15 +278,50 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return result.code === 'TOO_LARGE' ? result.error : 'Could not copy the results: ' + result.error
   }
 
+  /**
+   * Save Results As for one grid: main asks for the file and the backend writes it (ResultTextWriter); only the file's
+   * name comes back. The set must have finished loading. The save goes on when the tab runs again or closes (the backend
+   * leases the result); Cancel, Escape and reloading the window stop it. Resolves to the sentence the error banner shows
+   * when it fails; a cancelled dialog is silent, and the end of a save is announced and shown in the toolbar.
+   */
+  async saveAs(tabId: string, index: number, baseName: string): Promise<string | undefined> {
+    const run = this.runs.get(tabId), set = run?.sets[index]
+    if (!run || !set) return undefined
+    const snapshot = set.handle.getSnapshot()
+    if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
+    if (snapshot.state !== 'complete') return stillLoading
+    const jobId = this.newId()
+    const running: RunningJob = { tabId, job: { jobId, kind: 'save', index, label: `Result ${index + 1}`, rowsDone: 0, rowsTotal: snapshot.rowsAvailable, startedAt: this.now(), visible: false } }
+    this.saves.set(jobId, running)
+    this.clearJobNotice(tabId)
+    run.jobs = [...run.jobs, running.job]
+    this.schedule(tabId)
+    let result
+    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: `${baseName}-Result${index + 1}` }) }
+    finally { this.endJob(running) }
+    if (this.disposed) return undefined
+    if (result.ok) {
+      if (!result.value) return undefined
+      const { rows, truncatedCells, fileName } = result.value
+      this.notify(running.tabId, `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedCells > 0 ? ` ${formatCount(truncatedCells)} ${truncatedCells === 1 ? 'value was' : 'values were'} truncated.` : ''}`)
+      return undefined
+    }
+    if (result.code === 'CANCELLED') { this.notify(running.tabId, saveCancelled); return undefined }
+    return result.code && saveSentences.has(result.code) ? result.error : 'Could not save the results: ' + result.error
+  }
+
   /** Cancels a copy or save by its job id (Cancel on its strip). */
   cancelJob(jobId: string): void {
     if (this.copying?.job.jobId === jobId) this.cancelRunning(this.copying)
+    this.cancelRunning(this.saves.get(jobId))
   }
-  /** Escape in a grid: cancels the tab's running copy or save; false when there is none. */
+  /** Escape in a grid: cancels the tab's running copy, else its save once the file is chosen; false when there is none. */
   cancelTabJob(tabId: string): boolean {
-    if (this.copying?.tabId !== tabId) return false
-    this.cancelRunning(this.copying)
-    return true
+    if (this.copying?.tabId === tabId) { this.cancelRunning(this.copying); return true }
+    for (const save of this.saves.values()) {
+      if (save.tabId === tabId && save.job.fileName !== undefined) { this.cancelRunning(save); return true }
+    }
+    return false
   }
 
   /** The live region's sentence, after the 300 ms debounce. */
@@ -289,9 +343,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.disposed = true
     for (const unsubscribe of this.subscriptions) unsubscribe()
     for (const tabId of [...this.runs.keys()]) this.disposeRun(tabId)
-    for (const timer of this.announcements.values()) this.timers.clearTimeout(timer)
+    for (const save of this.saves.values()) this.cancelRunning(save)
+    for (const timer of [...this.announcements.values(), ...this.noticeTimers.values()]) this.timers.clearTimeout(timer)
     this.announcements.clear()
+    this.noticeTimers.clear()
     this.controllers.clear()
+    this.contextStore.clear()
     this.clearListeners()
   }
 
@@ -337,7 +394,37 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   private progress(progress: ResultsJobProgress): void {
-    if (this.copying?.job.jobId === progress.jobId) this.updateJob(this.copying, { rowsDone: progress.rowsDone, rowsTotal: progress.rowsTotal })
+    if (this.copying?.job.jobId === progress.jobId) { this.updateJob(this.copying, { rowsDone: progress.rowsDone, rowsTotal: progress.rowsTotal }); return }
+    const save = this.saves.get(progress.jobId)
+    if (!save) return
+    // The first report comes when the file is chosen: the strip's 300 ms start from then, not from the dialog.
+    if (save.job.fileName === undefined) save.timer = this.timers.setTimeout(() => { save.timer = undefined; this.updateJob(save, { visible: true }) }, g.copyStripDelayMs)
+    this.updateJob(save, { rowsDone: progress.rowsDone, ...progress.rowsTotal > 0 ? { rowsTotal: progress.rowsTotal } : {}, fileName: progress.fileName ?? save.job.fileName ?? '' })
+  }
+
+  /** The running saves a tab's new run keeps showing. */
+  private savesOf(tabId: string): ResultJob[] {
+    const jobs: ResultJob[] = []
+    for (const save of this.saves.values()) if (save.tabId === tabId) jobs.push(save.job)
+    return jobs
+  }
+
+  /** A save's outcome: announced, and shown in the toolbar until the next run or save, or for a few seconds. */
+  private notify(tabId: string, text: string): void {
+    const run = this.runs.get(tabId)
+    if (!run) return
+    this.announce(tabId, text)
+    this.clearJobNotice(tabId)
+    run.jobNotice = text
+    this.noticeTimers.set(tabId, this.timers.setTimeout(() => { this.noticeTimers.delete(tabId); this.clearJobNotice(tabId) }, g.jobNoticeMs))
+    this.schedule(tabId)
+  }
+  private clearJobNotice(tabId: string): void {
+    const timer = this.noticeTimers.get(tabId)
+    if (timer !== undefined) this.timers.clearTimeout(timer)
+    this.noticeTimers.delete(tabId)
+    const run = this.runs.get(tabId)
+    if (run?.jobNotice) { run.jobNotice = ''; this.schedule(tabId) }
   }
 
   private updateJob(running: RunningJob, patch: Partial<ResultJob>): void {
@@ -352,6 +439,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (running.timer !== undefined) this.timers.clearTimeout(running.timer)
     running.timer = undefined
     if (this.copying === running) this.copying = undefined
+    if (this.saves.get(running.job.jobId) === running) this.saves.delete(running.job.jobId)
     const run = this.runs.get(running.tabId)
     if (run && run.jobs.includes(running.job)) { run.jobs = run.jobs.filter(job => job !== running.job); this.schedule(running.tabId) }
   }
@@ -402,12 +490,29 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.publish({ ...this.getSnapshot(), [tabId]: this.snapshotOf(run) })
   }
 
+  protected override publish(snapshot: Readonly<Record<string, TabResults>>): void {
+    super.publish(snapshot)
+    this.updateContext()
+  }
+  /** `hasResults` per tab: a set exists, and the results were neither closed nor lost with the backend. */
+  private updateContext(): void {
+    const current = this.contextStore.getSnapshot(), next: Record<string, true> = {}
+    let changed = false
+    for (const [tabId, run] of this.runs) {
+      if (run.sets.length === 0 || run.status === 'closed' || run.status === 'lost') continue
+      next[tabId] = true
+      if (!current[tabId]) changed = true
+    }
+    if (changed || Object.keys(current).length !== Object.keys(next).length) this.contextStore.set(next)
+  }
+
   private snapshotOf(run: Run): TabResults {
     run.setsPublished = true
     return {
       queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
-      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, jobs: run.jobs, announcement: run.announcement
+      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, jobs: run.jobs, announcement: run.announcement,
+      jobNotice: run.jobNotice
     }
   }
 }

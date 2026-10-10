@@ -22,6 +22,8 @@ export const gridLimits = {
   ariaRowCountMs: 1000, liveRegionMs: 300,
   measureInitialRows: 128, measureFitRows: 4096, measureCap: 512,
   copyStripDelayMs: 300,
+  /** How long the toolbar shows how a save ended ("Saved 400 rows to results.csv."). */
+  jobNoticeMs: 8000,
   /** Stored values, formatted documents, nesting accepted by the formatters, and the chunk a large document fills per frame. */
   storedChars: 2_097_152, formattedChars: 4_194_304, xmlDepth: 256, jsonDepth: 512, documentChunk: 1_048_576
 } as const

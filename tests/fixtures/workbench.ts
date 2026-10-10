@@ -119,6 +119,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ...doc.api,
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 0, bytes: 0, truncatedCells: 0, partial: false } })),
+    saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: null })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
@@ -155,7 +156,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focused = { panel: '' as '' | 'explorer' | 'editor' | 'output' }
   // The focused element is a stand-in whose pane is `focused.panel`, so tests can put focus in Object Explorer.
   const activeElement = () => focused.panel ? { matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => focused.panel } : null } as unknown as Element : null
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, activeElement })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, activeElement })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {

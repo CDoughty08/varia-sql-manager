@@ -72,7 +72,10 @@ class Job {
   private id = 0
   private reason: CancelReason | undefined
   private lastProgress = Number.NEGATIVE_INFINITY
-  constructor(readonly jobId: string, readonly kind: 'copy' | 'save', private readonly generation: number, private readonly host: JobHostDeps) {}
+  constructor(readonly jobId: string, readonly kind: 'copy' | 'save', private readonly generation: number, private readonly host: JobHostDeps, private readonly fileName?: string) {
+    // A save's strip names its file from the start, which only main knows once the dialog has closed.
+    if (fileName !== undefined) this.report({ rowsDone: 0, rowsTotal: 0, bytes: 0 })
+  }
   get cancelled(): boolean { return this.reason !== undefined }
   sent(id: number): void {
     this.id = id
@@ -85,11 +88,13 @@ class Job {
   }
   credit(bytes: number): void { if (this.id && this.reason === undefined) this.host.backend.credit(this.generation, this.id, bytes) }
   /** At most 4 a second; the latest wins. */
-  progress(event: JobProgressEvent): void {
-    const now = (this.host.now ?? Date.now)()
-    if (now - this.lastProgress < 1000 / wire.jobs.progressPerSecond) return
-    this.lastProgress = now
-    this.host.progress({ jobId: this.jobId, kind: this.kind, rowsDone: event.rowsDone, rowsTotal: event.rowsTotal, bytes: event.bytes })
+  progress(event: Omit<JobProgressEvent, 'type'>): void {
+    if ((this.host.now ?? Date.now)() - this.lastProgress < 1000 / wire.jobs.progressPerSecond) return
+    this.report(event)
+  }
+  private report(event: Omit<JobProgressEvent, 'type'>): void {
+    this.lastProgress = (this.host.now ?? Date.now)()
+    this.host.progress({ jobId: this.jobId, kind: this.kind, rowsDone: event.rowsDone, rowsTotal: event.rowsTotal, bytes: event.bytes, ...this.fileName !== undefined ? { fileName: this.fileName } : {} })
   }
 }
 
@@ -171,7 +176,7 @@ export class ResultsJobHost {
       fileName = basename(path)
       const format = formatFromPath(path) ?? requested
       this.check(request.generation, request.resultId, jobSentences.closedBeforeSave)
-      const job = this.saving = new Job(request.jobId, 'save', request.generation, this.deps)
+      const job = this.saving = new Job(request.jobId, 'save', request.generation, this.deps, fileName)
       const result = await this.deps.backend.export(request.generation, { resultId: request.resultId, path, format, headers: exportDefaults.headers, nullText: exportDefaults.nullText[format] },
         { onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       this.lastDir = dirname(path)

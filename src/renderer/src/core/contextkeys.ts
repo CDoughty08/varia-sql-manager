@@ -42,6 +42,8 @@ export interface ContextInputs {
   readonly panes?: PaneVisibility
   /** The Object Explorer selection's keys; without them, those keys are false or ''. */
   readonly explorer?: ExplorerContextState
+  /** The tabs with results to save or close (`ResultsService.context`). */
+  readonly results?: Readonly<Record<string, true>>
 }
 /** Every context key from service snapshots and focus facts; without focus, the focus keys are false or ''. */
 export function computeContextKeys(inputs: ContextInputs): ContextKeys {
@@ -55,7 +57,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,
     anyDocumentConnected: documents.documents.some(document => !!document.connectionId && connections.some(connection => connection.id === document.connectionId && !connection.lost)),
-    queryRunning: !!active && !!inputs.queries[active.id]?.running, outputPaneVisible: !!inputs.panes?.output, ...inputs.explorer
+    queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes?.output, ...inputs.explorer
   })
 }
 
@@ -69,6 +71,7 @@ export interface ContextKeyOptions {
   readonly quickInput?: ExternalStore<{ readonly visible: boolean }>
   readonly panes?: ExternalStore<PaneVisibility>
   readonly explorer?: ExternalStore<ExplorerContextState>
+  readonly results?: ExternalStore<Readonly<Record<string, true>>>
   readonly editor?: () => FocusEditor<Element> | undefined
   readonly activeElement?: () => Element | null
 }
@@ -82,20 +85,20 @@ export class ContextKeyService implements Disposable {
   private cache?: { readonly inputs: readonly unknown[]; readonly keys: ContextKeys }
   private readonly unsubscribe: (() => void)[]
   constructor(private readonly options: ContextKeyOptions) {
-    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
+    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
   }
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this
     return {
       platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
       quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: options.editorOptions.getSnapshot().wordWrap, backendStatus: options.backend.getSnapshot().state.status,
-      panes: options.panes?.getSnapshot(), explorer: options.explorer?.getSnapshot()
+      panes: options.panes?.getSnapshot(), explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot()
     }
   }
   /** Static and state keys, for enablement: focus keys are false or ''. Cached until a snapshot changes. */
   getState(): ContextKeys {
     const { options } = this
-    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot()]
+    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot()]
     if (this.cache?.inputs.every((value, index) => value === inputs[index])) return this.cache.keys
     const keys = computeContextKeys(this.inputs())
     this.cache = { inputs, keys }

@@ -169,8 +169,9 @@ export interface ResultsSaveRequest { jobId: string; generation: number; resultI
 export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean }
 /** Only the file's name returns to the renderer, never its path. */
 export interface SavedResults extends ResultsJobResult { fileName: string; format: ResultsFormat }
-/** Pushed on `varia:results-job` at most 4 times a second per job. */
-export interface ResultsJobProgress { jobId: string; kind: 'copy' | 'save'; rowsDone: number; rowsTotal: number; bytes: number }
+/** Pushed on `varia:results-job` at most 4 times a second per job. A save reports once as soon as its file is chosen;
+ *  its reports carry the file's name (never its path). */
+export interface ResultsJobProgress { jobId: string; kind: 'copy' | 'save'; rowsDone: number; rowsTotal: number; bytes: number; fileName?: string }
 export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[]; headers: boolean; eol: 'crlf' | 'lf'; maxBytes: number }
 export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL' }
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts

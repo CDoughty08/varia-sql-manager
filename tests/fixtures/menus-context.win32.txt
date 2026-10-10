@@ -155,11 +155,15 @@ output.context, for a results grid with selected cells
   Copy with &Headers  Ctrl+Shift+C  ++++
   ---
   Select &All  Ctrl+A  ++++
+  ---
+  Sa&ve Results As…  Ctrl+S  ----
 output.context, for a results grid without
   &Copy  Ctrl+C  ----
   Copy with &Headers  Ctrl+Shift+C  ----
   ---
   Select &All  Ctrl+A  ++++
+  ---
+  Sa&ve Results As…  Ctrl+S  ----
 output.context, for Messages with selected text
   &Copy  Ctrl+C  ++++
   ---

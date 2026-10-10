@@ -37,6 +37,7 @@ export const contextKeys = {
   hasLostConnection: { type: 'boolean', scope: 'state', description: 'A connection was lost when the SQL backend restarted and has not been reconnected or removed.' },
   activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's connection was lost when the SQL backend restarted." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
+  hasResults: { type: 'boolean', scope: 'state', description: 'The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },

@@ -116,7 +116,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const targets = new TargetService(documents, queries, connections, files, api)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, editor: () => documents.boundEditor })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, editor: () => documents.boundEditor })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId

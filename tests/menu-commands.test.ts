@@ -524,6 +524,31 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.copy', on('grid'))).toBe(false)
     expect(commands.isEnabled('output.selectAll', on('grid'))).toBe(false)
   })
+  it('save the menu\'s grid, else the one that last had focus, and close the results when no query runs', async () => {
+    const { commands, api, results, resultClient, queries, tab, on, startQuery } = await ran()
+    expect(commands.isEnabled('output.saveResultsAs')).toBe(true)
+    expect(commands.isEnabled('output.closeResults')).toBe(true)
+    expect(await commands.execute('output.saveResultsAs', on('grid', { resultIndex: 1 }), 'menu')).toBe(true)
+    // From the palette (or Messages), the grid that last had focus.
+    results.viewState(tab.id).focusedIndex = 1
+    expect(await commands.execute('output.saveResultsAs', undefined, 'palette')).toBe(true)
+    results.viewState(tab.id).focusedIndex = 0
+    expect(await commands.execute('output.saveResultsAs', on('messages'), 'menu')).toBe(true)
+    expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName, request.format])).toEqual([[2, 'SQLQuery1-Result2', undefined], [2, 'SQLQuery1-Result2', undefined], [1, 'SQLQuery1-Result1', undefined]])
+    api.saveResults.mockResolvedValueOnce({ ok: false, code: 'EXPORT_FAILED', error: 'Could not save the results: access to out.csv is denied.' })
+    expect(await commands.execute('output.saveResultsAs', on('grid'), 'menu')).toBe(true)
+    expect(commands.getSnapshot().error).toBe('Could not save the results: access to out.csv is denied.')
+    expect(await commands.execute('output.closeResults', undefined, 'palette')).toBe(true)
+    expect(results.getSnapshot()[tab.id].status).toBe('closed')
+    for (const id of ['output.saveResultsAs', 'output.closeResults'] as const) expect(commands.isEnabled(id), id).toBe(false)
+    // While a query runs, its streamed sets can be saved (once complete) but not closed.
+    const running = startQuery()
+    resultClient.emit(queries.getSnapshot()[tab.id].running!.queryId, { type: 'resultSet.opened', descriptor: descriptor(7, { index: 0, state: 'open' }) })
+    expect(commands.isEnabled('output.saveResultsAs')).toBe(true)
+    expect(commands.isEnabled('output.closeResults')).toBe(false)
+    await running.finish()
+    expect(commands.isEnabled('output.closeResults')).toBe(true)
+  })
   it('copy and select the text of Messages', async () => {
     const { commands, api, doc, on } = await ran()
     const messages = on('messages', { selectedText: 'hello', text: 'hello\nCompleted.' })
