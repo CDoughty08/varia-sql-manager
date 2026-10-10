@@ -626,6 +626,15 @@ internal static partial class ScriptingLiveChecks
         check(failed.Count == 0, "the function's CREATE, ALTER and DROP And CREATE with the option, and its CREATE OR ALTER without it, script without the trigger's definition: "
             + string.Join("; ", failed));
 
+        // A database trigger target is in its own dependency walk: its 5 MB definition counts once against the script's budget.
+        failed.Clear();
+        foreach (var verb in new[] { "create", "createOrAlter", "dropAndCreate" })
+        {
+            var result = await client.Script(new ObjectRefDto("databaseTrigger", db, Name: "trg_DdlMid"), verb, dependents);
+            if (!Ok(result) || result.Text!.Length < 2_500_000) failed.Add(verb + ": " + (result.Error?.Message ?? result.Text!.Length + " characters"));
+        }
+        check(failed.Count == 0, "a database trigger of 2,500,000 characters scripts with the option for CREATE, CREATE OR ALTER and DROP And CREATE: " + string.Join("; ", failed));
+
         // Script triggers: SMO's ALTER of a view writes the view alone, its CREATE and CREATE OR ALTER its triggers too.
         var triggers = client.Options with { ScriptTriggers = true };
         var secretTrigger = Schema("view", "vSecretTrigger");

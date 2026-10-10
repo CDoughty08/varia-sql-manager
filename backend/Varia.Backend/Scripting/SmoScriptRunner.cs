@@ -152,6 +152,8 @@ internal sealed class SmoScriptRunner
             objects[key] = triggers || objects.GetValueOrDefault(key);
         }
         if (target.Ref is { Schema: { } schema, Name: { } name }) Add(database, 'o', schema, name, triggered);
+        // The walk returns its root too: keyed like it, a database trigger target is checked and counted once.
+        else if (target.Kind == "databaseTrigger" && target.Ref.Name is { } trigger) Add(database, 'd', "", trigger, false);
         if (walk is { } direction)
         {
             BeforeDependencies?.Invoke(database);
@@ -176,8 +178,7 @@ internal sealed class SmoScriptRunner
                 if (Checked(node) is { } item) Add(item.Database, item.Kind, item.Schema, item.Name, dto.ScriptTriggers && node.Type is "Table" or "View");
             }
         }
-        // A trigger target is no schema object; the preflight read its definition's size.
-        var total = target.Ref.Schema is null ? target.DefinitionBytes ?? 0 : 0;
+        long total = 0;
         foreach (var group in objects.GroupBy(item => item.Key.Database, StringComparer.Ordinal))
         {
             // A cloud database reaches no other one, so a definition there could not be checked.

@@ -253,3 +253,9 @@ DECLARE @sql nvarchar(max) = N'CREATE TRIGGER trg_DdlChildLarge ON DATABASE FOR 
     + N'/*' + REPLICATE(CONVERT(nvarchar(max), N'-'), 3999950) + N'*/' + NCHAR(10);
 EXEC (@sql);
 GO
+-- A database trigger of about 2,500,000 characters (5 MB): under the 8 MB definition bound and the script cap, but over
+-- half the script's byte budget, so counting it twice when it is the target refuses it.
+DECLARE @sql nvarchar(max) = N'CREATE TRIGGER trg_DdlMid ON DATABASE FOR CREATE_ASSEMBLY AS BEGIN DECLARE @x int = 1; END;' + NCHAR(10)
+    + N'/*' + REPLICATE(CONVERT(nvarchar(max), N'-'), 2500000) + N'*/' + NCHAR(10);
+EXEC (@sql);
+GO
