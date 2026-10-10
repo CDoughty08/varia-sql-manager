@@ -75,7 +75,7 @@ function OutputPane({ tabId, query, connected, hint }: Props) {
     tabRefs.current[next]?.focus()
   }
   const tabProps = (name: 'results' | 'messages') => ({
-    ref: (element: HTMLButtonElement | null) => { tabRefs.current[name] = element }, id: tabIds[name], role: 'tab', 'aria-selected': view === name, 'aria-controls': panelId,
+    ref: (element: HTMLButtonElement | null) => { tabRefs.current[name] = element }, id: tabIds[name], role: 'tab', 'data-output-tab': name, 'aria-selected': view === name, 'aria-controls': panelId,
     tabIndex: view === name ? 0 : -1, className: view === name ? 'active' : '', onClick: () => results.setView(tabId, name)
   })
   return <section className="output-panel" aria-label="Query output">

@@ -626,6 +626,8 @@ try {
   await page.keyboard.press('Enter')
   await expect(page.locator('.output-empty')).toHaveText('Results were closed to free memory. Execute the query again to see them.')
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
+  // Run from the editor, it leaves focus there.
+  await expect(textbox()).toBeFocused()
   await expect.poll(async () => (await stats()).client.uiWindows).toBe(0)
   // The Results tab stays, with no count of the sets that are gone.
   await expect(outputTab(/^Results/)).toHaveText('Results')
@@ -799,13 +801,19 @@ try {
   // Only Script As's segment gives way to a long text: the status bar's others, the indicator included, keep one line.
   expect(await page.locator('.status-bar > :not(.status-scripting)').evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
     .toEqual(Array(3).fill('0 nowrap'))
-  // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides.
-  await textbox().focus()
+  // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
+  // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
+  await cell(0, 0).click()
+  await expect(grid()).toBeFocused()
   await page.keyboard.press('F1')
   await page.keyboard.type('close results')
   await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
   await expect(memory).toHaveCount(0)
+  await expect(page.locator('[data-result-grid]')).toHaveCount(0)
+  await expect(outputTab(/^Results/)).toBeFocused()
+  await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+  expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true)
   await run('-- varia-fake: sets=W1*10 memory=0')
   await expect(memory).toHaveCount(0)
   // Closing a tab of hundreds of sets frees every one of them: one request closes them all, where one request each ran

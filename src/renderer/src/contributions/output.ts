@@ -88,7 +88,18 @@ export function outputContribution({ commands, results, menuTargets, documents }
         if (opened) documents.boundEditor?.focus()
       }
     }),
-    commands.register('output.closeResults', { run: () => { const tabId = documents.getSnapshot().activeId; if (tabId) results.closeResults(tabId) } }),
+    commands.register('output.closeResults', {
+      run: () => {
+        const tabId = documents.getSnapshot().activeId
+        if (!tabId) return
+        // Closing unmounts the grids and Messages, which would drop focus held in them to <body>, and selects the Results
+        // tab, which stays (saying the results were closed): focus in the view or on its tabs moves there first. Focus
+        // anywhere else stays put.
+        const view = typeof document === 'undefined' ? null : document.activeElement?.closest('.output-view, .output-toolbar [role="tablist"]')
+        view?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
+        results.closeResults(tabId)
+      }
+    }),
     commands.register('output.selectAll', {
       when: args => {
         const target = targetOf(args)
