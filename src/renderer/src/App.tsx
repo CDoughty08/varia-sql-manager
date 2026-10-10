@@ -77,6 +77,9 @@ export default function App() {
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
+  // The status bar's server and database, cut short when the bar is too narrow; its tooltip holds the whole text.
+  const place = connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'
+  const placeContext = !active.id ? 'No query' : isQuery ? active.database : kindInfo[activeKind].label
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
@@ -223,7 +226,7 @@ export default function App() {
           <div className="editor-container"><QueryEditor /></div>
         </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'}<span className="status-divider">|</span>{!active.id ? 'No query' : isQuery ? active.database : kindInfo[activeKind].label}</span><MemoryIndicator /></footer>
+    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><span className="status-place" title={[`${place} | ${placeContext}`, health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''].filter(Boolean).join('\n')}>{place}<span className="status-divider">|</span>{placeContext}</span><MemoryIndicator /></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsOpen && <OptionsDialog />}

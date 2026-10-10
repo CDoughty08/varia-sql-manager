@@ -798,9 +798,10 @@ try {
   await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
-  // Only Script As's segment gives way to a long text: the status bar's others, the indicator included, keep one line.
+  // Script As's segment and then the server and database give way to a long text; the backend status and the indicator
+  // keep their size. Every segment keeps one line (step 17 fits a long server name into a small window).
   expect(await page.locator('.status-bar > :not(.status-scripting)').evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
-    .toEqual(Array(3).fill('0 nowrap'))
+    .toEqual(['0 nowrap', '1 nowrap', '0 nowrap'])
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
   // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
   await cell(0, 0).click()
@@ -1041,6 +1042,26 @@ try {
   await rm(join(control, 'hold', 'results.copy'))
   await rm(join(control, 'hold', 'results.export'))
   await expect(strips).toHaveCount(0, { timeout: 30000 })
+  // A long server name is cut short, whole in its tooltip; the backend status and the memory indicator keep their size
+  // inside the status bar, and the page never scrolls.
+  const longServer = 'sqlprod-analytics-warehouse-cluster-01.' + 'reporting-'.repeat(10) + 'corp.contoso.com\\INSTANCE01,1433'
+  await page.getByRole('button', { name: 'Connect', exact: true }).click()
+  await page.getByLabel('Server Name', { exact: true }).fill(longServer)
+  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await server().selectOption({ label: longServer })
+  await run('-- varia-fake: sets=W1*10 memory=0.5')
+  await expect(page.locator('.memory-indicator')).toHaveText(/^Results 128 MB/)
+  await expect(page.locator('.status-place')).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')} \\| \\S`))
+  expect(await page.evaluate(() => {
+    const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect(), place = bar.querySelector('.status-place')
+    return {
+      fits: [...bar.children].every(child => { const part = child.getBoundingClientRect(); return part.left >= box.left - 0.5 && part.right <= box.right + 0.5 && part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 }),
+      overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: place.scrollWidth > place.clientWidth
+    }
+  })).toEqual({ fits: true, overflow: false, cut: true })
+  await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
   expect(failures).toEqual([])
   console.log('Results checks passed: streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, resizing, Save Results As, values in their own tabs, Messages, lifecycle, memory, the menu, styling, F6, Ctrl+R, tabs and a small window.')
 
