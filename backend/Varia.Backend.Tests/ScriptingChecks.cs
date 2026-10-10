@@ -322,8 +322,13 @@ internal static class ScriptingChecks
             && !HeaderGuard.Aligned(["USE [db]", Header("p") + "\r\nSET ANSI_NULLS ON", body + " "], plain) && !HeaderGuard.Aligned(["USE [db]", body], plain)
             && !HeaderGuard.Aligned(["USE [db]", "SET ANSI_NULLS ON", body, "DROP TABLE t"], plain),
             "one that a name splits, ends early, or changes in any other way does not");
-        check(HeaderGuard.Unheaded(body) && HeaderGuard.Unheaded(Header("old") + "\r\nCREATE PROCEDURE p AS SELECT 1;") && !HeaderGuard.Unheaded(Header("x\r\nDROP TABLE t --"))
-            && !HeaderGuard.Unheaded(Header("a*/b")), "without headers a batch may start with a definition's whole old header, not a broken one");
+        // A definition may start with an old header in any shape: a trailing space, a banner over lines, no date, or the
+        // CREATE on the same line. It fails the guard, and the script keeps SMO's headers because they are all it adds.
+        var leading = new[] { Header("old") + " \r\n", "/****** Object:  StoredProcedure [dbo].[p]\r\n** Purpose: nightly load\r\n******/\r\n",
+            "/****** Object:  StoredProcedure [dbo].[p] ******/\r\n", Header("old") };
+        check(leading.All(comment => comment + "CREATE PROCEDURE p AS SELECT 1;" is var definition && !HeaderGuard.Safe(definition)
+            && HeaderGuard.Aligned(["USE [db]", Header("p") + "\r\nSET ANSI_NULLS ON", definition], ["USE [db]", "SET ANSI_NULLS ON", definition])),
+            "a definition that starts with an old header of any shape keeps SMO's headers beside it");
         check(SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\r\nGO\r\nDROP TABLE t") && SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\n:r other.sql")
             && !SmoScriptRunner.Splits("CREATE PROC p AS SELECT N'\r\nGO\r\n' /*\nGO\n*/") && !SmoScriptRunner.Splits("CREATE TABLE [a\r\nGO\r\nb] (id int)"),
             "a definition is flagged when the query window would split it at a GO or refuse a SQLCMD line, never for GO inside quotes, comments or names");
@@ -356,6 +361,15 @@ internal static class ScriptingChecks
             && Classify(new DependentDefinitionException("TOO_LARGE", "dbo", "fn_Rates", null, "Generate script for dependent objects")) is
             { Code: "TOO_LARGE", Message: "The definition of dbo.fn_Rates is larger than 8 MB, which Varia cannot open. Turn off Generate script for dependent objects in Tools › Options › Scripting and try again." },
             "a trigger or dependent definition SMO would read is refused naming that object and the option that brought it in");
+        check(Classify(new DependentDefinitionException("TOO_LARGE", "dbo", "fn_Rates", null, "Generate script for dependent objects", "Archive‮")) is
+            { Code: "TOO_LARGE", Message: "The definition of dbo.fn_Rates in database Archive⟨U+202E⟩ is larger than 8 MB, which Varia cannot open. Turn off Generate script for dependent objects in Tools › Options › Scripting and try again." }
+            && Classify(new DependentDefinitionException("ENCRYPTED", "dbo", "TR_A", "Rates", "Generate script for dependent objects", "Archive"))?.Message ==
+                "Trigger TR_A of dbo.Rates in database Archive is encrypted (WITH ENCRYPTION), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",
+            "one in another database is named with that database");
+        check(Classify(new FailedOperationException("x", new DependentDatabaseException(null, "The server principal \"low\" is not able to access the database \"Archive\"."))) is
+            { Code: "DATABASE_UNAVAILABLE", Retryable: true, Message: "A database that dbo.Orders depends on is not available (The server principal \"low\" is not able to access the database \"Archive\".), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again." }
+            && Classify(new DependentDatabaseException("Archive", "OFFLINE"))?.Message == "Database Archive is not available (OFFLINE), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",
+            "a dependent's database that cannot be opened is DATABASE_UNAVAILABLE naming it and the option, not the target's database");
         check(Classify(new PropertyCannotBeRetrievedException("Text"), encrypted: true)?.Code == "ENCRYPTED" && Classify(new PropertyCannotBeRetrievedException("Text"))?.Code == "NO_DEFINITION"
             && Classify(new PropertyCannotBeRetrievedException("Text"), serverTrigger: true)?.Message == "The definition of dbo.Orders is encrypted, or you do not have permission to view it.",
             "a definition SMO cannot read is ENCRYPTED or NO_DEFINITION");
@@ -363,7 +377,7 @@ internal static class ScriptingChecks
             { Code: "SMO_ERROR", Retryable: true, Message: "Could not script dbo.Orders: Script failed for Table 'dbo.Orders'. Inner text." }
             && Classify(new InvalidOperationException("x")) is null && Classify(new InvalidOperationException("x"), broken: true)?.Code == "CONNECTION_LOST",
             "SMO's own failures join their messages; anything unknown is not a value unless the connection broke");
-        check(Classify(new ScriptRefusedException("a batch starts with a broken header.")) is { Code: "SMO_ERROR", Message: "Could not script dbo.Orders: a batch starts with a broken header." },
+        check(Classify(new ScriptRefusedException("it depends on an object in another database.")) is { Code: "SMO_ERROR", Message: "Could not script dbo.Orders: it depends on an object in another database." },
             "a script Varia refuses is a value that says why");
         var messages = Catalog.ErrorCodes.Select(code => ScriptingErrors.Create(Catalog, code, subject with { Display = new string('x', 400) }, new string('d', 5000), 1)).ToList();
         check(messages.All(error => error.Message.Length <= ScriptingErrors.MaxMessage && error.Retryable == Catalog.Retryable(error.Code)) && messages.Count == 14,

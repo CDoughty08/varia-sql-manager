@@ -6,7 +6,8 @@ namespace Varia.Backend.Scripting;
 /// line ending in ******/, with no other */ and no /* inside, and every line that ends as SMO ends a header ("Script
 /// Date:" … "******/") is such a line. Otherwise the target is scripted again without headers (spec C7), and the script
 /// keeps its headers only when they are all that differs (<see cref="Aligned"/>): a definition's own text may hold such
-/// lines. SMO 181 already writes "?" for a name containing */; the guard does not rely on it.</summary>
+/// lines, in any shape. SMO 181 already writes "?" for a name containing */; the guard does not rely on it. A script
+/// without headers is not guarded: SMO writes none then, and what remains is the definitions' stored text.</summary>
 internal static class HeaderGuard
 {
     public const string Opening = "/****** Object:";
@@ -71,10 +72,6 @@ internal static class HeaderGuard
         }
         return next == plain.Count;
     }
-
-    /// <summary>A batch SMO wrote without headers may start with a definition's own text, an old header comment included,
-    /// but not with a header that is split over lines or ends early: SMO 181 writes none there, so one would be SMO's.</summary>
-    public static bool Unheaded(string batch) => !batch.StartsWith(Opening, StringComparison.Ordinal) || AfterHeader(batch) is not null;
 
     /// <summary>Lines ending as SMO ends a header: "Script Date:" followed, at the end of the line, by ******/. A lone CR
     /// or a line separator ends a line too.</summary>

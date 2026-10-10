@@ -148,6 +148,42 @@ SET @sql = N'/****** Object:  StoredProcedure [dbo].[old]    Script Date: 1/1/20
     + N'CREATE PROCEDURE dbo.usp_LeadingHeader AS SELECT 1 AS one;';
 EXEC (@sql);
 GO
+-- Definitions that start with an old header in other shapes, none of them a header SMO writes: a trailing space, a
+-- banner over three lines, no Script Date, and the CREATE on the header's line; a trigger and a function (under a view)
+-- with the banner. Their scripts keep the stored text with headers on or off.
+DECLARE @crlf nchar(2) = NCHAR(13) + NCHAR(10);
+DECLARE @banner nvarchar(200) = N'/****** Object:  StoredProcedure [dbo].[old]' + @crlf + N'** Purpose: nightly load' + @crlf + N'******/' + @crlf;
+DECLARE @sql nvarchar(max) = N'/****** Object:  StoredProcedure [dbo].[old]    Script Date: 1/1/2010 ******/ ' + @crlf
+    + N'CREATE PROCEDURE dbo.usp_HeaderTrailing AS SELECT 1 AS one;';
+EXEC (@sql);
+SET @sql = @banner + N'CREATE PROCEDURE dbo.usp_HeaderBanner AS SELECT 1 AS one;';
+EXEC (@sql);
+SET @sql = N'/****** Object:  StoredProcedure [dbo].[old] ******/' + @crlf + N'CREATE PROCEDURE dbo.usp_HeaderNoDate AS SELECT 1 AS one;';
+EXEC (@sql);
+SET @sql = N'/****** Object:  StoredProcedure [dbo].[old]    Script Date: 1/1/2010 ******/CREATE PROCEDURE dbo.usp_HeaderSameLine AS SELECT 1 AS one;';
+EXEC (@sql);
+CREATE TABLE dbo.HeaderTrigger (id int NULL);
+SET @sql = @banner + N'CREATE TRIGGER dbo.TR_HeaderBanner ON dbo.HeaderTrigger AFTER INSERT AS SET NOCOUNT ON;';
+EXEC (@sql);
+SET @sql = @banner + N'CREATE FUNCTION dbo.fn_HeaderBanner () RETURNS TABLE AS RETURN SELECT 1 AS One;';
+EXEC (@sql);
+GO
+CREATE VIEW dbo.vHeaderBanner AS SELECT One FROM dbo.fn_HeaderBanner();
+GO
+-- A procedure over a database that does not exist: Generate script for dependent objects cannot open it.
+CREATE PROCEDURE dbo.usp_NoDatabase AS SELECT * FROM varia_no_such_database.dbo.t;
+GO
+-- Three triggers, each under 8,000,000 bytes but together too large for a script: with Script triggers the definition
+-- check refuses the table before SMO loads any of them.
+CREATE TABLE dbo.TriggerParts (id int NULL);
+DECLARE @part nvarchar(max) = N'/*' + REPLICATE(CONVERT(nvarchar(max), N'-'), 3900000) + N'*/' + NCHAR(10);
+DECLARE @sql nvarchar(max) = N'CREATE TRIGGER dbo.TR_Part1 ON dbo.TriggerParts AFTER INSERT AS SET NOCOUNT ON;' + NCHAR(10) + @part;
+EXEC (@sql);
+SET @sql = N'CREATE TRIGGER dbo.TR_Part2 ON dbo.TriggerParts AFTER INSERT AS SET NOCOUNT ON;' + NCHAR(10) + @part;
+EXEC (@sql);
+SET @sql = N'CREATE TRIGGER dbo.TR_Part3 ON dbo.TriggerParts AFTER INSERT AS SET NOCOUNT ON;' + NCHAR(10) + @part;
+EXEC (@sql);
+GO
 -- An encrypted database DDL trigger (OBJECTPROPERTY cannot see one) on an event the checks never raise.
 CREATE TRIGGER trg_SecretDdl ON DATABASE WITH ENCRYPTION FOR CREATE_ASSEMBLY AS SET NOCOUNT ON;
 GO

@@ -344,6 +344,19 @@ internal static partial class ScriptingLiveChecks
             if (!Ok(result) || !result.Text!.Contains("DROP", StringComparison.Ordinal)) failed.Add(target.Kind + " " + target.Name + ": " + (result.Error?.Message ?? "no DROP"));
         }
         check(failed.Count == 0, "Script as DROP resolves every kind of the scratch fixture: " + string.Join("; ", failed));
+        // The runner guards only scripts with headers (spec C7): SMO 181 writes none when asked for none, whatever the kind
+        // or name, so nothing a name holds can end a comment there.
+        failed.Clear();
+        var plain = client.Options with { IncludeHeaders = false };
+        foreach (var target in objects.Select(item => item.Target).Concat([new ObjectRefDto("login", Name: "sa"), new ObjectRefDto("serverTrigger", Name: db + "_trg"),
+            Schema("table", "dbo", "x*/ DROP TABLE dbo.Victim /*"), Schema("table", "dbo", "a*/b"), Schema("table", "dbo", "line\r\nGO\r\nbreak")]))
+            foreach (var verb in target.Kind == "database" ? new[] { "create" } : ["create", "drop"])
+            {
+                var result = await client.Script(target, verb, plain);
+                if (!Ok(result) || result.Text!.Contains("/******", StringComparison.Ordinal) || HeaderGuard.Dated(result.Text) > 0 || result.Warnings.Count > 0)
+                    failed.Add(target.Kind + " " + target.Name + " " + verb + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
+            }
+        check(failed.Count == 0, "with headers off SMO writes no descriptive header for any kind, crafted names included: " + string.Join("; ", failed));
         // SMO's dependency discovery refuses most kinds (databases, indexes, keys, principals); the option then adds nothing.
         failed.Clear();
         var dependents = client.Options with { GenerateDependentObjects = true };
@@ -428,7 +441,7 @@ internal static partial class ScriptingLiveChecks
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
         await SchemaLockAsync(check, service, client, json, Schema("table", "dbo", "Victim"), db);
         await DefinitionsAsync(check, client, Schema);
-        await OldHeadersAsync(check, client, db);
+        await OldHeadersAsync(check, client, sql, db);
         await CultureAsync(check, client, sql, db);
         await GoldenAsync(check, service, client, scratch, sql, live, json);
     }
@@ -495,6 +508,25 @@ internal static partial class ScriptingLiveChecks
         check(parts.Error is { Code: "TOO_LARGE" } && parts.Error.Message.StartsWith("The script for dbo.vParts is longer than 4,000,000 characters", StringComparison.Ordinal)
             && allocated < 48_000_000, "dependents each under 8,000,000 bytes that together could not fit in a script are refused before SMO loads them ("
             + allocated / 1_000_000 + " MB allocated): " + parts.Error?.Message);
+        var triggerParts = schema("table", "dbo", "TriggerParts");
+        allocated = GC.GetTotalAllocatedBytes(true);
+        var partsCreate = await client.Script(triggerParts, "create", triggers);
+        var partsBoth = await client.Script(triggerParts, "dropAndCreate", triggers);
+        allocated = GC.GetTotalAllocatedBytes(true) - allocated;
+        check(new[] { partsCreate, partsBoth }.All(result => result.Error is { Code: "TOO_LARGE" }
+                && result.Error.Message.StartsWith("The script for dbo.TriggerParts is longer than 4,000,000 characters", StringComparison.Ordinal))
+            && allocated < 48_000_000 && Ok(await client.Script(triggerParts, "create")),
+            "triggers each under 8,000,000 bytes that together could not fit in a script are refused before SMO loads them (" + allocated / 1_000_000 + " MB allocated), "
+            + "and the table scripts without Script triggers: " + partsCreate.Error?.Message + " " + partsBoth.Error?.Message);
+
+        // A dependent in a database that does not exist: the message names that database and the option, not the target as
+        // missing. SMO's walk lists the dependent, so the definition check is what fails there, naming it itself.
+        var noDatabase = await client.Script(schema("procedure", "dbo", "usp_NoDatabase"), "create", dependents);
+        check(noDatabase.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && noDatabase.Error.Message.StartsWith("Database varia_no_such_database is not available (", StringComparison.Ordinal)
+            && noDatabase.Error.Message.EndsWith("), so dbo.usp_NoDatabase cannot be scripted with "
+            + "Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.", StringComparison.Ordinal)
+            && Ok(await client.Script(schema("procedure", "dbo", "usp_NoDatabase"), "create")),
+            "a dependent's database that does not exist is named, with the option to turn off: " + noDatabase.Error?.Message);
 
         // A stored line the query window reads as GO would run the rest of the definition as a batch of its own.
         var split = await client.Script(schema("procedure", "dbo", "usp_go"), "create");
@@ -504,27 +536,51 @@ internal static partial class ScriptingLiveChecks
         check(Ok(drop) && drop.Warnings.Count == 0, "its DROP carries no warning");
     }
 
-    /// <summary>Definitions that keep an old SSMS header in their own text (spec C7): the guard cannot tell such a line from
-    /// a header, so the script is made again without headers, and SMO's headers stay because they are all it differs by.</summary>
-    private static async Task OldHeadersAsync(Action<bool, string> check, Client client, string db)
+    /// <summary>Definitions that keep an old SSMS header in their own text, in any shape (spec C7): the guard cannot tell
+    /// such a line from a header, so the script is made again without headers, and SMO's headers stay because they are all
+    /// it differs by. Without headers SMO writes none, so the stored text is all there is to keep.</summary>
+    private static async Task OldHeadersAsync(Action<bool, string> check, Client client, Func<string, string, Task<SqlRun>> sql, string db)
     {
         var failed = new List<string>();
-        foreach (var name in new[] { "usp_OldHeader", "usp_OldHeaderLine", "usp_LeadingHeader" })
+        var verbs = new (string Verb, string Keyword)[] { ("create", "CREATE"), ("alter", "ALTER"), ("createOrAlter", "CREATE OR ALTER"), ("dropAndCreate", "CREATE") };
+        foreach (var name in new[] { "usp_OldHeader", "usp_OldHeaderLine", "usp_LeadingHeader", "usp_HeaderTrailing", "usp_HeaderBanner", "usp_HeaderNoDate", "usp_HeaderSameLine" })
         {
             var target = new ObjectRefDto("procedure", db, "dbo", name);
             var header = "/****** Object:  StoredProcedure [dbo].[" + name + "]    Script Date: ";
-            foreach (var verb in new[] { "create", "alter", "createOrAlter", "dropAndCreate" })
-            {
-                var result = await client.Script(target, verb);
-                if (!Ok(result) || !result.Text!.Contains(header, StringComparison.Ordinal) || !result.Text.Contains("Script Date: 1/1/20", StringComparison.Ordinal)
-                    || result.Warnings.Count > 0 || !Framed(result.Text))
-                    failed.Add(name + " " + verb + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
-            }
-            var plain = await client.Script(target, "create", client.Options with { IncludeHeaders = false });
-            if (!Ok(plain) || plain.Text!.Contains(header, StringComparison.Ordinal) || !plain.Text.Contains("Script Date: 1/1/20", StringComparison.Ordinal) || plain.Warnings.Count > 0)
-                failed.Add(name + " without headers: " + (plain.Error?.Message ?? string.Join(" ", plain.Warnings)));
+            // SMO writes the name quoted and keeps the stored text around it byte for byte, the old header included.
+            var definition = (await sql("SELECT definition FROM sys.sql_modules WHERE object_id = OBJECT_ID(N'dbo." + name + "');", db)).Scalar ?? "";
+            var create = "CREATE PROCEDURE dbo." + name;
+            var at = definition.IndexOf(create, StringComparison.Ordinal);
+            foreach (var headers in new[] { true, false })
+                foreach (var (verb, keyword) in verbs)
+                {
+                    var result = await client.Script(target, verb, client.Options with { IncludeHeaders = headers });
+                    var stored = at < 0 ? null : definition[..at] + keyword + " PROCEDURE [dbo].[" + name + "]" + definition[(at + create.Length)..];
+                    if (!Ok(result) || result.Text!.Contains(header, StringComparison.Ordinal) != headers || stored is null || !result.Text.Contains(stored, StringComparison.Ordinal)
+                        || result.Warnings.Count > 0 || !Framed(result.Text))
+                        failed.Add(name + " " + verb + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
+                }
         }
-        check(failed.Count == 0, "a definition holding an old SSMS header scripts as stored with every DDL verb, with headers on or off: " + string.Join("; ", failed));
+        // A trigger or a function with such a banner comes in with Script triggers or Generate script for dependent objects.
+        const string banner = "/****** Object:  StoredProcedure [dbo].[old]\r\n** Purpose: nightly load\r\n******/\r\n";
+        foreach (var headers in new[] { true, false })
+        {
+            var options = client.Options with { IncludeHeaders = headers };
+            foreach (var (label, target, extra) in new (string, ObjectRefDto, ScriptingOptionsDto)[]
+            {
+                ("trigger", new ObjectRefDto("trigger", db, Name: "TR_HeaderBanner", Parent: new ParentRefDto("table", "dbo", "HeaderTrigger")), options),
+                ("its table with Script triggers", new ObjectRefDto("table", db, "dbo", "HeaderTrigger"), options with { ScriptTriggers = true }),
+                ("function", new ObjectRefDto("function", db, "dbo", "fn_HeaderBanner"), options),
+                ("view over it with dependent objects", new ObjectRefDto("view", db, "dbo", "vHeaderBanner"), options with { GenerateDependentObjects = true })
+            })
+            {
+                var result = await client.Script(target, "create", extra);
+                if (!Ok(result) || !result.Text!.Contains(banner + "CREATE ", StringComparison.Ordinal) || result.Warnings.Count > 0 || !Framed(result.Text))
+                    failed.Add(label + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
+            }
+        }
+        check(failed.Count == 0, "a definition holding an old SSMS header of any shape scripts as stored with every DDL verb, with headers on or off, also as a trigger "
+            + "or dependent object: " + string.Join("; ", failed));
         var secret = new ObjectRefDto("databaseTrigger", db, Name: "trg_SecretDdl");
         var encrypted = await client.Script(secret, "create");
         check(encrypted.Error is { Code: "ENCRYPTED" } && encrypted.Error.Message == "trg_SecretDdl is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work."

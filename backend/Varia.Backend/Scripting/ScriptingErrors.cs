@@ -101,7 +101,8 @@ internal static class ScriptingErrors
     /// the message names that object and the option that brought it in, not the target.</summary>
     public static ScriptError Dependent(ScriptingCatalog catalog, DependentDefinitionException error, ScriptSubject subject)
     {
-        var o = error.Parent is { } parent ? Display(error.Name) + " of " + Display(error.Schema + "." + parent) : Display(error.Schema + "." + error.Name);
+        var o = (error.Parent is { } parent ? Display(error.Name) + " of " + Display(error.Schema + "." + parent) : Display(error.Schema + "." + error.Name))
+            + (error.Database is { } database ? " in database " + Display(database) : "");
         var message = error.Code == "ENCRYPTED"
             ? (error.Parent is null ? "" : "Trigger ") + o + " is encrypted (WITH ENCRYPTION), so " + subject.Display + " cannot be scripted with " + error.Option
                 + " on. Turn it off in Tools › Options › Scripting and try again."
@@ -109,6 +110,28 @@ internal static class ScriptingErrors
                 + " in Tools › Options › Scripting and try again.";
         return new(error.Code, Clip(message, MaxMessage), catalog.Retryable(error.Code));
     }
+
+    /// <summary>A database a dependent object lives in is not available: the message names it, not the target's, and the
+    /// option that reached it.</summary>
+    public static ScriptError DependentDatabase(ScriptingCatalog catalog, DependentDatabaseException error, ScriptSubject subject)
+    {
+        var message = (error.Database is { } database ? "Database " + Display(database) : "A database that " + subject.Display + " depends on") + " is not available ("
+            + Detail(error.Detail, MaxState) + "), so " + subject.Display + " cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › "
+            + "Scripting and try again.";
+        return new("DATABASE_UNAVAILABLE", Clip(message, MaxMessage), catalog.Retryable("DATABASE_UNAVAILABLE"));
+    }
+
+    /// <summary>SQL Server's text when the chain holds an error saying a database cannot be opened (spec C9's
+    /// DATABASE_UNAVAILABLE numbers, and 911 for one that does not exist), else null.</summary>
+    public static string? UnavailableText(Exception error)
+    {
+        if (Chain(error).OfType<SqlException>().FirstOrDefault() is not { } sql) return null;
+        var first = First(sql);
+        var number = first?.Number ?? sql.Number;
+        return Unavailable.Contains(number) || number == 911 ? first?.Message ?? sql.Message : null;
+    }
+
+    private static SqlError? First(SqlException sql) => sql.Errors.Cast<SqlError>().FirstOrDefault(item => item.Class > 10) ?? (sql.Errors.Count > 0 ? sql.Errors[0] : null);
 
     /// <summary>Maps an exception from the preflight or SMO to an error value (spec C9). Cancellation is the caller's to
     /// decide; anything unrecognised is null, so the request fails as a backend error.</summary>
@@ -120,13 +143,14 @@ internal static class ScriptingErrors
     {
         var chain = Chain(error).ToList();
         if (chain.OfType<DependentDefinitionException>().FirstOrDefault() is { } dependent) return Dependent(catalog, dependent, subject);
+        if (chain.OfType<DependentDatabaseException>().FirstOrDefault() is { } elsewhere) return DependentDatabase(catalog, elsewhere, subject);
         if (chain.OfType<ScriptRefusedException>().FirstOrDefault() is { } refused) return Create(catalog, "SMO_ERROR", subject, refused.Reason);
         if (chain.OfType<ScriptTooLargeException>().Any()) return Create(catalog, "TOO_LARGE", subject);
         if (chain.OfType<EmptyScriptException>().Any()) return Create(catalog, "EMPTY", subject);
         if (chain.OfType<SmoObjectMissingException>().Any()) return Create(catalog, "NOT_FOUND", subject);
         if (chain.OfType<SqlException>().FirstOrDefault() is { } sql)
         {
-            var first = sql.Errors.Cast<SqlError>().FirstOrDefault(item => item.Class > 10) ?? (sql.Errors.Count > 0 ? sql.Errors[0] : null);
+            var first = First(sql);
             var number = first?.Number ?? sql.Number;
             var text = first?.Message ?? sql.Message;
             var code = SqlCode(number, first?.Class ?? sql.Class);

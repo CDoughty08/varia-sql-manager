@@ -217,7 +217,7 @@ internal static partial class ScriptingLiveChecks
 
     /// <summary>Generate script for dependent objects follows a three-part name into another database, so the definition
     /// check runs in each database a dependent lives in (spec F): the scratch database's 8,000,000-byte function is
-    /// refused before SMO loads it, here from a view in the round-trip database.</summary>
+    /// refused before SMO loads it, here from a view in the round-trip database, and named with its database.</summary>
     private static async Task CrossDatabaseAsync(Action<bool, string> check, Client client, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql)
     {
         var copy = scratch.RoundTrip;
@@ -228,8 +228,9 @@ internal static partial class ScriptingLiveChecks
         var cross = await client.Script(new ObjectRefDto("view", copy, "dbo", "vCrossLarge"), "create", dependents);
         var synonym = await client.Script(new ObjectRefDto("view", copy, "dbo", "vSynonymLarge"), "create", dependents);
         allocated = GC.GetTotalAllocatedBytes(true) - allocated;
-        check(setup.Status == "completed" && cross.Error is { Code: "TOO_LARGE" } && cross.Error.Message == "The definition of dbo.fn_Large is larger than 8 MB, which Varia cannot open. "
-            + "Turn off Generate script for dependent objects in Tools › Options › Scripting and try again." && (Ok(synonym) || synonym.Error?.Code == "TOO_LARGE") && allocated < 48_000_000,
+        check(setup.Status == "completed" && cross.Error is { Code: "TOO_LARGE" } && cross.Error.Message == "The definition of dbo.fn_Large in database " + scratch.Name
+            + " is larger than 8 MB, which Varia cannot open. Turn off Generate script for dependent objects in Tools › Options › Scripting and try again."
+            && (Ok(synonym) || synonym.Error?.Code == "TOO_LARGE") && allocated < 48_000_000,
             "a dependent in another database over 8,000,000 bytes is refused before SMO loads it, through a three-part name or a synonym (" + allocated / 1_000_000 + " MB allocated): "
             + (setup.Error ?? cross.Error?.Message) + " " + synonym.Error?.Message);
     }
@@ -288,6 +289,23 @@ internal static partial class ScriptingLiveChecks
             check(Ok(select) && select.Warnings.Count == 0, "its SELECT template needs only the columns, so it carries no VIEW DEFINITION warning: " + string.Join(" ", select.Warnings));
             await sql("GRANT VIEW DEFINITION ON Sales.usp_Orders TO " + user + ";", scratch.Name);
             check(Ok(await limited.Script(procedure, "create")), "with VIEW DEFINITION the procedure's CREATE scripts");
+
+            // Generate script for dependent objects reaching a database the login cannot open names that database (in SQL
+            // Server's text) and the option, not the target's database as unavailable. SMO's dependency walk reads
+            // sys.sql_expression_dependencies, which only db_owner may read by default.
+            var copy = scratch.RoundTrip;
+            var function = await sql("CREATE FUNCTION dbo.fn_Elsewhere () RETURNS int AS BEGIN RETURN 1; END;", copy);
+            var view = await sql("CREATE VIEW dbo.vElsewhere AS SELECT [" + copy + "].dbo.fn_Elsewhere() AS x;\nGO\nGRANT VIEW DEFINITION TO " + user
+                + ";\nGRANT SELECT ON sys.sql_expression_dependencies TO " + user + ";", scratch.Name);
+            var elsewhere = new ObjectRefDto("view", scratch.Name, "dbo", "vElsewhere");
+            var unavailable = await limited.Script(elsewhere, "create", limited.Options with { GenerateDependentObjects = true });
+            check(function.Status == "completed" && view.Status == "completed" && unavailable.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true }
+                && unavailable.Error.Message.StartsWith("A database that dbo.vElsewhere depends on is not available (", StringComparison.Ordinal)
+                && unavailable.Error.Message.Contains("\"" + copy + "\"", StringComparison.Ordinal) && !unavailable.Error.Message.Contains("Database " + scratch.Name, StringComparison.Ordinal)
+                && unavailable.Error.Message.EndsWith("), so dbo.vElsewhere cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › "
+                    + "Scripting and try again.", StringComparison.Ordinal) && Ok(await limited.Script(elsewhere, "create")),
+                "a dependent in a database the login cannot open is named, with the option to turn off, and the view scripts without it: "
+                + (function.Error ?? view.Error ?? unavailable.Error?.Message));
         }
         finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(reader.Id), json), json); }
     }

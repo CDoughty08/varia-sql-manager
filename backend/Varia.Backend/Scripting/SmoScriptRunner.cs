@@ -50,7 +50,9 @@ internal sealed class SmoScriptRunner
     }
 
     /// <summary>One target's batches, framed, at most <paramref name="max"/> characters. A header that fails HeaderGuard
-    /// makes SMO script the target again without headers; the headers stay when they are all the two scripts differ in.</summary>
+    /// makes SMO script the target again without headers; the headers stay when they are all the two scripts differ in.
+    /// SMO 181 writes no header when asked for none (a live check pins this for every kind), so a script without headers
+    /// is not guarded: any "/****** Object:" in it is a definition's own text, which SMO keeps as stored.</summary>
     public string Script(ResolvedTarget target, ScriptVerb verb, ScriptingOptionsDto dto, long max, List<string> warnings)
     {
         CultureInfo.CurrentCulture = ScriptingCulture.Formatting;
@@ -66,11 +68,9 @@ internal sealed class SmoScriptRunner
             (smo.GetSmoObject(urn) ?? throw new SmoObjectMissingException()).Touch();
         }
         var batches = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, dependencies, warnings);
-        if (!dto.IncludeHeaders) Unheaded(batches);
-        else if (!batches.All(HeaderGuard.Safe))
+        if (dto.IncludeHeaders && !batches.All(HeaderGuard.Safe))
         {
             var plain = Run(smo, urn, target, verb, dto, max, headers: false, dependencies, warnings);
-            Unheaded(plain);
             if (!HeaderGuard.Aligned(batches, plain))
             {
                 batches = plain;
@@ -85,13 +85,6 @@ internal sealed class SmoScriptRunner
             if (text.Length > max) throw new ScriptTooLargeException();
         }
         return text.ToString();
-    }
-
-    /// <summary>SMO 181 writes no header when asked for none, so a batch that starts with a broken one is refused.</summary>
-    private static void Unheaded(List<string> batches)
-    {
-        if (!batches.All(HeaderGuard.Unheaded))
-            throw new ScriptRefusedException("a batch starts with a descriptive header comment that is split over lines or ends early, so running the script could run part of a name as SQL.");
     }
 
     /// <summary>The preflight bounds the target's own definition; Script triggers and Generate script for dependent
@@ -110,9 +103,14 @@ internal sealed class SmoScriptRunner
         {
             var walker = new DependencyWalker(smo);
             walker.DiscoveryProgress += (_, _) => token.ThrowIfCancellationRequested();
-            foreach (var node in walker.WalkDependencies(walker.DiscoverDependencies(new[] { urn }, DependencyType.Parents)))
-                if (node.Urn.GetAttribute("Schema") is { } s && node.Urn.GetAttribute("Name") is { } n && node.Urn.GetAttribute("Name", "Database") is { } db)
-                    Add(db, s, n, dto.ScriptTriggers && node.Urn.Type is "Table" or "View");
+            try
+            {
+                foreach (var node in walker.WalkDependencies(walker.DiscoverDependencies(new[] { urn }, DependencyType.Parents)))
+                    if (node.Urn.GetAttribute("Schema") is { } s && node.Urn.GetAttribute("Name") is { } n && node.Urn.GetAttribute("Name", "Database") is { } db)
+                        Add(db, s, n, dto.ScriptTriggers && node.Urn.Type is "Table" or "View");
+            }
+            // The preflight has just read the target's database, so the walk failed in a database a dependent lives in.
+            catch (Exception error) when (ScriptingErrors.UnavailableText(error) is { } text) { throw new DependentDatabaseException(null, text); }
         }
         // A trigger target is no schema object; the preflight read its definition's size.
         var total = target.Ref.Schema is null ? target.DefinitionBytes ?? 0 : 0;
@@ -133,16 +131,24 @@ internal sealed class SmoScriptRunner
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = ScriptPreflight.DefinitionCheck });
             }
             command.Parameters.Add(new SqlParameter("@objects", SqlDbType.NVarChar, -1) { Value = list.Append("</d>").ToString() });
-            using var reader = command.ExecuteReader();
+            var elsewhere = group.Key != database ? group.Key : null;
+            using var reader = Execute(command, elsewhere);
             if (!reader.Read()) continue;
             var parent = reader.IsDBNull(2) ? null : reader.GetString(2);
             if (reader.GetBoolean(3) || !reader.IsDBNull(4) && reader.GetInt64(4) > ScriptPreflight.MaxDefinitionBytes)
                 throw new DependentDefinitionException(reader.GetBoolean(3) ? "ENCRYPTED" : "TOO_LARGE", reader.GetString(0), reader.GetString(1), parent,
-                    parent is null ? "Generate script for dependent objects" : "Script triggers");
+                    parent is null ? "Generate script for dependent objects" : "Script triggers", elsewhere);
             total += reader.IsDBNull(5) ? 0 : reader.GetInt64(5);
         }
         // Each definition appears in the script whole (two bytes a character), so together they could not fit in it.
         if (total > 2 * max) throw new ScriptTooLargeException();
+    }
+
+    /// <summary>The definition check in one database; one a dependent lives in that the login cannot open is named.</summary>
+    private static SqlDataReader Execute(SqlCommand command, string? elsewhere)
+    {
+        try { return command.ExecuteReader(); }
+        catch (SqlException error) when (elsewhere is not null && ScriptingErrors.UnavailableText(error) is { } text) { throw new DependentDatabaseException(elsewhere, text); }
     }
 
     /// <summary>A name's UTF-16 code units as hex, unpaired surrogates included.</summary>
@@ -248,11 +254,24 @@ internal sealed class ScriptRefusedException(string reason) : Exception("The scr
 /// <summary>A trigger or dependent object SMO would script with the target is encrypted or over the definition limit.</summary>
 /// <param name="parent">For a trigger, the table or view it is on (in <paramref name="schema"/>).</param>
 /// <param name="option">The scripting option that brought it in.</param>
-internal sealed class DependentDefinitionException(string code, string schema, string name, string? parent, string option) : Exception("A trigger or dependent object cannot be scripted.")
+/// <param name="database">The database it lives in when that is not the target's (three-part names, synonyms).</param>
+internal sealed class DependentDefinitionException(string code, string schema, string name, string? parent, string option, string? database = null)
+    : Exception("A trigger or dependent object cannot be scripted.")
 {
     public string Code { get; } = code;
     public string Schema { get; } = schema;
     public string Name { get; } = name;
     public string? Parent { get; } = parent;
     public string Option { get; } = option;
+    public string? Database { get; } = database;
+}
+
+/// <summary>Generate script for dependent objects reached a database other than the target's that the login cannot open,
+/// that is not online, or that does not exist.</summary>
+/// <param name="database">That database, or null when SMO's dependency walk failed in it: SMO reports no name, but
+/// SQL Server's text in <paramref name="detail"/> carries it.</param>
+internal sealed class DependentDatabaseException(string? database, string detail) : Exception("A dependent object's database is not available.")
+{
+    public string? Database { get; } = database;
+    public string Detail { get; } = detail;
 }
