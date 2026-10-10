@@ -711,20 +711,25 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`, including
   malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation and the budget.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
-  backend, and UI responsiveness while a million stored rows are read.
+  backend, and UI responsiveness while a million stored rows are read. `scripts/results-smoke.mjs` drives the grid on
+  the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
+  the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
+  the query produces, a FOR XML PATH value, and an error reported between the messages around it.
 
 ## Benchmarks
 
 ```sh
 npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
+npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
 ```
 
-Both harnesses need the Release backend and, for `bench:e2e`, the built app (`npm run check`). They write
-`artifacts/bench/node.json` and `artifacts/bench/e2e.json`; they are not part of `npm run check`. The benchmarks only
+The harnesses need the Release backend and, for `bench:e2e` and `bench:grid`, the built app (`npm run check`). They
+write `artifacts/bench/node.json`, `e2e.json` and `grid.json`; they are not part of `npm run check`. The benchmarks only
 measure (and check that every row and cell arrived); `check-bench.mjs --enforce` fails when a value is worse than its
-floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS report only.
+floor, or when a metric with a floor was not measured (a live one only when its harness ran `--live`). CI enforces
+floors on Linux (with live SQL Server); Windows and macOS report only.
 
 - **W1** is a typical wide row: int, nvarchar(50), datetime2(7), decimal(18,2), uniqueidentifier, nvarchar(200) of 80
   characters, bit, and an int that is NULL in every fifth row (about 220 bytes encoded). **B1** is two nvarchar(max)
@@ -733,11 +738,18 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
   backend, `ResultsPortHost` over a `MessageChannel`, and `ResultsWorkerCore` in a worker thread reading windows of
   every row with every cell decoded (four windows in flight).
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
-  1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, and
-  tile planning.
+  1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
+  planning, and the shared window cache (full, so every insert evicts).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
   `maxRows: 0`.
+- **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
+  on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
+  while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
+  and while scroll bar jumps cross 300 columns, the DOM elements of a grid, scroll bar jumps to random rows of a million
+  (each a cache miss), the window and page caches after a sweep and 300 jumps, heap growth after a collection, and long
+  tasks. `--live` copies 100,000 rows and saves a million rows as CSV from SQL Server, comparing the text with the rows
+  the query produces.
 
 | Metric | Target | Floor (Linux CI) | Measured, 4 CPUs | Measured, 2 CPUs |
 | --- | --- | --- | --- | --- |
@@ -754,6 +766,7 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
 | Grid frame: 64 selection blocks clipped, 1,800 cells tested | ≥ 5,000 ops/s | ≥ 1,000 ops/s | 4,500 – 4,900 ops/s | 5,300 – 5,700 ops/s |
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
+| Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |
 | B1 into the worker | ≥ 200 MB/s | ≥ 40 MB/s | 90 – 143 MB/s | 90 MB/s |
@@ -762,6 +775,20 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
+| Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 76 – 84 ms | 76 ms |
+| Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 12 – 16 % | 13 % |
+| Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |
+| Grid: animation-frame interval during that scroll, p95 / largest gap | ≤ 17.5 / 50 ms | gap ≤ 150 ms | 16.7 / 16.8 ms | 16.8 / 16.8 ms |
+| Grid: scroll bar jump to a random row of 1,000,000 → painted, p95 | ≤ 100 ms | ≤ 250 ms | 132 – 134 ms | 131 ms |
+| Grid: `frame()` after a scroll bar jump, 300 columns, p95 | ≤ 8 ms | ≤ 16 ms | 2.3 – 3.1 ms | 3.3 ms |
+| Grid: `frame()` scrolling across 300 columns, p95 | ≤ 6 ms | ≤ 12 ms | 0.5 – 0.8 ms | 0.7 ms |
+| Grid: DOM elements, 8 / 300 columns | ≤ 1,500 / 4,000 | same | 490 / 886 | 490 / 886 |
+| Grid: UI window cache after a sweep and 300 jumps, windows / text | ≤ 256 / 16 Mi units | same | 256 / 5.8 Mi | 256 / 5.8 Mi |
+| Grid: worker page cache after the same | ≤ 64 MiB | same | 64 MiB | 64 MiB |
+| Grid: renderer heap growth, Ctrl+End then Ctrl+Home over 1,000,000 rows | ≤ 80 MB | ≤ 150 MB | 0.1 MB | 0.1 MB |
+| Grid: UI long tasks over 50 ms in the measured segments / the longest | 0 / ≤ 50 ms | reported / ≤ 250 ms | 0 – 5 / 0 – 82 ms | 3 / 74 ms |
+| Grid, live: Ctrl+A, Ctrl+C of 100,000 × 8 rows → clipboard (16.7 MB) | ≤ 1.5 s | ≤ 6 s | 0.57 – 0.81 s | 0.61 s |
+| Grid, live: Save Results As CSV, 1,000,000 × 8 rows (172 MB) | ≤ 3 s | ≤ 15 s | 1.5 – 2.0 s | 1.5 s |
 
 Measured in a shared Linux container (Xeon at 2.1 GHz, Node 24, .NET 10, SQL Server 2022 in Docker on the same machine)
 while another build was running, once with its 4 CPUs and once with the app and benchmarks pinned to 2 (`taskset`), as
@@ -773,3 +800,10 @@ announced at once; the live first window needs 100 rows, from the second page, w
 of them comes once with each read (it is decoded once); that is the extra page bytes sent. The budget charge is the
 pages, their bookkeeping and the column metadata, against the distinct page bytes main forwarded. The end-to-end W1 rate
 includes copying each page from main into the renderer and cloning every window's text to the UI thread.
+
+The grid's jump target is 100 ms rather than 50 because a jump is a fast scroll: the grid fetches tiles only after
+scrolling has settled for 50 ms. Its cache and element rows are bounds rather than speeds, so their floors are the
+bounds themselves. Long tasks are counted only for the report: `results-smoke.mjs` holds each of its measured segments
+to none over 50 ms on Linux (one retry), while here only the longest task has a floor, which a freeze would break; on 2
+CPUs, jumps across 300 columns cost about 50 ms of style, layout, paint and layerization now and then, and opening the
+2 MB value one task of about 70 ms.

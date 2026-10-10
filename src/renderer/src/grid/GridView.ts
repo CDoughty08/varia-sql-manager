@@ -6,6 +6,7 @@ import type { ResultHandle, RowWindow } from '../results/ResultClient'
 import type { GridViewState } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { FLAG_ERROR, FLAG_NULL, FLAG_TRUNCATED } from '../results/worker-protocol'
+import { registerGridAnchor } from './anchor'
 import { gridLimits as g } from './constants'
 import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
@@ -159,7 +160,7 @@ export class GridView {
     this.root.setAttribute('aria-colcount', String(this.columns + 1))
     this.data = new GridData({ handle: o.handle, columns: this.columns, clientInflight: () => o.client.windowsInFlight, changed: () => this.schedule() })
     this.listen()
-    this.cleanup.push(o.handle.subscribe(() => this.schedule()))
+    this.cleanup.push(o.handle.subscribe(() => this.schedule()), registerGridAnchor(this.root, () => this.menuAnchor()))
     if (o.stats) this.cleanup.push(o.stats.add({ counters: () => this.data.counters, nodes: () => this.root.getElementsByTagName('*').length + 1, setScrollCap: px => { this.capOverride = px; this.updateCap() } }))
     this.viewportWidth = this.scroller.clientWidth
     this.viewportHeight = this.scroller.clientHeight
@@ -202,7 +203,7 @@ export class GridView {
   /** The selection changed elsewhere (a command): paint it. */
   repaint(): void { this.schedule() }
   /** The active cell's box, which keyboard-opened menus open below. */
-  activeCellRect(): DOMRect | undefined { return this.activeEl?.getBoundingClientRect() }
+  activeCellRect(): DOMRect | undefined { return this.menuAnchor().getBoundingClientRect() }
   /** Retry after failed tile reads or a stopped grid. */
   retry(): void {
     this.failures = 0
@@ -256,18 +257,42 @@ export class GridView {
     if (this.cancelFrame || this.disposed || this.stopped) return
     this.cancelFrame = nextFrame(() => {
       this.cancelFrame = undefined
-      if (this.disposed || this.stopped) return
-      const started = performance.now()
-      try {
-        this.render()
-        this.failures = 0
-      } catch (error) {
-        this.o.onError(error)
-        if (++this.failures >= 3) { this.stopped = true; this.setStatus({ ...this.status, renderError: true }) }
-        else this.schedule()
-      }
-      this.o.stats?.frame(performance.now() - started)
+      this.runFrame()
     })
+  }
+
+  private runFrame(): void {
+    if (this.disposed || this.stopped) return
+    const started = performance.now()
+    try {
+      this.render()
+      this.failures = 0
+    } catch (error) {
+      this.o.onError(error)
+      if (++this.failures >= 3) { this.stopped = true; this.setStatus({ ...this.status, renderError: true }) }
+      else this.schedule()
+    }
+    this.o.stats?.frame(performance.now() - started)
+  }
+
+  /**
+   * What a keyboard-opened menu opens below: the active cell, else the first cell in view, else the header row. A frame
+   * still pending (a click or key just moved the active cell) is painted first.
+   */
+  private menuAnchor(): Element {
+    if (this.cancelFrame) {
+      this.cancelFrame()
+      this.cancelFrame = undefined
+      this.runFrame()
+    }
+    if (this.activeEl) return this.activeEl
+    const range = this.lastRange
+    if (range && this.rowSlots.length > 0) {
+      const slot = this.rowSlots[range.firstRow % this.rowSlots.length]
+      const first = slot.shown && slot.row === range.firstRow ? slot.cells.find(cell => cell.shown && cell.column === range.firstColumn) : undefined
+      if (first) return first.el
+    }
+    return this.head
   }
 
   private setStatus(status: GridStatus): void {

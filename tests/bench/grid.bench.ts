@@ -4,7 +4,8 @@ import { ColumnLayout, rowHeaderWidth, visibleRange } from '../../src/renderer/s
 import { scrollCap, scrollModel, rebaseRow, rowsContainerY, toNative, topRowOf, toVirtual } from '../../src/renderer/src/grid/scroll'
 import { copyPlan, covered, select, windowRanges, type GridSelection } from '../../src/renderer/src/grid/selection'
 import { planTiles, prefetchTiles } from '../../src/renderer/src/grid/tiles'
-import { rate, record } from './harness'
+import { WindowCache, type RowWindow } from '../../src/renderer/src/results/ResultClient'
+import { rate, record, w1Row } from './harness'
 
 // The results grid's per-frame models on their own, in one thread: what GridView computes for every frame of a
 // 1600 × 1000 window (about 45 rows by 40 columns of cells in view).
@@ -59,4 +60,28 @@ it('plans the tiles of a view over 300 columns', () => {
   expect(tiles).toBeGreaterThan(0)
   const ops = rate(plan, { batch: 100 })
   record({ id: 'node.grid.tiles.opsPerSecond', value: ops, unit: 'ops/s', detail: 'visible range, tiles and the prefetch ring at 1600 × 1000' })
+})
+
+it('peeks and stores tile windows in a full window cache', () => {
+  // A frame over W1 peeks its visible tiles (two row tiles and the active cell's), and a read tile lands as a new window
+  // that evicts the least recently used one, with the cache full (256 windows; text units are within their bound).
+  const { tileRows, maxCellChars, uiCacheWindows } = gridLimits
+  const cells = Array.from({ length: tileRows }, (_, row) => w1Row(row).map(value => value ?? '')).flat()
+  const tile = (first: number): RowWindow => ({ first, count: tileRows, colStart: 0, colEnd: 8, text: cells, flags: new Uint8Array(cells.length) })
+  const key = (first: number) => WindowCache.key('1:7', first, tileRows, 0, 8, maxCellChars, true)
+  const cache = new WindowCache()
+  let next = 0, found = 0
+  const frame = () => {
+    // As GridData.peek does for each visible tile: the key, then the lookup that makes it the most recently used.
+    for (const back of [1, 2, 40]) if (cache.get(key((next - back) * tileRows))) found++
+    cache.set(key(next * tileRows), '1:7', tile(next * tileRows))
+    next++
+  }
+  for (let index = 0; index < uiCacheWindows * 2; index++) frame()
+  expect(cache.size).toBe(uiCacheWindows)
+  expect(cache.units).toBeLessThanOrEqual(gridLimits.uiCacheUnits)
+  const ops = rate(frame, { batch: 100 })
+  expect(found).toBeGreaterThan(0)
+  expect(cache.size).toBe(uiCacheWindows)
+  record({ id: 'node.grid.cache.opsPerSecond', value: ops, unit: 'ops/s', detail: `3 lookups and 1 insert with eviction, ${uiCacheWindows} windows of ${tileRows} W1 rows` })
 })

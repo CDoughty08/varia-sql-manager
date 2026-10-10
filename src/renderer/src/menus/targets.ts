@@ -5,6 +5,7 @@ import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
+import { gridAnchor } from '../grid/anchor'
 
 /**
  * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`), its
@@ -183,7 +184,7 @@ export class MenuTargetService {
       const output = outputTarget(element)
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
-      const anchor = output.view === 'grid' ? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
+      const anchor = output.view === 'grid' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
       return { target: output, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
     } catch (error) { onUnexpectedError(error); return undefined }
   }

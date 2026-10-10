@@ -1,11 +1,14 @@
 // The results grid against the fake backend's synthetic result sets (`-- varia-fake:` scripts, tests/fixtures/backend):
 // streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, column resizing,
 // Save Results As, XML, JSON and plan values in their own tabs, Messages, lifecycle, the memory indicator, the grid's
-// menu, styling, panes and tabs. No assertion depends on absolute pixel sizes.
+// menu, styling, panes and tabs. Then, with VARIA_TEST_SQL_SERVER set, part B repeats the essentials against that
+// server through the Release backend. No assertion depends on absolute pixel sizes.
 import { _electron as electron, expect } from '@playwright/test'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
+import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
+import { enlargeOutput } from './fixtures/results-pane.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -17,10 +20,13 @@ const linux = process.platform === 'linux', eol = process.platform === 'win32' ?
 // Renderer long tasks in the measured segments: none of 50 ms on Linux (a segment may run once more), elsewhere at most
 // 2 and none of 100 ms.
 const longTaskLimit = linux ? 50 : 100
-const application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
-const child = application.process()
+const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
+if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
+// Part B relaunches the app on the real backend; every helper below follows these to the current one.
+let application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+let child = application.process()
 const watchdog = setTimeout(() => { console.error('Results suite exceeded its time limit.'); child?.kill(); process.exit(1) }, 900_000)
-const page = await application.firstWindow()
+let page = await application.firstWindow()
 page.setDefaultTimeout(30000)
 const failures = [], cleanups = []
 page.on('pageerror', error => failures.push(error.message))
@@ -134,13 +140,7 @@ try {
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   // The output pane gets most of the window: the editor above it shrinks to a few lines.
-  const outputTop = (await page.locator('.output-panel').boundingBox()).y
-  const sash = (await Promise.all((await page.locator('.dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash:not(.dv-disabled)').all()).map(item => item.boundingBox())))
-    .filter(box => box && box.y < outputTop).sort((a, b) => b.y - a.y)[0]
-  await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(sash.x + sash.width / 2, Math.max(150, sash.y - 300), { steps: 5 })
-  await page.mouse.up()
+  await enlargeOutput(page)
 
   // A first run compiles the grid's code paths; long tasks are measured from the next one.
   await run('-- varia-fake: sets=W1*100,N1*10')
@@ -668,10 +668,22 @@ try {
   await expect(outputMenu).toBeVisible()
   expect(await outputMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
   await page.keyboard.press('Escape')
+  // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
+  // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
+  for (const [row, column] of [[2, 1], [5, 3], [3, 2], [6, 1], [1, 3], [4, 2]]) {
+    await cell(row, column).click()
+    await page.keyboard.press('Shift+F10')
+    await expect(outputMenu).toBeVisible()
+    const menuBox = await outputMenu.boundingBox(), cellBox = await cell(row, column).boundingBox()
+    expect(Math.min(Math.abs(menuBox.x - cellBox.x - 8), Math.abs(menuBox.x + menuBox.width - cellBox.x - cellBox.width)), `the menu's side for cell ${row}, ${column}`).toBeLessThanOrEqual(2)
+    expect(Math.min(Math.abs(menuBox.y - cellBox.y - cellBox.height), Math.abs(menuBox.y + menuBox.height - cellBox.y)), `the menu's edge for cell ${row}, ${column}`).toBeLessThanOrEqual(2)
+    await page.keyboard.press('Escape')
+    await expect(outputMenu).toHaveCount(0)
+  }
   await cell(3, 2).click({ button: 'right' })
   await expect(outputMenu).toBeVisible()
   await expect(cell(3, 2)).toHaveClass(/is-sel/)
-  await expect(cell(1, 1)).not.toHaveClass(/is-sel/)
+  await expect(cell(4, 2)).not.toHaveClass(/is-sel/)
   await page.keyboard.press('Escape')
   await expect(outputMenu).toHaveCount(0)
 
@@ -778,6 +790,110 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'results-small.png') })
   expect(failures).toEqual([])
   console.log('Results checks passed: streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, resizing, Save Results As, values in their own tabs, Messages, lifecycle, memory, the menu, styling, F6, Ctrl+R, tabs and a small window.')
+
+  // Part B: a real SQL Server through the Release backend. The first rows of a million show within a second while the
+  // script still runs; Cancel keeps them and Ctrl+End reaches the last; Save Results As writes every one as CSV; a copy
+  // of 100,000 rows matches the server's rows; a FOR XML PATH value opens in its own tab; and a SQL error sits between
+  // the messages printed around it.
+  if (process.env.VARIA_TEST_SQL_SERVER) {
+    await Promise.race([application.close(), new Promise(resolve => setTimeout(resolve, 10000))]).catch(() => {})
+    child?.kill()
+    const liveProfile = await mkdtemp(resolve('artifacts', 'results-live-profile-')), liveSaves = await mkdtemp(resolve('artifacts', 'results-live-save-'))
+    cleanups.push(() => rm(liveProfile, { recursive: true, force: true }), () => rm(liveSaves, { recursive: true, force: true }))
+    const liveEnv = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: liveProfile }
+    delete liveEnv.ELECTRON_RUN_AS_NODE
+    application = await electron.launch({ args: ['.'], env: liveEnv, chromiumSandbox: process.getuid?.() !== 0 })
+    child = application.process()
+    page = await application.firstWindow()
+    page.setDefaultTimeout(30000)
+    page.on('pageerror', error => failures.push(error.message))
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
+    await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+    await expect(page.locator('.status-bar').getByText(/· Ready/)).toBeVisible({ timeout: 30000 })
+    await connectLive(page, expect)
+    await enlargeOutput(page)
+    // The session opens with the first run, so the timed one below measures rows, not the login.
+    await run('SELECT 1 AS warm;')
+    const liveText = n => liveRow(n).map(value => value ?? 'NULL')
+    // Row 1 painted, timed in the page from just before F5 (a poll from here would add its own interval). The server holds
+    // a part-filled packet until the batch ends, so RAISERROR WITH NOWAIT sends the last rows before the wait.
+    await typeSql(`${liveRowsSql(1_000_000)}\nRAISERROR(N'All rows sent.', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:05:00';`)
+    await page.evaluate(first => {
+      window.__variaLiveFirst = new Promise(done => {
+        const started = performance.now()
+        const check = () => {
+          const element = document.querySelector('[data-result-grid] .rg-row[aria-rowindex="2"] .rg-c[aria-colindex="3"]')
+          if (element?.textContent === first) done(performance.now() - started)
+          else if (performance.now() - started < 30000) requestAnimationFrame(check)
+          else done(Infinity)
+        }
+        requestAnimationFrame(check)
+      })
+    }, liveText(1)[1])
+    await page.keyboard.press('F5')
+    const firstRows = await page.evaluate(() => window.__variaLiveFirst)
+    console.log(`Results live: the first rows of a million painted ${Math.round(firstRows)} ms after F5.`)
+    expect(firstRows).toBeLessThan(1000)
+    await expect(status()).toContainText('Executing query…')
+    const rowsRead = async () => Number((await status().textContent()).match(/· ([\d,]+) rows?/)?.[1].replaceAll(',', '') ?? 0)
+    await expect.poll(rowsRead, { timeout: 120000 }).toBe(1_000_000)
+    await expect(status()).toContainText('Executing query…')
+    await page.screenshot({ path: resolve('artifacts', 'results-live.png') })
+    await page.locator('.toolbar-actions').getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(status()).toContainText('Query was cancelled.', { timeout: 30000 })
+    await outputTab(/^Results/).click()
+    await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
+    await cell(0, 0).click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.press('Home')
+    await expect.poll(async () => (await active()).text, { timeout: 30000 }).toBe(liveText(1_000_000)[0])
+    expect(await active()).toMatchObject({ row: 999_999, column: 0, selected: 'true' })
+    // The set ended before the cancel, so it saves whole: a header row and a million rows, as the server sent them.
+    const csvPath = join(liveSaves, 'million.csv')
+    await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }) }, csvPath)
+    await page.keyboard.press('Control+S')
+    await expect(page.locator('.job-notice')).toHaveText('Saved 1,000,000 rows to million.csv.', { timeout: 120000 })
+    const saved = await readFile(csvPath)
+    let lines = 0
+    for (let index = saved.indexOf(10); index !== -1; index = saved.indexOf(10, index + 1)) lines++
+    expect(lines).toBe(1_000_001)
+    const csvLine = values => values.map(csvField).join(',') + '\r\n'
+    expect(saved.subarray(0, 4096).toString('utf8').startsWith('\uFEFF' + csvLine(liveColumns) + csvLine(liveRow(1)))).toBe(true)
+    expect(saved.subarray(saved.lastIndexOf(10, saved.length - 2) + 1).toString('utf8')).toBe(csvLine(liveRow(1_000_000)))
+    // Copy: every row, in order, as the server sent them.
+    await run(liveRowsSql(100_000))
+    await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 100,000 rows, 8 columns')
+    await cell(0, 0).click()
+    await page.keyboard.press('Control+A')
+    await setClipboard('')
+    await page.keyboard.press('Control+C')
+    const copied = () => application.evaluate(async ({ clipboard }, separator) => {
+      const lines = (await clipboard.readText()).split(separator)
+      return { count: lines.length, first: lines[0], last: lines.at(-1) }
+    }, eol)
+    await expect.poll(async () => (await copied()).count, { timeout: 60000 }).toBe(100_000)
+    expect(await copied()).toEqual({ count: 100_000, first: tsv([liveText(1)]), last: tsv([liveText(100_000)]) })
+    // FOR XML PATH arrives as rows of about 2,000 characters; the grid shows one link, which opens the whole value.
+    await run(`SELECT TOP (200) name, object_id FROM sys.all_objects ORDER BY object_id FOR XML PATH('o'), ROOT('objects');`)
+    await expect(cell(0, 0)).toHaveClass(/is-link/)
+    await cell(0, 0).click()
+    await expect(queryTabs().filter({ hasText: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B1.xml' })).toHaveAttribute('aria-selected', 'true')
+    const xml = await editorText()
+    expect(xml.startsWith('<objects>\n  <o>\n    <name>')).toBe(true)
+    expect(xml.endsWith('</objects>')).toBe(true)
+    expect(xml.split('<o>').length - 1).toBe(200)
+    await page.keyboard.press('Control+W')
+    await expect(queryTabs()).toHaveCount(1)
+    // A statement's error is reported in place, between the messages before and after it, and the run ends on Messages.
+    await run(`PRINT 'before';\nSELECT 1/0 AS boom;\nPRINT 'after';`)
+    await expect(status()).toContainText('Query completed with errors.')
+    await expect(outputTab(/^Messages/)).toHaveAttribute('aria-selected', 'true')
+    const messages = await page.locator('.messages .msg').evaluateAll(items => items.map(item => [item.classList.contains('error') ? 'error' : 'info', item.textContent]))
+    expect(messages.slice(0, 3)).toEqual([['info', 'before'], ['error', 'Msg 8134, Level 16, State 1, Line 2\nDivide by zero error encountered.'], ['info', 'after']])
+    expect(messages.at(-1)[1]).toMatch(/^Completion time: \d{4}-\d\d-\d\dT/)
+    expect(failures).toEqual([])
+    console.log('Results live checks passed: rows show while a million stream, Cancel keeps them, Save Results As and Copy match the server, FOR XML opens in a tab, and errors keep their order.')
+  }
 } catch (error) {
   await page.screenshot({ path: resolve('artifacts', 'results-failure.png') }).catch(() => {})
   throw error

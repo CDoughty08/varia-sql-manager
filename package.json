@@ -20,7 +20,8 @@
     "test:electron": "npm run check && npm run test:smoke",
     "check": "npm run typecheck && npm test && electron-vite build",
     "bench": "vitest run --config vitest.bench.config.ts",
-    "bench:e2e": "node scripts/ipc-bench.mjs"
+    "bench:e2e": "node scripts/ipc-bench.mjs",
+    "bench:grid": "node scripts/grid-bench.mjs"
   },
   "dependencies": {
     "dockview-react": "8.4.1",

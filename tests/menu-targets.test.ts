@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { contextMenuIds } from '../src/shared/commands/menus'
 import { argsFor, contextMenuLabels, editableText, inputTarget, isEditableText, menuForTarget, MenuTargetService, targetKeys, type MenuTarget } from '../src/renderer/src/menus/targets'
+import { registerGridAnchor } from '../src/renderer/src/grid/anchor'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
 const element = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(document, tag, init)
@@ -150,6 +151,13 @@ describe('menu target service', () => {
     expect(service.targetFor(dom(number))).toEqual({ target: { ...output, view: 'grid', element: grid }, element: grid, focus: grid, anchor: active })
     active.classes.delete('is-act')
     expect(service.targetFor(dom(active))?.anchor).toBe(first)
+    // A mounted grid names its anchor at event time, after painting a pending frame (a click just before Shift+F10
+    // has not been painted yet); the DOM decides only without one.
+    const painted = make('div', { className: 'rg-c' })
+    const unregister = registerGridAnchor(dom(grid), () => dom(painted))
+    expect(service.targetFor(dom(first))?.anchor).toBe(painted)
+    unregister()
+    expect(service.targetFor(dom(first))?.anchor).toBe(first)
     // Selected text counts only inside the view.
     doc.selection = 'hello'
     expect(service.targetFor(dom(text))?.target).toEqual({ ...output, resultIndex: 0, view: 'messages', element: messages })

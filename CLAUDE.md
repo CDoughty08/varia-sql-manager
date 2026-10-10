@@ -11,14 +11,14 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the eight Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the nine Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
   (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
-- `npm run bench` (node harness, Release backend) and `npm run bench:e2e [-- --live]` (Electron, needs `out/`): the IPC
-  benchmarks, not part of `check`. `node scripts/check-bench.mjs [--enforce]` compares them with
-  `tests/bench/floors.json`; CI enforces floors on Linux only.
+- `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]` and `npm run bench:grid [-- --live]`
+  (Electron, need `out/`): the IPC and results grid benchmarks, not part of `check`. `node scripts/check-bench.mjs
+  [--enforce]` compares them with `tests/bench/floors.json`; CI enforces floors on Linux only.
 
 ## Environment
 
@@ -55,6 +55,12 @@ pages, limits, error codes, display formats, benchmarks).
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
+  forbids HTML sinks under `grid/` and `results/`); no React per row or cell, and frames stay O(visible cells).
+- Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
+  leave main except to the backend.
+- Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
+- UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
   per port), and explicit truncation of results and messages.
@@ -95,9 +101,9 @@ pages, limits, error codes, display formats, benchmarks).
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age).
 - UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
-- IPC performance: `tests/bench/*.bench.ts` and `scripts/ipc-bench.mjs` only measure; a new metric needs a
-  `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in docs/ipc.md. Floors must
-  stay well below what slow shared CI runners measure.
+- Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs` and `scripts/grid-bench.mjs` only measure; a new
+  metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
+  docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.
 
 ## Conventions

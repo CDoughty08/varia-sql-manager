@@ -15,9 +15,9 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/backend-restart/menu/Object Explorer tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/backend-restart/menu/Object Explorer/results grid tests (after check)
 npm run test:electron   # Both of the above
-npm run bench           # IPC benchmarks against the Release backend (after check); npm run bench:e2e measures the app
+npm run bench           # IPC benchmarks against the Release backend (after check); npm run bench:e2e and bench:grid measure the app
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
 ```
@@ -89,8 +89,8 @@ Right-click, or press **Shift+F10** or the context-menu key where focus is, for 
 | Query editor | Connection › (Connect…, Disconnect, Disconnect All Queries, Reconnect…, Change Connection…), Execute, Cancel Executing Query, Cut, Copy, Paste, and Command Palette… |
 | Query tab | Save, Save As…, Close, Close All But This, Close All, Copy Full Path, and Open Containing Folder, all for that tab's query. The last two need a saved query. |
 | Panel tab | Float or Dock, and Close |
-| Results grid | Copy, Copy with Headers, and Select All. Right-clicking a cell outside the selection selects that cell first. |
-| Messages and the XML plan | Copy and Select All, which selects only that view's text |
+| Results grid | Copy, Copy with Headers, Select All, and Save Results As…; right-clicking a cell outside the selection selects that cell first. |
+| Messages | Copy and Select All, which selects only the messages' text |
 | Text field, including dialogs and the editor's find widget | Undo, Redo, Cut, Copy, Paste, Delete, and Select All. A password field never cuts or copies, and a read-only field never changes. This is the only menu that opens while a dialog is open. |
 | Object Explorer | See below. |
 
@@ -102,8 +102,8 @@ Right-clicking a node selects it. A server offers Connect…, Disconnect (that s
 
 ### Copying
 
-- The results grid copies its selected cells as tab-separated text, one line per row: NULL becomes `NULL`, line breaks and tabs inside a value become spaces, and lines end with CRLF on Windows and LF elsewhere. **Copy with Headers** (**Ctrl+Shift+C**) adds a line of column names, with "(No column name)" for unnamed columns. **Ctrl+C**, **Edit → Copy**, and the menu's Copy copy the same text.
-- In Messages and the XML plan, Copy copies the selected text.
+- The results grid copies its selected cells as tab-separated text, one line per row: NULL becomes `NULL`, line breaks and tabs inside a value become spaces, and lines end with CRLF on Windows and LF elsewhere. **Copy with Headers** (**Ctrl+Shift+C**) adds a line of column names, with "(No column name)" for unnamed columns. **Ctrl+C**, **Edit → Copy**, and the menu's Copy copy the same text. [Results grid](#results-grid) describes copying several ranges and the 64 MB limit.
+- In Messages, Copy copies the selected text.
 - **Copy Name** copies a server's name as you connected to it, or an object's bracket-quoted name (`[AppData]`, `[dbo].[Orders]`). **Copy Full Path** copies a saved query's file path.
 - The workbench writes to the clipboard through Electron's main process. Its only way to read it is Paste, the operating system's paste into the focused editor or field, which the main process runs for a menu only within a second of a click, tap, or key press in the focused window, so an idle or background window cannot read the clipboard. A screen reader or voice control activating a menu's Paste sends no such input, so that Paste is refused with a reminder that **Ctrl+V** (**⌘V** on macOS) pastes; the shortcut always works, as do macOS's native menus.
 
@@ -122,6 +122,45 @@ Focus **Database Name** or click its refresh button to load databases visible to
 Choose **Optional / Mandatory / Strict** encryption and certificate hostname settings. Mandatory is the default; Strict disables the Trust Server Certificate override. A custom **Name** labels the connected server. The palette or custom color picker marks that server in Object Explorer, its query tabs, and the active query context/status bar. **Connection String** previews the effective string produced by the actual SqlClient builder, with the password omitted; properties are edited through the form.
 
 **Advanced…** groups properties similarly to SSMS: command/connect timeouts, Always Encrypted and secure enclave attestation, MARS, protocol, packet size, transaction binding, type system version, connection retries, application/workstation identity, application intent/language, replication, IP preference, certificate path, attached file, failover/SPNs, Multi Subnet Failover, and user instance. OK applies the draft; Cancel/Escape discards it. Command timeout defaults to **0 (no timeout)** and controls each submitted script's existing overall deadline/cancellation handling; finite values also cover all GO batches. Connect timeout defaults to 15 seconds. Network Library maps to a `tcp:`, `np:`, or `lpc:` server prefix because the .NET provider lacks the legacy keyword. These settings are validated and carried through to query sessions and metadata/SMO connections; capabilities such as Always Encrypted also require the corresponding server/key-provider configuration. Provider support follows [SqlClient's connection options](https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlconnection.connectionstring?view=sqlclient-dotnet-7.1).
+
+## Results grid
+
+Rows appear in the grid while the query runs. Each result set gets its own grid; several sets stack in the **Results** tab with equal heights and a splitter between each pair (drag it, or focus it and use **↑**, **↓**, **Home**, and **End**; a double-click or **Enter** shares the height equally again), and the pane scrolls when they do not fit. A query shows up to 1,000 sets. The grid draws only the rows and columns in view and fetches them in tiles off the UI thread, so a set of millions of rows scrolls like a small one; past about 750,000 rows (fewer at high display scaling) the scroll bar maps proportionally while the wheel and keys still move row by row. The Results tab appears once a set exists. **Messages** streams too, with errors in red, in order, in SSMS's two-line form (`Msg 8134, Level 16, State 1, Line 2` and then the message), and ends with "Completion time:". A query that fails, is cancelled, or returns no rows finishes on Messages. Next to the tabs, the status line reads "Executing query… · 00:00:03 · 12,345 rows" and then how the query ended.
+
+NULL shows as `NULL` on a tinted background, a value cut short by a limit ends with `…` (its tooltip says which limit), and a value that could not be read shows as NULL in the error colour. A column header's tooltip gives its type and nullability. Column widths come from the column types and the first 128 rows and then stay put while rows stream in. **F6** moves between the editor and the results, and **Ctrl+R** hides or shows the pane; both, like switching query tabs, keep each grid's scroll position, selection, and column widths.
+
+| Action in the grid | Windows and Linux | macOS |
+| --- | --- | --- |
+| Move the active cell; extend the selection | Arrow keys; Shift+arrow keys | Arrow keys; ⇧+arrow keys |
+| First or last row, first or last column | Ctrl+↑, Ctrl+↓, Ctrl+←, Ctrl+→ | ⌘↑, ⌘↓, ⌘←, ⌘→ |
+| First or last column of the row; first or last cell | Home, End; Ctrl+Home, Ctrl+End | Home, End; ⌘Home, ⌘End |
+| A page up or down | Page Up, Page Down | Page Up, Page Down (fn+↑, fn+↓) |
+| Select the selection's whole rows or whole columns | Shift+Space, Ctrl+Space | ⇧Space, ⌃Space |
+| Select all; copy; copy with headers | Ctrl+A; Ctrl+C; Ctrl+Shift+C | ⌘A; ⌘C; ⇧⌘C |
+| Save Results As… | Ctrl+S | ⌘S |
+| Open an XML, JSON, or plan value | Enter | Return |
+| Cancel a drag or a resize, otherwise this tab's copy or save | Escape | Escape |
+| Leave the grid | Tab, Shift+Tab | Tab, ⇧Tab |
+
+Shift with any of the moves extends the selection; while rows stream in, **Ctrl+End** goes to the last row read so far. With the mouse, click a cell, a row number, or a column header (the corner selects everything), and Shift+click or drag to extend; dragging past an edge scrolls. **Ctrl+click** (**⌘-click**) adds another cell, row, or column, up to 64 ranges. Whole rows, whole columns, and Select All keep growing as rows stream in. Columns resize from their header's right border, and a double-click there fits the column to its widest value.
+
+Copy and Save Results As write the same text, formatted by the SQL backend:
+
+| | Copy | CSV (`.csv`) | Tab-delimited text (`.txt`, `.tsv`, `.tab`) | JSON (`.json`) |
+| --- | --- | --- | --- | --- |
+| File | the clipboard; CRLF on Windows, LF elsewhere, nothing after the last line | UTF-8 with a byte order mark, CRLF | UTF-8 with a byte order mark, CRLF | UTF-8, an array of one object per row |
+| Column names | with Copy with Headers only | a header row | a header row | the objects' keys |
+| NULL | `NULL` | an empty field (an empty string is `""`) | `NULL` | `null` |
+| Line breaks and tabs in text | a space each | kept, in a quoted field | a space each | escaped |
+| Numbers | as the grid shows them | as shown | as shown | JSON numbers; bit as `true` or `false` |
+
+CSV fields are quoted only when they hold a comma, a quote, or a line break, with quotes doubled; binary values are `0x` hex everywhere. Copying ranges that share their columns copies their rows as one block, ranges that share their rows copy side by side, and other ranges copy one after another, each with its own header line. A copy is limited to 64 MB of text: a larger selection is refused before any work, with a suggestion to save it instead. One that takes a moment shows its progress with **Cancel**, and the clipboard changes only when it is done. A set that is still running copies the rows read so far.
+
+**Save Results As…** (**Ctrl+S** in the grid, the grid's menu, or the palette) asks for a file in "Save Grid Results", picks the format from the file's extension, and remembers the last format and folder while Varia runs. It saves a set once all its rows are in. The file is written next to its target under a temporary name and renamed when complete, so a cancelled or failed save leaves no file and never touches an existing one. Running the query again or closing its tab does not stop a save that has started: it keeps its results until it finishes. Values are saved exactly as they are, as SSMS does: a spreadsheet treats a CSV field that starts with `=`, `+`, `-`, or `@` as a formula, so take care opening files of untrusted data that way (an opt-in guard is future work).
+
+XML, JSON, and execution plan cells, including the single row of a FOR XML or FOR JSON query, are links. A click or **Enter** opens the whole value (up to 2,097,152 characters) in a new tab named as SSMS names it (`XML_F52E2B61-18A1-11d1-B105-00805F49916B1.xml`, `data1.json`, `ExecutionPlan1.sqlplan`), formatted: elements that hold only elements are indented, mixed content is left alone, and entities and DTDs are never expanded. A value truncated at the storage limit, or longer than 4,194,304 characters once formatted, opens as it was stored. These tabs have no connection, cannot be executed, and save with their own file type, up to 16 MB.
+
+Results stay in the SQL backend's memory until you run the query again, close its tab, choose **Close Results** in the palette, or the backend restarts. Changing the database or connection, or disconnecting, keeps them readable, copyable, and saveable. The status bar shows how much memory results hold against their budget ("Results 236 MB / 2,048 MB"), with a warning from 90 %; when the budget is full, a grid says how many rows it kept and the query goes on. The grid is an ARIA grid for screen readers: the active cell is announced with its row, column, and selection, and the selection's size and each copy's and save's outcome are announced too.
 
 ## Object Explorer
 
@@ -177,7 +216,7 @@ Use **Layouts** in the query toolbar or **View → Save Layout… / Load Layout�
 
 Layouts contain only open panel identities and their geometry/presentation. Query documents, result data, SQL targets, and credentials stay out of layout files. Imported files are versioned, validated, and limited to 200 KB; inconsistent references or unsupported components leave the current layout intact. Ordinary Dockview size constraints and visibility metadata are accepted. Validation errors identify the offending field rather than requiring every panel to exist. Preferences use atomic writes. Invalid preferences recover to the default layout while preserving the original file as an `.invalid-<id>.json` backup. Native detached windows and auto-hide tool strips are future work. Docking uses the MIT-licensed [Dockview React library](https://dockview.dev/docs/overview/introduction/) with application-owned guide controls.
 
-Interface labels, menus, tabs, and status text disable browser text selection. Text editors and inputs, statistics/messages, XML plans, and error details remain selectable for copying; the results grid selects cells instead.
+Interface labels, menus, tabs, and status text disable browser text selection. Text editors and inputs, messages, and error details remain selectable for copying; the results grid selects cells instead.
 
 ## Themes
 
@@ -207,7 +246,7 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 - `src/shared/explorer/`: the Object Explorer catalogue (folders in SSMS order, node kinds, icons, filters, version gates, and limits), node identity and insert text, and the zod schemas for its requests. A test writes the catalogue to `docs/object-explorer.md` and to the JSON the backend embeds.
 - `backend/Varia.Backend/Explorer/`: the node provider: catalogue loading and ref validation, the server profile probed at connect, constant catalog queries for each SQL Server version, labels as SSMS shows them, paging cursors, error codes, and per-server concurrency gates.
 - `src/renderer/src/explorer/`: Object Explorer in the renderer: the DOM-free tree model (flattening, windowing, keys, type-ahead), the loader (limits, priorities, cancellation), `ExplorerService` (nodes, paging, refresh, filters, eviction, context keys), and the virtualized tree, its toolbar, the Filter Settings dialog, and the query editor's drop target.
-- `src/renderer/src/results/`: the results worker, which reads and decodes result pages, `ResultClient`, and the adapter that fills today's results table.
+- `src/renderer/src/results/` / `src/renderer/src/grid/`: the results worker, which reads, decodes, and sanitises result pages and formats values; `ResultClient` with its shared window cache; `ResultsService` (each tab's result sets, messages, jobs, and view state outside React); the output pane, Messages, and the memory indicator; and the grid: DOM-free layout, scroll, tile, selection, and key models, and `GridView`, which renders each grid's cells from reused DOM nodes.
 - `src/main/layout-store.ts` / `src/shared/layouts.ts`: atomic preferences, layout files, and bounded layout validation.
 - `src/preload/index.ts`: explicit public methods; no generic IPC or shell API exposed.
 - `backend/Varia.Backend`: independent C# console host and SQL services.
@@ -255,9 +294,9 @@ SET statements pass through unchanged to SQL Server, including combined `SET STA
 | --- | --- |
 | `SET STATISTICS TIME ON` | Server CPU and elapsed-time messages in **Messages**. |
 | `SET STATISTICS IO ON` | Server scan/read statistics in **Messages**. |
-| `SET STATISTICS XML ON` | Additional actual-plan result sets shown as escaped raw XML under **XML plan**. |
+| `SET STATISTICS XML ON` | Additional actual-plan result sets whose cells are links: a click or **Enter** opens the plan's XML in a new tab. |
 | `SET STATISTICS PROFILE ON` | Additional profile result sets shown in the results grid. |
-| `SET SHOWPLAN_XML ON` | Estimated plans shown as raw XML; SQL Server does not execute the planned statements. Put the ON/OFF statements in their own GO-separated batches. |
+| `SET SHOWPLAN_XML ON` | Estimated plans as link cells, opened as XML in a new tab; SQL Server does not execute the planned statements. Put the ON/OFF statements in their own GO-separated batches. |
 | `SET SHOWPLAN_TEXT/SHOWPLAN_ALL ON` | SQL Server's textual/tabular estimated-plan result sets use the regular results grid. |
 
 `PRINT`, informational SQL messages, statistics, and row counts are captured without treating them as query errors. Other SET options retain SQL Server's normal semantics and permissions. Plan collection requires the relevant SHOWPLAN permissions. A graphical execution-plan viewer is future work. References: [TIME](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-statistics-time-transact-sql), [IO](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-statistics-io-transact-sql), [XML](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-statistics-xml-transact-sql), [PROFILE](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-statistics-profile-transact-sql), [SHOWPLAN_XML](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-showplan-xml-transact-sql).
@@ -268,7 +307,7 @@ Try [examples/statistics-and-batches.sql](examples/statistics-and-batches.sql) o
 
 - Multiple server connections and query documents, with independent persistent sessions and executions per tab. Disconnecting a server detaches only that server's queries. Review generated scripts before executing them.
 - GO batches and repetitions are supported; SQLCMD mode is unavailable. The policy stops later batches on errors, which is intentionally stricter than some SSMS execution paths.
-- Results stay in the SQL backend's memory, never on disk, under a budget of a quarter of the available memory (256 MiB to 2 GiB; one query may use half of it, and nothing more is stored while the computer is low on memory). The results worker reads them in pages off the UI thread. The results table shows the first 1,000 rows across the first ten result sets, up to 100,000 cells and 4 million characters, and up to 16,384 characters per cell (XML plans 2,097,152). Stored cells keep up to 65,535 characters (XML and JSON 2,097,152; binary values 32,766 bytes). The SQL client cannot stream an XML value, so each one is read whole, briefly, in memory outside the budget: about twice its length in bytes, up to about 4 GB for the largest (2 GB) values. Messages retain at most 1,000 entries / 1 million characters. Truncation is explicit, with its reason. Limits never stop SQL execution or skip later batches. A streaming, virtualized grid is future work.
+- Results stay in the SQL backend's memory, never on disk, under a budget of a quarter of the available memory (256 MiB to 2 GiB; one query may use half of it, and nothing more is stored while the computer is low on memory). The results worker reads them in pages off the UI thread, and the grid fetches only what is in view, showing up to 512 characters of a cell (the whole value is copied, saved, or opened). A query shows up to 1,000 result sets. Stored cells keep up to 65,535 characters (XML and JSON 2,097,152; binary values 32,766 bytes). The SQL client cannot stream an XML value, so each one is read whole, briefly, in memory outside the budget: about twice its length in bytes, up to about 4 GB for the largest (2 GB) values. Messages retain at most 1,000 entries / 1 million characters. Truncation is explicit, with its reason. Limits never stop SQL execution or skip later batches. Results to Text and Results to File are future work.
 - Values are shown as SSMS shows them: bit as 1/0, exact numbers and decimals with their full precision and scale, money with two to four decimals, float and real with 15 and 7 significant digits, dates and times as `2026-10-08 12:34:56.1234567`, binary values as bounded `0x` hex, and SQL NULL as NULL. CLR types (hierarchyid, geometry, geography) are shown as their serialized hex, as in SSMS. [docs/ipc.md](docs/ipc.md#display-formats) lists every type with samples.
 - Script timeout follows the connection's Advanced Command Timeout (0 means no deadline, with a maximum of 86,400 seconds). SMO operations use a separate 30-second statement timeout. Configured connection recovery retries apply to stateless connections; query tabs disable automatic recovery so a lost SQL session cannot silently replace persistent SET/temp/transaction state.
 - Syntax highlighting and raw plan/profile output are available. Schema-aware IntelliSense, graphical plans, profiler, backup/restore, security management, and job management are future milestones.
@@ -299,7 +338,7 @@ These checks create only session-local temporary objects unless `VARIA_TEST_SQL_
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pull requests (including ones stacked on another pull request), pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests assume Windows/Linux window chrome and the themed menu bar, so macOS skips them; unit tests build its native menu bar and context menus on every platform. After the Electron tests, the IPC benchmarks run: Linux fails when a value falls below its floor in `tests/bench/floors.json`, Windows and macOS only report, and every job summary shows the table (see [docs/ipc.md](docs/ipc.md#benchmarks)). A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`, and every run uploads `artifacts/bench/`. `.github/workflows/sql-matrix.yml`, run by hand only, repeats the .NET checks (with the scratch database) against SQL Server 2017, 2019, 2022, and 2025; SQL Server 2016 has no Linux image, so the offline checks cover its catalog queries.
+`.github/workflows/ci.yml` runs on pull requests (including ones stacked on another pull request), pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled, and the results grid test again on a 1024×768 display. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests assume Windows/Linux window chrome and the themed menu bar, so macOS skips them; unit tests build its native menu bar and context menus on every platform. After the Electron tests, the IPC and results grid benchmarks run: Linux fails when a value falls below its floor in `tests/bench/floors.json`, Windows and macOS only report, and every job summary shows the table (see [docs/ipc.md](docs/ipc.md#benchmarks)). A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`, and every run uploads `artifacts/bench/`. `.github/workflows/sql-matrix.yml`, run by hand only, repeats the .NET checks (with the scratch database) against SQL Server 2017, 2019, 2022, and 2025; SQL Server 2016 has no Linux image, so the offline checks cover its catalog queries.
 
 ## Direction
 
