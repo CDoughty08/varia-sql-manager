@@ -33,6 +33,9 @@ internal sealed class ScriptingServiceOptions
     /// <summary>Runs on the SMO thread with the target's database just before Generate script for dependent objects
     /// walks its dependencies (live checks take the database offline there, after the preflight read it).</summary>
     internal Action<string>? BeforeDependencies { get; set; }
+    /// <summary>Runs on the SMO thread with the target's database after the definition check, just before SMO's Scripter
+    /// (live checks take a dependent's or the target's database offline there).</summary>
+    internal Action<string>? BeforeScript { get; set; }
 }
 
 /// <summary>scripting.script (spec C1): validate, register, take the connection's and the global gate, open a scripting
@@ -178,7 +181,7 @@ internal sealed class ScriptingService : IDisposable
             var session = new ScriptSession(connection, profile, served.Cloud);
             var job = new ScriptJob(connectionId, [resolved], verb, options);
             var sink = new StringScriptSink(catalog.Limit("maxScriptChars"));
-            var smo = runner = new SmoScriptRunner(session, token) { BeforeDependencies = Options.BeforeDependencies };
+            var smo = runner = new SmoScriptRunner(session, token) { BeforeDependencies = Options.BeforeDependencies, BeforeScript = Options.BeforeScript };
             // SMO blocks for whole round trips, so it gets a thread of its own; the tracker on this flow follows it there.
             // Templates only format the preflight's rows.
             var warnings = verb.Class != VerbClass.Ddl ? ScriptPipeline.Run(job, smo, sink, token, served.Cloud)

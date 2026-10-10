@@ -314,9 +314,27 @@ internal static partial class ScriptingLiveChecks
                 && either.Text!.Contains("CREATE OR ALTER VIEW [dbo].[vElsewhere]", StringComparison.Ordinal),
                 "with the option, the view's ALTER and CREATE OR ALTER script without opening that database: " + (alter.Error?.Message ?? either.Error?.Message));
 
+            // A dependent the login may execute but whose definition it cannot read (no VIEW DEFINITION in its database): SMO
+            // would fail reading it, so it is named with its database and the option to turn off, not as the view's own.
+            var hiddenSetup = await sql("CREATE USER " + user + " FOR LOGIN " + user + ";\nGO\nCREATE FUNCTION dbo.fn_Hidden () RETURNS int AS BEGIN RETURN 1; END;\nGO\n"
+                + "GRANT EXECUTE ON dbo.fn_Hidden TO " + user + ";", copy);
+            var hiddenView = await sql("CREATE VIEW dbo.vHidden AS SELECT [" + copy + "].dbo.fn_Hidden() AS x;", scratch.Name);
+            var vHidden = new ObjectRefDto("view", scratch.Name, "dbo", "vHidden");
+            var hiddenCreate = await limited.Script(vHidden, "create", dependents);
+            var hiddenBoth = await limited.Script(vHidden, "dropAndCreate", dependents);
+            const string hiddenMessage = "You do not have permission to view the definition of dbo.fn_Hidden in database {0}, so dbo.vHidden cannot be scripted with Generate script "
+                + "for dependent objects on. Turn it off in Tools › Options › Scripting and try again.";
+            var hiddenOthers = new[] { await limited.Script(vHidden, "alter", dependents), await limited.Script(vHidden, "createOrAlter", dependents), await limited.Script(vHidden, "create") };
+            check(hiddenSetup.Status == "completed" && hiddenView.Status == "completed" && hiddenCreate.Error is { Code: "NO_DEFINITION", Retryable: false }
+                && hiddenCreate.Error.Message == string.Format(CultureInfo.InvariantCulture, hiddenMessage, copy) && hiddenBoth.Error?.Message == hiddenCreate.Error.Message
+                && hiddenOthers.All(Ok),
+                "a dependent whose definition the login cannot read is named with its database and the option for CREATE and DROP And CREATE, and the view's ALTER, "
+                + "CREATE OR ALTER and CREATE without the option script: " + (hiddenSetup.Error ?? hiddenView.Error ?? hiddenCreate.Error?.Message + " / " + hiddenBoth.Error?.Message
+                + " / " + string.Join(" ", hiddenOthers.Select(result => result.Error?.Message))));
+
             // RESTRICTED_USER (error 923) shuts out a login that is not db_owner: the database is named as unavailable, as the
             // object's own, or as a dependent's with the option to turn off.
-            var restricted = await sql("CREATE USER " + user + " FOR LOGIN " + user + ";\nGRANT VIEW DEFINITION TO " + user + ";\nGRANT SELECT ON sys.sql_expression_dependencies TO "
+            var restricted = await sql("GRANT VIEW DEFINITION TO " + user + ";\nGRANT SELECT ON sys.sql_expression_dependencies TO "
                 + user + ";\nGO\nCREATE VIEW dbo.vRestricted AS SELECT dbo.fn_Elsewhere() AS x;", copy);
             var mode = await sql("ALTER DATABASE [" + copy + "] SET RESTRICTED_USER WITH ROLLBACK IMMEDIATE;", "master");
             ScriptResult own, dependent;

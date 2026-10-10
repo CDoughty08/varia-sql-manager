@@ -43,6 +43,10 @@ internal sealed class SmoScriptRunner
     /// walk (live checks change the database's state there).</summary>
     internal Action<string>? BeforeDependencies { get; init; }
 
+    /// <summary>ScriptingServiceOptions.BeforeScript: runs with the target's database after the definition check, just
+    /// before SMO's Scripter (live checks take a database offline there).</summary>
+    internal Action<string>? BeforeScript { get; init; }
+
     private Server Server()
     {
         if (server is not null) return server;
@@ -71,22 +75,39 @@ internal sealed class SmoScriptRunner
         var reading = SmoOptionsMapper.Passes(verb)[^1];
         var scripted = new ScriptedObjects();
         scripted.Add(target.Row.Urn, target.Ref.Name);
-        if (reading != ScriptVerb.Drop) CheckDefinitions(smo, urn, target, dto, reading, dependencies ? SmoOptionsMapper.Walk(reading) : null, max, scripted);
-        if (verb == ScriptVerb.Alter)
-        {
-            // Without Touch, SMO writes nothing for ALTER (sqltoolsservice does the same).
-            (smo.GetSmoObject(urn) ?? throw new SmoObjectMissingException()).Touch();
-        }
+        var walked = new List<string>();
+        if (reading != ScriptVerb.Drop) CheckDefinitions(smo, urn, target, dto, reading, dependencies ? SmoOptionsMapper.Walk(reading) : null, max, scripted, walked);
+        BeforeScript?.Invoke(target.Database);
         var unresolved = new List<Urn>();
-        var batches = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, dependencies, warnings, unresolved, scripted);
-        if (dto.IncludeHeaders && !batches.All(HeaderGuard.Safe))
+        List<string> batches;
+        try
         {
-            var plain = Run(smo, urn, target, verb, dto, max, headers: false, dependencies, warnings, unresolved, scripted);
-            if (!HeaderGuard.Aligned(batches, plain))
+            if (verb == ScriptVerb.Alter)
             {
-                batches = plain;
-                if (!warnings.Contains(HeaderGuard.Warning)) warnings.Add(HeaderGuard.Warning);
+                // Without Touch, SMO writes nothing for ALTER (sqltoolsservice does the same).
+                (smo.GetSmoObject(urn) ?? throw new SmoObjectMissingException()).Touch();
             }
+            batches = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, dependencies, warnings, unresolved, scripted);
+            if (dto.IncludeHeaders && !batches.All(HeaderGuard.Safe))
+            {
+                var plain = Run(smo, urn, target, verb, dto, max, headers: false, dependencies, warnings, unresolved, scripted);
+                if (!HeaderGuard.Aligned(batches, plain))
+                {
+                    batches = plain;
+                    if (!warnings.Contains(HeaderGuard.Warning)) warnings.Add(HeaderGuard.Warning);
+                }
+            }
+        }
+        catch (Exception error) when (!session.Cloud && target.Ref.Database is { } database && error is SmoException or SqlException && !token.IsCancellationRequested
+            && session.Connection.State == ConnectionState.Open)
+        {
+            // SMO's Scripter enters the target's database again after the preflight read it, and with Generate script for
+            // dependent objects every dependent's after the definition check did: the one that went away in between is
+            // named, the target's first (by SQL Server's own error: SMO may fail on it in other ways), else a dependent's.
+            EnterTargetDatabase(database);
+            if (!dependencies || ScriptingErrors.UnavailableText(error) is not { } unavailable) throw;
+            foreach (var other in walked) EnterDependentDatabase(other);
+            throw new DependentDatabaseException(null, unavailable);
         }
         // The last line of defence for a comment kind SMO may add: none of its comment batches may hold a name that ends
         // the comment early or breaks it over lines. A definition of an object the script creates keeps its own text,
@@ -104,30 +125,35 @@ internal sealed class SmoScriptRunner
     }
 
     /// <summary>The preflight bounds the target's own definition; Script triggers and Generate script for dependent
-    /// objects make SMO read other modules too, which are bounded here before SMO runs (spec F: no definition over
-    /// 8,000,000 bytes reaches managed memory, and none that could not fit in the script together). The dependencies are
-    /// SMO's own walk in the direction the pass takes (<see cref="SmoOptionsMapper.Walk"/>: none for ALTER), which the
-    /// scripter repeats, and may lie in other databases (three-part names, synonyms). SMO reads no definition for a
-    /// reference it could not resolve (a missing object or database) or one on a linked server, so neither is checked: it
-    /// writes a comment for each instead, which <see cref="Run"/> leaves out. The walk's objects go to
-    /// <paramref name="scripted"/>.</summary>
-    private void CheckDefinitions(Server smo, Urn urn, ResolvedTarget target, ScriptingOptionsDto dto, ScriptVerb pass, DependencyType? walk, long max, ScriptedObjects scripted)
+    /// objects make SMO read other modules too, which are checked here before SMO runs (spec F: no definition over
+    /// 8,000,000 bytes reaches managed memory, and none that could not fit in the script together; one that is encrypted
+    /// or that the login cannot read is named, not reported as the target's). The dependencies are SMO's own walk in the
+    /// direction the pass takes (<see cref="SmoOptionsMapper.Walk"/>: none for ALTER), which the scripter repeats, and may
+    /// lie in other databases (three-part names, synonyms); they include database triggers that refer to the target
+    /// (<see cref="Checked"/>). SMO reads no definition for a reference it could not resolve (a missing object or
+    /// database) or one on a linked server, so neither is checked: it writes a comment for each instead, which
+    /// <see cref="Run"/> leaves out. The walk's objects go to <paramref name="scripted"/>, and the other databases the
+    /// check entered to <paramref name="walked"/>.</summary>
+    private void CheckDefinitions(Server smo, Urn urn, ResolvedTarget target, ScriptingOptionsDto dto, ScriptVerb pass, DependencyType? walk, long max, ScriptedObjects scripted,
+        List<string> walked)
     {
         // A table's or view's triggers come with the object itself, not with one of its indexes or keys; SMO's ALTER of a
         // view writes the view alone.
         var triggered = dto.ScriptTriggers && target.Kind is "table" or "view" && pass != ScriptVerb.Alter;
         if (target.Ref.Database is not { } database || !triggered && walk is null) return;
-        var objects = new Dictionary<(string Database, string Schema, string Name), bool>();
+        var objects = new Dictionary<(string Database, char Kind, string Schema, string Name), bool>();
         // SQL Server compares database names in its own collation, so a three-part name may spell the target's database
         // differently; such a dependent is in the target's database, not another one.
         var names = new Dictionary<string, string>(StringComparer.Ordinal) { [database] = database };
         string Database(string db) => names.TryGetValue(db, out var known) ? known : names[db] = SameDatabase(db, database) ? database : db;
-        void Add(string db, string schema, string name, bool triggers)
+        void Add(string db, char kind, string schema, string name, bool triggers)
         {
-            var key = (Database(db), schema, name);
+            var key = (Database(db), kind, schema, name);
             objects[key] = triggers || objects.GetValueOrDefault(key);
         }
-        if (target.Ref is { Schema: { } schema, Name: { } name }) Add(database, schema, name, triggered);
+        if (target.Ref is { Schema: { } schema, Name: { } name }) Add(database, 'o', schema, name, triggered);
+        // The walk returns its root too: keyed like it, a database trigger target is checked and counted once.
+        else if (target.Kind == "databaseTrigger" && target.Ref.Name is { } trigger) Add(database, 'd', "", trigger, false);
         if (walk is { } direction)
         {
             BeforeDependencies?.Invoke(database);
@@ -149,20 +175,18 @@ internal sealed class SmoScriptRunner
                 if (node.Type == "UnresolvedEntity" || !string.Equals(node.GetAttribute("Name", "Server"), server, StringComparison.OrdinalIgnoreCase)
                     || node.GetAttribute("Name") is not { } n) continue;
                 scripted.Add(node.Type, n);
-                // What refers to the object includes DML triggers, schema objects in their table's or view's schema.
-                if ((node.GetAttribute("Schema") ?? (node.Type == "Trigger" ? node.Parent.GetAttribute("Schema") : null)) is { } s && node.GetAttribute("Name", "Database") is { } db)
-                    Add(db, s, n, dto.ScriptTriggers && node.Type is "Table" or "View");
+                if (Checked(node) is { } item) Add(item.Database, item.Kind, item.Schema, item.Name, dto.ScriptTriggers && node.Type is "Table" or "View");
             }
         }
-        // A trigger target is no schema object; the preflight read its definition's size.
-        var total = target.Ref.Schema is null ? target.DefinitionBytes ?? 0 : 0;
+        long total = 0;
         foreach (var group in objects.GroupBy(item => item.Key.Database, StringComparer.Ordinal))
         {
             // A cloud database reaches no other one, so a definition there could not be checked.
             if (session.Cloud && group.Key != database)
                 throw new ScriptRefusedException("it depends on an object in another database, which Generate script for dependent objects cannot check here. Turn it off in Tools › Options › Scripting and try again.");
             var list = new StringBuilder("<d>");
-            foreach (var ((_, s, n), triggers) in group) list.Append("<o s=\"").Append(Hex(s)).Append("\" n=\"").Append(Hex(n)).Append("\" t=\"").Append(triggers ? '1' : '0').Append("\"/>");
+            foreach (var ((_, k, s, n), triggers) in group)
+                list.Append("<o k=\"").Append(k).Append("\" s=\"").Append(Hex(s)).Append("\" n=\"").Append(Hex(n)).Append("\" t=\"").Append(triggers ? '1' : '0').Append("\"/>");
             using var command = session.Connection.CreateCommand();
             command.CommandTimeout = 30;
             if (session.Cloud) command.CommandText = ScriptPreflight.DefinitionCheck;
@@ -174,16 +198,43 @@ internal sealed class SmoScriptRunner
             }
             command.Parameters.Add(new SqlParameter("@objects", SqlDbType.NVarChar, -1) { Value = list.Append("</d>").ToString() });
             var elsewhere = group.Key != database ? group.Key : null;
+            if (elsewhere is not null) walked.Add(elsewhere);
             using var reader = Execute(command, elsewhere);
             if (!reader.Read()) continue;
-            var parent = reader.IsDBNull(2) ? null : reader.GetString(2);
-            if (reader.GetBoolean(3) || !reader.IsDBNull(4) && reader.GetInt64(4) > ScriptPreflight.MaxDefinitionBytes)
-                throw new DependentDefinitionException(reader.GetBoolean(3) ? "ENCRYPTED" : "TOO_LARGE", reader.GetString(0), reader.GetString(1), parent,
-                    parent is null ? "Generate script for dependent objects" : "Script triggers", elsewhere);
-            total += reader.IsDBNull(5) ? 0 : reader.GetInt64(5);
+            var kind = reader.GetString(3);
+            bool? encrypted = reader.IsDBNull(4) ? null : reader.GetBoolean(4);
+            long? bytes = reader.IsDBNull(5) ? null : reader.GetInt64(5);
+            // SMO reads every one of these definitions: one it cannot read fails it, as the target's NO_DEFINITION.
+            if ((encrypted == true ? "ENCRYPTED" : bytes is null ? "NO_DEFINITION" : bytes > ScriptPreflight.MaxDefinitionBytes ? "TOO_LARGE" : null) is { } code)
+            {
+                var parent = reader.IsDBNull(2) ? null : reader.GetString(2);
+                throw new DependentDefinitionException(code, reader.IsDBNull(0) ? null : reader.GetString(0), reader.GetString(1), parent,
+                    parent is null ? "Generate script for dependent objects" : "Script triggers", kind == "s" ? null : elsewhere,
+                    kind switch { "d" => "databaseTrigger", "s" => "serverTrigger", _ => null }, maybeEncrypted: encrypted is null);
+            }
+            total += reader.IsDBNull(6) ? 0 : reader.GetInt64(6);
         }
         // Each definition appears in the script whole (two bytes a character), so together they could not fit in it.
         if (total > 2 * max) throw new ScriptTooLargeException();
+    }
+
+    /// <summary>What the definition check reads for a node of SMO's dependency walk, with the database it lives in: a
+    /// schema object, a DML trigger among them in its table's or view's schema ('o'), a database trigger that refers to
+    /// the target ('d': no schema, its database is the node's) or a server trigger ('s', read in master). Null for a node
+    /// with no such definition to read (a database trigger outside a database, say).</summary>
+    internal static (string Database, char Kind, string Schema, string Name)? Checked(Urn node)
+    {
+        if (node.GetAttribute("Name") is not { } name) return null;
+        var database = node.GetAttribute("Name", "Database");
+        if (node.Type == "DdlTrigger")
+            return node.Parent?.Type switch
+            {
+                "Database" when database is not null => (database, 'd', "", name),
+                "Server" => ("master", 's', "", name),
+                _ => null
+            };
+        return (node.GetAttribute("Schema") ?? (node.Type == "Trigger" ? node.Parent?.GetAttribute("Schema") : null)) is { } schema && database is not null
+            ? (database, 'o', schema, name) : null;
     }
 
     /// <summary>The definition check in one database; one a dependent lives in that the login cannot open is named.</summary>
@@ -208,12 +259,26 @@ internal sealed class SmoScriptRunner
     /// target's database (and a database dropped since the preflight makes the target missing).</summary>
     private void EnterTargetDatabase(string database)
     {
+        try { Enter(database); }
+        catch (SqlException error) when (error.Number is 2812 or 911) { throw new SmoObjectMissingException(); }
+    }
+
+    /// <summary>Enters a dependent's database as the definition check did; a <see cref="DependentDatabaseException"/>
+    /// naming it when it cannot.</summary>
+    private void EnterDependentDatabase(string database)
+    {
+        try { Enter(database); }
+        catch (SqlException error) when (ScriptingErrors.UnavailableText(error) is { } text) { throw new DependentDatabaseException(database, text); }
+        catch (SqlException error) when (error.Number == 2812) { throw new DependentDatabaseException(database, "it does not exist"); }
+    }
+
+    private void Enter(string database)
+    {
         using var command = session.Connection.CreateCommand();
         command.CommandTimeout = 30;
         command.CommandText = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module N'SELECT 1;';";
         command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
-        try { command.ExecuteNonQuery(); }
-        catch (SqlException error) when (error.Number is 2812 or 911) { throw new SmoObjectMissingException(); }
+        command.ExecuteNonQuery();
     }
 
     /// <summary>A name's UTF-16 code units as hex, unpaired surrogates included.</summary>
@@ -382,19 +447,25 @@ internal sealed class ScriptRefusedException(string reason) : Exception("The scr
     public string Reason { get; } = reason;
 }
 
-/// <summary>A trigger or dependent object SMO would script with the target is encrypted or over the definition limit.</summary>
-/// <param name="parent">For a trigger, the table or view it is on (in <paramref name="schema"/>).</param>
+/// <summary>A trigger or dependent object SMO would script with the target is encrypted, over the definition limit, or has
+/// a definition the login cannot read (<paramref name="code"/> ENCRYPTED, TOO_LARGE or NO_DEFINITION).</summary>
+/// <param name="schema">Null for a database or server trigger.</param>
+/// <param name="parent">For a trigger Script triggers brings in, the table or view it is on (in <paramref name="schema"/>).</param>
 /// <param name="option">The scripting option that brought it in.</param>
 /// <param name="database">The database it lives in when that is not the target's (three-part names, synonyms).</param>
-internal sealed class DependentDefinitionException(string code, string schema, string name, string? parent, string option, string? database = null)
-    : Exception("A trigger or dependent object cannot be scripted.")
+/// <param name="kind">Null for a schema object or a table's or view's trigger, else "databaseTrigger" or "serverTrigger".</param>
+/// <param name="maybeEncrypted">NO_DEFINITION only: SQL Server cannot tell whether the hidden definition is encrypted.</param>
+internal sealed class DependentDefinitionException(string code, string? schema, string name, string? parent, string option, string? database = null, string? kind = null,
+    bool maybeEncrypted = false) : Exception("A trigger or dependent object cannot be scripted.")
 {
     public string Code { get; } = code;
-    public string Schema { get; } = schema;
+    public string? Schema { get; } = schema;
     public string Name { get; } = name;
     public string? Parent { get; } = parent;
     public string Option { get; } = option;
     public string? Database { get; } = database;
+    public string? Kind { get; } = kind;
+    public bool MaybeEncrypted { get; } = maybeEncrypted;
 }
 
 /// <summary>Generate script for dependent objects reached a database other than the target's that the login cannot open,
