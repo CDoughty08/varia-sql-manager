@@ -215,22 +215,33 @@ async function explorerChildren({ node, subtype }) {
 const stored = new Map()
 let nextResultId = 1
 const globalBytes = 256 * 1024 * 1024
-// The memory a directive's `memory=` pretends its results hold, until results.close frees the last of them.
-let held = { bytes: 0, results: new Set() }
+// The bytes each result pretends to hold: a directive's `memory=` share of the budget, split across its result sets. They
+// count until results.close releases them or the tab's next script replaces them (as ResultStore.BeginQuery does), and
+// usage is their sum across tabs.
+const heldBytes = new Map()
+const sessionResults = new Map()
+const usedBytes = () => { let used = 0; for (const bytes of heldBytes.values()) used += bytes; return used }
+/** A new script on a session releases that session's earlier results. */
+function beginQuery(sessionId) {
+  for (const resultId of sessionResults.get(sessionId) ?? []) heldBytes.delete(resultId)
+  sessionResults.set(sessionId, [])
+}
 // What the status bar was last shown, by an event or a summary. As SqlService.ReportMemory does, an event goes out only
-// for a new band (50, 75, 90, 100 %), a 64 MiB rise, or any fall below it.
+// for a new band (50, 75, 90, 100 %), a 64 MiB rise, or any fall below it. Events and summary budgets share one sequence.
 let reported = { bytes: -1, band: 0 }
+let memorySeq = 0
 const band = used => used >= globalBytes ? 4 : used * 10 >= globalBytes * 9 ? 3 : used * 4 >= globalBytes * 3 ? 2 : used * 2 >= globalBytes ? 1 : 0
 function reportMemory() {
-  const used = held.bytes
+  const used = usedBytes()
   if (reported.bytes < 0 ? used === 0 : used >= reported.bytes && band(used) === reported.band && used - reported.bytes < 64 * 1024 * 1024) return
   reported = { bytes: used, band: band(used) }
-  write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes })
+  write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes, seq: ++memorySeq })
 }
 /** A summary's budget, which counts as reported (SqlService.SummaryBudget). */
 function summaryBudget() {
-  reported = { bytes: held.bytes, band: band(held.bytes) }
-  return { usedBytes: held.bytes, globalBytes, queryBytes: globalBytes / 2 }
+  const used = usedBytes()
+  reported = { bytes: used, band: band(used) }
+  return { usedBytes: used, globalBytes, queryBytes: globalBytes / 2, seq: ++memorySeq }
 }
 const column = (name, dataType) => ({ name, dataType, wire: 'text', nullable: true })
 const available = result => result.complete ? result.read : Math.floor(result.read / result.pageRows) * result.pageRows
@@ -354,10 +365,8 @@ async function runDirective(id, params, directive) {
   const maxSets = params.maxResultSets ?? 10
   const queryId = params.queryId
   runningDirectives.add(queryId)
-  if (directive.memory !== undefined) {
-    held = { bytes: Math.round(directive.memory * globalBytes), results: new Set() }
-    reportMemory()
-  }
+  // The share is split across the sets kept; the first takes the remainder, so the sum is exact.
+  const share = Math.round((directive.memory ?? 0) * globalBytes), kept = Math.min(directive.sets.length, maxSets)
   let status = 'completed'
   try {
     for (const [index, set] of directive.sets.entries()) {
@@ -365,7 +374,11 @@ async function runDirective(id, params, directive) {
       if (index >= maxSets) { discarded.push(set); continue }
       const result = storeResult({ columns: shape.columns, rowAt: shape.row, pageRows: shape.pageRows, read: set.rate === undefined ? set.rows : 0, complete: false }, index)
       results.push(result)
-      if (directive.memory !== undefined) held.results.add(result.resultId)
+      if (share > 0) {
+        heldBytes.set(result.resultId, Math.floor(share / kept) + (index === 0 ? share % kept : 0))
+        sessionResults.get(params.sessionId)?.push(result.resultId)
+        reportMemory()
+      }
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.opened', descriptor: describe(result) })
       while (result.read < set.rows) {
         if (cancelledQueries.has(queryId)) { status = 'cancelled'; result.incomplete = true; break }
@@ -462,9 +475,9 @@ async function workbench(id, method, params, credit) {
       let closed = 0
       for (const resultId of params.resultIds) if (stored.delete(resultId)) closed++
       // As the real backend does, the fall goes out as an event before the answer.
-      if (params.resultIds.filter(resultId => held.results.delete(resultId)).length && held.results.size === 0) held.bytes = 0
+      for (const resultId of params.resultIds) heldBytes.delete(resultId)
       if (closed) reportMemory()
-      return respond(id, { closed, usedBytes: held.bytes })
+      return respond(id, { closed, usedBytes: usedBytes() })
     }
   }
   const connection = workbenchConnections.get(params.connectionId)
@@ -477,6 +490,7 @@ async function workbench(id, method, params, credit) {
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)
+      beginQuery(params.sessionId)
       if (directive) return runDirective(id, params, directive)
       if (params.sql.includes('WAIT_FOR_CANCEL')) { waitingScripts.set(params.queryId, { id, database: params.database }); return }
       const fixture = Object.keys(fixtures).find(name => params.sql.includes(name))

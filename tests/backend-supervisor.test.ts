@@ -423,6 +423,8 @@ describe('BackendSupervisor results', () => {
     const events: QueryEvent[] = []
     const result = await value.request('query.execute', { ...query('tab-1'), connectionId: info.id }, { onEvent: event => { events.push(event) } })
     expect(result.resultSets).toEqual([expect.objectContaining({ generation: 1, resultId: 1, rowsAvailable: 1, state: 'complete' })])
+    // The budget's seq orders it with this generation's results.memory events.
+    expect(result.budget).toMatchObject({ generation: 1, seq: 1 })
     expect(events.map(event => event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? [event.type, event.descriptor.generation] : [event.type])).toEqual([['resultSet.opened', 1], ['resultSet.closed', 1]])
     const pages: ArrayBuffer[] = []
     let id = 0

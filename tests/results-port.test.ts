@@ -214,8 +214,8 @@ describe('ResultsPortHost', () => {
     const { host, read, reads, port } = fixture()
     const opened: QueryEvent = { type: 'resultSet.opened', descriptor: { generation: 1, resultId: 9, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [{ name: 'a', dataType: 'int', wire: 'text', nullable: true }], rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'open', incomplete: false } }
     host.queryEvent('query-1', opened)
-    host.memory(10, 100)
-    expect(port().posted.slice(-2)).toEqual([{ t: 'query', queryId: 'query-1', event: opened }, { t: 'memory', usedBytes: 10, globalBytes: 100 }])
+    host.memory(1, { usedBytes: 10, globalBytes: 100, seq: 7 })
+    expect(port().posted.slice(-2)).toEqual([{ t: 'query', queryId: 'query-1', event: opened }, { t: 'memory', usedBytes: 10, globalBytes: 100, generation: 1, seq: 7 }])
     read(1, 9)
     expect(reads).toHaveLength(1)
   })

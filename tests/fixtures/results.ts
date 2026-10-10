@@ -11,7 +11,7 @@ export const descriptor = (resultId: number, patch: Partial<ResultDescriptor> = 
 /** A summary of `sets`, completed unless `patch` says otherwise. */
 export const summaryOf = (sets: ResultDescriptor[], patch: Partial<QueryResult> = {}): QueryResult => ({
   resultSets: sets, discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 5, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master',
-  messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 256 * 1048576, queryBytes: 128 * 1048576 }, completedAt: '2026-10-08T21:48:01.1234567+00:00', ...patch
+  messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 256 * 1048576, queryBytes: 128 * 1048576, generation: 1, seq: 1 }, completedAt: '2026-10-08T21:48:01.1234567+00:00', ...patch
 })
 
 export interface FakeHandle extends ResultHandle {

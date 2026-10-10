@@ -186,9 +186,9 @@ describe('ResultClient', () => {
     expect(events).toHaveBeenCalledTimes(4)
     const memory = vi.fn()
     client.onMemory(memory)
-    worker().toWorker({ t: 'memory', usedBytes: 5, globalBytes: 50 })
+    worker().toWorker({ t: 'memory', usedBytes: 5, globalBytes: 50, generation: 1, seq: 4 })
     await settle()
-    expect(memory).toHaveBeenCalledWith({ usedBytes: 5, globalBytes: 50 })
+    expect(memory).toHaveBeenCalledWith({ usedBytes: 5, globalBytes: 50, generation: 1, seq: 4 })
   })
 
   it('leaves memory to the backend\'s events after a close, and reports none once a new backend replaces the old one', async () => {
@@ -203,13 +203,13 @@ describe('ResultClient', () => {
     const closing = client.open(descriptor()).close()
     await settle()
     expect(worker().fromWorker.find(request => request.t === 'close')).toMatchObject({ rid: 1, resultIds: [3] })
-    worker().toWorker({ t: 'memory', usedBytes: 1000, globalBytes: 5000 })
+    worker().toWorker({ t: 'memory', usedBytes: 1000, globalBytes: 5000, generation: 1, seq: 2 })
     worker().toWorker({ t: 'end', rid: 1, ok: true, result: { closed: 1, usedBytes: 1234 } })
     await closing
-    expect(memory).toHaveBeenLastCalledWith({ usedBytes: 1000, globalBytes: 5000 })
+    expect(memory).toHaveBeenLastCalledWith({ usedBytes: 1000, globalBytes: 5000, generation: 1, seq: 2 })
     worker().toWorker({ t: 'backend', generation: 2, status: 'ready' })
     await settle()
-    expect(memory).toHaveBeenLastCalledWith({ usedBytes: 0, globalBytes: 0 })
+    expect(memory).toHaveBeenLastCalledWith({ usedBytes: 0, globalBytes: 0, generation: 2, seq: 0 })
     expect(memory).toHaveBeenCalledTimes(2)
   })
 

@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { dialogLifecycle } from './fixtures/dialog-lifecycle.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -99,9 +100,11 @@ try {
   await application.evaluate(({ dialog }) => {
     globalThis.variaReloadPrompts = 0
     // A reload would ask first (unsaved queries); count the question and cancel it, so a reload attempt shows up.
-    dialog.showMessageBoxSync = () => { globalThis.variaReloadPrompts++; return 1 }
     // Unsaved queries make a normal exit ask first; answer Don't Save.
-    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
+    dialog.showMessageBox = async (_window, options) => {
+      if (options.title === 'Reload workbench') globalThis.variaReloadPrompts++
+      return { response: 1, checkboxChecked: false }
+    }
   })
 
   // 1. The menubar by mouse: a click opens a themed menu below its button, hovering another button switches menus, and
@@ -1208,11 +1211,19 @@ try {
   expect((await popups()).length).toBe(8)
   console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, the fallback, and none for an idle page.')
 
-  // 16. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
+  // 16. Main's dialogs across the page's lifecycle, in fresh apps (fixtures/dialog-lifecycle.mjs): Restart asked for
+  // twice restarts once; a crash's prompt waits for the open Save dialog and the dead page's queued save never opens;
+  // the reload and not-responding prompts take their turn too; a quit while a Script As save waits exits once the
+  // dialogs are answered.
+  expect(failures).toEqual([])
+  await application.close()
+  application = undefined
+  await dialogLifecycle(launchOptions)
+  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open dialog and drops the dead page\'s, the reload and not-responding prompts wait their turn, and a quit waits for queued dialogs.')
+
+  // 17. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
   // master, and the server's Refresh reloads its lists without an error.
   if (process.env.VARIA_TEST_SQL_SERVER) {
-    expect(failures).toEqual([])
-    await application.close()
     application = await electron.launch({ ...launchOptions, env: liveEnv })
     page = await application.firstWindow()
     page.setDefaultTimeout(10000)
@@ -1257,7 +1268,7 @@ try {
   } else console.log('Menus checks: the live server step was skipped (VARIA_TEST_SQL_SERVER is not set).')
 
   expect(failures).toEqual([])
-  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; and a live server when configured.')
+  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; main\'s dialogs across a restart, a crash and a quit; and a live server when configured.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'menus-failure.png') }).catch(() => {})
   console.log(await page?.evaluate(() => ({ focused: document.activeElement?.outerHTML.slice(0, 300), menus: document.querySelectorAll('.menu').length, errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })).catch(() => 'no page'))

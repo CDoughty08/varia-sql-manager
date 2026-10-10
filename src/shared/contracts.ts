@@ -137,9 +137,12 @@ export interface QueryResult {
   totalBatches: number
   database: string
   messagesTruncated: boolean
-  budget: { usedBytes: number; globalBytes: number; queryBytes: number }
+  budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
   completedAt: string
 }
+/** Orders what the backend reports about result memory (results.memory events and summaries): `seq` counts within the
+ *  backend process that main numbered `generation`, so a figure overtaken by a newer one is never shown after it. */
+export interface MemoryOrder { generation: number; seq: number }
 /** Rows read so far for one result set of a running script. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */

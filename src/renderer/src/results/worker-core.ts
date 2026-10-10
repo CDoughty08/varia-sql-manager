@@ -122,7 +122,7 @@ export class ResultsWorkerCore {
       case 'page': return this.page(message.rid, message.body)
       case 'end': return message.ok ? this.ended(message.rid, message.result) : this.failed(message.rid, message.code, message.message)
       case 'query': this.post({ type: 'query', queryId: message.queryId, event: message.event }); return
-      case 'memory': this.post({ type: 'memory', usedBytes: message.usedBytes, globalBytes: message.globalBytes }); return
+      case 'memory': this.post({ type: 'memory', usedBytes: message.usedBytes, globalBytes: message.globalBytes, generation: message.generation, seq: message.seq }); return
     }
   }
 

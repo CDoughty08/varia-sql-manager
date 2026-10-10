@@ -5,6 +5,7 @@ using System.IO.Pipes;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Varia.Backend.Protocol;
+using Varia.Backend.Results;
 
 namespace Varia.Backend.Tests;
 
@@ -214,6 +215,7 @@ internal static class HostChecks
         }
 
         OutboundChecks(check);
+        MemoryOrder(check);
 
         // HELLO announces MethodNames and main refuses a backend missing any of its methods, so every name must dispatch.
         using var service = new SqlService();
@@ -241,6 +243,45 @@ internal static class HostChecks
         }
         check(retired.Count == retiredMethods.Length && !retiredMethods.Any(SqlService.MethodNames.Contains),
             "the retired v1 catalog and table script methods are neither announced nor dispatched: " + string.Join(", ", retired));
+    }
+
+    /// <summary>A summary is written after SummaryBudget took its figure, so a results.close answered meanwhile (Close
+    /// Results in another tab while a summary of a thousand sets is serialized) sends its fall first, and the older summary
+    /// arrives last. Applied in arrival order, skipping any report older than one already applied (as the status bar
+    /// does), the reports end on what the store holds.</summary>
+    private static void MemoryOrder(Action<bool, string> check)
+    {
+        HostHarness? harness = null;
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var taken = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var host = harness = new HostHarness(dispatcher: () => new HeldSummary(new SqlService(store, hooks: true, publish: value => harness!.Host.Publish(value)), taken, release));
+        host.Hello();
+        host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
+        var resultId = Body(host.Next(FrameKind.Response)!.Value).GetProperty("result").GetProperty("resultId").GetUInt32();
+        host.Request(2, "test.summary", new { });
+        var held = taken.Wait(5000);
+        host.Request(3, "results.close", new { resultIds = new[] { resultId } });
+        var closed = host.Next(FrameKind.Response);
+        release.Set();
+        var summary = host.Next(FrameKind.Response);
+        var reports = new List<(long Arrival, long Seq, long Used, string Kind)>();
+        while (host.Next(FrameKind.Event, 300) is { } frame)
+        {
+            var body = Body(frame);
+            if (frame.Header.Id == 0 && body.GetProperty("type").GetString() == "results.memory")
+                reports.Add((host.ArrivalOf(frame), body.TryGetProperty("seq", out var seq) ? seq.GetInt64() : -1, body.GetProperty("usedBytes").GetInt64(), "event"));
+        }
+        if (summary is { } answer && Body(answer).GetProperty("result").GetProperty("budget") is var budget)
+            reports.Add((host.ArrivalOf(answer), budget.TryGetProperty("seq", out var seq) ? seq.GetInt64() : -1, budget.GetProperty("usedBytes").GetInt64(), "summary"));
+        reports.Sort((left, right) => left.Arrival.CompareTo(right.Arrival));
+        long shown = -1, shownSeq = 0;
+        foreach (var report in reports.Where(report => report.Seq > shownSeq)) (shown, shownSeq) = (report.Used, report.Seq);
+        var fall = reports.FindIndex(report => report is { Kind: "event", Used: 0 });
+        check(held && closed?.Header.Id == 3 && summary?.Header.Id == 2 && fall >= 0 && reports[^1] is { Kind: "summary", Used: > 0 } && reports.All(report => report.Seq > 0)
+            && reports.Select(report => report.Seq).Distinct().Count() == reports.Count && shown == store.UsedBytes && shown == 0,
+            "a summary overtaken by a close's fall carries an older sequence number, so the newest report is what the store holds: "
+            + string.Join(", ", reports.Select(report => report.Kind + " #" + report.Seq + " " + report.Used)));
     }
 
     private static void OutboundChecks(Action<bool, string> check)
@@ -352,6 +393,27 @@ internal sealed class StubDispatcher : IRequestDispatcher
 
     public void CancelAll() => Interlocked.Increment(ref CancelAllCalls);
     public void Dispose() => Disposed = true;
+}
+
+/// <summary>SqlService plus test.summary: a summary budget taken at once and answered only when the check says so, as a
+/// summary of a thousand result sets is still being serialized when a close from another tab is answered.</summary>
+internal sealed class HeldSummary(SqlService service, ManualResetEventSlim taken, ManualResetEventSlim release) : IRequestDispatcher
+{
+    public IReadOnlyList<string> Methods { get; } = [.. service.Methods, "test.summary"];
+    public RequestLane LaneOf(string method) => method == "test.summary" ? RequestLane.Query : service.LaneOf(method);
+    public (long GlobalBytes, long QueryBytes) ResultBudget => service.ResultBudget;
+
+    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context)
+    {
+        if (method != "test.summary") return await service.DispatchAsync(method, parameters, json, context);
+        var budget = service.SummaryBudget();
+        taken.Set();
+        await Task.Run(() => release.Wait(10_000));
+        return new { Budget = budget };
+    }
+
+    public void CancelAll() => service.CancelAll();
+    public void Dispose() => service.Dispose();
 }
 
 /// <summary>A ProtocolHost on its own thread, spoken to through anonymous pipes as main would.</summary>

@@ -8,7 +8,7 @@ import { deferred, documentFixture } from './fixtures/documents'
 
 const output = (patch: Partial<QueryResult> = {}): QueryResult => ({
   status: 'completed', resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false,
-  budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }, completedAt: '2026-10-08T21:48:01.1234567+00:00', ...patch
+  budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }, completedAt: '2026-10-08T21:48:01.1234567+00:00', ...patch
 })
 function fixture(commandTimeout?: number) {
   const docs = documentFixture()

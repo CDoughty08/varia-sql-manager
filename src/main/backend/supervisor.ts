@@ -234,11 +234,12 @@ export class BackendSupervisor {
       else this.markLost(parsed.data.id)
       return { ...parsed.data, generation: connection.generation }
     }
-    // The summary's descriptors name results this generation holds; main stamps the generation on them.
+    // The summary's descriptors name results this generation holds, and its budget's seq counts in this generation; main
+    // stamps the generation on both.
     if (method === 'query.execute') {
       const parsed = queryResultSchema.safeParse(result)
       if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
-      return { ...parsed.data, resultSets: parsed.data.resultSets.map(descriptor => stamp(descriptor, connection.generation)) }
+      return { ...parsed.data, resultSets: parsed.data.resultSets.map(descriptor => stamp(descriptor, connection.generation)), budget: { ...parsed.data.budget, generation: connection.generation } }
     }
     if (method === 'debug.results.synthesize') return stamp(result as BackendResultDescriptor, connection.generation)
     if (method === 'connections.disconnect') { const id = idOf(params, 'connectionId'); if (id !== undefined) this.live.delete(id) }

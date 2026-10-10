@@ -64,5 +64,5 @@ export type WorkerResponse =
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
-  | { readonly type: 'memory'; readonly usedBytes: number; readonly globalBytes: number }
+  | { readonly type: 'memory'; readonly usedBytes: number; readonly globalBytes: number; readonly generation: number; readonly seq: number }
   | { readonly type: 'backend'; readonly generation: number; readonly status: BackendStatus }

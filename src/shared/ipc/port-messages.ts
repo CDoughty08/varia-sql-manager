@@ -25,7 +25,7 @@ export type PortMessage =
   | { t: 'end'; rid: number; ok: true; result: ResultsReadResult | ResultsCloseResult }
   | { t: 'end'; rid: number; ok: false; code: ErrorCode; message: string }
   | { t: 'query'; queryId: string; event: QueryEvent }
-  | { t: 'memory'; usedBytes: number; globalBytes: number }
+  | { t: 'memory'; usedBytes: number; globalBytes: number; generation: number; seq: number }
 
 const columnSchema = z.object({
   name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector']).optional(),
@@ -55,10 +55,10 @@ export const queryResultSchema = z.object({
   recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'failed', 'cancelled', 'timedOut']),
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),
-  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count }).strict(), completedAt: z.string().max(40)
+  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count }).strict(), completedAt: z.string().max(40)
 }).strict()
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()
 export type JobProgressEvent = z.infer<typeof jobProgressSchema>
-/** The global EVENT (id 0) for result memory. */
-export const memoryEventSchema = z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count }).strict()
+/** The global EVENT (id 0) for result memory; `seq` orders it with the summaries' budgets (QueryResult). */
+export const memoryEventSchema = z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count, seq: count }).strict()

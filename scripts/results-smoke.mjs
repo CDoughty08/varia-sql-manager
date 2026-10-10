@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -817,12 +818,31 @@ try {
   expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true)
   // A run that grows by less than a report step is shown only by its summary, which the backend counts as reported, so
   // closing it still sends the fall and the indicator hides.
+  const closeResults = async () => {
+    await page.keyboard.press('F1')
+    await page.keyboard.type('close results')
+    await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+    await page.keyboard.press('Enter')
+    await expect(page.locator('.quick-input')).toHaveCount(0)
+  }
   await run('-- varia-fake: sets=W1*10 memory=0.1')
   await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
-  await page.keyboard.press('F1')
-  await page.keyboard.type('close results')
-  await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
-  await page.keyboard.press('Enter')
+  await closeResults()
+  await expect(memory).toHaveCount(0)
+  // Two tabs' results add up, and closing one tab's leaves the other's.
+  await run('-- varia-fake: sets=W1*10 memory=0.1')
+  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await page.keyboard.press('Control+N')
+  await expect(queryTabs()).toHaveCount(2)
+  if (!(await server().inputValue())) await server().selectOption({ index: 1 })
+  await run('-- varia-fake: sets=W1*10 memory=0.1')
+  await expect(memory).toHaveText(/^Results 51 MB \/ 256 MB$/)
+  await closeResults()
+  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
+  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await closeResults()
   await expect(memory).toHaveCount(0)
   await run('-- varia-fake: sets=W1*10 memory=0')
   await expect(memory).toHaveCount(0)
@@ -1062,6 +1082,31 @@ try {
     }
   })).toEqual({ fits: true, overflow: false, cut: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
+  // A Script As held in the backend keeps Cancel and the start of its text: the server and database give way, and no
+  // segment covers another.
+  await writeFile(join(control, 'hold', 'scripting.script'), '')
+  const ordersPath = [longServer, 'Databases', 'AppData', 'Tables', 'dbo.Orders']
+  await expandExplorerPath(page, ...ordersPath.slice(0, -1))
+  await (await explorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
+  const contextMenu = name => page.getByRole('menu', { name, exact: true })
+  await contextMenu('Object Explorer').getByRole('menuitem', { name: 'Script Table as', exact: true }).click({ force: true })
+  await contextMenu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click({ force: true })
+  await contextMenu('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }).click({ force: true })
+  const cancelScripting = page.getByRole('button', { name: 'Cancel scripting', exact: true })
+  await expect(cancelScripting).toBeVisible()
+  expect(await page.evaluate(() => {
+    const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect()
+    const parts = { backend: bar.firstElementChild, cancel: bar.querySelector('button[aria-label="Cancel scripting"]'), place: bar.querySelector('.status-place'), memory: bar.querySelector('.memory-indicator') }
+    const boxes = Object.entries(parts).map(([name, part]) => [name, part.getBoundingClientRect()])
+    const overlaps = boxes.flatMap(([name, a], i) => boxes.slice(i + 1).filter(([, b]) => a.left < b.right - 0.5 && b.left < a.right - 0.5).map(([other]) => name + '/' + other))
+    return {
+      overlaps, inside: boxes.every(([, part]) => part.left >= box.left - 0.5 && part.right <= box.right + 0.5),
+      text: bar.querySelector('.status-scripting-text').getBoundingClientRect().width >= 40, placeShown: parts.place.getBoundingClientRect().width >= 40
+    }
+  })).toEqual({ overlaps: [], inside: true, text: true, placeShown: true })
+  await page.locator('.status-bar').screenshot({ path: resolve('artifacts', 'results-small-scripting.png') })
+  await rm(join(control, 'hold', 'scripting.script'))
+  await expect(cancelScripting).toHaveCount(0)
   expect(failures).toEqual([])
   console.log('Results checks passed: streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, resizing, Save Results As, values in their own tabs, Messages, lifecycle, memory, the menu, styling, F6, Ctrl+R, tabs and a small window.')
 
@@ -1165,8 +1210,76 @@ try {
     const messages = await page.locator('.messages .msg').evaluateAll(items => items.map(item => [item.classList.contains('error') ? 'error' : 'info', item.textContent]))
     expect(messages.slice(0, 3)).toEqual([['info', 'before'], ['error', 'Msg 8134, Level 16, State 1, Line 2\nDivide by zero error encountered.'], ['info', 'after']])
     expect(messages.at(-1)[1]).toMatch(/^Completion time: \d{4}-\d\d-\d\dT/)
+    // Memory: Close Results in one tab races the summary of a 1,000-set run in another. The summary takes its figure
+    // before it is serialized, so the close's fall can arrive first; the indicator must still end on what the backend
+    // holds, which the next summary (SELECT 1) reports.
+    const memory = page.locator('.memory-indicator')
+    const shown = async () => (await memory.count()) ? (await memory.textContent()).trim() : '(hidden)'
+    const wideColumns = Array.from({ length: 30 }, (_, c) => `${c + 1} AS [c${String(c + 1).padStart(3, '0')}_${'x'.repeat(110)}]`).join(', ')
+    const thousandSets = `SET NOCOUNT ON; DECLARE @i int = 0; WHILE @i < 1000 BEGIN SELECT ${wideColumns}; WAITFOR DELAY '00:00:00.002'; SET @i += 1; END`
+    await page.evaluate(() => {
+      const client = window.__variaResults, race = window.__variaRace = { log: [], fired: false, trigger: undefined }
+      client.onMemory(report => race.log.push(['event', report.seq, report.usedBytes]))
+      const applySummary = client.applySummary.bind(client)
+      client.applySummary = summary => { race.log.push(['summary', summary.budget.seq, summary.budget.usedBytes, summary.resultSets.length]); return applySummary(summary) }
+    })
+    let raced = 0
+    for (let attempt = 1; attempt <= 3 && raced === 0; attempt++) {
+      await queryTabs().first().click()
+      await run('SELECT TOP (200000) a.name AS n1, b.name AS n2 FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;')
+      await expect(memory).toBeVisible()
+      if (await queryTabs().count() < 2) {
+        await page.keyboard.press('Control+N')
+        await expect(queryTabs()).toHaveCount(2)
+        if (!(await server().inputValue())) await server().selectOption({ index: 1 })
+      } else await queryTabs().nth(1).click()
+      await typeSql(thousandSets)
+      // The trigger listens to the run's own events, ahead of the results view.
+      await page.evaluate(() => {
+        const client = window.__variaResults, race = window.__variaRace
+        Object.assign(race, { log: [], fired: false, trigger: undefined })
+        client.onQueryEvent = (queryId, listener) => {
+          delete client.onQueryEvent
+          client.onQueryEvent(queryId, event => {
+            if (event.type !== 'resultSet.closed' || event.descriptor.index !== 999 || race.fired || !race.trigger) return
+            race.fired = true
+            race.log.push(['close'])
+            race.trigger()
+          })
+          return client.onQueryEvent(queryId, listener)
+        }
+      })
+      await page.keyboard.press('F5')
+      await expect(status()).toContainText('Executing query…')
+      // Close Results for tab 1 from the palette; Enter goes the moment tab 2's last set closes.
+      await queryTabs().first().click()
+      await page.keyboard.press('F1')
+      await page.keyboard.type('close results')
+      await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+      await page.evaluate(() => {
+        const input = document.activeElement
+        window.__variaRace.trigger = () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
+      })
+      await page.waitForFunction(() => window.__variaRace.log.some(entry => entry[0] === 'summary' && entry[3] === 1000), null, { timeout: 120000 })
+      if (!(await page.evaluate(() => window.__variaRace.fired))) await page.keyboard.press('Enter')
+      await expect(page.locator('.quick-input')).toHaveCount(0)
+      await page.waitForTimeout(1500)
+      const log = await page.evaluate(() => window.__variaRace.log)
+      const summaryAt = log.findIndex(entry => entry[0] === 'summary' && entry[3] === 1000), summarySeq = log[summaryAt][1]
+      // The race happened when the close's report, newer than the summary, arrived before it.
+      if (log.slice(0, summaryAt).some(entry => entry[0] === 'event' && entry[1] > summarySeq)) raced++
+      const afterRace = await shown()
+      await run('SELECT 1 AS truth;')
+      const truth = await shown()
+      console.log(`Results live: attempt ${attempt}, ${raced ? 'the close overtook the summary' : 'no overtaking'}; shown ${afterRace}, held ${truth} (${log.map(entry => entry.join(' ')).join(', ')}).`)
+      expect(afterRace).toBe(truth)
+    }
+    if (!raced) console.log('Results live: Close Results never overtook the 1,000-set summary in 3 attempts; the ordering was not exercised on this machine.')
+    await queryTabs().nth(1).click()
+    await page.keyboard.press('Control+W')
+    await expect(queryTabs()).toHaveCount(1)
     expect(failures).toEqual([])
-    console.log('Results live checks passed: rows show while a million stream, Cancel keeps them, Save Results As and Copy match the server, FOR XML opens in a tab, and errors keep their order.')
+    console.log('Results live checks passed: rows show while a million stream, Cancel keeps them, Save Results As and Copy match the server, FOR XML opens in a tab, errors keep their order, and the memory indicator survives a close racing a summary.')
   }
 } catch (error) {
   await page.screenshot({ path: resolve('artifacts', 'results-failure.png') }).catch(() => {})

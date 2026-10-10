@@ -272,12 +272,33 @@ describe('file commands', () => {
     api.confirmClose.mockReturnValueOnce(pending.promise)
     const flush = vi.fn(async () => { expect(api.closeWindow).not.toHaveBeenCalled() })
     const closing = files.closeWindow(flush)
-    await files.closeWindow(flush); await commands.run('file.new')
+    // A second request while the first asks is the same close, not a second round of prompts.
+    expect(files.closeWindow(flush)).toBe(closing)
+    await commands.run('file.new')
     expect(api.confirmClose).toHaveBeenCalledTimes(1)
     pending.resolve({ ok: true, value: 'discard' }); await closing
     expect(flush).toHaveBeenCalledTimes(1)
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
     expect(documents.getSnapshot().documents).toHaveLength(1)
+  })
+  it('waits for a file task to end before closing the window, instead of dropping the close', async () => {
+    const { api, files, documents, model } = fixture()
+    model(documents.active!.id).edit('SELECT dirty')
+    // A Script As File… whose save dialog waits in main's queue behind Save Grid Results.
+    const save = deferred<SaveResponse>()
+    api.saveSqlFile.mockReturnValueOnce(save.promise)
+    const copy = files.saveCopy('dbo.Orders.sql', 'CREATE TABLE dbo.Orders (Id int);')
+    await vi.waitFor(() => expect(documents.getSnapshot().busy).toBe(true))
+    const flush = vi.fn(async () => {})
+    const closing = files.closeWindow(flush)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(api.confirmClose).not.toHaveBeenCalled()
+    save.resolve({ ok: true, value: { id: 'file-id', name: 'dbo.Orders.sql', path: 'C:/dbo.Orders.sql' } })
+    await copy
+    await closing
+    expect(api.confirmClose).toHaveBeenCalledTimes(1)
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
   it('releases unclaimed file handles after a late open result without releasing an owned handle', async () => {
     const { api, files, documents, commands } = fixture()

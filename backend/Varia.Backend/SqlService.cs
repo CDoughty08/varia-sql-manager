@@ -49,6 +49,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly object memoryGate = new();
     private long reportedBytes = -1;
     private int reportedBand;
+    /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
+    private long memorySeq;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -693,12 +695,15 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             if (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep) return;
             reportedBytes = used;
             reportedBand = band;
-            publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
+            publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = ++memorySeq });
         }
     }
 
     /// <summary>A summary's budget. The status bar shows it as it shows an event, so it counts as reported: otherwise a run
-    /// that grew by less than a report step, then closed, would leave the status bar showing memory already freed.</summary>
+    /// that grew by less than a report step, then closed, would leave the status bar showing memory already freed. The
+    /// summary is written only after this returns, so an event published meanwhile (a close in another tab) can reach main
+    /// first; both take their sequence number under this lock with the usage they carry, and the status bar ignores a
+    /// figure older than the one it shows.</summary>
     internal ResultBudget SummaryBudget()
     {
         lock (memoryGate)
@@ -706,7 +711,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             var used = store.UsedBytes;
             reportedBytes = used;
             reportedBand = Band(used, store.GlobalBytes);
-            return new ResultBudget(used, store.GlobalBytes, store.QueryBytes);
+            return new ResultBudget(used, store.GlobalBytes, store.QueryBytes, ++memorySeq);
         }
     }
 

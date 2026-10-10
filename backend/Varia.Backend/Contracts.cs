@@ -32,7 +32,8 @@ internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumbe
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
-internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes);
+/// <summary>Seq orders it with the results.memory events: the status bar applies only a figure newer than the last it showed.</summary>
+internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes, long Seq);
 /// <summary>One line of the Messages tab: kind is "info" or "error" (SQL errors, cancellation and timeout, shown in red).</summary>
 internal sealed record MessageEntry(string Text, string Kind);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt

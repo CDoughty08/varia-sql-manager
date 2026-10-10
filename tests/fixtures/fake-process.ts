@@ -51,7 +51,7 @@ export class FakeBackend extends EventEmitter {
       : method === 'system.health' ? { pid: this.pid, generation: this.generation }
       : method === 'connections.disconnect' ? { disconnected: true }
       : method === 'query.session.close' ? { closed: true }
-      : method === 'query.execute' ? { resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }, completedAt: '2026-10-09T12:00:00.0000000+00:00' }
+      : method === 'query.execute' ? { resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: 1 }, completedAt: '2026-10-09T12:00:00.0000000+00:00' }
       : { method }
     this.send(FrameKind.RESPONSE, request.id, 0, { result })
   }

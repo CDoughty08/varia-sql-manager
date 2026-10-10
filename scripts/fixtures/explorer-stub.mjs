@@ -104,7 +104,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       case 'query.session.close': return ok({ closed: true })
       case 'query.execute': return ok({
         resultSets: [], discardedResultSets: 0, messages: [`Executed in ${params.database}`], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
-        database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }
+        database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }
       })
       default: return { ok: false, error: 'Unsupported stub operation.' }
     }

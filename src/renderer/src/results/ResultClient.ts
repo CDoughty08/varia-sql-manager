@@ -1,6 +1,6 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text.
-import type { BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, WireKind } from '../../../shared/contracts'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
@@ -147,6 +147,9 @@ export class WindowCache {
   }
 }
 
+/** What the backend holds for results, in its order (MemoryOrder); seq 0 is this client's own report of a new backend. */
+export type MemoryReport = { readonly usedBytes: number; readonly globalBytes: number } & MemoryOrder
+
 /**
  * Owns the results worker and hands it the results port: the page asks main for the port, accepts exactly one port
  * posted by its own window while it waits for one, and transfers it to the worker. A worker that fails is recreated and
@@ -161,7 +164,7 @@ export class ResultClient implements Disposable {
   private readonly pending = new Map<number, Pending>()
   private readonly results = new Map<string, ResultState>()
   private readonly queryListeners = new Map<string, Set<(event: QueryEvent) => void>>()
-  private readonly memoryListeners = new Set<(memory: { usedBytes: number; globalBytes: number }) => void>()
+  private readonly memoryListeners = new Set<(memory: MemoryReport) => void>()
   private readonly generationListeners = new Set<(generation: number) => void>()
   /** Result ids to close, by generation, until the port is attached (or main has room for the request again). */
   private readonly closeQueue = new Map<number, Set<number>>()
@@ -273,7 +276,7 @@ export class ResultClient implements Disposable {
     return { dispose: () => { listeners.delete(listener); if (listeners.size === 0) this.queryListeners.delete(queryId) } }
   }
 
-  onMemory(listener: (memory: { usedBytes: number; globalBytes: number }) => void): Disposable {
+  onMemory(listener: (memory: MemoryReport) => void): Disposable {
     this.memoryListeners.add(listener)
     return { dispose: () => { this.memoryListeners.delete(listener) } }
   }
@@ -456,21 +459,21 @@ export class ResultClient implements Disposable {
         return
       }
       case 'query': return this.queryEvent(message.queryId, message.event)
-      case 'memory': return this.memoryChanged(message.usedBytes, message.globalBytes)
+      case 'memory': return this.memoryChanged({ usedBytes: message.usedBytes, globalBytes: message.globalBytes, generation: message.generation, seq: message.seq })
       case 'backend': return this.backend(message.generation, message.status)
     }
   }
 
   /** Memory listeners hear what the backend holds; a `globalBytes` of 0 leaves the budget as last reported. */
-  private memoryChanged(usedBytes: number, globalBytes: number): void {
-    for (const listener of [...this.memoryListeners]) listener({ usedBytes, globalBytes })
+  private memoryChanged(report: MemoryReport): void {
+    for (const listener of [...this.memoryListeners]) listener(report)
   }
 
   private backend(generation: number, status: BackendStatus): void {
     this.status = status
     if (generation === this.generation) return
-    // A new backend holds no results yet.
-    if (this.generation !== 0) this.memoryChanged(0, 0)
+    // A new backend holds no results yet (seq 0: before any report of its own); generation 0 means none is running.
+    this.memoryChanged({ usedBytes: 0, globalBytes: 0, generation, seq: 0 })
     this.generation = generation
     // The backend that held them is gone, and with it their results.
     for (const queued of [...this.closeQueue.keys()]) if (queued !== generation) this.closeQueue.delete(queued)

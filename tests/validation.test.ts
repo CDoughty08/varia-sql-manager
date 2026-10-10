@@ -107,10 +107,12 @@ describe('IPC validation', () => {
   it('accepts a summary with message entries and its completion time, and nothing looser', () => {
     const summary = {
       resultSets: [], discardedResultSets: 0, messages: [{ text: '(1 row affected)', kind: 'info' }], recordsAffected: 1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
-      database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 }, completedAt: '2026-10-09T12:34:56.1234567+02:00'
+      database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: 1 }, completedAt: '2026-10-09T12:34:56.1234567+02:00'
     }
     expect(queryResultSchema.safeParse(summary).success).toBe(true)
-    for (const patch of [{ completedAt: undefined }, { completedAt: 'x'.repeat(41) }, { messages: ['(1 row affected)'] }])
+    // The budget's seq orders it with the results.memory events; main adds the generation.
+    for (const patch of [{ completedAt: undefined }, { completedAt: 'x'.repeat(41) }, { messages: ['(1 row affected)'] }, { budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 } },
+      { budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: 1, generation: 1 } }, { budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: -1 } }])
       expect(queryResultSchema.safeParse({ ...summary, ...patch }).success, JSON.stringify(patch).slice(0, 60)).toBe(false)
   })
   it('validates copy and save requests strictly', () => {
