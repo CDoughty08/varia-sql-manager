@@ -16,7 +16,7 @@
     "start": "electron-vite preview",
     "backend:test": "dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release",
     "test": "npm run backend:test && vitest run",
-    "test:smoke": "node scripts/electron-smoke.mjs && node scripts/layout-smoke.mjs && node scripts/connections-smoke.mjs && node scripts/theme-smoke.mjs && node scripts/palette-smoke.mjs && node scripts/backend-smoke.mjs && node scripts/menus-smoke.mjs && node scripts/explorer-smoke.mjs && node scripts/results-smoke.mjs",
+    "test:smoke": "node scripts/electron-smoke.mjs && node scripts/layout-smoke.mjs && node scripts/connections-smoke.mjs && node scripts/theme-smoke.mjs && node scripts/palette-smoke.mjs && node scripts/backend-smoke.mjs && node scripts/menus-smoke.mjs && node scripts/explorer-smoke.mjs && node scripts/scripting-smoke.mjs && node scripts/results-smoke.mjs",
     "test:electron": "npm run check && npm run test:smoke",
     "check": "npm run typecheck && npm test && electron-vite build",
     "bench": "vitest run --config vitest.bench.config.ts",

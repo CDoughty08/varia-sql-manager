@@ -172,8 +172,9 @@ try {
   await palette('execute', 'Query: Execute')
   // aria-disabled says it is unavailable; the name does not repeat it.
   expect(await activeOption()).toMatchObject({ disabled: 'true', name: 'Query: Execute, F5' })
-  // Matches on a dimmed row are dimmed too, and so is the key of the active one.
-  expect(await widget().locator('.quick-input-row.disabled:not(.active)').first().evaluate(row => getComputedStyle(row.querySelector('.quick-input-hl')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
+  // Matches on a dimmed row are dimmed too, and so is the key of the active one. (A row found by a keyword, such as
+  // Script As… by "execute", highlights nothing.)
+  expect(await widget().locator('.quick-input-row.disabled:not(.active):has(.quick-input-label .quick-input-hl)').first().evaluate(row => getComputedStyle(row.querySelector('.quick-input-hl')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
   expect(await widget().locator('.quick-input-row.active.disabled').evaluate(row => getComputedStyle(row.querySelector('kbd')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
   // The live region stays in the accessibility tree while empty, so the hint is announced when it arrives.
   const message = widget().locator('.quick-input-message[aria-live="polite"]')

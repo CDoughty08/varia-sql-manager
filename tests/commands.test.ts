@@ -86,6 +86,18 @@ describe('command execution', () => {
     expect(commands.getSnapshot().error).toBe('')
     expect(error).toHaveBeenCalledTimes(3)
   })
+  it('shows a warning in the banner as a warning, until an error or a dismissal replaces it', async () => {
+    const commands = new CommandService()
+    commands.register('file.new', { run: async () => { throw new Error('No space left.') } })
+    commands.reportWarning('Scripted dbo.Orders with a warning.')
+    expect(commands.getSnapshot()).toEqual({ error: 'Scripted dbo.Orders with a warning.', kind: 'warning' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await commands.execute('file.new', undefined, 'api')
+    expect(commands.getSnapshot()).toEqual({ error: 'Could not run “File: New Query”: No space left.' })
+    commands.reportWarning('Again.')
+    commands.clearError()
+    expect(commands.getSnapshot()).toEqual({ error: '' })
+  })
   it('treats a throwing condition as unavailable', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const commands = new CommandService()

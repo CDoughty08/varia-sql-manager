@@ -1,14 +1,15 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import type { CommandId } from '../shared/commands/catalog'
 import { primaryRule, toAccelerator, toPlatform } from '../shared/commands/keybindings'
-import { buildMenuModel, contextMenuRequestSchema, pruneMenu, type ContextMenuRequest, type MenuEntry, type MenuId } from '../shared/commands/menus'
+import { buildMenuModel, contextMenuRequestSchema, pruneMenu, submenuTitle, type ContextMenuRequest, type MenuEntry, type MenuId } from '../shared/commands/menus'
 import type { MenuStyle } from '../shared/menu-style'
 
 /**
  * A native context menu for a request the renderer resolved: the catalogue's menu with only the `visible` commands,
  * without submenus left empty or stray separators. Labels and keys are the catalogue's (the placement's title, else
- * the platform's, else the command's), never the renderer's. Role-backed commands are Electron's roles, which act on
- * the focused element; every other item sends its command id back through `send`.
+ * the platform's, else the command's; the Script submenu's from its title key), never the renderer's. A submenu whose
+ * items are all disabled is disabled. Role-backed commands are Electron's roles, which act on the focused element;
+ * every other item sends its command id back through `send`.
  */
 export function contextMenuTemplate(request: ContextMenuRequest, platform: NodeJS.Platform, send: (id: CommandId) => void,
   model: (menu: MenuId) => readonly MenuEntry[] = menu => buildMenuModel(menu, toPlatform(platform))): MenuItemConstructorOptions[] {
@@ -18,7 +19,10 @@ export function contextMenuTemplate(request: ContextMenuRequest, platform: NodeJ
   const keep = (entry: MenuEntry) => entry.kind === 'command' ? visible.has(entry.id) : entry.kind === 'submenu' && !entry.dynamic
   const items = (entries: readonly MenuEntry[], depth: number): MenuItemConstructorOptions[] => pruneMenu(entries, keep, id => model(id), depth).map((entry): MenuItemConstructorOptions => {
     if (entry.kind === 'separator' || entry.kind === 'role') return { type: 'separator' }
-    if (entry.kind === 'submenu') return { id: entry.nativeId, label: label(entry.title), submenu: items(model(entry.id), depth + 1) }
+    if (entry.kind === 'submenu') {
+      const submenu = items(model(entry.id), depth + 1)
+      return { id: entry.nativeId, label: label(submenuTitle(entry, { explorerScriptTitle: request.scriptAsTitle })), submenu, enabled: submenu.some(item => item.type !== 'separator' && item.enabled !== false) }
+    }
     const { id } = entry, rule = primaryRule(id, toPlatform(platform)), accelerator = rule && toAccelerator(rule.chords, toPlatform(platform))
     // An open popup handles its own keys, so every key can show; nothing registers outside the menu.
     const keys = accelerator ? { accelerator, registerAccelerator: false } : {}

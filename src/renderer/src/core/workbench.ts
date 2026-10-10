@@ -29,6 +29,9 @@ import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
 import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
+import { scriptingContribution } from '../contributions/scripting'
+import { ScriptingOptionsService } from '../scripting/ScriptingOptionsService'
+import { ScriptingService } from '../scripting/ScriptingService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -77,6 +80,10 @@ export interface Workbench extends Disposable {
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
   readonly resultSelection: ResultSelectionService
+  /** Tools › Options › Scripting: the options every Script As request carries, and the Options dialog. */
+  readonly scriptingOptions: ScriptingOptionsService
+  /** Script As requests: their status, cancellation, and destinations. */
+  readonly scripting: ScriptingService
   readonly theme: ThemeService
 }
 /**
@@ -116,7 +123,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const targets = new TargetService(documents, queries, connections, files, api)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, editor: () => documents.boundEditor })
+  const scriptingOptions = new ScriptingOptionsService(api, (message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
+  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, scripting: scripting.running, editor: () => documents.boundEditor })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
@@ -132,18 +142,20 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, resultClient, results, resultMemory, ...gridStats ? { gridStats } : {}, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, resultClient, results, resultMemory, ...gridStats ? { gridStats } : {}, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, scripting, theme, dispose: () => {
     if (disposed) return
     disposed = true
     // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
     listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); resultMemory.dispose(); resultClient.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); theme.dispose(); events.dispose()
+    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); resultMemory.dispose(); resultClient.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); scripting.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); scriptingOptions.dispose(); theme.dispose(); events.dispose()
   } }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench)]
+    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench), scriptingContribution(workbench)]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
+  // Requests carry the defaults until main's stored options arrive; a warning about the file shows in the command banner.
+  void scriptingOptions.load()
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')
   return workbench
 }

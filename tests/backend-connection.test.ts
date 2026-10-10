@@ -49,7 +49,7 @@ describe('BackendConnection handshake', () => {
     expect(await lossOf(fake('wrong-version'))).toMatchObject({ reason: 'incompatible', detail: 'protocol 3, expected 2' })
   })
   it('refuses a stale build that lacks a method main may call', async () => {
-    expect(await lossOf(fake('missing-method'))).toMatchObject({ reason: 'incompatible', detail: 'protocol 2, expected 2; missing: tables.script' })
+    expect(await lossOf(fake('missing-method'))).toMatchObject({ reason: 'incompatible', detail: 'protocol 2, expected 2; missing: scripting.script' })
   })
   it('gives up on a backend that never says HELLO, and kills it', async () => {
     const connection = fake('no-hello', { limits: { helloMs: 300 } })

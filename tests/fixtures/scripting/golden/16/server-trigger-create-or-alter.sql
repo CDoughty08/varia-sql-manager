@@ -1,0 +1,10 @@
+USE [master]
+GO
+
+/****** Object:  DdlTrigger [<scratch>_trg]    Script Date: <date> ******/
+CREATE OR ALTER TRIGGER [<scratch>_trg] ON ALL SERVER FOR CREATE_CREDENTIAL AS SET NOCOUNT ON;
+GO
+
+DISABLE TRIGGER [<scratch>_trg] ON ALL SERVER
+GO
+

@@ -1,0 +1,9 @@
+USE [master]
+GO
+
+CREATE SERVER AUDIT SPECIFICATION [<scratch>_sas]
+FOR SERVER AUDIT [<scratch>_audit]
+ADD (FAILED_LOGIN_GROUP)
+WITH (STATE = OFF)
+GO
+

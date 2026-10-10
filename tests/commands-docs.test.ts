@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { commandDescriptor, commandIds, paletteLabel } from '../src/shared/commands/catalog'
 import { contextKeyNames } from '../src/shared/commands/context-keys'
 import { renderCommandDocs } from '../src/shared/commands/docs'
-import { contextMenuIds, menuIds, submenuIds, submenus } from '../src/shared/commands/menus'
+import { contextMenuIds, menuIds, submenuIds, submenus, type SubmenuId } from '../src/shared/commands/menus'
 
 // Regenerate after changing the catalogue, menus, context keys, or reserved keys: npx vitest run tests/commands-docs.test.ts -u
 describe('generated command documentation', () => {
@@ -35,7 +35,9 @@ describe('generated command documentation', () => {
     menuIds.forEach((menu, index) => {
       const section = sections[index]
       for (const id of commandIds.filter(id => commandDescriptor(id).menus?.some(placement => placement.menu === menu))) expect(section, `${menu}: ${id}`).toContain(`| \`${id}\` |`)
-      for (const id of submenuIds.filter(id => submenus[id].placements.some(placement => placement.menu === menu))) expect(section.replaceAll('**', ''), `${menu}: ${id}`).toContain(`| ${submenus[id].title} › | Submenu: `)
+      // A dynamic title is documented by its pattern: Script … as names the selected object.
+      const title = (id: SubmenuId) => submenus[id].dynamicTitle === 'scriptAs' ? 'Script … as' : submenus[id].title
+      for (const id of submenuIds.filter(id => submenus[id].placements.some(placement => placement.menu === menu))) expect(section.replaceAll('**', ''), `${menu}: ${id}`).toContain(`| ${title(id)} › | Submenu: `)
     })
     for (const menu of contextMenuIds) expect(menus).toMatch(new RegExp(`#### .* \\(\`${menu.replace('.', '\\.')}\`\\)\n\nRight-click `))
     expect(menus).toContain('| `z_quit` | E**x**it | `window.close` | Windows only |')

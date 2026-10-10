@@ -73,6 +73,55 @@ internal sealed record ExplorerError(string Code, string Message, bool Retryable
 /// <summary>A page of children: static folders first (first page only), then rows. Total is on the first page only.</summary>
 internal sealed record ExplorerChildrenResult(List<ExplorerNode> Nodes, long ElapsedMs, string? Cursor = null, int? Total = null, ExplorerError? Error = null);
 
+/// <summary>scripting.script: one object for Script As (the wizard will send many), a verb of the catalogue, and every
+/// scripting option (src/shared/scripting/schema.ts). Cancellation is a CANCEL frame for the request.</summary>
+internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options);
+/// <summary>The 36 options of src/shared/scripting/options.ts in its order; a missing member fails deserialization.</summary>
+internal sealed record ScriptingOptionsDto
+{
+    public required bool DelimitStatements { get; init; }
+    public required bool IncludeHeaders { get; init; }
+    public required bool IncludeVarDecimal { get; init; }
+    public required bool ScriptChangeTracking { get; init; }
+    public required bool ScriptFullTextCatalogs { get; init; }
+    public required bool ScriptUseDatabase { get; init; }
+    public required bool CheckExistence { get; init; }
+    public required bool GenerateDependentObjects { get; init; }
+    public required bool SchemaQualify { get; init; }
+    public required bool ScriptDataCompression { get; init; }
+    public required bool ScriptExtendedProperties { get; init; }
+    public required bool ScriptOwner { get; init; }
+    public required bool ScriptPermissions { get; init; }
+    public required bool ConvertUserDefinedDataTypes { get; init; }
+    public required bool GenerateAnsiPadding { get; init; }
+    public required bool IncludeCollation { get; init; }
+    public required bool IncludeIdentity { get; init; }
+    public required bool SchemaQualifyForeignKeys { get; init; }
+    public required bool ScriptBindings { get; init; }
+    public required bool ScriptCheckConstraints { get; init; }
+    public required bool ScriptDefaults { get; init; }
+    public required bool ScriptFileGroups { get; init; }
+    public required bool ScriptForeignKeys { get; init; }
+    public required bool ScriptFullTextIndexes { get; init; }
+    public required bool ScriptIndexes { get; init; }
+    public required bool ScriptPartitionSchemes { get; init; }
+    public required bool ScriptPrimaryKeys { get; init; }
+    public required bool ScriptStatistics { get; init; }
+    public required bool ScriptTriggers { get; init; }
+    public required bool ScriptUniqueKeys { get; init; }
+    public required bool ScriptViewColumns { get; init; }
+    public required bool IncludeDriSystemNames { get; init; }
+    public required bool MatchSourceSettings { get; init; }
+    public required string TargetEngineEdition { get; init; }
+    public required string TargetEngineType { get; init; }
+    public required string TargetServerVersion { get; init; }
+}
+/// <summary>A scripting failure, returned as a value so its code reaches the renderer.</summary>
+internal sealed record ScriptError(string Code, string Message, bool Retryable);
+/// <summary>The whole script (at most 4,000,000 characters) or an error. Database is where a new query window should
+/// run it: the object's, or master for databases and server objects. Commands counts the SQL commands the job sent.</summary>
+internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
+
 internal sealed class RequestException(string code, string message) : Exception(message)
 {
     public string Code { get; } = code;

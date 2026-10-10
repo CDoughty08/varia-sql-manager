@@ -1,0 +1,20 @@
+USE [<scratch>]
+GO
+
+/****** Object:  Table [dbo].[Compressed]    Script Date: <date> ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[Compressed](
+	[Id] [int] NOT NULL,
+	[Payload] [nvarchar](200) NULL,
+ CONSTRAINT [PK_Compressed] PRIMARY KEY CLUSTERED 
+(
+	[Id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, DATA_COMPRESSION = PAGE) ON [PRIMARY]
+) ON [PRIMARY]
+GO
+

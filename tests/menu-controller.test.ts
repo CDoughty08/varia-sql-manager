@@ -10,16 +10,17 @@ afterEach(() => { vi.restoreAllMocks() })
 let separators = 0
 const command = (title: string, mnemonic = 0, enabled = true): ResolvedMenuItem => ({ kind: 'command', key: title, id: 'file.new', title, mnemonic, enabled })
 const separator = (): ResolvedMenuItem => ({ kind: 'separator', key: `sep:${separators++}` })
-const submenu = (title: string, mnemonic: number, items: ResolvedMenuItem[]): ResolvedMenuItem => ({ kind: 'submenu', key: title, title, mnemonic, items })
+const submenu = (title: string, mnemonic: number, items: ResolvedMenuItem[]): ResolvedMenuItem => ({ kind: 'submenu', key: title, title, mnemonic, items, enabled: true })
 
 const menus: Record<MenubarId, ResolvedMenuItem[]> = {
   file: [command('New Query'), command('Open…'), separator(), command('Save'), command('Save As…', 5, false)],
   edit: [command('Undo'), command('Redo'), separator(), command('Find')],
   view: [command('Command Palette…'), separator(), submenu('Theme', 1, [command('Color Theme…'), separator(), submenu('Dark Theme', 3, [command('Varia Dark', -1), command('Harbor', -1)])])],
   query: [submenu('Connection', 1, [command('Connect…'), command('Disconnect')]), command('Execute', 1), command('Cancel Executing Query', 0, false)],
+  tools: [command('Options…')],
   window: [command('Object Explorer')]
 }
-const buttons: Record<MenubarId, Rect> = { file: rect(40, 0, 40, 34), edit: rect(80, 0, 40, 34), view: rect(120, 0, 40, 34), query: rect(160, 0, 50, 34), window: rect(210, 0, 60, 34) }
+const buttons: Record<MenubarId, Rect> = { file: rect(40, 0, 40, 34), edit: rect(80, 0, 40, 34), view: rect(120, 0, 40, 34), query: rect(160, 0, 50, 34), tools: rect(210, 0, 50, 34), window: rect(260, 0, 60, 34) }
 function rect(left: number, top: number, width: number, height: number): Rect { return { left, top, right: left + width, bottom: top + height } }
 const key = (name: string, extra: Partial<MenuKey> = {}): MenuKey => ({ key: name, code: /^[a-z]$/i.test(name) ? `Key${name.toUpperCase()}` : name, alt: false, ctrl: false, meta: false, shift: false, repeat: false, ...extra })
 

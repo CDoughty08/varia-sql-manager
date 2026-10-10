@@ -12,6 +12,8 @@ import type { FolderId } from '../src/shared/explorer/catalog'
 import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { descriptor } from './fixtures/results'
 import { deferred } from './fixtures/documents'
+import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
+import { scriptTarget } from '../src/renderer/src/scripting/ScriptingService'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -100,7 +102,13 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ['Messages with selected text', output('messages', 0, 'Completed.')], ['Messages without', output('messages', 0)]
   ]
   const snapshots: (readonly ResolvedMenuItem[])[][] = []
-  const capture = () => { snapshots.push(targets.map(([, target]) => fixture.menus.resolve(menuForTarget[target.kind], target))) }
+  // A right-click selects its node first, so the node's menu reads that node's Script As keys.
+  const resolve = (target: MenuTarget) => {
+    const node = target.kind === 'explorer' ? target.node : undefined, state = fixture.context.getState()
+    const selected = node ? vi.spyOn(fixture.context, 'getState').mockReturnValue({ ...state, ...scriptContextValues(scriptMenuState(scriptTarget(node))) }) : undefined
+    try { return fixture.menus.resolve(menuForTarget[target.kind], target) } finally { selected?.mockRestore() }
+  }
+  const capture = () => { snapshots.push(targets.map(([, target]) => resolve(target))) }
   capture()
   fixture.connections.add(connectionInfo('server-a'), connectionOptions)
   fixture.targets.update(saved.id, { connectionId: 'server-a' })

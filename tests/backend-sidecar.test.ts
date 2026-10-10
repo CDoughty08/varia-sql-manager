@@ -13,6 +13,7 @@ import type { BackendMethod, BackendMethods, ResultDescriptor } from '../src/sha
 import { decodePage } from '../src/shared/ipc/wire/pages'
 import { cellText } from '../src/shared/ipc/wire/cells'
 import { fuzzSeed, mulberry32 } from './fuzz/prng'
+import { defaultScriptingOptions } from '../src/shared/scripting/options'
 
 // The Release build, as CI checks it: npm run check builds it before vitest runs.
 const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
@@ -120,14 +121,15 @@ describe('real .NET sidecar over protocol v2', () => {
   it('validates authentication without attempting a connection', async () => {
     await expect(call(backend(), 'connections.connect', { server: 'localhost', database: 'master', authentication: 'invalid' as 'sql', trustServerCertificate: false })).rejects.toThrow('Unsupported authentication mode.')
   })
-  it('no longer offers the v1 catalog methods that explorer.children replaced', async () => {
+  it('no longer offers the v1 catalog and table script methods that explorer.children and scripting.script replaced', async () => {
     const backend = raw()
     const hello = await backend.hello()
-    const retired = ['tables.list', 'server.objects.list']
+    const retired = ['tables.list', 'server.objects.list', 'tables.script']
     expect((hello.methods as string[]).filter(method => retired.includes(method))).toEqual([])
     backend.request(1, { method: 'tables.list', params: { connectionId: crypto.randomUUID(), database: 'master' } })
     backend.request(2, { method: 'server.objects.list', params: { connectionId: crypto.randomUUID(), kind: 'logins' } })
-    for (let index = 0; index < 2; index++) expect(body(await backend.next(FrameKind.RESPONSE))).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } })
+    backend.request(3, { method: 'tables.script', params: { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' } })
+    for (let index = 0; index < 3; index++) expect(body(await backend.next(FrameKind.RESPONSE))).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } })
   })
   it('reads a table\'s columns on the metadata lane, checking names before the connection', async () => {
     const connection = backend()
@@ -148,6 +150,21 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'explorer.children', { ...base, node: folder })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
     await expect(call(connection, 'explorer.children', { ...base, node: { type: 'object', object: { kind: 'server' } } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('explorer.children', { ...base, node: folder })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
+  })
+  it('checks scripting requests against the catalogue before the connection', async () => {
+    const connection = backend()
+    const valid = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), targets: [{ kind: 'table', database: 'master', schema: 'dbo', name: 'Orders' }], verb: 'create', options: defaultScriptingOptions } as const
+    // Requests zod would also refuse reach the backend only through tests; it re-checks them on its own.
+    for (const patch of [
+      { targets: [] }, { targets: [valid.targets[0], valid.targets[0]] }, { targets: [{ kind: 'table', database: 'master', name: 'Orders' }] }, { targets: [{ kind: 'certificate', database: 'master', name: 'c' }] },
+      { targets: [{ kind: 'index', database: 'master', name: 'i', parent: { kind: 'tableType', schema: 'dbo', name: 't' } }] }, { verb: 'execute' }, { verb: 'truncate' },
+      { options: { ...defaultScriptingOptions, targetServerVersion: '120' } }, { options: { ...defaultScriptingOptions, extra: true } }, { requestId: 'r1' }, { extra: 1 }
+    ]) await expect(call(connection, 'scripting.script', { ...valid, ...patch } as never), JSON.stringify(patch)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    const { includeHeaders: _, ...missing } = defaultScriptingOptions
+    await expect(call(connection, 'scripting.script', { ...valid, options: missing } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'scripting.script', valid)).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    await expect(call(connection, 'scripting.script', { ...valid, targets: [{ kind: 'login', name: 'sa' }] })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    expect(deadlineFor('scripting.script', valid)).toEqual({ deadlineMs: 60_000, backstopMs: 65_000 })
   })
   it('handles cancellation of a completed or unknown query', async () => {
     await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
@@ -302,7 +319,7 @@ describe('real .NET sidecar frame handling', () => {
     expect(await backend.exit).toBe(0)
   })
   it('surfaces backend error codes on BackendError', async () => {
-    const error = await call(backend(), 'tables.script', { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' }).catch(value => value)
+    const error = await call(backend(), 'tables.columns', { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' }).catch(value => value)
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: 'NOT_CONNECTED' })
   })

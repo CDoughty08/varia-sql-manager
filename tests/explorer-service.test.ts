@@ -8,6 +8,7 @@ import type { Timers } from '../src/renderer/src/core/timers'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { ExplorerService, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
+import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
@@ -816,19 +817,27 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(listener).toHaveBeenCalledTimes(1)
     expect(f.explorer.context.getSnapshot()).toEqual({
       explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
-      explorerSelectionInsertable: false, explorerSelectionScriptable: false, explorerLoading: false
+      explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState({ kind: 'folder' })), explorerLoading: false
     })
     expect(f.explorer.getSnapshot().selected).toBe(databases)
     f.explorer.select(f.find('Database Snapshots'))
     expect(listener).toHaveBeenCalledTimes(2)
     f.explorer.select(f.find('AppData'))
     expect(listener).toHaveBeenCalledTimes(3)
-    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'database', explorerSelectionFolder: '', explorerSelectionInsertable: true, explorerSelectionScriptable: true })
+    expect(f.explorer.context.getSnapshot()).toMatchObject({
+      explorerSelectionKind: 'database', explorerSelectionFolder: '', explorerSelectionInsertable: true, explorerScriptTitle: 'database', explorerScriptCreate: 'enabled', explorerScriptAlter: 'enabled',
+      explorerScriptCreateOrAlter: '', explorerScriptSelect: '', explorerSelectionModifiable: false
+    })
     // A row with the same keys publishes nothing.
     f.explorer.select(f.find('Locked'))
     expect(listener).toHaveBeenCalledTimes(3)
     f.explorer.select(f.find('server-a.example'))
-    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'server', explorerSelectionInsertable: true, explorerSelectionScriptable: false })
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'server', explorerSelectionInsertable: true, explorerScriptTitle: '', explorerScriptCreate: '' })
+    // A system database's subtype changes the row: it still scripts as a database.
+    f.explorer.expand(f.find('System Databases'))
+    await settle()
+    f.explorer.select(f.find('master'))
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'database', explorerScriptTitle: 'database', explorerScriptDrop: 'enabled' })
     // Synthetic rows are not nodes.
     f.explorer.select(syntheticId(1, RowKind.Error))
     expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerHasSelection: false, explorerSelectionKind: '' })

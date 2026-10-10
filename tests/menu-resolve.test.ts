@@ -100,12 +100,12 @@ describe('menu resolution', () => {
       'explorer.context': [
         command('connection.connect', 'Connect…', { when: compileWhen("explorerNode == 'server' || explorerNode == 'background'") }), { kind: 'separator' },
         command('file.new', 'New Query', { when: compileWhen("explorerNode == 'server' && hasConnection") }), { kind: 'separator' },
-        { kind: 'submenu', id: 'explorer.scriptTableAs', nativeId: 'explorer.scriptTableAs', title: 'Script Table as', when: compileWhen("explorerNode == 'table'") }, { kind: 'separator' },
+        { kind: 'submenu', id: 'explorer.scriptAs', nativeId: 'explorer.scriptAs', title: 'Script Table as', when: compileWhen("explorerNode == 'table'") }, { kind: 'separator' },
         { kind: 'role', role: 'copy' }, { kind: 'separator' },
         command('explorer.refresh', 'Refresh', { when: compileWhen("explorerNode != 'table'") })
       ],
-      'explorer.scriptTableAs': [{ kind: 'submenu', id: 'explorer.scriptTableAs.create', nativeId: 'explorer.scriptTableAs.create', title: 'CREATE To' }],
-      'explorer.scriptTableAs.create': [command('file.saveAs', 'File…', { when: compileWhen('backendReady') })]
+      'explorer.scriptAs': [{ kind: 'submenu', id: 'explorer.scriptAs.create', nativeId: 'explorer.scriptAs.create', title: 'CREATE To' }],
+      'explorer.scriptAs.create': [command('file.saveAs', 'File…', { when: compileWhen('backendReady') })]
     }
     const model = (menu: MenuId) => entries[menu] ?? []
     const resolve = (target: Parameters<typeof resolveMenu>[1]['target'], state = {}) => marked(resolveMenu('explorer.context', options({ model, target, state: contextRecord('win32', state) })))

@@ -17,8 +17,12 @@ void Invalid(string sql, string name)
 
 var batches = SqlScript.Parse("SELECT 1;\r\ngo\r\nSELECT 2;\r\nGo 3 -- repeat\r\n");
 Check(batches.Count == 2 && batches[0].RepeatCount == 1 && batches[1].RepeatCount == 3, "case insensitive GO and repetition");
-Check(batches[0].StartLine == 1 && batches[1].StartLine == 2, "source line offsets retained");
-Check(!batches[0].Sql.Contains("go") && !batches[1].Sql.Contains("Go 3"), "GO commands removed");
+Check(batches[0].StartLine == 1 && batches[1].StartLine == 3, "source line offsets retained");
+Check(!batches[0].Sql.Contains("go") && !batches[1].Sql.Contains("Go 3") && batches[1].Sql == "SELECT 2;\r\n", "GO commands removed");
+var modules = SqlScript.Parse("SELECT 1;\nGO\n\nCREATE PROC p AS SELECT 1;\r\nGO\r\nCREATE VIEW v AS SELECT 1 AS a;\nGO -- end\nSELECT 2;");
+Check(modules.Count == 4 && modules[1].Sql == "\nCREATE PROC p AS SELECT 1;\r\n" && modules[1].StartLine == 3 && modules[2].Sql == "CREATE VIEW v AS SELECT 1 AS a;\n" && modules[2].StartLine == 6
+    && modules[3].Sql == " -- end\nSELECT 2;" && modules[3].StartLine == 7,
+    "a bare GO line ends with its line break, so a scripted module comes back without a leading blank line");
 Check(SqlScript.Parse("GO\n-- empty\nGO\nSELECT 1;\nGO\nGO").Count == 1, "ignore empty batches");
 Check(SqlScript.Parse("-- GO\n/* GO */\n").Count == 0, "ignore comments only");
 foreach (var literal in new[] { "'first\nGO\nlast'", "N'it''s\nGO 3\ntext'", "[name\nGO\n]]end]", "\"name\nGO\n\"\"end\"" })
@@ -78,6 +82,7 @@ HostChecks.Run(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
+await ScriptingChecks.RunAsync(Check);
 using (var offline = new SqlService())
 {
     try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }
@@ -207,6 +212,7 @@ try
     Check(result.Status == "failed", "closing a tab removes temporary objects and session state");
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
     await ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json);
+    await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }
 finally { await Call<object>("connections.disconnect", new ConnectionArgs(info.Id)); }

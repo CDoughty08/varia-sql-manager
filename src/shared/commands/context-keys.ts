@@ -1,6 +1,7 @@
 import type { Platform } from './keybindings'
 import { comparisons, parseWhen, referencedKeys, type ContextRecord } from './when'
 import { folderIds, nodeKinds } from '../explorer/catalog.ts'
+import { scriptAsTitleKeys, scriptVerbContextKey, scriptVerbs, scriptVerbSpecs, type ScriptVerbContextKey } from '../scripting/catalog.ts'
 
 /**
  * `static` keys never change while the app runs, `state` keys come from service snapshots, `focus` keys from the
@@ -15,6 +16,14 @@ interface DeclaredTarget { readonly scope: 'target'; readonly description: strin
 export type ContextKeyDeclaration =
   | ({ readonly type: 'boolean' } & (Declared | DeclaredTarget))
   | ({ readonly type: 'enum'; readonly values: readonly string[] } & (Declared | DeclaredTarget))
+
+const verbStates = ['', 'disabled', 'enabled'] as const
+interface VerbKeyDeclaration { readonly type: 'enum'; readonly scope: 'state'; readonly values: typeof verbStates; readonly description: string }
+/** One key per Script As verb, from `scriptMenuState` of the selection. */
+const scriptVerbKeys = Object.fromEntries(scriptVerbs.map(verb => [scriptVerbContextKey(verb), {
+  type: 'enum', scope: 'state', values: verbStates,
+  description: `How the selected Object Explorer node offers Script as › ${scriptVerbSpecs[verb].name} To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding \`when\` clauses.`
+}])) as { readonly [K in ScriptVerbContextKey]: VerbKeyDeclaration }
 
 export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
@@ -54,8 +63,14 @@ export const contextKeys = {
   explorerSelectionFilterable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is a folder that Filter Settings can filter.' },
   explorerSelectionFiltered: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer folder has a filter.' },
   explorerSelectionInsertable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node has a name to copy: a server, an object, or a fully loaded Columns folder.' },
-  explorerSelectionScriptable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is an object SMO can script.' },
+  explorerScriptTitle: {
+    type: 'enum', scope: 'state', values: ['', ...scriptAsTitleKeys],
+    description: "The selected Object Explorer node's Script submenu title key from `src/shared/scripting/catalog.ts` ('table' shows Script Table as), or '' when it has none. Keep it out of keybinding `when` clauses."
+  },
+  ...scriptVerbKeys,
+  explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
+  scriptingRunning: { type: 'boolean', scope: 'state', description: 'A Script As request is running.' },
   explorerNode: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['background', 'folder', ...nodeKinds, ''],
     description: "The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers."

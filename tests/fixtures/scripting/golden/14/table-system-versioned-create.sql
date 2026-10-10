@@ -1,0 +1,27 @@
+USE [<scratch>]
+GO
+
+/****** Object:  Table [Sales].[Invoices]    Script Date: <date> ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [Sales].[Invoices](
+	[Id] [int] NOT NULL,
+	[Amount] [money] NULL,
+	[ValidFrom] [datetime2](7) GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+	[ValidTo] [datetime2](7) GENERATED ALWAYS AS ROW END HIDDEN NOT NULL,
+ CONSTRAINT [PK_Invoices] PRIMARY KEY CLUSTERED 
+(
+	[Id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY],
+	PERIOD FOR SYSTEM_TIME ([ValidFrom], [ValidTo])
+) ON [PRIMARY]
+WITH
+(
+SYSTEM_VERSIONING = ON (HISTORY_TABLE = [Sales].[InvoicesHistory])
+)
+GO
+

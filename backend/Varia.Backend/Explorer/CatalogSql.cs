@@ -100,7 +100,7 @@ internal static partial class CatalogSql
     private const string ParentFound = "SELECT CONVERT(bit, CASE WHEN @object_id IS NULL THEN 0 ELSE 1 END);\nIF @object_id IS NULL RETURN;\n";
 
     // Metadata functions ignore the isolation level and LOCK_TIMEOUT, so the catalog is read through joins only.
-    private static readonly string[] Builtins = ["OBJECT_NAME(", "OBJECT_SCHEMA_NAME(", "SCHEMA_NAME(", "TYPE_NAME(", "USER_NAME(", "SUSER_SNAME(", "SUSER_NAME(",
+    internal static readonly string[] Builtins = ["OBJECT_NAME(", "OBJECT_SCHEMA_NAME(", "SCHEMA_NAME(", "TYPE_NAME(", "USER_NAME(", "SUSER_SNAME(", "SUSER_NAME(",
         "OBJECTPROPERTY", "COL_NAME(", "INDEX_COL(", "DATABASEPROPERTYEX(", "OBJECT_DEFINITION("];
     /// <summary>Catalog columns and views that appear only from a version band (B6).</summary>
     public static readonly (string Token, int Since)[] Gates =

@@ -1,0 +1,600 @@
+explorer.context, for a table
+  Select Top 1000 Ro&ws
+  ---
+  &Script Table as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    C&REATE OR ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &INSERT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &UPDATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    D&ELETE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a history table
+  Select Top 1000 Ro&ws
+  ---
+  &Script Table as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    C&REATE OR ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &INSERT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &UPDATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    D&ELETE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a ledger history table
+  Select Top 1000 Ro&ws
+  ---
+  &Script Table as >
+    &CREATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    C&REATE OR ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &DROP To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    DROP A&nd CREATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &INSERT To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &UPDATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    D&ELETE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a view
+  &Script View as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    C&REATE OR ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &INSERT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &UPDATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    D&ELETE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a ledger view
+  &Script View as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    C&REATE OR ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &DROP To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    DROP A&nd CREATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &INSERT To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &UPDATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    D&ELETE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a T-SQL procedure
+  Modif&y
+  ---
+  &Script Stored Procedure as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    C&REATE OR ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    E&XECUTE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a CLR procedure
+  &Script Stored Procedure as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    C&REATE OR ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    E&XECUTE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for an inline table-valued function
+  Modif&y
+  ---
+  &Script Function as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    C&REATE OR ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a scalar function
+  Modif&y
+  ---
+  &Script Function as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    C&REATE OR ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    E&XECUTE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for an aggregate
+  &Script Function as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    C&REATE OR ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    ---
+    &SELECT To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a DML trigger
+  Modif&y
+  ---
+  &Script Trigger as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    C&REATE OR ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a database
+  New &Query
+  ---
+  &Script Database as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a database snapshot
+  New &Query
+  ---
+  &Script Database as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for an index
+  &Script Index as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a foreign key
+  &Script Key as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a user
+  &Script User as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a login
+  &Script Login as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a linked server
+  &Script Linked Server as >
+    &CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &DROP To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    DROP A&nd CREATE To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+  ---
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a certificate (deferred)
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for an extended procedure (deferred)
+  Copy &Name
+  ---
+  Re&fresh
+explorer.context, for a table type's index (not scriptable)
+  Copy &Name
+  ---
+  Re&fresh

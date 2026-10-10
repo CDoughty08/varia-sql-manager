@@ -1,12 +1,13 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
+import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 
 export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'debug-restart', 'refresh',
   'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
   'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table', 'collapse-all', 'filter',
-  'filter-filled', 'clear-all', 'warning'] as const
+  'filter-filled', 'clear-all', 'warning', 'settings-gear', 'file-code', 'edit'] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
@@ -281,18 +282,21 @@ export const commandCatalog = {
     title: 'Select Top 1000 Rows', category: 'Object Explorer', icon: 'table', precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
     menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'w', when: "explorerNode == 'table'" }]
   },
-  'explorer.scriptCreateToNewQuery': {
-    title: 'Script Table as CREATE to New Query Editor Window', category: 'Object Explorer', keywords: ['script'], precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
-    menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 1, title: 'New Query Editor Window', mnemonic: 'n' }]
+  // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
+  // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
+  ...scriptCommandEntries(),
+  // The palette's way in: a quick pick of the enabled verbs and destinations for the selected node.
+  'explorer.scriptAs': {
+    title: 'Script As…', category: 'Object Explorer', icon: 'file-code', keywords: ['script', 'create', 'alter', 'drop', 'select', 'insert', 'update', 'delete', 'execute'],
+    precondition: "backendReady && explorerScriptTitle != ''", unavailableHint: scriptUnavailableHint
   },
-  'explorer.scriptCreateToFile': {
-    title: 'Script Table as CREATE to File…', category: 'Object Explorer', icon: 'save-as', keywords: ['script'], precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
-    menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 2, title: 'File…', mnemonic: 'f' }]
+  // SSMS's Modify: ALTER to a new query window, for modules and triggers.
+  'explorer.modify': {
+    title: 'Modify', category: 'Object Explorer', icon: 'edit', precondition: "backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy",
+    unavailableHint: 'Select a stored procedure, function, or trigger.',
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 3, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
   },
-  'explorer.scriptCreateToClipboard': {
-    title: 'Script Table as CREATE to Clipboard', category: 'Object Explorer', icon: 'clippy', keywords: ['script'], precondition: 'backendReady', unavailableHint: selectTable,
-    menus: [{ menu: 'explorer.scriptTableAs.create', group: '1_destination', order: 3, title: 'Clipboard', mnemonic: 'l' }]
-  },
+  'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
     menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]
@@ -360,6 +364,11 @@ export const commandCatalog = {
   'preferences.reloadThemes': { title: 'Reload Themes', category: 'Preferences', icon: 'refresh', keywords: ['color'] },
   // View › Theme's theme and mode items in custom menus: the choice travels as the item's arguments.
   'preferences.setTheme': { title: 'Set Color Theme', category: 'Preferences', palette: false },
+  // SSMS's Tools › Options, with its Scripting page; ⌘, is the macOS settings key.
+  'preferences.options': {
+    title: 'Options…', category: 'Preferences', icon: 'settings-gear', keywords: ['settings', 'scripting', 'ssms'],
+    keybindings: [{ mac: 'mod+,' }], menus: [{ menu: 'tools', group: '1_options', order: 1, mnemonic: 'o' }]
+  },
   // Ctrl+Shift+= too: Electron's own Zoom In key (Ctrl++, ⌘+), which the menus used before they showed Ctrl+=.
   'view.zoomIn': {
     title: 'Zoom In', category: 'View', icon: 'zoom-in', role: 'zoomIn', keybindings: [{ key: 'mod+=', native: true }, { key: 'mod+shift+=', native: true }],

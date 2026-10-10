@@ -388,6 +388,17 @@ describe('smoke-test backends', () => {
     expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], packaged: true })
     expect(() => backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_NODE: 'node' } })).toThrow('absolute VARIA_TEST_NODE')
   })
+  it('passes the OS locale to the real backend, which dates script headers in it', () => {
+    const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false, env: { PATH: '/bin', VARIA_BACKEND_TEST_HOOKS: '1' } }
+    expect(backendSpawnSpec({ ...base, locale: 'de-DE' }).env).toEqual({ PATH: '/bin', VARIA_LOCALE: 'de-DE' })
+    expect(backendSpawnSpec({ ...base, packaged: true, locale: 'ja-JP' }).env).toEqual({ PATH: '/bin', VARIA_LOCALE: 'ja-JP' })
+    expect(backendSpawnSpec({ ...base, smokeTest: true, locale: 'tr-TR' }).env).toEqual({ PATH: '/bin', VARIA_BACKEND_TEST_HOOKS: '1', VARIA_LOCALE: 'tr-TR' })
+    expect(backendSpawnSpec(base).env).toEqual({ PATH: '/bin' })
+    // Without an explicit environment the backend still inherits main's, plus the locale.
+    const inherited = backendSpawnSpec({ ...base, env: undefined, locale: 'en-GB' }).env!
+    expect(inherited.VARIA_LOCALE).toBe('en-GB')
+    expect(Object.keys(inherited).filter(key => key !== 'VARIA_LOCALE').length).toBeGreaterThan(0)
+  })
   it('the workbench fake records calls by generation and crashes on request', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'varia-fake-backend-'))
     directories.push(directory)
