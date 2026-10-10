@@ -137,7 +137,7 @@ used with a warning.
 | # | Option | Key | Default | Description | SMO |
 | --- | --- | --- | --- | --- | --- |
 | 7 | Check for object existence | `checkExistence` | False | Runs each statement only when the object exists (for DROP and ALTER) or does not exist yet (for CREATE). | `IncludeIfNotExists` |
-| 8 | Generate script for dependent objects | `generateDependentObjects` | False | Also scripts the objects that must exist before the selected object's script can run. | `WithDependencies`: what the object refers to for CREATE, what refers to it for CREATE OR ALTER and DROP, nothing for ALTER (SMO's comments for references it cannot resolve are left out and named in a warning) |
+| 8 | Generate script for dependent objects | `generateDependentObjects` | False | Also scripts the objects that must exist before the selected object's script can run. | `WithDependencies`: what the object refers to for CREATE, what refers to it (database DDL triggers included) for CREATE OR ALTER and DROP, nothing for ALTER (SMO's comments for references it cannot resolve are left out and named in a warning) |
 | 9 | Schema qualify object names | `schemaQualify` | True (docs page: False) | Prefixes object names with their schema. | `SchemaQualify`; templates |
 | 10 | Script data compression options | `scriptDataCompression` | False | Includes the data compression and XML compression settings of tables and indexes. | `ScriptDataCompression`, `ScriptXmlCompression` |
 | 11 | Script extended properties | `scriptExtendedProperties` | True (docs page: False) | Includes the object's extended properties. | `ExtendedProperties` |

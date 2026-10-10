@@ -98,17 +98,23 @@ internal static class ScriptingErrors
         return new(code, Clip(message, MaxMessage), catalog.Retryable(code));
     }
 
-    /// <summary>A trigger or dependent object the target's script would carry is encrypted or over the definition limit:
-    /// the message names that object and the option that brought it in, not the target.</summary>
+    /// <summary>A trigger or dependent object the target's script would carry is encrypted, over the definition limit, or
+    /// has a definition the login cannot read: the message names that object (a database or server trigger as such) and
+    /// the option that brought it in, not the target.</summary>
     public static ScriptError Dependent(ScriptingCatalog catalog, DependentDefinitionException error, ScriptSubject subject)
     {
-        var o = (error.Parent is { } parent ? Display(error.Name) + " of " + Display(error.Schema + "." + parent) : Display(error.Schema + "." + error.Name))
+        var noun = error.Kind switch { "databaseTrigger" => "database trigger ", "serverTrigger" => "server trigger ", _ => error.Parent is null ? "" : "trigger " };
+        var o = (error.Parent is { } parent ? Display(error.Name) + " of " + Display(error.Schema + "." + parent)
+                : Display(error.Schema is { } schema ? schema + "." + error.Name : error.Name))
             + (error.Database is { } database ? " in database " + Display(database) : "");
-        var message = error.Code == "ENCRYPTED"
-            ? (error.Parent is null ? "" : "Trigger ") + o + " is encrypted (WITH ENCRYPTION), so " + subject.Display + " cannot be scripted with " + error.Option
-                + " on. Turn it off in Tools › Options › Scripting and try again."
-            : "The definition of " + (error.Parent is null ? "" : "trigger ") + o + " is larger than 8 MB, which Varia cannot open. Turn off " + error.Option
-                + " in Tools › Options › Scripting and try again.";
+        var advice = " cannot be scripted with " + error.Option + " on. Turn it off in Tools › Options › Scripting and try again.";
+        var message = error.Code switch
+        {
+            "ENCRYPTED" => (noun.Length == 0 ? "" : char.ToUpperInvariant(noun[0]) + noun[1..]) + o + " is encrypted (WITH ENCRYPTION), so " + subject.Display + advice,
+            "NO_DEFINITION" when error.MaybeEncrypted => "The definition of " + noun + o + " is encrypted, or you do not have permission to view it, so " + subject.Display + advice,
+            "NO_DEFINITION" => "You do not have permission to view the definition of " + noun + o + ", so " + subject.Display + advice,
+            _ => "The definition of " + noun + o + " is larger than 8 MB, which Varia cannot open. Turn off " + error.Option + " in Tools › Options › Scripting and try again."
+        };
         return new(error.Code, Clip(message, MaxMessage), catalog.Retryable(error.Code));
     }
 

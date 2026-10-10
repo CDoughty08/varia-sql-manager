@@ -67,7 +67,7 @@ export const scriptingOptionDefs = [
   },
   {
     key: 'generateDependentObjects', group: 'object', label: 'Generate script for dependent objects', type: 'boolean', default: false,
-    smo: '`WithDependencies`: what the object refers to for CREATE, what refers to it for CREATE OR ALTER and DROP, nothing for ALTER (SMO\'s comments for references it cannot resolve are left out and named in a warning)',
+    smo: '`WithDependencies`: what the object refers to for CREATE, what refers to it (database DDL triggers included) for CREATE OR ALTER and DROP, nothing for ALTER (SMO\'s comments for references it cannot resolve are left out and named in a warning)',
     description: 'Also scripts the objects that must exist before the selected object\'s script can run.'
   },
   {

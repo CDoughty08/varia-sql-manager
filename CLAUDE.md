@@ -26,8 +26,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 431 checks instead of 314
-  (545 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer and Script As
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 433 checks instead of 316
+  (552 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer and Script As
   scratch-database checks and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
   and `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
@@ -105,7 +105,9 @@ pages, limits, error codes, display formats, benchmarks).
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
   first; live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
-  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age).
+  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
+  scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each
+  script in a rolled-back transaction, which must change only what its verb implies; keep it when changing scripting.
 - UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
 - IPC performance: `tests/bench/*.bench.ts` and `scripts/ipc-bench.mjs` only measure; a new metric needs a
   `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in docs/ipc.md. Floors must

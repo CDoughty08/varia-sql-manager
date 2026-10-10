@@ -444,6 +444,7 @@ internal static partial class ScriptingLiveChecks
         await VerbsAsync(check, client, sql, scratch);
         await UnresolvedAsync(check, client, sql, scratch);
         await DependentDatabasesAsync(check, service, client, sql, scratch);
+        await InjectionAsync(check, service, client, live, json, scratch);
         await OldHeadersAsync(check, client, sql, db);
         await CultureAsync(check, client, sql, db);
         await GoldenAsync(check, service, client, scratch, sql, live, json);
@@ -599,6 +600,32 @@ internal static partial class ScriptingLiveChecks
             }
         check(failed.Count == 0, "the function's CREATE, ALTER and DROP And CREATE with the option script without the view under it: " + string.Join("; ", failed));
 
+        // A database DDL trigger that calls a function also refers to it: encrypted or over 8 MB, it is named as a database
+        // trigger for the function's CREATE OR ALTER before SMO reads it (not reported as the function's own definition).
+        var triggerBytes = (await sql("SELECT DATALENGTH(m.definition) FROM sys.sql_modules AS m JOIN sys.triggers AS t ON t.object_id = m.object_id "
+            + "WHERE t.parent_class = 0 AND t.name = N'trg_DdlChildLarge';", db)).Scalar;
+        allocated = GC.GetTotalAllocatedBytes(true);
+        var ddlEncrypted = await client.Script(Schema("function", "fn_DdlChild"), "createOrAlter", dependents);
+        var ddlLarge = await client.Script(Schema("function", "fn_DdlChildLarge"), "createOrAlter", dependents);
+        allocated = GC.GetTotalAllocatedBytes(true) - allocated;
+        check(ddlEncrypted.Error is { Code: "ENCRYPTED", Retryable: false } && ddlEncrypted.Error.Message == "Database trigger trg_DdlChild is encrypted (WITH ENCRYPTION), so "
+                + "dbo.fn_DdlChild cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again."
+            && ddlLarge.Error is { Code: "TOO_LARGE" } && ddlLarge.Error.Message == "The definition of database trigger trg_DdlChildLarge is larger than 8 MB, which Varia "
+                + "cannot open. Turn off Generate script for dependent objects in Tools › Options › Scripting and try again."
+            && long.Parse(triggerBytes!, CultureInfo.InvariantCulture) > 8_000_000 && allocated < 48_000_000,
+            "a CREATE OR ALTER with the option names a database trigger over the function that is encrypted or over 8 MB before SMO loads it (" + triggerBytes + " bytes, "
+            + allocated / 1_000_000 + " MB allocated): " + ddlEncrypted.Error?.Message + " " + ddlLarge.Error?.Message);
+        failed.Clear();
+        foreach (var name in new[] { "fn_DdlChild", "fn_DdlChildLarge" })
+            foreach (var (verb, options) in new[] { ("create", dependents), ("alter", dependents), ("dropAndCreate", dependents), ("createOrAlter", client.Options) })
+            {
+                var result = await client.Script(Schema("function", name), verb, options);
+                if (!Ok(result) || Regex.IsMatch(result.Text!, @"(CREATE|ALTER) TRIGGER \[trg_DdlChild"))
+                    failed.Add(name + " " + verb + ": " + (result.Error?.Message ?? "the trigger's definition is in the script"));
+            }
+        check(failed.Count == 0, "the function's CREATE, ALTER and DROP And CREATE with the option, and its CREATE OR ALTER without it, script without the trigger's definition: "
+            + string.Join("; ", failed));
+
         // Script triggers: SMO's ALTER of a view writes the view alone, its CREATE and CREATE OR ALTER its triggers too.
         var triggers = client.Options with { ScriptTriggers = true };
         var secretTrigger = Schema("view", "vSecretTrigger");
@@ -729,6 +756,35 @@ internal static partial class ScriptingLiveChecks
             "the target's own database going offline before SMO's dependency walk is named as the target's, without advice about the option, and the view scripts "
             + "once it is back: " + (gone.Error?.Message ?? "no error"));
 
+        // The same after the definition check, as SMO's Scripter enters the databases again (BeforeScript): the target's
+        // database is named as the target's, a dependent's (vOfflineDependent's function, VerbsAsync) as the dependent's.
+        var offline = scratch.Offline;
+        var cases = new (string Label, ObjectRefDto Target, string Database)[]
+        {
+            ("the target's", view, ro), ("a dependent's", new ObjectRefDto("view", scratch.Name, "dbo", "vOfflineDependent"), offline)
+        };
+        var named = new List<ScriptResult>();
+        foreach (var (_, target, database) in cases)
+        {
+            var online = await sql("ALTER DATABASE [" + database + "] SET ONLINE;", "master");
+            options.BeforeScript = _ => sql("ALTER DATABASE [" + database + "] SET OFFLINE WITH ROLLBACK IMMEDIATE;", "master").GetAwaiter().GetResult();
+            try { named.Add(online.Status == "completed" ? await client.Script(target, "create", dependents) : new ScriptResult(null, "", [], 0, 0, new ScriptError("SETUP", online.Error ?? "", false))); }
+            finally
+            {
+                options.BeforeScript = null;
+                // The offline fixture database stays offline; the read-only one comes back.
+                if (database == ro) await sql("ALTER DATABASE [" + ro + "] SET ONLINE;", "master");
+            }
+        }
+        check(named[0].Error is { Code: "DATABASE_UNAVAILABLE" } && named[0].Error!.Message.StartsWith("Database " + ro + " is not available (", StringComparison.Ordinal)
+            && named[0].Error!.Message.EndsWith("), so dbo.vGone cannot be scripted.", StringComparison.Ordinal)
+            && named[1].Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && named[1].Error!.Message.StartsWith("Database " + offline + " is not available (", StringComparison.Ordinal)
+            && named[1].Error!.Message.Contains("offline", StringComparison.Ordinal)
+            && named[1].Error!.Message.EndsWith("), so dbo.vOfflineDependent cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › "
+                + "Scripting and try again.", StringComparison.Ordinal) && Ok(await client.Script(view, "create", dependents)),
+            "a database going offline after the definition check, before SMO's Scripter, is named as the target's or, with the option to turn off, as the dependent's: "
+            + string.Join(" / ", named.Select(result => result.Error?.Message ?? "no error")));
+
         // SQL Server compares database names in the server's collation (case-insensitive here, while the scratch database's
         // own collation is case-sensitive).
         var db = scratch.Name;
@@ -743,6 +799,42 @@ internal static partial class ScriptingLiveChecks
         check(created.Status == "completed" && cased.Error is { Code: "ENCRYPTED" } && cased.Error.Message == "dbo.fn_Secret is encrypted (WITH ENCRYPTION), so dbo.vSecretCase cannot "
             + "be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",
             "a dependent reached through the target's database spelled in another case is not named as in another database: " + (created.Error ?? cased.Error?.Message));
+    }
+
+    /// <summary>The injection matrix (<see cref="InjectionMatrix"/>) in a scratch database of its own, scripted over two
+    /// connections four jobs at a time, and bounded in time.</summary>
+    private static async Task InjectionAsync(Action<bool, string> check, SqlService service, Client client, Func<string, ConnectOptions> live, JsonSerializerOptions json,
+        ScratchDatabase scratch)
+    {
+        var watch = Stopwatch.StartNew();
+        var database = await scratch.CreateInjectionAsync();
+        var connectionString = ConnectionSettings.Build(live(database)).ConnectionString;
+        await using (var connection = new SqlConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            foreach (var statement in InjectionMatrix.Fixture())
+            {
+                await using var command = new SqlCommand(statement, connection) { CommandTimeout = 30 };
+                await command.ExecuteNonQueryAsync();
+            }
+        }
+        var other = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live("master"), json), json);
+        try
+        {
+            var connections = new[] { client.ConnectionId, other.Id };
+            var report = await InjectionMatrix.RunAsync(database, connectionString, 4,
+                (worker, target, verb, options) => client.Script(target, verb, options, connectionId: connections[worker % 2]), client.Options);
+            var refusals = string.Join(", ", report.Refusals.Select(item => item.Value + " " + item.Key));
+            Console.WriteLine("Script As injection matrix: " + report.Cases + " cases, " + report.Scripted + " scripts, refused: " + (refusals.Length > 0 ? refusals : "none") + ", "
+                + report.Retried + " retried; " + report.Executed + " scripts run (" + report.Batches + " batches); scripting " + report.ScriptMs + " ms, running " + report.ExecuteMs
+                + " ms, " + watch.ElapsedMilliseconds + " ms in all");
+            foreach (var failure in report.Failures.Take(20)) Console.Error.WriteLine("Script As injection: " + failure);
+            check(report.Failures.Count == 0 && report.Cases == 240 && report.Executed >= 220 && watch.ElapsedMilliseconds < 80_000,
+                "names built to break out of SMO's comments, headers, banners, brackets, strings, lines and batches script with every DDL verb and header, dependent-object "
+                + "and existence option, and each script run in a rolled-back transaction does only what its verb implies, canary intact (" + report.Cases + " cases, "
+                + report.Executed + " scripts run, " + watch.ElapsedMilliseconds + " ms): " + report.Failures.Count + " failures, first " + report.Failures.FirstOrDefault());
+        }
+        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(other.Id), json), json); }
     }
 
     /// <summary>Definitions that keep an old SSMS header in their own text, in any shape (spec C7): the guard cannot tell

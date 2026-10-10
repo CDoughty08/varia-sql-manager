@@ -428,6 +428,27 @@ internal static class ScriptingChecks
             && Classify(new DependentDefinitionException("ENCRYPTED", "dbo", "TR_A", "Rates", "Generate script for dependent objects", "Archive"))?.Message ==
                 "Trigger TR_A of dbo.Rates in database Archive is encrypted (WITH ENCRYPTION), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",
             "one in another database is named with that database");
+        const string turnOff = " cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.";
+        check(Classify(new DependentDefinitionException("ENCRYPTED", null, "trd_\u202eAudit", null, "Generate script for dependent objects", kind: "databaseTrigger")) is
+                { Code: "ENCRYPTED", Retryable: false, Message: "Database trigger trd_⟨U+202E⟩Audit is encrypted (WITH ENCRYPTION), so dbo.Orders" + turnOff }
+            && Classify(new DependentDefinitionException("TOO_LARGE", null, "trd_Audit", null, "Generate script for dependent objects", kind: "databaseTrigger"))?.Message
+                == "The definition of database trigger trd_Audit is larger than 8 MB, which Varia cannot open. Turn off Generate script for dependent objects in Tools › Options › Scripting and try again."
+            && Classify(new DependentDefinitionException("NO_DEFINITION", null, "trd_Audit", null, "Generate script for dependent objects", kind: "databaseTrigger", maybeEncrypted: true)) is
+                { Code: "NO_DEFINITION", Retryable: false, Message: "The definition of database trigger trd_Audit is encrypted, or you do not have permission to view it, so dbo.Orders" + turnOff }
+            && Classify(new DependentDefinitionException("NO_DEFINITION", null, "trs_Logon", null, "Generate script for dependent objects", kind: "serverTrigger", maybeEncrypted: true))?.Message
+                == "The definition of server trigger trs_Logon is encrypted, or you do not have permission to view it, so dbo.Orders" + turnOff
+            && Classify(new DependentDefinitionException("NO_DEFINITION", "dbo", "fn_Rates", null, "Generate script for dependent objects", "Archive")) is
+                { Code: "NO_DEFINITION", Message: "You do not have permission to view the definition of dbo.fn_Rates in database Archive, so dbo.Orders" + turnOff }
+            && Classify(new DependentDefinitionException("NO_DEFINITION", "dbo", "TR_A", "Rates", "Script triggers"))?.Message
+                == "You do not have permission to view the definition of trigger TR_A of dbo.Rates, so dbo.Orders cannot be scripted with Script triggers on. Turn it off in Tools › Options › Scripting and try again.",
+            "a database or server trigger is named as such, and a dependent whose definition the login cannot read is NO_DEFINITION naming it, its database and the option");
+        var walkNode = (string path) => new Urn("Server[@Name='srv']" + path);
+        check(SmoScriptRunner.Checked(walkNode("/Database[@Name='Sales']/UserDefinedFunction[@Name='f' and @Schema='dbo']")) == ("Sales", 'o', "dbo", "f")
+            && SmoScriptRunner.Checked(walkNode("/Database[@Name='Sales']/Table[@Name='t' and @Schema='s']/Trigger[@Name='tr']")) == ("Sales", 'o', "s", "tr")
+            && SmoScriptRunner.Checked(walkNode("/Database[@Name='Sales']/DdlTrigger[@Name='trd']")) == ("Sales", 'd', "", "trd")
+            && SmoScriptRunner.Checked(walkNode("/DdlTrigger[@Name='trs']")) == ("master", 's', "", "trs")
+            && SmoScriptRunner.Checked(walkNode("/Database[@Name='Sales']/PlanGuide[@Name='pg']")) is null,
+            "the definition check reads every walk node with a definition: schema modules, DML triggers in their table's schema, and database and server triggers");
         check(Classify(new FailedOperationException("x", new DependentDatabaseException(null, "The server principal \"low\" is not able to access the database \"Archive\"."))) is
             { Code: "DATABASE_UNAVAILABLE", Retryable: true, Message: "A database that dbo.Orders depends on is not available (The server principal \"low\" is not able to access the database \"Archive\".), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again." }
             && Classify(new DependentDatabaseException("Archive", "OFFLINE"))?.Message == "Database Archive is not available (OFFLINE), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",

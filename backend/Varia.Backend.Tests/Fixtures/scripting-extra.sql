@@ -241,3 +241,15 @@ CREATE TABLE dbo.NegativeIdentity (Id int IDENTITY(-100, -1) NOT NULL, Amount de
 CREATE SEQUENCE dbo.seq_Default;
 CREATE SEQUENCE dbo.seq_Int AS int START WITH 1;
 GO
+-- Functions a database DDL trigger refers to, the trigger encrypted or over 8 MB: Generate script for dependent objects
+-- brings such a trigger into the function's CREATE OR ALTER (what refers to the object). They fire on CREATE ASSEMBLY only.
+CREATE FUNCTION dbo.fn_DdlChild () RETURNS int AS BEGIN RETURN 1; END;
+GO
+CREATE TRIGGER trg_DdlChild ON DATABASE WITH ENCRYPTION FOR CREATE_ASSEMBLY AS BEGIN DECLARE @x int = dbo.fn_DdlChild(); END;
+GO
+CREATE FUNCTION dbo.fn_DdlChildLarge () RETURNS int AS BEGIN RETURN 2; END;
+GO
+DECLARE @sql nvarchar(max) = N'CREATE TRIGGER trg_DdlChildLarge ON DATABASE FOR CREATE_ASSEMBLY AS BEGIN DECLARE @x int = dbo.fn_DdlChildLarge(); END;' + NCHAR(10)
+    + N'/*' + REPLICATE(CONVERT(nvarchar(max), N'-'), 3999950) + N'*/' + NCHAR(10);
+EXEC (@sql);
+GO

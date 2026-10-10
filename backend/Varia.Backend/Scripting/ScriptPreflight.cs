@@ -31,19 +31,32 @@ internal static partial class ScriptPreflight
     public const long MaxDefinitionBytes = 8_000_000;
 
     /// <summary>The definitions SMO reads besides the target's own when Script triggers or Generate script for dependent
-    /// objects is on: the modules @objects names and, where t = 1, the triggers on them. Names arrive as hex UTF-16, so
-    /// control characters and unpaired surrogates survive the XML. One row comes back: an encrypted module if there is
-    /// one, else the largest, with the bytes of all of them, so SMO never loads one over the limit or more than fits (spec F).</summary>
+    /// objects is on: for k = 'o' the schema module @objects names and, where t = 1, the triggers on it; for k = 'd' a
+    /// database trigger (sys.triggers, parent_class 0) and for k = 's' a server trigger (sys.server_triggers, its name in
+    /// the database's collation for the UNION), by name. Names arrive as hex UTF-16, so control characters and unpaired
+    /// surrogates survive the XML. One row comes back: an
+    /// encrypted module if there is one, else one whose definition the login cannot read (bytes NULL; is_encrypted NULL
+    /// when that may be encryption: OBJECTPROPERTY knows no database or server trigger, so a database trigger's hidden
+    /// definition is encrypted only when the login may view every definition in the database), else the largest, with
+    /// the bytes of all of them, so SMO never loads one over the limit or more than fits, nor fails on one it cannot read
+    /// and blames the target (spec F).</summary>
     public const string DefinitionCheck = "DECLARE @list xml = CONVERT(xml, @objects);\n"
-        + "SELECT TOP (1) q.schema_name, q.object_name, q.parent_name, CONVERT(bit, ISNULL(q.is_encrypted, 0)) AS is_encrypted, CONVERT(bigint, q.bytes) AS bytes, "
+        + "SELECT TOP (1) q.schema_name, q.object_name, q.parent_name, q.kind, CONVERT(bit, q.is_encrypted) AS is_encrypted, CONVERT(bigint, q.bytes) AS bytes, "
         + "SUM(CONVERT(bigint, q.bytes)) OVER () AS total_bytes FROM (SELECT "
         + "CONVERT(sysname, CONVERT(varbinary(256), l.o.value('@s', 'varchar(512)'), 2)) AS s, CONVERT(sysname, CONVERT(varbinary(256), l.o.value('@n', 'varchar(512)'), 2)) AS n, "
-        + "l.o.value('@t', 'bit') AS t FROM @list.nodes('/d/o') AS l(o)) AS w "
-        + "JOIN sys.schemas AS sc ON sc.name = w.s JOIN sys.all_objects AS ob ON ob.schema_id = sc.schema_id AND ob.name = w.n "
-        + "CROSS APPLY (SELECT sc.name, ob.name, CONVERT(sysname, NULL), OBJECTPROPERTY(ob.object_id, N'IsEncrypted'), DATALENGTH(m.definition) FROM sys.all_sql_modules AS m "
-        + "WHERE m.object_id = ob.object_id UNION ALL SELECT sc.name, tr.name, ob.name, OBJECTPROPERTY(tr.object_id, N'IsEncrypted'), DATALENGTH(tm.definition) "
-        + "FROM sys.triggers AS tr JOIN sys.all_sql_modules AS tm ON tm.object_id = tr.object_id WHERE w.t = 1 AND tr.parent_id = ob.object_id) "
-        + "AS q(schema_name, object_name, parent_name, is_encrypted, bytes) ORDER BY CONVERT(bit, ISNULL(q.is_encrypted, 0)) DESC, q.bytes DESC;";
+        + "l.o.value('@t', 'bit') AS t, l.o.value('@k', 'char(1)') AS k FROM @list.nodes('/d/o') AS l(o)) AS w "
+        + "CROSS APPLY (SELECT sc.name, ob.name, CONVERT(sysname, NULL), 'o', OBJECTPROPERTY(ob.object_id, N'IsEncrypted'), DATALENGTH(m.definition) FROM sys.schemas AS sc "
+        + "JOIN sys.all_objects AS ob ON ob.schema_id = sc.schema_id JOIN sys.all_sql_modules AS m ON m.object_id = ob.object_id WHERE w.k = 'o' AND sc.name = w.s AND ob.name = w.n "
+        + "UNION ALL SELECT sc.name, tr.name, ob.name, 'o', OBJECTPROPERTY(tr.object_id, N'IsEncrypted'), DATALENGTH(tm.definition) FROM sys.schemas AS sc "
+        + "JOIN sys.all_objects AS ob ON ob.schema_id = sc.schema_id JOIN sys.triggers AS tr ON tr.parent_id = ob.object_id JOIN sys.all_sql_modules AS tm ON tm.object_id = tr.object_id "
+        + "WHERE w.k = 'o' AND w.t = 1 AND sc.name = w.s AND ob.name = w.n "
+        + "UNION ALL SELECT CONVERT(sysname, NULL), dt.name, CONVERT(sysname, NULL), 'd', CASE WHEN dm.definition IS NOT NULL THEN 0 "
+        + "WHEN HAS_PERMS_BY_NAME(NULL, N'DATABASE', N'VIEW DEFINITION') = 1 THEN 1 END, DATALENGTH(dm.definition) FROM sys.triggers AS dt "
+        + "LEFT JOIN sys.all_sql_modules AS dm ON dm.object_id = dt.object_id WHERE w.k = 'd' AND dt.parent_class = 0 AND dt.name = w.n "
+        + "UNION ALL SELECT CONVERT(sysname, NULL), st.name COLLATE DATABASE_DEFAULT, CONVERT(sysname, NULL), 's', CASE WHEN sm.definition IS NOT NULL THEN 0 END, DATALENGTH(sm.definition) "
+        + "FROM sys.server_triggers AS st LEFT JOIN sys.server_sql_modules AS sm ON sm.object_id = st.object_id WHERE w.k = 's' AND st.name = w.n) "
+        + "AS q(schema_name, object_name, parent_name, kind, is_encrypted, bytes) "
+        + "ORDER BY CASE WHEN q.is_encrypted = 1 THEN 0 WHEN q.bytes IS NULL THEN 1 ELSE 2 END, q.bytes DESC;";
     public const string DefinitionCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
         + "EXEC @module @stmt, N'@objects nvarchar(max)', @objects = @objects;";
 
