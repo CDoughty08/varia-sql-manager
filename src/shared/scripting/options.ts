@@ -66,7 +66,8 @@ export const scriptingOptionDefs = [
     description: 'Runs each statement only when the object exists (for DROP and ALTER) or does not exist yet (for CREATE).'
   },
   {
-    key: 'generateDependentObjects', group: 'object', label: 'Generate script for dependent objects', type: 'boolean', default: false, smo: '`WithDependencies`',
+    key: 'generateDependentObjects', group: 'object', label: 'Generate script for dependent objects', type: 'boolean', default: false,
+    smo: '`WithDependencies` (SMO\'s comments for references it cannot resolve are left out and named in a warning)',
     description: 'Also scripts the objects that must exist before the selected object\'s script can run.'
   },
   {

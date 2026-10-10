@@ -39,6 +39,10 @@ internal sealed class SmoScriptRunner
     /// <summary>The script's version for messages about SMO's refusals.</summary>
     public SqlServerVersion? Target { get; private set; }
 
+    /// <summary>ScriptingServiceOptions.BeforeDependencies: runs with the target's database just before SMO's dependency
+    /// walk (live checks change the database's state there).</summary>
+    internal Action<string>? BeforeDependencies { get; init; }
+
     private Server Server()
     {
         if (server is not null) return server;
@@ -52,7 +56,9 @@ internal sealed class SmoScriptRunner
     /// <summary>One target's batches, framed, at most <paramref name="max"/> characters. A header that fails HeaderGuard
     /// makes SMO script the target again without headers; the headers stay when they are all the two scripts differ in.
     /// SMO 181 writes no header when asked for none (a live check pins this for every kind), so a script without headers
-    /// is not guarded: any "/****** Object:" in it is a definition's own text, which SMO keeps as stored.</summary>
+    /// is not guarded: any "/****** Object:" in it is a definition's own text, which SMO keeps as stored. SMO's comment
+    /// for an unresolved reference, written with headers on or off, is left out (<see cref="Run"/>), with a warning
+    /// naming the references; any other comment batch of SMO's that a name breaks refuses the script.</summary>
     public string Script(ResolvedTarget target, ScriptVerb verb, ScriptingOptionsDto dto, long max, List<string> warnings)
     {
         CultureInfo.CurrentCulture = ScriptingCulture.Formatting;
@@ -67,16 +73,21 @@ internal sealed class SmoScriptRunner
             // Without Touch, SMO writes nothing for ALTER (sqltoolsservice does the same).
             (smo.GetSmoObject(urn) ?? throw new SmoObjectMissingException()).Touch();
         }
-        var batches = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, dependencies, warnings);
+        var unresolved = new List<Urn>();
+        var batches = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, dependencies, warnings, unresolved);
         if (dto.IncludeHeaders && !batches.All(HeaderGuard.Safe))
         {
-            var plain = Run(smo, urn, target, verb, dto, max, headers: false, dependencies, warnings);
+            var plain = Run(smo, urn, target, verb, dto, max, headers: false, dependencies, warnings, unresolved);
             if (!HeaderGuard.Aligned(batches, plain))
             {
                 batches = plain;
                 if (!warnings.Contains(HeaderGuard.Warning)) warnings.Add(HeaderGuard.Warning);
             }
         }
+        // The last line of defence for a comment kind SMO may add: none of its comment batches may hold a name that ends
+        // the comment early or breaks it over lines.
+        if (!batches.All(HeaderGuard.Closed)) throw new ScriptRefusedException(BrokenComment);
+        if (unresolved.Count > 0 && UnresolvedWarning(unresolved, urn) is var notice && !warnings.Contains(notice)) warnings.Add(notice);
         var text = new StringBuilder();
         foreach (var batch in batches)
         {
@@ -90,27 +101,45 @@ internal sealed class SmoScriptRunner
     /// <summary>The preflight bounds the target's own definition; Script triggers and Generate script for dependent
     /// objects make SMO read other modules too, which are bounded here before SMO runs (spec F: no definition over
     /// 8,000,000 bytes reaches managed memory, and none that could not fit in the script together). The dependencies are
-    /// SMO's own walk, which the scripter repeats, and may lie in other databases (three-part names, synonyms).</summary>
+    /// SMO's own walk, which the scripter repeats, and may lie in other databases (three-part names, synonyms). SMO reads
+    /// no definition for a reference it could not resolve (a missing object or database) or one on a linked server, so
+    /// neither is checked: it writes a comment for each instead, which <see cref="Run"/> leaves out.</summary>
     private void CheckDefinitions(Server smo, Urn urn, ResolvedTarget target, ScriptingOptionsDto dto, bool dependencies, long max)
     {
         // A table's or view's triggers come with the object itself, not with one of its indexes or keys.
         var triggered = dto.ScriptTriggers && target.Kind is "table" or "view";
         if (target.Ref.Database is not { } database || !triggered && !dependencies) return;
         var objects = new Dictionary<(string Database, string Schema, string Name), bool>();
-        void Add(string db, string schema, string name, bool triggers) => objects[(db, schema, name)] = triggers || objects.GetValueOrDefault((db, schema, name));
+        // SQL Server compares database names in its own collation, so a three-part name may spell the target's database
+        // differently; such a dependent is in the target's database, not another one.
+        var names = new Dictionary<string, string>(StringComparer.Ordinal) { [database] = database };
+        string Database(string db) => names.TryGetValue(db, out var known) ? known : names[db] = SameDatabase(db, database) ? database : db;
+        void Add(string db, string schema, string name, bool triggers)
+        {
+            var key = (Database(db), schema, name);
+            objects[key] = triggers || objects.GetValueOrDefault(key);
+        }
         if (target.Ref is { Schema: { } schema, Name: { } name }) Add(database, schema, name, triggered);
         if (dependencies)
         {
+            BeforeDependencies?.Invoke(database);
             var walker = new DependencyWalker(smo);
             walker.DiscoveryProgress += (_, _) => token.ThrowIfCancellationRequested();
-            try
+            List<Urn> nodes;
+            try { nodes = [.. walker.WalkDependencies(walker.DiscoverDependencies(new[] { urn }, DependencyType.Parents)).Select(node => node.Urn)]; }
+            catch (Exception error) when (ScriptingErrors.UnavailableText(error) is { } text)
             {
-                foreach (var node in walker.WalkDependencies(walker.DiscoverDependencies(new[] { urn }, DependencyType.Parents)))
-                    if (node.Urn.GetAttribute("Schema") is { } s && node.Urn.GetAttribute("Name") is { } n && node.Urn.GetAttribute("Name", "Database") is { } db)
-                        Add(db, s, n, dto.ScriptTriggers && node.Urn.Type is "Table" or "View");
+                // The walk enters the target's database again (USE) after the preflight read it: when that database is the
+                // one that went away in between, the error is the target's, else a dependent's database failed.
+                if (session.Cloud) throw;
+                EnterTargetDatabase(database);
+                throw new DependentDatabaseException(null, text);
             }
-            // The preflight has just read the target's database, so the walk failed in a database a dependent lives in.
-            catch (Exception error) when (ScriptingErrors.UnavailableText(error) is { } text) { throw new DependentDatabaseException(null, text); }
+            var server = urn.GetAttribute("Name", "Server");
+            foreach (var node in nodes)
+                if (node.Type != "UnresolvedEntity" && string.Equals(node.GetAttribute("Name", "Server"), server, StringComparison.OrdinalIgnoreCase)
+                    && node.GetAttribute("Schema") is { } s && node.GetAttribute("Name") is { } n && node.GetAttribute("Name", "Database") is { } db)
+                    Add(db, s, n, dto.ScriptTriggers && node.Type is "Table" or "View");
         }
         // A trigger target is no schema object; the preflight read its definition's size.
         var total = target.Ref.Schema is null ? target.DefinitionBytes ?? 0 : 0;
@@ -151,6 +180,29 @@ internal sealed class SmoScriptRunner
         catch (SqlException error) when (elsewhere is not null && ScriptingErrors.UnavailableText(error) is { } text) { throw new DependentDatabaseException(elsewhere, text); }
     }
 
+    /// <summary>Whether two database names name the same database, as SQL Server resolves them.</summary>
+    private bool SameDatabase(string name, string database)
+    {
+        using var command = session.Connection.CreateCommand();
+        command.CommandTimeout = 30;
+        command.CommandText = "SELECT CONVERT(bit, CASE WHEN DB_ID(@name) = DB_ID(@database) THEN 1 ELSE 0 END);";
+        command.Parameters.Add(new SqlParameter("@name", SqlDbType.NVarChar, 128) { Value = name });
+        command.Parameters.Add(new SqlParameter("@database", SqlDbType.NVarChar, 128) { Value = database });
+        return command.ExecuteScalar() is true;
+    }
+
+    /// <summary>Enters the target's database as the preflight does; SQL Server's error when it cannot, which then names the
+    /// target's database (and a database dropped since the preflight makes the target missing).</summary>
+    private void EnterTargetDatabase(string database)
+    {
+        using var command = session.Connection.CreateCommand();
+        command.CommandTimeout = 30;
+        command.CommandText = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module N'SELECT 1;';";
+        command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
+        try { command.ExecuteNonQuery(); }
+        catch (SqlException error) when (error.Number is 2812 or 911) { throw new SmoObjectMissingException(); }
+    }
+
     /// <summary>A name's UTF-16 code units as hex, unpaired surrogates included.</summary>
     internal static string Hex(string name) => Convert.ToHexString(MemoryMarshal.AsBytes(name.AsSpan()));
 
@@ -163,6 +215,29 @@ internal sealed class SmoScriptRunner
     {
         try { return SqlScript.Parse(batch).Count > 1; }
         catch (RequestException) { return true; }
+    }
+
+    /// <summary>Why a script is refused when one of SMO's comment batches fails <see cref="HeaderGuard.Closed"/>.</summary>
+    public const string BrokenComment = "SQL Server Management Objects wrote a comment that a name in it ends early or breaks over lines, so running the script "
+        + "could run part of that name as SQL.";
+
+    /// <summary>The warning for the references SMO could not resolve, whose comments <see cref="Run"/> left out: up to three
+    /// of them by name (shown as Object Explorer shows names), with their database, and their server when it is a linked
+    /// one.</summary>
+    internal static string UnresolvedWarning(IReadOnlyList<Urn> entities, Urn target)
+    {
+        var server = target.GetAttribute("Name", "Server");
+        string Name(Urn entity)
+        {
+            var schema = entity.GetAttribute("Schema");
+            var name = ScriptingErrors.Display(string.IsNullOrEmpty(schema) ? entity.GetAttribute("Name") ?? "" : schema + "." + entity.GetAttribute("Name"));
+            var at = entity.GetAttribute("Name", "Server") is { } linked && !string.Equals(linked, server, StringComparison.OrdinalIgnoreCase)
+                ? " on server " + ScriptingErrors.Display(linked) : "";
+            return entity.GetAttribute("Name", "Database") is { Length: > 0 } database ? name + " in database " + ScriptingErrors.Display(database) + at : name + at;
+        }
+        var names = string.Join(", ", entities.Take(3).Select(Name)) + (entities.Count > 3 ? " and " + (entities.Count - 3).ToString(CultureInfo.InvariantCulture) + " more" : "");
+        return "The script does not create objects that a definition in it refers to but that do not exist or are on a linked server, which SQL Server Management "
+            + "Objects cannot script: " + names + ".";
     }
 
     /// <summary>Kinds whose script lists child collections. Without prefetch SMO reads each column's and each index's
@@ -200,8 +275,12 @@ internal sealed class SmoScriptRunner
     /// keeping the ledger columns: a script no older server runs.</summary>
     private static readonly HashSet<string> LedgerSubtypes = ["updatableLedger", "appendOnlyLedger", "ledgerHistory", "ledger"];
 
-    /// <summary>SMO's batches for every pass of the verb, unframed, at most <paramref name="max"/> characters in all.</summary>
-    private List<string> Run(Server smo, Urn urn, ResolvedTarget target, ScriptVerb verb, ScriptingOptionsDto dto, long max, bool headers, bool dependencies, List<string> warnings)
+    /// <summary>SMO's batches for every pass of the verb, unframed, at most <paramref name="max"/> characters in all. The
+    /// comment SMO writes as a batch for each reference it could not resolve is left out: it holds the referenced name
+    /// unescaped, so a name could end it and run the rest as SQL. Which batches those are comes from SMO itself (its
+    /// progress event for the unresolved entity), and each one's URN is added to <paramref name="unresolved"/>.</summary>
+    private List<string> Run(Server smo, Urn urn, ResolvedTarget target, ScriptVerb verb, ScriptingOptionsDto dto, long max, bool headers, bool dependencies, List<string> warnings,
+        List<Urn> unresolved)
     {
         var batches = new List<string>();
         long total = 0;
@@ -219,6 +298,11 @@ internal sealed class SmoScriptRunner
             // (over 30 s in a database with 2,500 tables); without it the list scripts in about a second.
             var scripter = new Scripter(smo) { Options = mapped.Options, PrefetchObjects = PrefetchKinds.Contains(target.Kind) && !dependencies };
             scripter.ScriptingProgress += (_, _) => token.ThrowIfCancellationRequested();
+            var comments = new List<(string Text, Urn Entity)>();
+            scripter.ScriptingProgress += (_, progress) =>
+            {
+                if (progress.Current is { Type: "UnresolvedEntity" } entity) comments.Add((HeaderGuard.Unresolved(entity.ToString()), entity));
+            };
             var written = 0;
             foreach (var batch in scripter.EnumScript(new[] { urn }))
             {
@@ -228,6 +312,13 @@ internal sealed class SmoScriptRunner
                 // Bounded before anything else reads it: SMO hands over a dependent's definition whole.
                 total += batch.Length;
                 if (total > max) throw new ScriptTooLargeException();
+                if (comments.FindIndex(item => item.Text == batch) is var comment and >= 0)
+                {
+                    var entity = comments[comment].Entity;
+                    if (!unresolved.Any(item => item.ToString() == entity.ToString())) unresolved.Add(entity);
+                    comments.RemoveAt(comment);
+                    continue;
+                }
                 // A later pass opens with the USE the script is already in, which SSMS writes once; the USE batches it
                 // switches databases with inside (a database's extended properties) stay.
                 if (written == 0 && index > 0 && batch == use) continue;

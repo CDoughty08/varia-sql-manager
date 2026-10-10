@@ -170,8 +170,22 @@ EXEC (@sql);
 GO
 CREATE VIEW dbo.vHeaderBanner AS SELECT One FROM dbo.fn_HeaderBanner();
 GO
--- A procedure over a database that does not exist: Generate script for dependent objects cannot open it.
+-- A procedure over a database that does not exist: SMO's dependency walk lists the table as unresolved.
 CREATE PROCEDURE dbo.usp_NoDatabase AS SELECT * FROM varia_no_such_database.dbo.t;
+GO
+-- References SMO cannot resolve, named to break the comment SMO writes for each of them (it holds the name as is):
+-- ending it early, opening a nested comment, splitting it over lines with a GO, and in another database (master).
+CREATE TABLE dbo.UnresolvedVictim (id int NULL);
+GO
+CREATE PROCEDURE dbo.usp_Unresolved AS SELECT * FROM dbo.[x*/ DROP TABLE dbo.UnresolvedVictim /*];
+GO
+CREATE PROCEDURE dbo.usp_UnresolvedNested AS SELECT * FROM dbo.[n/*x];
+GO
+DECLARE @sql nvarchar(max) = N'CREATE PROCEDURE dbo.usp_UnresolvedLine AS SELECT * FROM dbo.'
+    + QUOTENAME(N'a' + NCHAR(13) + NCHAR(10) + N'GO' + NCHAR(13) + NCHAR(10) + N'x*/ DROP TABLE dbo.UnresolvedVictim --') + N';';
+EXEC (@sql);
+GO
+CREATE PROCEDURE dbo.usp_UnresolvedMaster AS SELECT * FROM master.dbo.[y*/ DROP TABLE dbo.UnresolvedVictim /*];
 GO
 -- Three triggers, each under 8,000,000 bytes but together too large for a script: with Script triggers the definition
 -- check refuses the table before SMO loads any of them.

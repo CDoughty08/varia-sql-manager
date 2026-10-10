@@ -7,13 +7,32 @@ namespace Varia.Backend.Scripting;
 /// Date:" … "******/") is such a line. Otherwise the target is scripted again without headers (spec C7), and the script
 /// keeps its headers only when they are all that differs (<see cref="Aligned"/>): a definition's own text may hold such
 /// lines, in any shape. SMO 181 already writes "?" for a name containing */; the guard does not rely on it. A script
-/// without headers is not guarded: SMO writes none then, and what remains is the definitions' stored text.</summary>
+/// without headers is not guarded: SMO writes none then, and what remains is the definitions' stored text.
+/// SMO also writes comments as batches of their own, with headers on or off: <see cref="Unresolved"/>, which
+/// SmoScriptRunner leaves out, and any other that <see cref="Closed"/> refuses when a name breaks it.</summary>
 internal static class HeaderGuard
 {
     public const string Opening = "/****** Object:";
     private const string Closing = "******/";
     private const string Date = "Script Date:";
     public const string Warning = "Descriptive headers were left out because an object name or definition would break them (it contains /*, */ or a line break).";
+
+    /// <summary>The batch SMO 181 writes for an object Generate script for dependent objects found referenced but could
+    /// not resolve (ScriptMaker.ScriptCreateUnresolvedEntity): the object's URN as is, where only apostrophes are
+    /// doubled, so a name in it can end the comment early or break it over lines.</summary>
+    public static string Unresolved(string urn) => "/****** Cannot script Unresolved Entities : " + urn + " ******/";
+
+    /// <summary>Whether a batch SMO writes as a comment of its own is still one: a batch that opens with "/****** " and
+    /// ends with " ******/", as SMO's comment batches do, must be a single comment on a single line that closes only
+    /// at its end, with no other comment delimiter in it. Any other batch passes (a definition's own text, however
+    /// its comments look, is not SMO's to break).</summary>
+    public static bool Closed(string batch)
+    {
+        var text = batch.TrimEnd();
+        if (!text.StartsWith("/****** ", StringComparison.Ordinal) || !text.EndsWith(" " + Closing, StringComparison.Ordinal)) return true;
+        return text.IndexOfAny(['\r', '\n', '\u2028', '\u2029']) < 0 && text.IndexOf("*/", 2, StringComparison.Ordinal) == text.Length - 2
+            && text.IndexOf("/*", 2, StringComparison.Ordinal) < 0;
+    }
 
     public static bool Safe(string text)
     {

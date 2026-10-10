@@ -329,6 +329,25 @@ internal static class ScriptingChecks
         check(leading.All(comment => comment + "CREATE PROCEDURE p AS SELECT 1;" is var definition && !HeaderGuard.Safe(definition)
             && HeaderGuard.Aligned(["USE [db]", Header("p") + "\r\nSET ANSI_NULLS ON", definition], ["USE [db]", "SET ANSI_NULLS ON", definition])),
             "a definition that starts with an old header of any shape keeps SMO's headers beside it");
+        // SMO 181's own comment batch for a reference it could not resolve holds the name as is, with headers on or off.
+        string Banner(string name) => HeaderGuard.Unresolved("Server[@Name='srv']/Database[@Name='Sales']/UnresolvedEntity[@Name='" + name + "' and @Schema='dbo']");
+        check(Banner("t") == "/****** Cannot script Unresolved Entities : Server[@Name='srv']/Database[@Name='Sales']/UnresolvedEntity[@Name='t' and @Schema='dbo'] ******/",
+            "the comment SMO writes for an unresolved reference is rebuilt exactly as SMO 181 formats it");
+        var broken = new[] { Banner("x*/ DROP TABLE t /*"), Banner("a*/b") + "\r\n", Banner("n/*x"), Banner("a\r\nGO\r\nx*/ DROP TABLE t --"), Banner("a\r\nb"),
+            Banner("a ******/\r\nDROP TABLE t\r\n/****** b"), Banner("a" + (char)0x2028 + "b"), "/****** Future : x*/ DROP TABLE t /* ******/" };
+        check(broken.All(batch => !HeaderGuard.Closed(batch)), "a comment batch of SMO's that a name ends early, nests a comment in, or breaks over lines fails the comment check");
+        check(HeaderGuard.Closed(Banner("t")) && HeaderGuard.Closed(Banner("O''Brien") + "\n") && HeaderGuard.Closed(Header("p")) && HeaderGuard.Closed(Header("p") + "\r\nSET ANSI_NULLS ON")
+            && HeaderGuard.Closed("SET ANSI_NULLS ON") && leading.All(comment => HeaderGuard.Closed(comment + "CREATE PROCEDURE p AS SELECT 1;"))
+            && HeaderGuard.Closed("/****** Script for SelectTopNRows command from SSMS  ******/\r\nCREATE VIEW v AS SELECT TOP (1000) 1 AS one")
+            && HeaderGuard.Closed("/****** a ******/\r\nCREATE PROCEDURE p AS SELECT 1 /* x */") && HeaderGuard.Closed("CREATE PROCEDURE p AS SELECT 1 /****** x */ ******/"),
+            "a whole comment batch, a header, and definitions with comments of their own pass the comment check");
+        var entity = (string database, string name, string server) => new Urn("Server[@Name='" + server + "']/Database[@Name='" + database + "']/UnresolvedEntity[@Name='" + name + "' and @Schema='dbo']");
+        var target = new Urn("Server[@Name='srv']/Database[@Name='Sales']/StoredProcedure[@Name='p' and @Schema='dbo']");
+        check(SmoScriptRunner.UnresolvedWarning([entity("Sales", "x*/ DROP TABLE t /*", "srv"), entity("Archive", "a\r\nb", "SRV"), entity("Remote", "t", "ls")], target)
+                == "The script does not create objects that a definition in it refers to but that do not exist or are on a linked server, which SQL Server Management Objects cannot "
+                + "script: dbo.x*/ DROP TABLE t /* in database Sales, dbo.a⟨U+000D⟩⟨U+000A⟩b in database Archive, dbo.t in database Remote on server ls."
+            && SmoScriptRunner.UnresolvedWarning([.. Enumerable.Range(0, 5).Select(i => entity("Sales", "t" + i, "srv"))], target).EndsWith("dbo.t2 in database Sales and 2 more.", StringComparison.Ordinal),
+            "the warning names the unresolved references as messages show names, with their database and a linked server, three at most");
         check(SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\r\nGO\r\nDROP TABLE t") && SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\n:r other.sql")
             && !SmoScriptRunner.Splits("CREATE PROC p AS SELECT N'\r\nGO\r\n' /*\nGO\n*/") && !SmoScriptRunner.Splits("CREATE TABLE [a\r\nGO\r\nb] (id int)"),
             "a definition is flagged when the query window would split it at a GO or refuse a SQLCMD line, never for GO inside quotes, comments or names");
@@ -370,6 +389,13 @@ internal static class ScriptingChecks
             { Code: "DATABASE_UNAVAILABLE", Retryable: true, Message: "A database that dbo.Orders depends on is not available (The server principal \"low\" is not able to access the database \"Archive\".), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again." }
             && Classify(new DependentDatabaseException("Archive", "OFFLINE"))?.Message == "Database Archive is not available (OFFLINE), so dbo.Orders cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",
             "a dependent's database that cannot be opened is DATABASE_UNAVAILABLE naming it and the option, not the target's database");
+        // When SMO's walk fails, only SQL Server's text names the database, after the login: both may be 128 characters.
+        var database = "dependent_" + new string('q', 55) + "_end";
+        var refused = "The server principal \"" + new string('l', 128) + "\" is not able to access the database \"" + database + "\" under the current security context.";
+        var widest = ScriptingErrors.DependentDatabase(Catalog, new DependentDatabaseException(null, new string('d', 5000)), subject with { Display = new string('x', 400) });
+        check(Classify(new DependentDatabaseException(null, refused))?.Message.Contains("\"" + database + "\" under the current security context.)", StringComparison.Ordinal) == true
+            && widest.Message.Length <= ScriptingErrors.MaxMessage && widest.Message.EndsWith(" Turn it off in Tools › Options › Scripting and try again.", StringComparison.Ordinal),
+            "a long login and database name in SQL Server's text both reach the message, which still ends with its advice within 2,048 characters");
         check(Classify(new PropertyCannotBeRetrievedException("Text"), encrypted: true)?.Code == "ENCRYPTED" && Classify(new PropertyCannotBeRetrievedException("Text"))?.Code == "NO_DEFINITION"
             && Classify(new PropertyCannotBeRetrievedException("Text"), serverTrigger: true)?.Message == "The definition of dbo.Orders is encrypted, or you do not have permission to view it.",
             "a definition SMO cannot read is ENCRYPTED or NO_DEFINITION");

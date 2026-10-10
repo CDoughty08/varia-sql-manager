@@ -112,12 +112,13 @@ internal static class ScriptingErrors
     }
 
     /// <summary>A database a dependent object lives in is not available: the message names it, not the target's, and the
-    /// option that reached it.</summary>
+    /// option that reached it. When SMO's walk failed, only SQL Server's text names the database (after the login in
+    /// error 916, both up to 128 characters), so that text gets MaxDetail; the message still stays under MaxMessage.</summary>
     public static ScriptError DependentDatabase(ScriptingCatalog catalog, DependentDatabaseException error, ScriptSubject subject)
     {
         var message = (error.Database is { } database ? "Database " + Display(database) : "A database that " + subject.Display + " depends on") + " is not available ("
-            + Detail(error.Detail, MaxState) + "), so " + subject.Display + " cannot be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › "
-            + "Scripting and try again.";
+            + Detail(error.Detail, error.Database is null ? MaxDetail : MaxState) + "), so " + subject.Display + " cannot be scripted with Generate script for dependent "
+            + "objects on. Turn it off in Tools › Options › Scripting and try again.";
         return new("DATABASE_UNAVAILABLE", Clip(message, MaxMessage), catalog.Retryable("DATABASE_UNAVAILABLE"));
     }
 

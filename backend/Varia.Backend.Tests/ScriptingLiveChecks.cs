@@ -441,6 +441,8 @@ internal static partial class ScriptingLiveChecks
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
         await SchemaLockAsync(check, service, client, json, Schema("table", "dbo", "Victim"), db);
         await DefinitionsAsync(check, client, Schema);
+        await UnresolvedAsync(check, client, sql, scratch);
+        await DependentDatabasesAsync(check, service, client, sql, scratch);
         await OldHeadersAsync(check, client, sql, db);
         await CultureAsync(check, client, sql, db);
         await GoldenAsync(check, service, client, scratch, sql, live, json);
@@ -519,21 +521,138 @@ internal static partial class ScriptingLiveChecks
             "triggers each under 8,000,000 bytes that together could not fit in a script are refused before SMO loads them (" + allocated / 1_000_000 + " MB allocated), "
             + "and the table scripts without Script triggers: " + partsCreate.Error?.Message + " " + partsBoth.Error?.Message);
 
-        // A dependent in a database that does not exist: the message names that database and the option, not the target as
-        // missing. SMO's walk lists the dependent, so the definition check is what fails there, naming it itself.
-        var noDatabase = await client.Script(schema("procedure", "dbo", "usp_NoDatabase"), "create", dependents);
-        check(noDatabase.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && noDatabase.Error.Message.StartsWith("Database varia_no_such_database is not available (", StringComparison.Ordinal)
-            && noDatabase.Error.Message.EndsWith("), so dbo.usp_NoDatabase cannot be scripted with "
-            + "Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.", StringComparison.Ordinal)
-            && Ok(await client.Script(schema("procedure", "dbo", "usp_NoDatabase"), "create")),
-            "a dependent's database that does not exist is named, with the option to turn off: " + noDatabase.Error?.Message);
-
         // A stored line the query window reads as GO would run the rest of the definition as a batch of its own.
         var split = await client.Script(schema("procedure", "dbo", "usp_go"), "create");
         check(Ok(split) && split.Warnings.SequenceEqual([SmoScriptRunner.SplitWarning]) && split.Text!.Contains("\r\nGO\r\nDROP TABLE dbo.Victim", StringComparison.Ordinal),
             "a definition with a GO line scripts as stored, with a warning that running it would split it: " + string.Join(" ", split.Warnings));
         var drop = await client.Script(schema("procedure", "dbo", "usp_go"), "drop");
         check(Ok(drop) && drop.Warnings.Count == 0, "its DROP carries no warning");
+    }
+
+    private static string UnresolvedWarning(params string[] names) => "The script does not create objects that a definition in it refers to but that do not exist or are on "
+        + "a linked server, which SQL Server Management Objects cannot script: " + string.Join(", ", names) + ".";
+
+    /// <summary>Generate script for dependent objects reaching references SMO cannot resolve (scripting-extra.sql): SMO
+    /// writes a comment batch for each that holds the name as is, with headers on or off. The script leaves those out
+    /// and names the references in a warning, so it equals the script without the option, and a name built to end that
+    /// comment drops nothing when the script runs. A reference to a missing database, or to a linked server's database
+    /// that is offline here under the same name, is not checked as a local database, as SMO does not read it.</summary>
+    private static async Task UnresolvedAsync(Action<bool, string> check, Client client, Func<string, string, Task<SqlRun>> sql, ScratchDatabase scratch)
+    {
+        var db = scratch.Name;
+        var crafted = new (string Procedure, string Reference)[]
+        {
+            ("usp_Unresolved", "dbo.x*/ DROP TABLE dbo.UnresolvedVictim /* in database " + db),
+            ("usp_UnresolvedNested", "dbo.n/*x in database " + db),
+            ("usp_UnresolvedLine", "dbo.a⟨U+000D⟩⟨U+000A⟩GO⟨U+000D⟩⟨U+000A⟩x*/ DROP TABLE dbo.UnresolvedVictim -- in database " + db),
+            ("usp_UnresolvedMaster", "dbo.y*/ DROP TABLE dbo.UnresolvedVictim /* in database master"),
+            ("usp_NoDatabase", "dbo.t in database varia_no_such_database")
+        };
+        var failed = new List<string>();
+        var scripts = new List<string>();
+        foreach (var (procedure, reference) in crafted)
+            foreach (var headers in new[] { true, false })
+                foreach (var verb in new[] { "create", "alter", "createOrAlter", "dropAndCreate" })
+                {
+                    var target = new ObjectRefDto("procedure", db, "dbo", procedure);
+                    var options = client.Options with { IncludeHeaders = headers };
+                    var result = await client.Script(target, verb, options with { GenerateDependentObjects = true });
+                    var alone = await client.Script(target, verb, options);
+                    // SMO walks a module's references for CREATE, also DROP And CREATE's second pass, and not for ALTER.
+                    string[] expected = verb is "create" or "dropAndCreate" ? [UnresolvedWarning(reference)] : [];
+                    // Equal to the script without the option, so framed alike; a GO line inside a name breaks Framed's count.
+                    if (!Ok(result) || result.Text!.Contains("Cannot script", StringComparison.Ordinal) || !result.Warnings.SequenceEqual(expected) || !Parses(result.Text)
+                        || !Ok(alone) || Normalize(result.Text) != Normalize(alone.Text!) || procedure != "usp_UnresolvedLine" && !Framed(result.Text))
+                        failed.Add(procedure + " " + verb + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
+                    // Every DROP And CREATE script runs, so the victim shows what any of them would do.
+                    if (verb == "dropAndCreate" && Ok(result)) scripts.Add(result.Text!);
+                }
+        const string victim = "SELECT COUNT(*) FROM sys.tables WHERE name = N'UnresolvedVictim';";
+        var before = (await sql(victim, db)).Scalar;
+        var runs = new List<string>();
+        foreach (var script in scripts)
+        {
+            try { if (await sql(script, db) is { Status: not "completed" } run) runs.Add(run.Error ?? run.Status); }
+            catch (RequestException error) { runs.Add(error.Message); }
+        }
+        var after = (await sql(victim, db)).Scalar;
+        check(failed.Count == 0 && scripts.Count == 10 && runs.Count == 0 && before == "1" && after == "1",
+            "with Generate script for dependent objects, SMO's comments for unresolved references are left out and named in a warning, with headers on or off, the "
+            + "script equals the one without the option, and names built to end those comments drop nothing when the scripts run (UnresolvedVictim " + before + "→" + after
+            + "): " + string.Join("; ", failed.Concat(runs)));
+
+        // A loopback linked server's database: SMO scripts the procedure whatever a local database of that name is (here
+        // offline). The scratch run creates the linked server and drops it with the other server objects.
+        var offline = scratch.Offline;
+        var linked = db + "_ls";
+        SqlRun? created = null;
+        if ((await sql("ALTER DATABASE [" + offline + "] SET ONLINE;", "master")).Status == "completed")
+        {
+            try
+            {
+                if ((await sql("CREATE TABLE dbo.LinkedRemote (id int NULL);", offline)).Status == "completed")
+                    created = await sql("CREATE PROCEDURE dbo.usp_Linked AS SELECT * FROM [" + linked + "].[" + offline + "].dbo.LinkedRemote;", db);
+            }
+            finally { await sql("ALTER DATABASE [" + offline + "] SET OFFLINE WITH ROLLBACK IMMEDIATE;", "master"); }
+        }
+        if (created?.Status != "completed") Console.WriteLine("Linked-server scripting check skipped: the loopback linked server could not reach this server.");
+        else
+        {
+            var remote = await client.Script(new ObjectRefDto("procedure", db, "dbo", "usp_Linked"), "create", client.Options with { GenerateDependentObjects = true });
+            check(Ok(remote) && remote.Warnings.SequenceEqual([UnresolvedWarning("dbo.LinkedRemote in database " + offline + " on server " + linked)])
+                && remote.Text!.Contains("[" + linked + "].[" + offline + "].dbo.LinkedRemote", StringComparison.Ordinal),
+                "a procedure over a linked server's database scripts with Generate script for dependent objects, whatever a local database of that name is: "
+                + (remote.Error?.Message ?? string.Join(" ", remote.Warnings)));
+        }
+    }
+
+    /// <summary>Which database a refusal names (spec C9): the target's own when it goes offline after the preflight read
+    /// it and before SMO's dependency walk enters it again (BeforeDependencies takes it offline there), and none for a
+    /// dependent that a three-part name places in the target's database spelled in another case.</summary>
+    private static async Task DependentDatabasesAsync(Action<bool, string> check, SqlService service, Client client, Func<string, string, Task<SqlRun>> sql, ScratchDatabase scratch)
+    {
+        var dependents = client.Options with { GenerateDependentObjects = true };
+        var ro = scratch.ReadOnly;
+        var setup = new[]
+        {
+            await sql("ALTER DATABASE [" + ro + "] SET READ_WRITE WITH ROLLBACK IMMEDIATE;", "master"),
+            await sql("CREATE FUNCTION dbo.fn_Gone () RETURNS int AS BEGIN RETURN 1; END;", ro),
+            await sql("CREATE VIEW dbo.vGone AS SELECT dbo.fn_Gone() AS x;", ro),
+            await sql("ALTER DATABASE [" + ro + "] SET READ_ONLY WITH ROLLBACK IMMEDIATE;", "master")
+        };
+        var view = new ObjectRefDto("view", ro, "dbo", "vGone");
+        var options = service.Scripting.Options;
+        options.BeforeDependencies = database =>
+        {
+            if (database == ro) sql("ALTER DATABASE [" + ro + "] SET OFFLINE WITH ROLLBACK IMMEDIATE;", "master").GetAwaiter().GetResult();
+        };
+        ScriptResult gone;
+        try { gone = await client.Script(view, "create", dependents); }
+        finally
+        {
+            options.BeforeDependencies = null;
+            await sql("ALTER DATABASE [" + ro + "] SET ONLINE;", "master");
+        }
+        check(setup.All(run => run.Status == "completed") && gone.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true }
+            && gone.Error.Message.StartsWith("Database " + ro + " is not available (", StringComparison.Ordinal)
+            && gone.Error.Message.EndsWith("), so dbo.vGone cannot be scripted.", StringComparison.Ordinal) && Ok(await client.Script(view, "create", dependents)),
+            "the target's own database going offline before SMO's dependency walk is named as the target's, without advice about the option, and the view scripts "
+            + "once it is back: " + (gone.Error?.Message ?? "no error"));
+
+        // SQL Server compares database names in the server's collation (case-insensitive here, while the scratch database's
+        // own collation is case-sensitive).
+        var db = scratch.Name;
+        var upper = db.ToUpperInvariant();
+        if ((await sql("SELECT CASE WHEN DB_ID(N'" + upper + "') = DB_ID(N'" + db + "') THEN 1 ELSE 0 END;", "master")).Scalar != "1")
+        {
+            Console.WriteLine("Database-name case check skipped: this server compares database names case-sensitively.");
+            return;
+        }
+        var created = await sql("CREATE VIEW dbo.vSecretCase AS SELECT One FROM [" + upper + "].dbo.fn_Secret();", db);
+        var cased = await client.Script(new ObjectRefDto("view", db, "dbo", "vSecretCase"), "create", dependents);
+        check(created.Status == "completed" && cased.Error is { Code: "ENCRYPTED" } && cased.Error.Message == "dbo.fn_Secret is encrypted (WITH ENCRYPTION), so dbo.vSecretCase cannot "
+            + "be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",
+            "a dependent reached through the target's database spelled in another case is not named as in another database: " + (created.Error ?? cased.Error?.Message));
     }
 
     /// <summary>Definitions that keep an old SSMS header in their own text, in any shape (spec C7): the guard cannot tell
