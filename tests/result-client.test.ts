@@ -5,6 +5,7 @@ import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/
 import type { ApiResult, QueryResult, ResultDescriptor } from '../src/shared/contracts'
 import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
 import { encodePage } from '../src/shared/ipc/wire/pages'
+import { manualTimers } from './fixtures/workbench'
 
 const descriptor = (patch: Partial<ResultDescriptor> = {}): ResultDescriptor => ({
   generation: 1, resultId: 3, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [{ name: 'n', dataType: 'int', wire: 'text', nullable: true }],
@@ -357,6 +358,48 @@ describe('ResultClient', () => {
     worker().toWorker({ t: 'backend', generation: 2, status: 'ready' })
     await settle()
     expect(client.queuedCloses).toBe(0)
+  })
+
+  it('closes many results in requests of 1,024, and sends a close main refused as busy again shortly', async () => {
+    const workers: FakeWorker[] = [], window = new FakeWindow(), { timers, advance } = manualTimers()
+    const client = new ResultClient({ api: { openResultsPort: async () => ({ ok: true, value: undefined }) }, window, createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker }, timers })
+    window.dispatch({ source: window, data: { type: 'varia:results-port' }, ports: [new MessageChannel().port1] })
+    await client.ready()
+    const worker = workers[0]
+    const closing = client.release(Array.from({ length: 1500 }, (_, index) => ({ generation: 1, resultId: index + 1 })))
+    await settle()
+    const first = worker.fromWorker.splice(0)
+    expect(first.map(request => request.t === 'close' && request.resultIds.length)).toEqual([1024])
+    // Main's results port already has 64 requests outstanding.
+    worker.toWorker({ t: 'end', rid: first[0].rid, ok: false, code: 'TOO_MANY_REQUESTS', message: 'Too many pending backend requests.' })
+    await settle()
+    const second = worker.fromWorker.splice(0)
+    expect(second.map(request => request.t === 'close' && request.resultIds.length)).toEqual([476])
+    worker.toWorker({ t: 'end', rid: second[0].rid, ok: true, result: { closed: 476, usedBytes: 0 } })
+    await closing
+    expect(client.queuedCloses).toBe(1024)
+    advance(250)
+    await settle()
+    const retried = worker.fromWorker.splice(0)
+    expect(retried.map(request => request.t === 'close' && request.resultIds.length)).toEqual([1024])
+    worker.toWorker({ t: 'end', rid: retried[0].rid, ok: true, result: { closed: 1024, usedBytes: 0 } })
+    await settle()
+    expect(client.queuedCloses).toBe(0)
+    client.dispose()
+  })
+
+  it('drops one result\'s windows without touching the others', () => {
+    const cache = new WindowCache(10, 1000)
+    const window = (text: string): RowWindow => ({ first: 0, count: 1, colStart: 0, colEnd: 1, text: [text], flags: new Uint8Array(1) })
+    cache.set(WindowCache.key('1:1', 0, 1, 0, 1, 512, true), '1:1', window('a'))
+    cache.set(WindowCache.key('1:2', 0, 1, 0, 1, 512, true), '1:2', window('bb'))
+    cache.set(WindowCache.key('1:1', 1, 1, 0, 1, 512, true), '1:1', window('ccc'))
+    cache.dropResult('1:1')
+    expect([cache.size, cache.units]).toEqual([1, 2])
+    expect(cache.get(WindowCache.key('1:2', 0, 1, 0, 1, 512, true))?.text).toEqual(['bb'])
+    cache.dropResult('1:3')
+    cache.dropResult('1:2')
+    expect([cache.size, cache.units]).toEqual([0, 0])
   })
 
   it('measures display columns in the worker, and reports its counters', async () => {

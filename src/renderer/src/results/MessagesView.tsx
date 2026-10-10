@@ -9,10 +9,11 @@ const Message = memo(function Message({ entry }: { entry: MessageEntry }) {
   return <pre className={entry.kind === 'error' ? 'msg error' : 'msg'}>{entry.text}</pre>
 })
 
-/** What Messages show after the last message: SSMS's line when there was nothing else, then the completion time. */
-export function messageTail(tab: Pick<TabResults, 'status' | 'messages' | 'summary'>): string[] {
+/** What Messages show after the last message: SSMS's line when SQL Server sent nothing (Varia's own notices do not
+ *  count), then the completion time. */
+export function messageTail(tab: Pick<TabResults, 'status' | 'messages' | 'notices' | 'summary'>): string[] {
   if (tab.status === 'running') return []
-  const lines = tab.messages.length === 0 && (tab.status === 'completed' || tab.status === 'closed') ? ['Commands completed successfully.'] : []
+  const lines = tab.messages.length - tab.notices === 0 && (tab.status === 'completed' || tab.status === 'closed') ? ['Commands completed successfully.'] : []
   if (tab.summary?.completedAt) lines.push('', 'Completion time: ' + tab.summary.completedAt)
   return lines
 }

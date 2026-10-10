@@ -91,7 +91,8 @@ internal sealed class QueryEventSink : IDisposable
             if (stopped) return;
             messages.Add(entry);
             characters += entry.Text.Length;
-            if (characters >= FlushCharacters) FlushMessages();
+            // Main accepts at most MaxMessages entries per event; the late errors past that cap go out in the next one.
+            if (characters >= FlushCharacters || messages.Count >= QueryMessages.MaxMessages) FlushMessages();
         }
     }
 

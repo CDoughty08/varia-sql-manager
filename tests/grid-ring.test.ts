@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { freshRing, ringStep, slotOf, type RowRing } from '../src/renderer/src/grid/ring'
+import { freshRing, ringStep, rotation, slotOf, type RowRing } from '../src/renderer/src/grid/ring'
 
 /** Plays the moves on a list of slots standing for the DOM, as GridView does. */
 function apply(dom: number[], step: { toEnd: readonly number[]; toFront: readonly number[] }, oldFront: number): number[] {
@@ -36,6 +36,18 @@ describe('grid row ring', () => {
     expect(ringStep(ring, 98, 8)).toEqual({ ring: { base: 100, start: 6, first: 98 }, toEnd: [], toFront: [7, 6] })
     // Six rows down in eight slots: the two that stay move to the front instead.
     expect(ringStep(ring, 106, 8)).toEqual({ ring: { base: 100, start: 6, first: 106 }, toEnd: [], toFront: [7, 6] })
+  })
+  it('catches a DOM left behind while rows scrolled up with the ring in one rotation', () => {
+    const count = 10
+    let ring: RowRing = freshRing(0)
+    const dom = Array.from({ length: count }, (_, slot) => slot)
+    // The ring moves frame by frame (and once by more than the pool) while the DOM keeps its order.
+    for (const first of [3, 7, 12, 40, 44]) ring = ringStep(ring, first, count).ring
+    const caught = apply(dom, rotation(0, ring.start, count), dom[0])
+    expect(Array.from({ length: count }, (_, index) => caught.indexOf(slotOf(ring, 44 + index, count)))).toEqual(Array.from({ length: count }, (_, index) => index))
+    expect(rotation(4, 4, count)).toEqual({ toEnd: [], toFront: [] })
+    expect(rotation(2, 5, 8)).toEqual({ toEnd: [2, 3, 4], toFront: [] })
+    expect(rotation(5, 2, 8)).toEqual({ toEnd: [], toFront: [4, 3, 2] })
   })
   it('renumbers the slots instead of moving any when no row stays shown', () => {
     const ring = ringStep(freshRing(0), 3, 8).ring

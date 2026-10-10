@@ -281,14 +281,15 @@ async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes
 }
 /** results.export: a temporary file renamed over the target; hold/results.export pauses it after each page, and a
  *  CANCEL frame stops it (the temporary file is removed). */
-async function exportResults(id, { resultId, path, format, headers, nullText }) {
-  if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || !['csv', 'tsv', 'json'].includes(format) || !['empty', 'NULL'].includes(nullText)) return fail(id, 'INVALID_PARAMS', 'The export request is invalid.')
+async function exportResults(id, { resultId, path, format, headers, nullText, temporaryId }) {
+  if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || !['csv', 'tsv', 'json'].includes(format) || !['empty', 'NULL'].includes(nullText)
+    || typeof temporaryId !== 'string' || !/^[0-9a-f]{32}$/.test(temporaryId)) return fail(id, 'INVALID_PARAMS', 'The export request is invalid.')
   const result = stored.get(resultId)
   if (!result) return missing(id, resultId)
   if (!result.complete) return fail(id, 'RESULT_OPEN', 'Save the results after this result set finishes loading.')
   if (!existsSync(dirname(path))) return fail(id, 'EXPORT_FAILED', 'NOT_FOUND')
   if (existsSync(path) && statSync(path).isDirectory()) return fail(id, 'EXPORT_FAILED', 'IS_DIRECTORY')
-  const temporary = join(dirname(path), `.varia-${crypto.randomUUID().replaceAll('-', '')}.tmp`)
+  const temporary = join(dirname(path), `.varia-${temporaryId}.tmp`)
   const file = await open(temporary, 'wx')
   let last = Date.now()
   try {

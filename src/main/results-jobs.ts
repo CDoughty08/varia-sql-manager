@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { rm, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { z } from 'zod'
 import type { ResultsCopyParams, ResultsExportParams, ResultsFormat, ResultsJobProgress, ResultsJobResult, SavedResults } from '../shared/contracts'
@@ -44,6 +46,22 @@ export function sanitizeFileName(name: string): string {
 /** The format an extension chooses; any other extension, or none, keeps the requested format. */
 export function formatFromPath(path: string): ResultsFormat | undefined { return formatsByExtension[extname(path).toLowerCase()] }
 
+/**
+ * Removes what an export the backend never finished left beside its target: the temporary file, and the backup of the
+ * replaced file (Windows) once the target exists again (otherwise it is the only copy of the old file). A backend killed
+ * mid-save cannot clean up, and one that is still exiting may hold the file open (Windows refuses the delete then), so
+ * this runs again after the stop grace period.
+ */
+export function removeExportLeftovers(target: string, temporaryId: string, retryMs: number = wire.timers.stopGraceMs + 1000): Promise<void> {
+  const prefix = join(dirname(target), `.varia-${temporaryId}`)
+  const sweep = async () => {
+    await rm(prefix + '.tmp', { force: true }).catch(() => {})
+    if (await stat(target).then(() => true, () => false)) await rm(prefix + '.bak', { force: true }).catch(() => {})
+  }
+  setTimeout(() => { void sweep() }, retryMs).unref?.()
+  return sweep()
+}
+
 export interface SaveDialog {
   (options: { title: string; defaultPath: string; filters: { name: string; extensions: string[] }[]; properties: ('showOverwriteConfirmation' | 'createDirectory')[] }): Promise<{ canceled: boolean; filePath?: string }>
 }
@@ -66,6 +84,8 @@ export interface JobHostDeps {
   progress(progress: ResultsJobProgress): void
   platform: NodeJS.Platform
   now?: () => number
+  /** removeExportLeftovers, replaced in tests. */
+  removeLeftovers?: (target: string, temporaryId: string) => Promise<void>
 }
 
 /** One running copy or save: CANCEL reaches it once its request is written. */
@@ -165,6 +185,8 @@ export class ResultsJobHost {
     if (this.saveBusy) throw new BackendError('JOB_BUSY', jobSentences.busy)
     this.saveBusy = true
     let fileName = ''
+    // The export's files, from the moment the backend may write them.
+    let writing: { path: string; temporaryId: string } | undefined
     try {
       this.check(request.generation, request.resultId)
       const requested = request.format ?? this.lastFormat ?? 'csv'
@@ -181,13 +203,16 @@ export class ResultsJobHost {
       const format = formatFromPath(path) ?? requested
       this.check(request.generation, request.resultId, jobSentences.closedBeforeSave)
       const job = this.saving = new Job(request.jobId, 'save', request.generation, this.deps, fileName)
-      const result = await this.deps.backend.export(request.generation, { resultId: request.resultId, path, format, headers: exportDefaults.headers, nullText: exportDefaults.nullText[format] },
+      writing = { path, temporaryId: randomUUID().replaceAll('-', '') }
+      const result = await this.deps.backend.export(request.generation, { resultId: request.resultId, path, format, headers: exportDefaults.headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId },
         { onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       this.lastDir = dirname(path)
       this.lastFormat = format
       return { ...result, fileName, format }
     } catch (error) {
       if (error instanceof BackendError && error.code === 'EXPORT_FAILED') throw new BackendError('EXPORT_FAILED', jobSentences.exportFailed(error.message, fileName))
+      // The backend stopped (crashed, killed, or restarted) before it could remove its own files.
+      if (writing && error instanceof BackendError && (error.code === 'BACKEND_LOST' || error.code === 'BACKEND_UNAVAILABLE')) void (this.deps.removeLeftovers ?? removeExportLeftovers)(writing.path, writing.temporaryId).catch(() => {})
       throw error
     } finally {
       this.saving = undefined

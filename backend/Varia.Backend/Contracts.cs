@@ -48,8 +48,9 @@ internal sealed record CopyPartArgs(long[][] Rows, int[][] Columns);
 /// <summary>results.copy (main only): the parts' text streams as DATA; eol is "crlf" or "lf".</summary>
 internal sealed record ResultsCopyArgs(uint ResultId, CopyPartArgs[] Parts, bool Headers, string Eol, long MaxBytes);
 /// <summary>results.export (main only): Path comes from main's save dialog; Format is csv, tsv or json; NullText is
-/// "empty" or "NULL".</summary>
-internal sealed record ResultsExportArgs(uint ResultId, string Path, string Format, bool Headers, string NullText);
+/// "empty" or "NULL"; TemporaryId (32 hex digits) names the temporary file, .varia-{id}.tmp beside the target, which main
+/// removes if the backend dies while writing it.</summary>
+internal sealed record ResultsExportArgs(uint ResultId, string Path, string Format, bool Headers, string NullText, string TemporaryId);
 internal sealed record ResultsJobResult(long Rows, long Bytes, long TruncatedCells, bool Partial);
 /// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only).</summary>
 internal sealed record SynthesizeArgs(string Shape, int Rows);

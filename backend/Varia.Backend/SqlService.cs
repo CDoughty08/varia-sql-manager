@@ -605,7 +605,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
             Note("Results were truncated because the result memory budget (" + (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
-        if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString(CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
+        if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString("N0", CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
         if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
         // Only when something was skipped: an error ends its batch's script, not the batch, which SQL Server may run on.
         if (failure is not null && batchNumber > 0 && completed + 1 < totalBatches)

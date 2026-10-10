@@ -62,6 +62,8 @@ internal sealed class ResultJobs(ResultStore store)
     private const int MaxPathCharacters = 32_767;
     /// <summary>Read, write and execute for owner, group and others: a replaced file's mode without set-id or sticky bits.</summary>
     private const UnixFileMode PermissionBits = (UnixFileMode)0b111_111_111;
+    /// <summary>Read and write for owner, group and others: the most a new file gets before the umask.</summary>
+    private const UnixFileMode NewFileBits = (UnixFileMode)0b110_110_110;
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(250);
 
     /// <summary>Called after each page is written: the checks release or cancel mid-job through it.</summary>
@@ -112,7 +114,8 @@ internal sealed class ResultJobs(ResultStore store)
     public async Task<ResultsJobResult> ExportAsync(ResultsExportArgs args, RequestContext? context)
     {
         var format = args.Format switch { "csv" => TextFormat.Csv, "tsv" => TextFormat.Tsv, "json" => TextFormat.Json, _ => (TextFormat?)null };
-        if (args.ResultId == 0 || format is null || args.NullText is not ("empty" or "NULL") || !IsExportPath(args.Path))
+        if (args.ResultId == 0 || format is null || args.NullText is not ("empty" or "NULL") || !IsExportPath(args.Path)
+            || args.TemporaryId is not { Length: 32 } || !Guid.TryParseExact(args.TemporaryId, "N", out _))
             throw new RequestException("INVALID_PARAMS", "The export request is invalid.");
         var set = Lease(args.ResultId);
         string? temporary = null;
@@ -123,13 +126,15 @@ internal sealed class ResultJobs(ResultStore store)
             var directory = Path.GetDirectoryName(args.Path);
             if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) throw Failed("NOT_FOUND");
             if (Directory.Exists(args.Path)) throw Failed("IS_DIRECTORY");
-            temporary = Path.Combine(directory, ".varia-" + Guid.NewGuid().ToString("N") + ".tmp");
+            // Main chose the name, so it can remove the file if this process dies before the finally below runs.
+            temporary = Path.Combine(directory, ".varia-" + args.TemporaryId + ".tmp");
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Export(format.Value, args.Headers, args.NullText), set.Columns);
             var progress = new Progress(context, set.RowsAvailable);
             int[] all = [.. Enumerable.Range(0, set.Columns.Count)];
             // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back
-            // readable by others. A symbolic link there is replaced, not followed, so it lends nothing.
+            // readable by others. A symbolic link there is replaced, not followed; the file it points to may only narrow
+            // the new file's default permissions.
             var target = new FileInfo(args.Path);
             var replacing = target.Exists && target.LinkTarget is null;
             var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, BufferSize = 0, Options = FileOptions.Asynchronous };
@@ -140,6 +145,7 @@ internal sealed class ResultJobs(ResultStore store)
                 mode = target.UnixFileMode & PermissionBits;
                 options.UnixCreateMode = mode;
             }
+            else if (target.LinkTarget is not null && !OperatingSystem.IsWindows() && LinkedMode(target) is { } linked) options.UnixCreateMode = linked;
             // The target is touched only by the final rename, so a failure or cancel leaves it as it was.
             await using (var file = new FileStream(temporary, options))
             {
@@ -162,7 +168,7 @@ internal sealed class ResultJobs(ResultStore store)
                 file.Flush(flushToDisk: true);
             }
             // On Windows, Replace keeps the replaced file's ACLs and attributes, which a move over it would drop.
-            if (replacing && OperatingSystem.IsWindows()) File.Replace(temporary, args.Path, null);
+            if (replacing && OperatingSystem.IsWindows()) ReplaceFile(temporary, args.Path, Path.Combine(directory, ".varia-" + args.TemporaryId + ".bak"), File.Replace);
             else File.Move(temporary, args.Path, overwrite: true);
             temporary = null;
             return new ResultsJobResult(writer.Rows, writer.Bytes, writer.TruncatedCells, false);
@@ -173,6 +179,38 @@ internal sealed class ResultJobs(ResultStore store)
             if (temporary is not null) try { File.Delete(temporary); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             set.ReleaseLease();
         }
+    }
+
+    /// <summary>Replaces <paramref name="path"/> with <paramref name="temporary"/>, keeping the replaced file at
+    /// <paramref name="backup"/> until that succeeds. Without a backup name, ReplaceFile can fail after it removed the
+    /// original (ERROR_UNABLE_TO_MOVE_REPLACEMENT, e.g. while antivirus holds the new file), leaving neither; with one, a
+    /// failure leaves both names as they were, or the original at the backup name, and then the new file is moved into
+    /// place, or failing that the original is put back.</summary>
+    internal static void ReplaceFile(string temporary, string path, string backup, Action<string, string, string?> replace)
+    {
+        try { replace(temporary, path, backup); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException && !File.Exists(path))
+        {
+            try { File.Move(temporary, path); }
+            catch (Exception) when (File.Exists(backup) && !File.Exists(path))
+            {
+                File.Move(backup, path);
+                throw;
+            }
+        }
+        finally
+        {
+            // The backup is the only copy of the old file while the target is missing.
+            if (File.Exists(path)) try { File.Delete(backup); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>The mode for a new file that replaces a symbolic link: the permissions of the file it points to, within a
+    /// new file's (the umask narrows them further); null for a link to nothing.</summary>
+    private static UnixFileMode? LinkedMode(FileInfo link)
+    {
+        try { return link.ResolveLinkTarget(returnFinalTarget: true) is FileInfo { Exists: true } file ? file.UnixFileMode & NewFileBits : null; }
+        catch (IOException) { return null; }
     }
 
     /// <summary>The one-word reason an export failed; never the exception's message, which names the path.</summary>

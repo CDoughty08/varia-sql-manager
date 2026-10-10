@@ -471,18 +471,23 @@ describe('real .NET sidecar results (test hooks)', () => {
     try {
       const stored = await call(connection, 'debug.results.synthesize', { shape: 'N1', rows: 1000 }) as ResultDescriptor
       const path = join(folder, 'n1.json')
-      const saved = await call(connection, 'results.export', { resultId: stored.resultId, path, format: 'json', headers: true, nullText: 'NULL' })
+      const temporaryId = () => crypto.randomUUID().replaceAll('-', '')
+      const saved = await call(connection, 'results.export', { resultId: stored.resultId, path, format: 'json', headers: true, nullText: 'NULL', temporaryId: temporaryId() })
       const rows = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>[]
       expect(saved).toMatchObject({ rows: 1000, partial: false, truncatedCells: 500 })
       expect([rows.length, rows[1]]).toEqual([1000, { id: 1, maybe: null, unicode: 'é', clipped: 'truncated pre', failed: 37, bytes: null, none: null }])
-      await expect(call(connection, 'results.export', { resultId: stored.resultId, path: 'relative.csv', format: 'csv', headers: true, nullText: 'empty' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
-      await expect(call(connection, 'results.export', { resultId: stored.resultId, path: folder, format: 'csv', headers: true, nullText: 'empty' })).rejects.toMatchObject({ code: 'EXPORT_FAILED', message: 'IS_DIRECTORY' })
+      await expect(call(connection, 'results.export', { resultId: stored.resultId, path: 'relative.csv', format: 'csv', headers: true, nullText: 'empty', temporaryId: temporaryId() })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+      await expect(call(connection, 'results.export', { resultId: stored.resultId, path, format: 'csv', headers: true, nullText: 'empty', temporaryId: '../x' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+      await expect(call(connection, 'results.export', { resultId: stored.resultId, path: folder, format: 'csv', headers: true, nullText: 'empty', temporaryId: temporaryId() })).rejects.toMatchObject({ code: 'EXPORT_FAILED', message: 'IS_DIRECTORY' })
 
       const big = await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 1_000_000 }) as ResultDescriptor
       const target = join(folder, 'big.csv')
       const progress: unknown[] = []
-      const exporting = connection.send('results.export', { resultId: big.resultId, path: target, format: 'csv', headers: true, nullText: 'empty' }, { deadlineMs: 0, onEvent: event => { progress.push(event) } })
+      const named = temporaryId()
+      const exporting = connection.send('results.export', { resultId: big.resultId, path: target, format: 'csv', headers: true, nullText: 'empty', temporaryId: named }, { deadlineMs: 0, onEvent: event => { progress.push(event) } })
       await vi.waitUntil(() => progress.length > 0, { timeout: 20_000, interval: 20 })
+      // The file being written has the name main chose, so main can remove it if the backend dies.
+      expect(await readdir(folder)).toContain(`.varia-${named}.tmp`)
       connection.cancel(exporting.id, 1)
       await expect(exporting.done).rejects.toMatchObject({ code: 'CANCELLED' })
       await vi.waitUntil(async () => (await readdir(folder)).every(name => !name.endsWith('.tmp')), { timeout: 10_000, interval: 50 })

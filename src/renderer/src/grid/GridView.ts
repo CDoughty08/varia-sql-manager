@@ -12,7 +12,7 @@ import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
 import { fitWidth, initialWidth, measureCharWidth, typeHintChars } from './measure'
-import { freshRing, ringStep, slotOf, type RowRing } from './ring'
+import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { applyWheel, ensureVisible, normalizeWheel, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
@@ -94,8 +94,12 @@ export class GridView {
   private readonly slots = new WeakMap<Element, { row?: RowSlot; cell?: CellSlot; header?: HeaderSlot }>()
   private readonly cleanup: (() => void)[] = []
   private rowSlots: RowSlot[] = []
-  /** How rows map to `rowSlots` and their DOM order (ring.ts); undefined until the pool has rows to show. */
+  /** How rows map to `rowSlots` (ring.ts); undefined until the pool has rows to show. */
   private ring: RowRing | undefined
+  /** The slot the DOM's rotation of row slots starts with: it catches up with the ring's once the rows stop moving. */
+  private domStart = 0
+  /** The first row the last frame showed, to tell a frame that scrolled from one that did not. */
+  private shownFirst = Number.NaN
   private pinSlot: RowSlot
   /** Whether the active row's spare slot comes before the ring in the DOM (its row is above the rows shown). */
   private pinFirst = true
@@ -184,7 +188,9 @@ export class GridView {
     if (o.stats) this.cleanup.push(o.stats.add({ counters: () => this.data.counters, nodes: () => this.root.getElementsByTagName('*').length + 1, setScrollCap: px => { this.capOverride = px; this.updateCap() } }))
     this.viewportWidth = this.scroller.clientWidth
     this.viewportHeight = this.scroller.clientHeight
-    this.schedule()
+    // The first frame is drawn now, not a frame later: the rows of a tile already cached show at once, and the others are
+    // requested a frame sooner.
+    this.runFrame()
   }
 
   /** A key from the shell's onKeyDown; true when the grid handled it (and the caller prevents its default). */
@@ -338,6 +344,8 @@ export class GridView {
       this.cleanup.push(() => target.removeEventListener(type, guarded, options))
     }
     on(this.scroller, 'scroll', () => this.schedule(), { passive: true })
+    // A press on a scroll bar focuses the scroller, which has no name and no active cell: the grid keeps the focus.
+    on(this.scroller, 'focus', () => this.root.focus({ preventScroll: true }))
     on(this.root, 'pointerdown', event => this.pointerDown(event))
     on(this.root, 'mousedown', event => this.mouseDown(event))
     on(this.root, 'pointermove', event => this.pointerMove(event))
@@ -370,7 +378,7 @@ export class GridView {
     watchRatio()
     this.cleanup.push(() => media?.removeEventListener('change', onRatio))
     const fonts = this.root.ownerDocument.fonts
-    const onFonts = () => { if (this.disposed) return; this.charWidth = fontMeasure().charWidth; this.schedule() }
+    const onFonts = () => { if (this.disposed) return; this.charWidth = fontMeasure(true).charWidth; this.schedule() }
     fonts?.addEventListener('loadingdone', onFonts)
     this.cleanup.push(() => fonts?.removeEventListener('loadingdone', onFonts))
   }
@@ -844,23 +852,33 @@ export class GridView {
     if (activeCell) {
       // A NULL and a value that could not be read both show NULL, as does the text 'NULL': the label tells them apart.
       const bits = activeCell.bits
-      const label = activeCell.value + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '')
+      // A cell whose rows are still being read says so: an empty name reads as "blank", and the value that follows is a
+      // name change some screen readers do not read for the active cell.
+      const label = bits & LOAD ? 'Loading' : activeCell.value + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
   }
 
-  /** Keeps the slots of the rows shown in row order in the DOM, as browse-mode screen readers read them (ring.ts). */
+  /**
+   * Keeps the slots of the rows shown in row order in the DOM, as browse-mode screen readers read them (ring.ts). A row
+   * moved in the DOM is styled and laid out again, so while the rows scroll only the ring moves; the DOM catches up in
+   * the first frame after they stop.
+   */
   private orderRows(firstRow: number): void {
     const count = this.rowSlots.length
     if (count === 0) return
-    if (!this.ring) { this.ring = freshRing(firstRow); return }
-    const front = this.rowSlots[this.ring.start].el
-    const step = ringStep(this.ring, firstRow, count)
-    this.ring = step.ring
+    const moving = firstRow !== this.shownFirst
+    this.shownFirst = firstRow
+    if (!this.ring) { this.ring = freshRing(firstRow); this.domStart = this.ring.start; return }
+    this.ring = ringStep(this.ring, firstRow, count).ring
+    if (this.ring.start === this.domStart) return
+    if (moving) { this.schedule(); return }
+    const step = rotation(this.domStart, this.ring.start, count)
     const end = this.pinFirst ? null : this.pinSlot.el
     for (const index of step.toEnd) this.rowsEl.insertBefore(this.rowSlots[index].el, end)
-    let before = front
+    let before = this.rowSlots[this.domStart].el
     for (const index of step.toFront) { const el = this.rowSlots[index].el; this.rowsEl.insertBefore(el, before); before = el }
+    this.domStart = this.ring.start
   }
 
   /** Paints one row's cells over the frame's columns (and the active cell when it is out of them); returns the active cell. */
@@ -999,11 +1017,14 @@ function firstCell(resultIndex: number): GridSelection {
   return { resultIndex, blocks: [{ kind: 'cells', anchor: cell, focus: cell }], active: cell }
 }
 
-/** The grid font's digit width and a header measurer (canvas measureText in the UI font). */
-function fontMeasure(): { charWidth: number; header: (text: string) => number } {
-  const context = document.createElement('canvas').getContext('2d')
+let measureContext: CanvasRenderingContext2D | null | undefined
+let measuredCharWidth: number | undefined
+/** The grid font's digit width and a header measurer (canvas measureText in the UI font). One canvas serves every grid,
+ *  and the digit width is measured once, again only when fonts finish loading (`fresh`). */
+function fontMeasure(fresh = false): { charWidth: number; header: (text: string) => number } {
+  const context = measureContext === undefined ? measureContext = document.createElement('canvas').getContext('2d') : measureContext
   if (!context) return { charWidth: 7.2, header: text => text.length * 7 }
-  const charWidth = measureCharWidth(text => { context.font = `12px ${monoFontFamily}`; return context.measureText(text).width })
+  if (fresh || measuredCharWidth === undefined) measuredCharWidth = measureCharWidth(text => { context.font = `12px ${monoFontFamily}`; return context.measureText(text).width })
   const header = (text: string) => { context.font = `12px ${uiFontFamily}`; return context.measureText(text).width }
-  return { charWidth, header }
+  return { charWidth: measuredCharWidth, header }
 }

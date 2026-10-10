@@ -2,6 +2,7 @@
 // reads and decodes pages, and the UI thread receives only windows of display text.
 import type { BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, WireKind } from '../../../shared/contracts'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
+import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
 import { gridLimits as g } from '../grid/constants'
 import type { ResultKey, ValueFormat, WorkerRequest, WorkerResponse } from './worker-protocol'
@@ -102,6 +103,8 @@ const abortError = (): Error => new DOMException('The request was aborted.', 'Ab
  */
 export class WindowCache {
   private readonly entries = new Map<string, { readonly window: RowWindow; readonly units: number; readonly result: string }>()
+  /** Each result's keys, so dropping a result costs its own windows rather than a scan of the whole cache. */
+  private readonly byResult = new Map<string, Set<string>>()
   private used = 0
   constructor(private readonly maxWindows: number = g.uiCacheWindows, private readonly maxUnits: number = g.uiCacheUnits) {}
   static key(result: string, first: number, count: number, colStart: number, colEnd: number, maxCellChars: number, display: boolean): string {
@@ -122,19 +125,25 @@ export class WindowCache {
     for (const text of window.text) units += text.length
     this.delete(key)
     this.entries.set(key, { window, units, result })
+    let keys = this.byResult.get(result)
+    if (!keys) this.byResult.set(result, keys = new Set())
+    keys.add(key)
     this.used += units
     while (this.entries.size > 1 && (this.entries.size > this.maxWindows || this.used > this.maxUnits)) this.delete(this.entries.keys().next().value!)
   }
   /** Every window of one result (`generation:resultId`). */
   dropResult(result: string): void {
-    for (const [key, entry] of this.entries) if (entry.result === result) this.delete(key)
+    for (const key of [...this.byResult.get(result) ?? []]) this.delete(key)
   }
-  clear(): void { this.entries.clear(); this.used = 0 }
+  clear(): void { this.entries.clear(); this.byResult.clear(); this.used = 0 }
   private delete(key: string): void {
     const entry = this.entries.get(key)
     if (!entry) return
     this.entries.delete(key)
     this.used -= entry.units
+    const keys = this.byResult.get(entry.result)
+    keys?.delete(key)
+    if (keys?.size === 0) this.byResult.delete(entry.result)
   }
 }
 
@@ -153,8 +162,11 @@ export class ResultClient implements Disposable {
   private readonly results = new Map<string, ResultState>()
   private readonly queryListeners = new Map<string, Set<(event: QueryEvent) => void>>()
   private readonly memoryListeners = new Set<(memory: { usedBytes: number; globalBytes: number }) => void>()
-  /** Result ids to close, by generation, until the port is attached. */
+  private readonly generationListeners = new Set<(generation: number) => void>()
+  /** Result ids to close, by generation, until the port is attached (or main has room for the request again). */
   private readonly closeQueue = new Map<number, Set<number>>()
+  private readonly timers: Timers
+  private closeRetry: unknown
   readonly windows: WindowCache
   private worker: WorkerLike
   private attached!: Promise<void>
@@ -171,8 +183,12 @@ export class ResultClient implements Disposable {
   private disposed = false
 
   /** `windowCache` bounds the windows every result shares (default 256 windows and 16 Mi UTF-16 units). */
-  constructor(o: { api: Pick<VariaApi, 'openResultsPort'>; createWorker: () => WorkerLike; window: WindowLike; now?: () => number; schedule?: (callback: () => void) => void; windowCache?: { windows?: number; units?: number } }) {
+  constructor(o: {
+    api: Pick<VariaApi, 'openResultsPort'>; createWorker: () => WorkerLike; window: WindowLike; now?: () => number; schedule?: (callback: () => void) => void
+    windowCache?: { windows?: number; units?: number }; timers?: Timers
+  }) {
     this.api = o.api
+    this.timers = o.timers ?? browserTimers
     this.windows = new WindowCache(o.windowCache?.windows, o.windowCache?.units)
     this.createWorker = o.createWorker
     this.window = o.window
@@ -240,7 +256,8 @@ export class ResultClient implements Disposable {
       dispose: () => {
         for (const listener of listeners) state.listeners.delete(listener)
         listeners.clear()
-        this.windows.dropResult(state.id)
+        // A released or lost result's windows went when it was forgotten.
+        if (this.results.get(state.id) === state) this.windows.dropResult(state.id)
         if (state.handle === handle) state.handle = undefined
       }
     }
@@ -259,6 +276,12 @@ export class ResultClient implements Disposable {
   onMemory(listener: (memory: { usedBytes: number; globalBytes: number }) => void): Disposable {
     this.memoryListeners.add(listener)
     return { dispose: () => { this.memoryListeners.delete(listener) } }
+  }
+
+  /** A new backend generation: every result of an earlier one is lost (their handles already say so). */
+  onGeneration(listener: (generation: number) => void): Disposable {
+    this.generationListeners.add(listener)
+    return { dispose: () => { this.generationListeners.delete(listener) } }
   }
 
   /** The summary's descriptors are final; events for the script that arrive later change nothing. */
@@ -301,10 +324,12 @@ export class ResultClient implements Disposable {
     if (this.disposed) return
     this.disposed = true
     this.window.removeEventListener('message', this.onWindowMessage)
+    if (this.closeRetry !== undefined) this.timers.clearTimeout(this.closeRetry)
     this.worker.terminate()
     this.rejectAll(new ResultError('PORT_CLOSED', 'The workbench closed.'))
     this.queryListeners.clear()
     this.memoryListeners.clear()
+    this.generationListeners.clear()
     this.windows.clear()
   }
 
@@ -320,12 +345,16 @@ export class ResultClient implements Disposable {
         // and an answer could arrive after a newer event or summary.
         try { await this.request(id => ({ type: 'close', id, generation, resultIds })) }
         catch (error) {
-          // The port or the worker went away before main had them: they wait for the next port.
+          // The port or the worker went away before main had them: they wait for the next port. Main refuses requests
+          // past its limit (reads in flight count too): they are sent again shortly.
           const code = error instanceof ResultError ? error.code : undefined
-          if (code === 'PORT_CLOSED' || code === 'RESULT_DECODER_FAILED') {
+          if (code === 'PORT_CLOSED' || code === 'RESULT_DECODER_FAILED' || code === 'TOO_MANY_REQUESTS') {
             const again = this.closeQueue.get(generation) ?? new Set<number>()
             for (const resultId of resultIds) again.add(resultId)
             this.closeQueue.set(generation, again)
+          }
+          if (code === 'TOO_MANY_REQUESTS' && this.closeRetry === undefined && !this.disposed) {
+            this.closeRetry = this.timers.setTimeout(() => { this.closeRetry = undefined; void this.flushCloses() }, g.busyRetryMs)
           }
         }
       }
@@ -450,6 +479,7 @@ export class ResultClient implements Disposable {
       if (state.snapshot.state !== 'lost') this.publish(state, { ...state.snapshot, state: 'lost' })
       this.forget(state)
     }
+    for (const listener of [...this.generationListeners]) listener(generation)
   }
 
   private forget(state: ResultState): void {

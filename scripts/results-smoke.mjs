@@ -17,9 +17,11 @@ await mkdir(join(control, 'hold'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
 const linux = process.platform === 'linux', eol = process.platform === 'win32' ? '\r\n' : '\n'
-// Renderer long tasks in the measured segments: none of 50 ms on Linux (a segment may run once more), elsewhere at most
-// 2 and none of 100 ms.
-const longTaskLimit = linux ? 50 : 100
+// Renderer tasks in the measured segments, from a trace of the renderer's main thread: none with 50 ms of CPU time on
+// Linux (100 ms elsewhere), and none of 250 ms by the clock; a segment over either runs once more before it fails. A
+// shared machine stretches short tasks by the clock (a 36 ms task had 7 ms of CPU time), which made clock-only limits
+// flaky; the CPU time is what the grid itself spends.
+const cpuLimit = linux ? 50 : 100, clockLimit = 250
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 // Part B relaunches the app on the real backend; every helper below follows these to the current one.
@@ -41,6 +43,8 @@ const grid = (index = 0) => page.locator(`[data-result-grid][data-result-index="
 const scroller = (index = 0) => grid(index).locator('.rg-scroll')
 const cell = (row, column, of = grid()) => of.locator(`.rg-row[aria-rowindex="${row + 2}"] .rg-c[aria-colindex="${column + 2}"]`)
 const header = (name, of = grid()) => of.getByRole('columnheader', { name, exact: true })
+/** A grid's strip, beside the grid rather than inside its table structure. */
+const strip = (index = 0) => page.locator('.rg-frame').filter({ has: grid(index) }).locator('.rg-strip')
 /** A row's number as drawn in the sticky row-number column (screen readers read the row's own header instead). */
 const rowNumber = (row, of = grid()) => of.locator('.rg-rn:visible').filter({ hasText: new RegExp(`^${row + 1}$`) })
 const outputTab = name => page.locator('.output-toolbar').getByRole('tab', { name })
@@ -70,6 +74,17 @@ const active = (index = 0) => grid(index).evaluate(root => {
     selected: element.getAttribute('aria-selected'), label: element.getAttribute('aria-label'), text: element.textContent
   }
 })
+/** Records the active cell's name each time aria-activedescendant moves, as a screen reader reads it then. */
+const watchActiveNames = (index = 0) => grid(index).evaluate(root => {
+  window.__variaActiveObserver?.disconnect()
+  window.__variaActiveNames = []
+  window.__variaActiveObserver = new MutationObserver(() => {
+    const element = document.getElementById(root.getAttribute('aria-activedescendant'))
+    window.__variaActiveNames.push(element?.getAttribute('aria-label') ?? element?.textContent ?? '')
+  })
+  window.__variaActiveObserver.observe(root, { attributes: true, attributeFilter: ['aria-activedescendant'] })
+})
+const activeNames = () => page.evaluate(() => { window.__variaActiveObserver.disconnect(); return window.__variaActiveNames })
 /** The active cell once keys and drags are painted: its row and the scroll position no longer change. */
 async function settled(index = 0) {
   const position = async () => JSON.stringify([(await active(index)).row, await scroller(index).evaluate(element => element.scrollTop)])
@@ -102,24 +117,39 @@ const loadingInView = (index = 0) => grid(index).evaluate(root => {
     return cell.style.display !== 'none' && cell.parentElement.style.display !== 'none' && box.width > 0 && box.right > body.left && box.left < body.right && box.bottom > head.bottom && box.top < body.bottom
   }).length
 })
-/** Records renderer long tasks from now on. */
-const startLongTasks = () => page.evaluate(() => {
-  window.__variaLongTasks?.disconnect()
-  window.__variaLongTaskList = []
-  window.__variaLongTasks = new PerformanceObserver(list => { for (const entry of list.getEntries()) window.__variaLongTaskList.push(Math.round(entry.duration)) })
-  window.__variaLongTasks.observe({ type: 'longtask' })
-})
-const longTasks = () => page.evaluate(() => window.__variaLongTaskList)
-/** Runs `segment` with long tasks recorded; a segment over the limit runs once more before it fails. */
+let tracer
+/** Traces the renderer from now on; the returned function stops and gives each main-thread task's clock and CPU ms. */
+async function startTrace() {
+  if (tracer?.page !== page) tracer = { page, cdp: await page.context().newCDPSession(page) }
+  const { cdp } = tracer, events = []
+  const collect = data => { for (const event of data.value) events.push(event) }
+  cdp.on('Tracing.dataCollected', collect)
+  const complete = new Promise(done => cdp.once('Tracing.tracingComplete', done))
+  // DevTools' timeline category names the main thread's tasks RunTask, with their thread (CPU) time.
+  await cdp.send('Tracing.start', { traceConfig: { includedCategories: ['toplevel', 'disabled-by-default-devtools.timeline'] }, transferMode: 'ReportEvents' })
+  return async () => {
+    await cdp.send('Tracing.end')
+    await complete
+    cdp.off('Tracing.dataCollected', collect)
+    // The page's main thread is the renderer main thread that ran the most tasks.
+    const threads = events.filter(event => event.name === 'thread_name' && event.args?.name === 'CrRendererMain')
+    const tasks = thread => events.filter(event => event.ph === 'X' && event.name === 'RunTask' && event.pid === thread.pid && event.tid === thread.tid)
+    const main = threads.map(tasks).sort((a, b) => b.length - a.length)[0] ?? []
+    // A segment runs thousands of tasks: none would mean the trace missed the page, not that the page was idle.
+    if (main.length === 0) throw new Error('The trace holds no tasks of the renderer\'s main thread.')
+    return main.map(event => ({ clock: event.dur / 1000, cpu: (event.tdur ?? event.dur) / 1000 }))
+  }
+}
+/** Runs `segment` with the renderer traced; a segment over a limit runs once more before it fails. */
 async function measured(name, segment) {
   for (let attempt = 1; ; attempt++) {
-    await startLongTasks()
+    const stop = await startTrace()
     await segment()
-    const tasks = await longTasks()
-    console.log(`Results ${name}: long tasks ${JSON.stringify(tasks)} (attempt ${attempt}).`)
-    const over = tasks.filter(ms => ms >= longTaskLimit)
-    if (linux ? over.length === 0 : tasks.length <= 2 && over.length === 0) return
-    if (attempt === 2) throw new Error(`${name}: renderer long tasks ${JSON.stringify(tasks)} (limit ${longTaskLimit} ms)`)
+    const tasks = await stop(), long = tasks.filter(task => task.clock >= 50 || task.cpu >= 50)
+    const shown = JSON.stringify(long.map(task => `${Math.round(task.clock)}/${Math.round(task.cpu)}`))
+    console.log(`Results ${name}: of ${tasks.length} tasks, those of 50 ms by the clock / of CPU time: ${shown} (attempt ${attempt}).`)
+    if (!long.some(task => task.cpu >= cpuLimit || task.clock >= clockLimit)) return
+    if (attempt === 2) throw new Error(`${name}: renderer tasks ${shown} (limits ${cpuLimit} ms of CPU time, ${clockLimit} ms by the clock)`)
   }
 }
 /** A theme token's color as computed styles report it, for comparison with an element's computed color. */
@@ -198,9 +228,14 @@ try {
   await measured('a million rows', async () => {
     await page.evaluate(() => window.__variaGrid.reset())
     await cell(0, 0).click()
+    await watchActiveNames()
     await page.keyboard.press('Control+End')
     await expect.poll(async () => (await active()).text).toBe(w1(999_999)[7])
     expect(await active()).toMatchObject({ resolved: true, row: 999_999, column: 7 })
+    // The far cell's rows are not read yet when the active cell moves there: it is announced as loading, never blank.
+    const names = await activeNames()
+    expect(names.length).toBeGreaterThan(0)
+    expect(names.every(name => name !== ''), `names as the active cell moved: ${JSON.stringify(names)}`).toBe(true)
     await expect(grid().locator('.rg-row[aria-rowindex="1000001"] .rg-rh')).toHaveText('1000000')
     expect(await scroller().evaluate(element => element.scrollHeight)).toBeLessThanOrEqual(200_000 + 1)
     await page.keyboard.press('Control+Home')
@@ -216,7 +251,8 @@ try {
     expect(paged.row).toBeGreaterThan(top + 1 + 20 * Math.max(1, bottom - top - 3))
     await expect(cell(paged.row, 0)).toHaveText(String(paged.row))
     expect(await insideGrid(cell(paged.row, 0))).toBe(true)
-    expect(ascending(await rowOrder()), 'rows in DOM order after PageDown').toBe(true)
+    // The DOM catches up with the rows a frame after they stop moving.
+    await expect.poll(async () => ascending(await rowOrder()), { message: 'rows in DOM order after PageDown' }).toBe(true)
     jumped = await stats()
     // The wheel moves the rows by its pixels (a row is 20 of them), never by the compressed scroll bar.
     await page.evaluate(() => window.__variaGrid.reset())
@@ -227,8 +263,8 @@ try {
     await expect.poll(async () => (await visibleRows())[0]).toBeGreaterThan(before + 100)
     expect((await visibleRows())[0]).toBeLessThan(before + 200)
     // The active row, scrolled out above, keeps its slot, which comes first; the rows wheeled in follow in order.
-    const order = await rowOrder()
-    expect(ascending(order), `rows in DOM order after the wheel: ${order.slice(0, 5)}`).toBe(true)
+    let order
+    await expect.poll(async () => { order = await rowOrder(); return ascending(order) }, { message: 'rows in DOM order after the wheel' }).toBe(true)
     expect(order[0]).toBe(paged.row + 2)
     wheeled = await stats()
   })
@@ -357,9 +393,9 @@ try {
   for (const key of ['ArrowDown', 'ArrowRight', 'ArrowRight', 'Shift+ArrowDown', 'Shift+ArrowRight', 'ArrowLeft', 'End', 'Home', 'PageDown', 'PageUp', 'Control+End', 'Control+Home',
     'Control+ArrowDown', 'Control+ArrowRight', 'Control+ArrowUp', 'Control+ArrowLeft', 'Shift+Space', 'Control+Space', 'Tab', 'Shift+Tab', 'Enter']) {
     await page.keyboard.press(key)
-    // A cell whose rows are still being read has no text and no label yet.
+    // A cell whose rows are still being read is labelled as loading until they are.
     let state
-    await expect.poll(async () => { state = await active(); return state.resolved && state.label !== null }, key).toBe(true)
+    await expect.poll(async () => { state = await active(); return state.resolved && state.label !== null && state.label !== 'Loading' }, key).toBe(true)
     expect(state, key).toMatchObject({ role: 'gridcell', selected: 'true' })
     expect(state.id, key).toMatch(new RegExp(`-r${state.row}c${state.column}$`))
     expect(state.label.startsWith(state.text), key).toBe(true)
@@ -431,6 +467,13 @@ try {
   await setClipboard('')
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.copy())
   await expect.poll(clipboard).toBe(tsv(Array.from({ length: 400 }, (_, row) => w1(row))))
+  // Values the backend stored cut are copied cut, and the copy says how many, in the toolbar and to screen readers.
+  await run('-- varia-fake: sets=N1*20')
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+C')
+  await expect(page.locator('.job-notice')).toHaveText('Copied 20 rows. 10 values were truncated.')
+  await expect(page.locator('.output-panel > [role="status"]')).toHaveText('Copied 20 rows. 10 values were truncated.')
   // A copy that takes a while shows its strip, then sets the clipboard.
   await run('-- varia-fake: sets=W1*200000')
   await measured('copying 200,000 rows', async () => {
@@ -690,6 +733,22 @@ try {
   // The badges are drawn; the tabs' names say what they mean.
   await expect(outputTab(/^Messages/)).toHaveAccessibleName('Messages, contains errors')
   await expect(outputTab(/^Results/)).toHaveAccessibleName('Results, 1 result set')
+  // Results and Messages are tabs: one Tab stop, and the arrow keys, Home and End show the tab they reach.
+  await outputTab(/^Results/).click()
+  await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('ArrowRight')
+  await expect(outputTab(/^Messages/)).toBeFocused()
+  await expect(outputTab(/^Messages/)).toHaveAttribute('aria-selected', 'true')
+  expect([await outputTab(/^Results/).getAttribute('tabindex'), await outputTab(/^Messages/).getAttribute('tabindex')]).toEqual(['-1', '0'])
+  const panel = page.locator('.output-panel [role="tabpanel"]')
+  await expect(panel.locator('.messages')).toBeVisible()
+  expect(await panel.getAttribute('aria-labelledby')).toBe(await outputTab(/^Messages/).getAttribute('id'))
+  expect(await outputTab(/^Messages/).getAttribute('aria-controls')).toBe(await panel.getAttribute('id'))
+  await page.keyboard.press('Home')
+  await expect(outputTab(/^Results/)).toBeFocused()
+  await expect(panel.locator('[data-result-grid]')).toHaveCount(1)
+  await page.keyboard.press('ArrowLeft')
+  await expect(outputTab(/^Messages/)).toBeFocused()
   await run('-- varia-fake: sets=W1*0')
   await outputTab(/^Messages/).click()
   await expect(page.locator('.messages')).toContainText('Commands completed successfully.')
@@ -727,7 +786,8 @@ try {
   await server().selectOption({ index: 1 })
   await run('-- varia-fake: sets=W1*10 memory=0.92')
   const memory = page.locator('.memory-indicator')
-  await expect(memory).toHaveText('Results 236 MB / 256 MB')
+  // The warning icon is drawn; the words say it to screen readers.
+  await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides.
@@ -739,6 +799,17 @@ try {
   await expect(memory).toHaveCount(0)
   await run('-- varia-fake: sets=W1*10 memory=0')
   await expect(memory).toHaveCount(0)
+  // Closing a tab of hundreds of sets frees every one of them: one request closes them all, where one request each ran
+  // into main's limit of 64 outstanding and left most of them held.
+  await page.keyboard.press('Control+N')
+  await expect(queryTabs()).toHaveCount(2)
+  if (!(await server().inputValue())) await server().selectOption({ index: 1 })
+  await run('-- varia-fake: sets=M1*300 memory=0.5')
+  await expect(memory).toHaveText(/^Results 128 MB/)
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
+  await expect(memory).toHaveCount(0)
+  console.log('Results checks: the memory indicator warns from 90 %, and closing results or a tab of 300 sets frees them all.')
 
   // 13. Menu: Shift+F10 on the grid lists its commands; a right-click on an unselected cell selects it first.
   await cell(1, 1).click()
@@ -802,6 +873,8 @@ try {
   expect(selectedHeader.background).toBe(selectedCell.background)
   expect(selectedHeader.background).not.toBe((await computed(header('id'))).background)
   expect((await computed(rowNumber(1))).background).toBe(selectedCell.background)
+  // NULL's tint is dropped too: its dimmed text still tells it from a value.
+  expect((await computed(nullCell)).color).not.toBe((await computed(cell(1, 0))).color)
   await page.emulateMedia({ forcedColors: null })
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
   console.log('Results checks: NULL, truncated, failed and selected cells take their theme tokens, and a theme change keeps the grid\'s nodes.')
@@ -851,12 +924,26 @@ try {
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   expect(await widthOf(header('id'))).toBeCloseTo(resized, 0)
+  // The pane's live region reads out only what happens while a tab is shown: switching tabs repeats no sentence.
+  const liveRegion = page.locator('.output-panel > [role="status"]')
   await page.keyboard.press('Control+N')
   await expect(queryTabs()).toHaveCount(2)
+  await expect(liveRegion).toHaveText('')
   await queryTabs().first().click()
+  await expect(liveRegion).toHaveText('')
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   await expect.poll(() => widthOf(header('id'))).toBeCloseTo(resized, 0)
+  // A press on the grid's scroll bar leaves the focus on the grid, so the arrow keys move a cell screen readers hear.
+  const bar = await scroller().evaluate(element => { const box = element.getBoundingClientRect(); return { x: box.left + element.clientWidth + (element.offsetWidth - element.clientWidth) / 2, y: box.top + element.clientHeight * 0.75, width: element.offsetWidth - element.clientWidth } })
+  if (bar.width > 0) {
+    await textbox().focus()
+    await page.mouse.click(bar.x, bar.y)
+    await expect(grid()).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(async () => (await active()).resolved).toBe(true)
+    await expect(grid()).toBeFocused()
+  }
   console.log('Results checks: F6 goes to the results and back; Ctrl+R and tab switches keep scroll, selection and column widths.')
 
   // 11 (continued). A backend crash makes the shown results unavailable, without a page error.
@@ -868,7 +955,15 @@ try {
   await expect(page.locator('.messages .msg.error')).toContainText('The SQL backend stopped', { timeout: 30000 })
   await queryTabs().first().click()
   await expect(page.locator('.rg-overlay')).toHaveText('These results are no longer available because the SQL backend restarted.', { timeout: 30000 })
-  console.log('Results checks: a backend crash marks the shown results unavailable.')
+  // Nothing is left to save.
+  await textbox().focus()
+  await page.keyboard.press('F1')
+  await page.keyboard.type('save results as')
+  await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Save Results As')
+  await expect(page.locator('.quick-input .quick-input-row.active')).toHaveClass(/disabled/)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.quick-input')).toHaveCount(0)
+  console.log('Results checks: a backend crash marks the shown results unavailable, and Save Results As is disabled.')
 
   // 17. At a small window the output toolbar, the grid's strip and the status bar stay inside it.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
@@ -886,9 +981,11 @@ try {
   await page.locator('.toolbar-actions').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(status()).toContainText('Query was cancelled.')
   await outputTab(/^Results/).click()
-  await expect(grid().locator('.rg-strip')).toContainText('This result is incomplete')
+  await expect(strip()).toContainText('This result is incomplete')
+  // A grid holds only its rows: the strip (a status, here with no Retry) is outside the table structure.
+  await expect(grid().locator('[role="status"], button')).toHaveCount(0)
   const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
-  for (const locator of [page.locator('.output-toolbar'), grid().locator('.rg-strip'), page.locator('.status-bar')]) {
+  for (const locator of [page.locator('.output-toolbar'), strip(), page.locator('.status-bar')]) {
     const box = await locator.boundingBox()
     expect(box.x).toBeGreaterThanOrEqual(-1)
     expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1)

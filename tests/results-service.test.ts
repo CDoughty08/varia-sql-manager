@@ -104,6 +104,7 @@ describe('results service', () => {
     service.setView('t1', 'results')
     expect(tab()).toMatchObject({ view: 'results', manualView: true })
     service.begin('t1', 'q2')
+    flush()
     expect(tab()).toMatchObject({ view: 'messages', manualView: false })
     service.setView('t1', 'messages')
     client.emit('q2', { type: 'resultSet.opened', descriptor: descriptor(3, { state: 'open' }) })
@@ -138,7 +139,7 @@ describe('results service', () => {
     expect(tab().messages).toHaveLength(resultLimits.messages)
   })
   it('releases a tab\'s results when it runs again, closes, or the user closes them, and keeps its view state otherwise', () => {
-    const { client, events, service, tab } = fixture()
+    const { client, events, service, tab, flush } = fixture()
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1 })]) })
     const first = client.handle(1)!, second = client.handle(2)!
@@ -147,20 +148,24 @@ describe('results service', () => {
     expect(service.viewState('t1').grids.get(1)).toMatchObject({ scrollLeft: 40, selection: selectAll(1) })
     // Closing results keeps Messages and frees the sets; a running query's results cannot be closed.
     service.closeResults('t1')
-    expect(first.close).toHaveBeenCalledOnce()
+    // One request closes every set of the run.
+    expect(client.release).toHaveBeenCalledOnce()
+    expect(client.released()).toEqual([1, 2])
+    expect([first.close, second.close].map(close => close.mock.calls.length)).toEqual([0, 0])
     expect(second.dispose).toHaveBeenCalledOnce()
     expect(tab()).toMatchObject({ status: 'closed', sets: [] })
     expect(service.viewState('t1').grids.size).toBe(0)
     service.begin('t1', 'q2')
     service.closeResults('t1')
+    flush()
     expect(tab().status).toBe('running')
     service.finish('t1', 'q2', { summary: summaryOf([descriptor(3)]) })
     // Running again releases the last run's results first.
     service.begin('t1', 'q3')
-    expect(client.handle(3)!.close).toHaveBeenCalledOnce()
+    expect(client.released()).toEqual([1, 2, 3])
     service.finish('t1', 'q3', { summary: summaryOf([descriptor(4)]) })
     events.emit({ type: 'documents.closed', tabId: 't1' })
-    expect(client.handle(4)!.close).toHaveBeenCalledOnce()
+    expect(client.released()).toEqual([1, 2, 3, 4])
     expect(tab()).toBeUndefined()
     service.release('missing')
   })
@@ -193,6 +198,14 @@ describe('results service', () => {
     await service.copy('t1', 0, false)
     timers.advance(300)
     expect(tab().announcement).toBe('Copied 2 rows.')
+    // Values stored cut are copied cut: the toolbar and the live region say how many.
+    api.copyResults.mockResolvedValueOnce({ ok: true, value: { rows: 3, bytes: 10, truncatedCells: 1, partial: false } })
+    await service.copy('t1', 0, false)
+    flush()
+    expect(tab().jobNotice).toBe('Copied 3 rows. 1 value was truncated.')
+    const before = tab().announced
+    timers.advance(300)
+    expect(tab()).toMatchObject({ announcement: 'Copied 3 rows. 1 value was truncated.', announced: before + 1 })
   })
   it('runs one copy at a time, cancels it on Escape or a new run, and returns failures as sentences', async () => {
     const { api, service } = fixture()
@@ -350,6 +363,33 @@ describe('results service', () => {
     service.finish('t3', 'q4', { error: 'The SQL backend stopped.', code: 'BACKEND_LOST' })
     expect(seen.at(-1)).toEqual({})
     expect(seen).toHaveLength(4)
+    // A completed run keeps its status when the backend restarts afterwards, but nothing is left to save or close.
+    service.begin('t4', 'q5')
+    service.finish('t4', 'q5', { summary: summaryOf([descriptor(5)]) })
+    expect(seen.at(-1)).toEqual({ t4: true })
+    client.lose()
+    expect(seen.at(-1)).toEqual({})
+    expect(service.getSnapshot().t4.status).toBe('completed')
+  })
+  it('closes a run of a thousand sets with one request', () => {
+    const { client, service } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf(Array.from({ length: 1000 }, (_, index) => descriptor(index + 1, { index }))) })
+    service.begin('t1', 'q2')
+    expect(client.release).toHaveBeenCalledOnce()
+    expect(client.released()).toEqual(Array.from({ length: 1000 }, (_, index) => index + 1))
+  })
+  it('keeps the error that stopped a run in Messages, even when the backend could not', () => {
+    const { service, tab } = fixture()
+    const flood = Array.from({ length: 1001 }, (_, index) => ({ text: String(index), kind: 'info' as const }))
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([], { status: 'failed', messages: flood, messagesTruncated: true, error: { code: 'SQL_ERROR', message: 'Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.', batchNumber: 1, iteration: 1 } }) })
+    expect(tab().messages.at(-1)).toEqual({ text: 'Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.', kind: 'error' })
+    // The summary's own error entries and the notes after the cap are kept as they are.
+    const kept = [...flood, { text: 'Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.', kind: 'error' as const }, ...Array.from({ length: 7 }, (_, index) => ({ text: `note ${index}`, kind: 'info' as const }))]
+    service.begin('t1', 'q2')
+    service.finish('t1', 'q2', { summary: summaryOf([], { status: 'failed', messages: kept, messagesTruncated: true, error: { code: 'SQL_ERROR', message: 'x', batchNumber: 1, iteration: 1 } }) })
+    expect(tab().messages).toEqual(kept)
   })
   it('routes Select All to the mounted grid, else to the view state', () => {
     const { service } = fixture()

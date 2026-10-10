@@ -9,12 +9,14 @@ const info = (text: string): MessageEntry => ({ text, kind: 'info' })
 describe('Messages and the status line', () => {
   it('end Messages with SSMS\'s line when there was nothing else, then the completion time', () => {
     const summary = summaryOf([])
-    expect(messageTail({ status: 'running', messages: [], summary: undefined })).toEqual([])
-    expect(messageTail({ status: 'completed', messages: [], summary })).toEqual(['Commands completed successfully.', '', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
-    expect(messageTail({ status: 'completed', messages: [info('(1 row affected)')], summary })).toEqual(['', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
+    expect(messageTail({ status: 'running', messages: [], notices: 0, summary: undefined })).toEqual([])
+    expect(messageTail({ status: 'completed', messages: [], notices: 0, summary })).toEqual(['Commands completed successfully.', '', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
+    expect(messageTail({ status: 'completed', messages: [info('(1 row affected)')], notices: 0, summary })).toEqual(['', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
     // A failure has its error entries; one main reported has no completion time.
-    expect(messageTail({ status: 'failed', messages: [{ text: 'The SQL backend stopped.', kind: 'error' }], summary: undefined })).toEqual([])
-    expect(messageTail({ status: 'cancelled', messages: [], summary })).toEqual(['', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
+    expect(messageTail({ status: 'failed', messages: [{ text: 'The SQL backend stopped.', kind: 'error' }], notices: 0, summary: undefined })).toEqual([])
+    expect(messageTail({ status: 'cancelled', messages: [], notices: 0, summary })).toEqual(['', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
+    // Varia's notice about a new session is not a message from SQL Server.
+    expect(messageTail({ status: 'completed', messages: [info('The SQL backend restarted. This query runs in a new session.')], notices: 1, summary })).toEqual(['Commands completed successfully.', '', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
   })
   it('say how a run is going in SSMS\'s words, with hh:mm:ss, en-US counts and batches', () => {
     expect(formatElapsed(0)).toBe('00:00:00')

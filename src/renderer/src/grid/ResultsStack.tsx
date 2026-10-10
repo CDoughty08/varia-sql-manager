@@ -52,18 +52,21 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     const element = stackRef.current
     if (element && paneHeight > 0 && Math.abs(element.scrollTop - view.stackScrollTop) >= 1) element.scrollTop = view.stackScrollTop
   }, [paneHeight, view])
-  // At most 2 grids mount a frame, so scrolling a stack of 1,000 never builds 12 grids at once.
-  useEffect(() => {
+  // At most 2 grids mount a frame, so scrolling a stack of 1,000 never builds 12 grids at once. The first ones mount
+  // before the pane paints, so the first rows are not a frame later.
+  useLayoutEffect(() => {
     let missing = false
     for (let index = first; index <= last; index++) if (!mounted.has(index)) { missing = true; break }
     const stale = [...mounted].some(index => index < first || index > last)
     if (!missing && !stale) return
-    return nextFrame(() => setMounted(current => {
+    const mount = (current: ReadonlySet<number>) => {
       const next = new Set<number>()
       for (const index of current) if (index >= first && index <= last) next.add(index)
       for (let index = first, added = 0; index <= last && added < g.mountsPerFrame; index++) if (!next.has(index)) { next.add(index); added++ }
       return next
-    }))
+    }
+    if (mounted.size === 0) { setMounted(mount); return }
+    return nextFrame(() => setMounted(mount))
   }, [first, last, mounted])
   useEffect(() => () => drag.current?.frame?.(), [])
 

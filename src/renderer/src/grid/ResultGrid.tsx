@@ -1,4 +1,4 @@
-import { Component, useEffect, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type ReactNode } from 'react'
+import { Component, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type ReactNode } from 'react'
 import type { QueryResult } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -41,7 +41,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
   const index = entry.index
   const countRef = useRef(count)
   countRef.current = count
-  useEffect(() => {
+  // Before the shell paints: the view draws its first frame as it is built, so the grid never paints empty first.
+  useLayoutEffect(() => {
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: entry.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
       resultIndex: index, resultCount: countRef.current, platform, stats: gridStats,
@@ -71,9 +72,12 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
   const retry = () => viewRef.current?.retry()
-  return <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={index}
-    data-pane-focus={focused ? 'selected' : 'grid'} aria-multiselectable="true" aria-readonly="true" onKeyDown={keyDown} onFocus={() => onFocus(index)}>
-    <div ref={scrollRef} className="rg-scroll" tabIndex={-1} />
+  // The grid holds only rows; its strip and the lost overlay are its siblings, outside the table structure.
+  return <div className="rg-frame">
+    <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={index}
+      data-pane-focus={focused ? 'selected' : 'grid'} aria-multiselectable="true" aria-readonly="true" onKeyDown={keyDown} onFocus={() => onFocus(index)}>
+      <div ref={scrollRef} className="rg-scroll" tabIndex={-1} />
+    </div>
     {lost && <div className="rg-overlay" role="status">{lostText}</div>}
     {!lost && status.renderError ? <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={retry}>Retry</button></div>
       : !lost && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
@@ -89,7 +93,7 @@ class GridErrorBoundary extends Component<{ children: ReactNode; index: number }
   componentDidCatch(error: Error, info: ErrorInfo): void { onUnexpectedError(Object.assign(error, { componentStack: info.componentStack })) }
   render(): ReactNode {
     if (this.state.failed) {
-      return <div className="results-grid rg failed" data-result-index={this.props.index}>
+      return <div className="rg-frame failed" data-result-index={this.props.index}>
         <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={() => this.setState(state => ({ failed: false, attempt: state.attempt + 1 }))}>Retry</button></div>
       </div>
     }

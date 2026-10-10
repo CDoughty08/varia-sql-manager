@@ -131,7 +131,7 @@ internal static class TextChecks
                 {
                     count++;
                     var path = Path.Combine(folder.FullName, "golden-" + count + ".out");
-                    var result = await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, path, save.GetProperty("format").GetString()!, save.GetProperty("headers").GetBoolean(), save.GetProperty("nullText").GetString()!), null);
+                    var result = await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, path, save.GetProperty("format").GetString()!, save.GetProperty("headers").GetBoolean(), save.GetProperty("nullText").GetString()!, Guid.NewGuid().ToString("N")), null);
                     var bytes = File.ReadAllBytes(path);
                     var expected = Encoding.UTF8.GetBytes(save.GetProperty("expected").GetString()!);
                     if (!bytes.AsSpan().SequenceEqual(expected) || result.Rows != save.GetProperty("rows").GetInt64() || result.TruncatedCells != save.GetProperty("truncatedCells").GetInt64() || result.Bytes != bytes.Length)
@@ -304,7 +304,7 @@ internal static class TextChecks
             string[] Leftovers() => [.. Directory.GetFiles(folder.FullName, ".varia-*.tmp")];
             var target = Path.Combine(folder.FullName, "out.csv");
             File.WriteAllText(target, "old");
-            var result = await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, target, "csv", true, "empty"), null);
+            var result = await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, target, "csv", true, "empty", Guid.NewGuid().ToString("N")), null);
             // ReadAllText would drop the BOM.
             var lines = Encoding.UTF8.GetString(File.ReadAllBytes(target)).Split("\r\n");
             check(result is { Rows: 1000, Partial: false } && lines.Length == 1002 && lines[0] == "\uFEFFid,name,created,amount,key,note,active,score" && lines[^1] == "" && Leftovers().Length == 0
@@ -316,23 +316,71 @@ internal static class TextChecks
                 foreach (var mode in new[] { UnixFileMode.UserRead | UnixFileMode.UserWrite, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.GroupWrite })
                 {
                     File.SetUnixFileMode(target, mode);
-                    await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, target, "csv", true, "empty"), null);
+                    await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, target, "csv", true, "empty", Guid.NewGuid().ToString("N")), null);
                     modes.Add(Convert.ToString((int)File.GetUnixFileMode(target), 8));
                 }
                 var fresh = Path.Combine(folder.FullName, "fresh.csv");
-                await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, fresh, "csv", true, "empty"), null);
+                await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, fresh, "csv", true, "empty", Guid.NewGuid().ToString("N")), null);
                 var freshMode = File.GetUnixFileMode(fresh);
                 File.Delete(fresh);
                 check(modes.SequenceEqual(["600", "660"]) && (freshMode & UnixFileMode.UserRead) != 0 && Leftovers().Length == 0,
                     "an export over an existing file keeps its permissions (" + string.Join(", ", modes) + "), and a new file gets the default (" + Convert.ToString((int)freshMode, 8) + ")");
+                // A symbolic link to a private file is replaced by a file no more readable than the one it pointed to.
+                var hidden = Path.Combine(folder.FullName, "private.csv");
+                var link = Path.Combine(folder.FullName, "link.csv");
+                File.WriteAllText(hidden, "private");
+                File.SetUnixFileMode(hidden, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                File.CreateSymbolicLink(link, hidden);
+                await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, link, "csv", true, "empty", Guid.NewGuid().ToString("N")), null);
+                var linkInfo = new FileInfo(link);
+                var linkMode = File.GetUnixFileMode(link);
+                check(linkInfo.LinkTarget is null && linkInfo.Length == result.Bytes && File.ReadAllText(hidden) == "private" && linkMode == (UnixFileMode.UserRead | UnixFileMode.UserWrite),
+                    "an export over a link to a private file replaces the link with a file as private (" + Convert.ToString((int)linkMode, 8) + ")");
+                File.Delete(link);
+                File.Delete(hidden);
             }
+
+            // The temporary file has the name main chose, so main can remove it if the backend dies while writing.
+            var named = Guid.NewGuid().ToString("N");
+            var seenName = false;
+            var naming = new ResultJobs(store) { AfterPage = () => seenName = File.Exists(Path.Combine(folder.FullName, ".varia-" + named + ".tmp")) };
+            await naming.ExportAsync(new ResultsExportArgs(set.ResultId, target, "csv", true, "empty", named), null);
+            check(seenName && Leftovers().Length == 0, "an export writes .varia-{temporaryId}.tmp beside the target, then renames it");
+
+            // ReplaceFile (Windows) keeps a backup until the replace succeeds: a failure leaves the old file or puts the new one in place.
+            var replaced = Path.Combine(folder.FullName, "replaced.csv");
+            var fresher = Path.Combine(folder.FullName, ".varia-new.tmp");
+            var backup = Path.Combine(folder.FullName, ".varia-new.bak");
+            string Outcome(Action<string, string, string?> replace)
+            {
+                File.WriteAllText(replaced, "old");
+                File.WriteAllText(fresher, "new");
+                string? failure = null;
+                try { ResultJobs.ReplaceFile(fresher, replaced, backup, replace); } catch (IOException) { failure = "failed"; }
+                var outcome = (failure ?? "ok") + ":" + (File.Exists(replaced) ? File.ReadAllText(replaced) : "none") + ":" + (File.Exists(backup) ? "backup" : "") + (File.Exists(fresher) ? "temporary" : "");
+                File.Delete(fresher);
+                File.Delete(backup);
+                return outcome;
+            }
+            var outcomes = new[]
+            {
+                Outcome((source, path, copy) => { File.Move(path, copy!); File.Move(source, path); }),
+                // ERROR_UNABLE_TO_REPLACE: nothing moved.
+                Outcome((_, _, _) => throw new IOException("1175")),
+                // ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: the original went to the backup name, the new file stayed put.
+                Outcome((_, path, copy) => { File.Move(path, copy!); throw new IOException("1177"); }),
+                // The same, and the new file cannot be moved either: the original comes back.
+                Outcome((source, path, copy) => { File.Move(path, copy!); File.Delete(source); throw new IOException("1177"); })
+            };
+            check(outcomes.SequenceEqual(["ok:new:", "failed:old:temporary", "ok:new:", "failed:old:"]),
+                "a replace that fails keeps the old file or puts the new one in place, never neither: " + string.Join(", ", outcomes));
 
             string? Code(ResultsExportArgs args, RequestContext? context = null)
             {
                 try { jobs.ExportAsync(args, context).GetAwaiter().GetResult(); return null; }
                 catch (RequestException error) { return error.Code + ":" + error.Message; }
             }
-            var args = new ResultsExportArgs(set.ResultId, target, "tsv", true, "NULL");
+            var args = new ResultsExportArgs(set.ResultId, target, "tsv", true, "NULL", Guid.NewGuid().ToString("N"));
             var codes = new[]
             {
                 Code(args with { Path = "relative.csv" }), Code(args with { Path = Path.Combine(folder.FullName, "nul\0.csv") }), Code(args with { Path = @"\\.\pipe\x" }),
@@ -358,7 +406,7 @@ internal static class TextChecks
             using (var context = exportContext = new RequestContext(2, "results.export", RequestLane.Results, 0))
             {
                 var stopped = false;
-                try { await cancelling.ExportAsync(new ResultsExportArgs(big.ResultId, target, "json", false, "NULL"), context); } catch (OperationCanceledException) { stopped = true; }
+                try { await cancelling.ExportAsync(new ResultsExportArgs(big.ResultId, target, "json", false, "NULL", Guid.NewGuid().ToString("N")), context); } catch (OperationCanceledException) { stopped = true; }
                 check(stopped && temporarySeen && pagesWritten == 3 && File.ReadAllText(target) == "old" && Leftovers().Length == 0 && big.Leases == 0,
                     "an export cancelled mid-write removes its temporary file and leaves the target untouched");
             }
@@ -369,7 +417,7 @@ internal static class TextChecks
             long during = 0;
             var releasing = new ResultJobs(store) { AfterPage = () => { if (!released) { released = store.Release(big.ResultId); during = store.UsedBytes; } } };
             var watch = Stopwatch.StartNew();
-            result = await releasing.ExportAsync(new ResultsExportArgs(big.ResultId, json, "json", true, "NULL"), null);
+            result = await releasing.ExportAsync(new ResultsExportArgs(big.ResultId, json, "json", true, "NULL", Guid.NewGuid().ToString("N")), null);
             var seconds = watch.Elapsed.TotalSeconds;
             using (var document = JsonDocument.Parse(File.ReadAllBytes(json)))
                 check(released && during > 0 && result.Rows == 300_000 && document.RootElement.GetArrayLength() == 300_000 && big.Leases == 0 && store.Find(big.ResultId) is null,
@@ -389,7 +437,7 @@ internal static class TextChecks
                 else
                 {
                     var small = Synthetic(store, "W1", 5);
-                    check(Code(new ResultsExportArgs(small.ResultId, Path.Combine(locked.FullName, "x.csv"), "csv", true, "empty")) == "EXPORT_FAILED:ACCESS" && locked.GetFiles().Length == 0,
+                    check(Code(new ResultsExportArgs(small.ResultId, Path.Combine(locked.FullName, "x.csv"), "csv", true, "empty", Guid.NewGuid().ToString("N"))) == "EXPORT_FAILED:ACCESS" && locked.GetFiles().Length == 0,
                         "an export to a read-only folder fails with ACCESS and leaves nothing behind");
                     store.Release(small.ResultId);
                 }
@@ -441,6 +489,27 @@ internal static class TextChecks
             var cell = PageReader.Read(builder.Seal(), [WireKind.Text]).Rows[0][0];
             check(collector.Rows == 1100 && cut && collector.Truncated && cell.Text!.Length == ColumnPlan.DocumentCap && (cell.Flags & PageReader.Truncated) != 0 && store.UsedBytes <= 2L * (ColumnPlan.DocumentCap + 1) + ResultStore.ReserveStep,
                 "output past 2,097,152 characters keeps that prefix, marked truncated (" + collector.Rows + " chunks)");
+            // The pool rounds a rented length up to a power of two: the budget must cover the array actually held.
+            check(collector.Capacity <= ColumnPlan.DocumentCap && store.UsedBytes >= 2L * collector.Capacity,
+                "the collector's reservation covers its buffer (" + collector.Capacity + " characters, " + store.UsedBytes + " bytes reserved)");
+        }
+        using (var collector = new ForXmlCollector(store, budget, cap: 10))
+        {
+            collector.Append("0123456789");
+            var exact = !collector.Truncated;
+            collector.Append("");
+            exact &= !collector.Truncated;
+            collector.Append("x");
+            check(exact && collector.Truncated && collector.Length == 10, "a value of exactly the cap is whole, and one more character marks it truncated");
+        }
+        using (var collector = new ForXmlCollector(store, budget, cap: 10))
+        {
+            collector.Append("012345678\U0001F600");
+            var builder = new PageBuilder(1, [WireKind.Text]);
+            builder.BeginRow();
+            cut = collector.Write(builder);
+            builder.CommitRow();
+            check(cut && PageReader.Read(builder.Seal(), [WireKind.Text]).Rows[0][0].Text == "012345678", "a surrogate pair split by the cap is dropped whole");
         }
         var tight = new ResultStore(1024 * 1024, 1024 * 1024);
         using (var collector = new ForXmlCollector(tight, tight.BeginQuery("tight")))

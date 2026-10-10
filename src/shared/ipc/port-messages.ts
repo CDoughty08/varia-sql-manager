@@ -49,9 +49,9 @@ export const queryEventSchema = z.discriminatedUnion('type', [
   }).strict(),
   z.object({ type: z.literal('messages'), messages: z.array(message).min(1).max(limits.messages.count) }).strict()
 ])
-/** The query.execute summary. Notes about truncation follow the stored messages, hence the few extra entries. */
+/** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
-  resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max), discardedResultSets: count, messages: z.array(message).max(limits.messages.count + 8),
+  resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max), discardedResultSets: count, messages: z.array(message).max(limits.messages.count + limits.messages.lateErrors + 8),
   recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'failed', 'cancelled', 'timedOut']),
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),

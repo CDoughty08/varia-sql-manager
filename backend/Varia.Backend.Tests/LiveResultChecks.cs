@@ -139,6 +139,18 @@ internal static class LiveResultChecks
             var many = await Run("SELECT " + string.Join(", ", Enumerable.Range(0, 1000).Select(i => i + " AS c" + i)) + ";\nGO 20", maxResultSets: 1000);
             check(many.Status == "completed" && many.ResultSets.Count == 20 && many.DiscardedResultSets == 0 && many.ResultSets.All(set => set.Columns.Count == 1000),
                 "20 sets of 1,000 columns are all kept");
+            var overflow = await Run("DECLARE @i int = 0; WHILE @i < 1001 BEGIN SELECT @i AS n; SET @i += 1 END;", maxResultSets: 1000);
+            check(overflow.Status == "completed" && overflow.ResultSets.Count == 1000 && overflow.DiscardedResultSets == 1
+                && Texts(overflow).Contains("Only the first 1,000 result sets are displayed. Display limits do not stop script execution."),
+                "sets past maxResultSets are discarded with a note that groups the count");
+            // Past the cap of 1,000 entries, the error that stopped the script is still in Messages, after the truncation
+            // note and before the note about the batches it skipped; the summary stays within main's bound.
+            var flooded = await Run("DECLARE @i int = 0; WHILE @i < 1200 BEGIN PRINT @i; SET @i += 1 END; SELECT 1/0 AS boom;\nGO\nSELECT 2 AS later;");
+            var floodedTexts = Texts(flooded).ToList();
+            var errorAt = flooded.Messages.FindIndex(entry => entry.Kind == "error" && entry.Text.StartsWith("Msg 8134, Level 16"));
+            check(flooded.Status == "failed" && flooded.MessagesTruncated && flooded.Messages.Count <= 1000 + QueryMessages.MaxLateErrors + 8
+                && floodedTexts[1000].StartsWith("Messages were truncated") && errorAt > 1000 && floodedTexts[^1] == "Batch 1 raised an error; later batches were not executed.",
+                "an error after 1,000 messages is kept in Messages (" + flooded.Messages.Count + " entries, error at " + errorAt + ")");
 
             await ResultText(check, service, store, info, options, json, Run, Close);
 
@@ -232,7 +244,7 @@ internal static class LiveResultChecks
             foreach (var format in new[] { "csv", "tsv", "json" })
             {
                 paths[format] = Path.Combine(folder.FullName, "rows." + format);
-                var saved = await Call<ResultsJobResult>("results.export", new ResultsExportArgs(set.ResultId, paths[format], format, true, format == "csv" ? "empty" : "NULL"));
+                var saved = await Call<ResultsJobResult>("results.export", new ResultsExportArgs(set.ResultId, paths[format], format, true, format == "csv" ? "empty" : "NULL", Guid.NewGuid().ToString("N")));
                 check(saved.Rows == 200_000 && saved.Bytes == new FileInfo(paths[format]).Length, "results.export writes " + format + " (" + saved.Bytes / 1024 + " KiB)");
             }
             var records = ParseCsv(Encoding.UTF8.GetString(File.ReadAllBytes(paths["csv"])));
@@ -453,7 +465,8 @@ internal static class LiveResultChecks
             var (blocked, available, result, kinds) = await WhileLocked("SELECT id FROM " + table + " ORDER BY id;", 0, PageBuilder.FirstPageRows + 1);
             check(blocked && available > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
                 "rows read before a lock wait are sealed and readable while the statement waits (" + available + " rows)");
-            check(kinds.First() == "resultSet.opened" && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
+            // The batch's own progress may go out on the sink's first tick, before the set opens; it names no set then.
+            check(kinds.First(kind => kind != "progress") == "resultSet.opened" && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
                 "query events report the result set as it opens and closes: " + string.Join(", ", kinds.Distinct()));
             (blocked, available, result, _) = await WhileLocked("SELECT id, CAST(N'x' AS nvarchar(max)) AS note FROM " + table + " ORDER BY id;", 100, 100);
             check(blocked && available == 100 && result.Status == "completed" && result.ResultSets[0] is { RowsRead: 3000, RowsStored: 100 },

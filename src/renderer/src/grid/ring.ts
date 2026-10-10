@@ -23,7 +23,15 @@ export function ringStep(ring: RowRing, first: number, count: number): RingStep 
   const delta = first - ring.first
   if (delta === 0 || count <= 0) return { ring, toEnd: none, toFront: none }
   if (Math.abs(delta) >= count) return { ring: { base: first - ring.start, start: ring.start, first }, toEnd: none, toFront: none }
-  const shift = mod(delta, count), next: RowRing = { base: ring.base, start: mod(ring.start + delta, count), first }
-  if (shift <= count - shift) return { ring: next, toEnd: Array.from({ length: shift }, (_, index) => mod(ring.start + index, count)), toFront: none }
-  return { ring: next, toEnd: none, toFront: Array.from({ length: count - shift }, (_, index) => mod(ring.start - 1 - index, count)) }
+  const next: RowRing = { base: ring.base, start: mod(ring.start + delta, count), first }
+  return { ring: next, ...rotation(ring.start, next.start, count) }
+}
+
+/** The slots to move so that a DOM rotation starting with slot `from` starts with slot `to` instead: from the front to
+ *  the end, or from the end to the front, whichever moves fewer. */
+export function rotation(from: number, to: number, count: number): { toEnd: readonly number[]; toFront: readonly number[] } {
+  const shift = count > 0 ? mod(to - from, count) : 0
+  if (shift === 0) return { toEnd: none, toFront: none }
+  if (shift <= count - shift) return { toEnd: Array.from({ length: shift }, (_, index) => mod(from + index, count)), toFront: none }
+  return { toEnd: none, toFront: Array.from({ length: count - shift }, (_, index) => mod(from - 1 - index, count)) }
 }

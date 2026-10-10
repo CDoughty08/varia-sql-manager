@@ -222,6 +222,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-toolbar button.active { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px var(--varia-panelTitle-activeBorder); }
 .output-toolbar button .badge { margin-left: 8px; padding: 1px 5px; border-radius: 3px; background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: 9px; }
 .output-toolbar small { font-size: 10px; color: var(--varia-descriptionForeground); }
+.output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .output-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: 12px; }
 .output-empty strong { font-weight: 500; color: var(--varia-emptyState-titleForeground); }
 .output-empty p { font-size: 11px; margin-top: 8px; }
@@ -246,6 +247,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rs-placeholder { height: 22px; padding: 0 8px; font: 12px/22px var(--varia-font-ui); color: var(--varia-resultsGrid-headerForeground); background: var(--varia-resultsGrid-headerBackground); }
 .rs-splitter { position: absolute; left: 0; right: 0; height: 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); outline: none; touch-action: none; }
 .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
+/* A grid with its strip and lost overlay, which sit outside the grid's table structure. */
+.rg-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); }
 /* The results grid (GridView): pooled rows and cells, positioned absolutely; one class string per cell. */
 .rg { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-foreground); font: 12px/19px var(--varia-font-mono); user-select: none; outline: none; }
 /* The focus ring is drawn above the grid's sticky headers and row numbers, which would cover an outline of the grid itself. */
@@ -294,6 +297,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg:focus-within .rg-c.is-act { outline-color: CanvasText; }
   .rg:focus-within .rg-c.is-sel.is-act { outline-color: HighlightText; }
   .rg-c.is-link { color: LinkText; }
+  /* NULL's tint is dropped too; dimmed text tells it from the text 'NULL'. */
+  .rg-c.is-null:not(.is-sel) { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */
   .rs-splitter { background: CanvasText; forced-color-adjust: none; }
   .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }

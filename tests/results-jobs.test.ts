@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { exportDefaults, formatFromPath, jobSentences, ResultsJobHost, sanitizeFileName, supervisorJobs, type JobHostDeps, type JobsBackend } from '../src/main/results-jobs'
+import { exportDefaults, formatFromPath, jobSentences, removeExportLeftovers, ResultsJobHost, sanitizeFileName, supervisorJobs, type JobHostDeps, type JobsBackend } from '../src/main/results-jobs'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { BackendSupervisor } from '../src/main/backend/supervisor'
 import type { ResultsCopyParams, ResultsExportParams, ResultsJobProgress, ResultsJobResult } from '../src/shared/contracts'
@@ -147,7 +147,7 @@ describe('ResultsJobHost save', () => {
       properties: ['showOverwriteConfirmation', 'createDirectory']
     })
     // The chosen file's extension wins: out.csv is CSV, with the CSV defaults, and the path is used as chosen.
-    expect(calls[0].params).toEqual({ resultId: 7, path: '/home/me/Documents/out.csv', format: 'csv', headers: true, nullText: 'empty' })
+    expect(calls[0].params).toEqual({ resultId: 7, path: '/home/me/Documents/out.csv', format: 'csv', headers: true, nullText: 'empty', temporaryId: expect.stringMatching(/^[0-9a-f]{32}$/) })
     calls[0].resolve(done)
     expect(await saving).toEqual({ ...done, fileName: 'out.csv', format: 'csv' })
   })
@@ -222,6 +222,34 @@ describe('ResultsJobHost save', () => {
       expect(await failure(saving)).toMatchObject({ code: 'EXPORT_FAILED', message: sentence })
     }
   })
+  it('removes the temporary file it named when the backend stops mid-save, and only then', async () => {
+    const removeLeftovers = vi.fn(async () => {})
+    const { jobs, calls } = host({ removeLeftovers })
+    const failed = jobs.save(saveRequest())
+    await settle()
+    calls[0].reject(new BackendError('EXPORT_FAILED', 'IO'))
+    await failure(failed)
+    const lost = jobs.save(saveRequest())
+    await settle()
+    calls[1].reject(new BackendError('BACKEND_LOST', sentences.lost))
+    expect(await failure(lost)).toMatchObject({ code: 'BACKEND_LOST' })
+    expect(removeLeftovers.mock.calls).toEqual([['/home/me/Documents/out.csv', (calls[1].params as ResultsExportParams).temporaryId]])
+    expect((calls[0].params as ResultsExportParams).temporaryId).not.toBe((calls[1].params as ResultsExportParams).temporaryId)
+  })
+  it('sweeps the temporary file, and the backup only once the target exists again', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'varia-leftovers-'))
+    try {
+      const id = 'a'.repeat(32), target = join(folder, 'out.csv')
+      await writeFile(join(folder, `.varia-${id}.tmp`), 'partial')
+      await writeFile(join(folder, `.varia-${id}.bak`), 'old')
+      await removeExportLeftovers(target, id, 60_000)
+      // Without the target, the backup is the only copy of the old file.
+      expect((await readdir(folder)).sort()).toEqual([`.varia-${id}.bak`])
+      await writeFile(target, 'new')
+      await removeExportLeftovers(target, id, 60_000)
+      expect(await readdir(folder)).toEqual(['out.csv'])
+    } finally { await rm(folder, { recursive: true, force: true }) }
+  })
 })
 
 describe('ResultsJobHost over the fake backend', () => {
@@ -270,6 +298,20 @@ describe('ResultsJobHost over the fake backend', () => {
     expect(await failure(saving)).toMatchObject({ code: 'CANCELLED' })
     await expect.poll(async () => (await readdir(control)).filter(name => name.endsWith('.tmp') || name === 'held.json')).toEqual([])
     expect(existsSync(target)).toBe(false)
+  })
+  it('removes the temporary file of a save whose backend stopped before it could', async () => {
+    const { control, supervisor, jobs, execute, choose } = await workbench()
+    const [set] = (await execute('-- varia-fake: sets=W1*5000\nSELECT 1')).resultSets
+    choose(join(control, 'lost.csv'))
+    await mkdir(join(control, 'hold'), { recursive: true })
+    await writeFile(join(control, 'hold', 'results.export'), '')
+    const saving = jobs.save(saveRequest({ resultId: set.resultId }))
+    await expect.poll(async () => (await readdir(control)).some(name => name.endsWith('.tmp'))).toBe(true)
+    // The fake backend exits at once on stdin EOF, as a killed one would, without removing its file.
+    const failed = failure(saving)
+    await supervisor.restart('manual')
+    expect(await failed).toMatchObject({ code: 'BACKEND_LOST' })
+    await expect.poll(async () => (await readdir(control)).filter(name => name.endsWith('.tmp') || name === 'lost.csv')).toEqual([])
   })
   it('streams rows at their rate while the script runs and stops them on cancel', async () => {
     const { supervisor } = await workbench()

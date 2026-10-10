@@ -261,6 +261,42 @@ try {
       if (long.length === 0 || attempt === 2) return { stats: await stats(), tasks, long, attempt }
     }
   }
+  /**
+   * Continuous scrolling down grid 0 for 3 s, 400 px (20 rows) every animation frame, natively below the scroll cap and
+   * past it (a cap of 50,000 px) through the grid's own wheel handling, which takes the synthetic wheel events a page
+   * cannot scroll with. The animation-frame intervals and the long tasks started meanwhile are what flicking through
+   * wide results feels like.
+   */
+  const wheelLongTasks = []
+  async function wheelSegment(name, cap) {
+    await segment(name)
+    await page.evaluate(value => window.__variaGrid.setScrollCap(value), cap)
+    const result = await page.evaluate(async label => {
+      const frame = () => new Promise(done => requestAnimationFrame(done))
+      const scroller = document.querySelector('[data-result-grid][data-result-index="0"] .rg-scroll')
+      scroller.scrollTop = 0
+      scroller.scrollLeft = 0
+      for (let index = 0; index < 5; index++) await frame()
+      const box = scroller.getBoundingClientRect(), x = box.left + box.width / 2, y = box.top + box.height / 2, intervals = []
+      const started = performance.now()
+      let last = started
+      while (performance.now() - started < 3000) {
+        const wheel = new WheelEvent('wheel', { deltaY: 400, deltaMode: 0, clientX: x, clientY: y, bubbles: true, cancelable: true })
+        scroller.dispatchEvent(wheel)
+        if (!wheel.defaultPrevented) scroller.scrollTop += 400
+        await frame()
+        const now = performance.now()
+        intervals.push(now - last)
+        last = now
+      }
+      const start = window.__benchSegments.findLast(item => item.name === label).at
+      return { intervals, rows: Number(window.__benchView().signature.split(':')[0]), long: window.__benchLongTasks.filter(task => task.at >= start && task.ms > 50).map(task => task.ms) }
+    }, name)
+    await page.evaluate(() => window.__variaGrid.setScrollCap())
+    if (!(result.rows > 1000)) throw new Error(`${name}: the grid scrolled to row ${result.rows} only.`)
+    wheelLongTasks.push(...result.long)
+    return [percentile(result.intervals, 95), 'ms', `${result.intervals.length} animation frames in 3 s at 400 px a frame, to row ${result.rows.toLocaleString('en-US')}; median ${percentile(result.intervals, 50).toFixed(1)} ms, longest ${Math.max(...result.intervals).toFixed(1)} ms; long tasks ${JSON.stringify(result.long)}`]
+  }
   const jumpLongTasks = []
   await segment('300 columns')
   await run('-- varia-fake: sets=X1*5000')
@@ -287,6 +323,8 @@ try {
   })
   const across = await stats()
   record('grid.x1.horizontalFrameP95Ms', percentile(across.frames, 95), 'ms', `${across.frames.length} frames over ${steps} steps of 120 px, max ${Math.max(...across.frames).toFixed(1)} ms`)
+  record('grid.x1.wheelIntervalP95Ms', ...await wheelSegment('300 columns: wheel', undefined))
+  record('grid.x1.virtualWheelIntervalP95Ms', ...await wheelSegment('300 columns: wheel past the cap', 50_000))
 
   // 300 bit columns: the narrowest columns put the most cells in view.
   await segment('narrow columns')
@@ -297,6 +335,9 @@ try {
   jumpLongTasks.push(...narrow.long)
   record('grid.x2.jumpTaskP95Ms', percentile(narrow.tasks, 95), 'ms', `main-thread task time per jump over 40 jumps, median ${percentile(narrow.tasks, 50).toFixed(1)} ms, max ${Math.max(...narrow.tasks).toFixed(1)} ms; frame() p95 ${percentile(narrow.stats.frames, 95).toFixed(1)} ms`)
   record('grid.x2.elements', narrow.stats.nodes, 'elements', `1 grid of 300 bit columns, ${view.width} × ${view.height} window`)
+  record('grid.x2.wheelIntervalP95Ms', ...await wheelSegment('narrow columns: wheel', undefined))
+  record('grid.x2.virtualWheelIntervalP95Ms', ...await wheelSegment('narrow columns: wheel past the cap', 50_000))
+  record('grid.wide.wheelLongTasks', wheelLongTasks.length, 'tasks', `over 50 ms in those four wheel segments: ${wheelLongTasks.length ? wheelLongTasks.join(', ') + ' ms' : 'none'}`)
   record('grid.jump.longTasks', jumpLongTasks.length, 'tasks', `over 50 ms in the 300-column and bit-column jump segments (a segment with one runs once more): ${jumpLongTasks.length ? jumpLongTasks.join(', ') + ' ms' : 'none'}; attempts ${wide.attempt} and ${narrow.attempt}`)
 
   await segment('stacked sets')

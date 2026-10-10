@@ -21,7 +21,8 @@ export const limits = {
   cell: { text: 65_535, document: 2_097_152, vector: 65_535, binary: 32_766 },
   maxResultSets: { min: 1, max: 1000, default: 10 },
   maxRows: 2_147_483_647,
-  messages: { count: 1000, characters: 1_000_000, errorCharacters: 16_384 },
+  /** `lateErrors`: error entries kept after the count or character cap, so the error that stopped a script is never lost. */
+  messages: { count: 1000, characters: 1_000_000, errorCharacters: 16_384, lateErrors: 20 },
   pending: { requests: 256, control: 32, stdinBytes: 32 * MiB },
   backend: { inFlight: 288, metadataSlots: 8, sessions: 32, resultReads: 16 },
   credit: { min: 64 * KiB, max: 16 * MiB, workerDefault: 4 * MiB, perStream: 16 * MiB, perPort: 64 * MiB },

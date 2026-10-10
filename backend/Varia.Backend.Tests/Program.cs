@@ -43,6 +43,11 @@ Check(messages.Truncated && messages.Snapshot()[0].Text.Length == 1_000_000 && m
 messages = new QueryMessages();
 for (var i = 0; i < 1001; i++) messages.Add("message");
 Check(messages.Truncated && messages.Snapshot().Count == 1001, "message count budget is explicit");
+for (var i = 0; i < 25; i++) messages.Add("Msg 50000, Level 16, State 1, Line 1\n" + new string('e', 20_000), MessageKind.Error);
+messages.Add("printed later");
+var late = messages.Snapshot();
+Check(late.Count == 1000 + 1 + QueryMessages.MaxLateErrors && late[1000].Text.StartsWith("Messages were truncated") && late.Skip(1001).All(entry => entry.Kind == "error" && entry.Text.Length == 16_384),
+    "after the message caps, up to 20 errors are still kept (cut at 16,384 characters), after the truncation note");
 var stored = new List<MessageEntry>();
 messages = new QueryMessages(stored.Add);
 messages.Add("printed");

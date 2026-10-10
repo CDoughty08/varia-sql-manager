@@ -27,6 +27,7 @@ export interface FakeHandle extends ResultHandle {
  */
 export function fakeResultClient() {
   const listeners = new Map<string, Set<(event: QueryEvent) => void>>()
+  const generationListeners = new Set<(generation: number) => void>()
   const handles = new Map<string, FakeHandle>()
   const keyOf = (value: { generation: number; resultId: number }) => `${value.generation}:${value.resultId}`
   const settle = (handle: FakeHandle, value: ResultDescriptor, final: boolean) => {
@@ -61,13 +62,23 @@ export function fakeResultClient() {
       return { dispose: () => { set.delete(listener) } }
     },
     applySummary: vi.fn((summary: QueryResult) => { for (const value of summary.resultSets) { const handle = handles.get(keyOf(value)); if (handle) settle(handle, value, true) } }),
+    /** results.close for many results at once; their handles report them released (lost ones stay lost). */
+    release: vi.fn(async (keys: readonly { generation: number; resultId: number }[]) => {
+      for (const key of keys) { const handle = handles.get(keyOf(key)); if (handle && handle.snapshot.state !== 'lost') handle.snapshot = { ...handle.snapshot, state: 'released' } }
+    }),
+    onGeneration: (listener: (generation: number) => void) => { generationListeners.add(listener); return { dispose: () => { generationListeners.delete(listener) } } },
+    /** The result ids `release` was asked to close, in order. */
+    released: () => client.release.mock.calls.flatMap(([keys]) => keys.map(key => key.resultId)),
     /** Delivers an event of the run `queryId` (resultSet events also update the handle, as ResultClient does). */
     emit: (queryId: string, event: QueryEvent) => {
       if (event.type === 'resultSet.opened' || event.type === 'resultSet.closed') { const handle = handles.get(keyOf(event.descriptor)); if (handle) settle(handle, event.descriptor, false) }
       for (const listener of [...listeners.get(queryId) ?? []]) listener(event)
     },
-    /** Every result's handle becomes lost, as when the backend restarts. */
-    lose: () => { for (const handle of handles.values()) handle.snapshot = { ...handle.snapshot, state: 'lost' } },
+    /** Every result's handle becomes lost, as when the backend restarts, and a new generation is announced. */
+    lose: () => {
+      for (const handle of handles.values()) handle.snapshot = { ...handle.snapshot, state: 'lost' }
+      for (const listener of [...generationListeners]) listener(2)
+    },
     handle: (resultId: number, generation = 1) => handles.get(`${generation}:${resultId}`),
     listening: (queryId: string) => listeners.get(queryId)?.size ?? 0,
     windowsInFlight: 0

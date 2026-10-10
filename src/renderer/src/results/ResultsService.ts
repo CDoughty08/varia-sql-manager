@@ -9,6 +9,7 @@ import { copyPlan, selectAll, type GridSelection } from '../grid/selection'
 import { kindInfo } from '../documents'
 import type { DocumentService, TextDocument } from '../services/documents'
 import type { ResultClient, ResultHandle } from './ResultClient'
+import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
 
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'timedOut' | 'lost' | 'closed'
@@ -26,8 +27,13 @@ export interface ResultJob {
 export interface TabResults {
   readonly queryId: string; readonly startedAt: number; readonly status: RunStatus; readonly sets: readonly ResultSetEntry[]
   readonly messages: readonly MessageEntry[]; readonly messagesTruncated: boolean; readonly rowsRead: number
+  /** How many of `messages`, first, are Varia's own notices (a new session) rather than SQL Server's. */
+  readonly notices: number
   readonly completedBatches: number; readonly totalBatches: number; readonly summary?: QueryResult; readonly error?: string
   readonly view: 'results' | 'messages'; readonly manualView: boolean; readonly jobs: readonly ResultJob[]; readonly announcement: string
+  /** When `announcement` was set, on a counter that only grows (0 before the run's first), so the live region reads out
+   *  only sentences newer than the moment it was shown. */
+  readonly announced: number
   /** How the last save ended ("Saved 400 rows to results.csv."), shown in the toolbar for a few seconds; '' otherwise. */
   readonly jobNotice: string
 }
@@ -65,13 +71,15 @@ interface Run {
   manualView: boolean
   jobs: ResultJob[]
   announcement: string
+  announced: number
   jobNotice: string
   subscription?: Disposable
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 
-/** Result sets a run keeps (the backend keeps the same number) and the Messages entries it shows. */
-export const resultLimits = { sets: 1000, messages: 1001 } as const
+/** Result sets a run keeps (the backend keeps the same number) and the Messages entries it shows: the backend's, the errors
+ *  it keeps past its cap, and its notes. */
+export const resultLimits = { sets: 1000, messages: wire.messages.count + wire.messages.lateErrors + 8 } as const
 const unavailable = 'These results are no longer available because the SQL backend restarted.'
 const closedResults = 'These results were closed. Execute the query again to see them.'
 const stillLoading = 'Save the results after this result set finishes loading.'
@@ -80,6 +88,9 @@ const saveCancelled = 'Saving was cancelled. The file was not written.'
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
 const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
 const runStatus = (summary: QueryResult): RunStatus => summary.status
+/** " 3 values were truncated." after a copy or save that wrote values the backend stored cut; '' otherwise. */
+const truncatedClause = (cells: number): string => cells > 0 ? ` ${formatCount(cells)} ${cells === 1 ? 'value was' : 'values were'} truncated.` : ''
+const held = (set: ResultSetEntry): boolean => { const state = set.handle.getSnapshot().state; return state !== 'lost' && state !== 'released' }
 /** The document a link cell opens in: its kind, and the name its tabs count from (SSMS: XML_F52E2B61-…1.xml, ExecutionPlan1.sqlplan). */
 const valueKinds: Readonly<Record<string, { kind: TextDocument['kind']; base?: string; extension: string }>> = {
   xml: { kind: 'xml', extension: '.xml' }, json: { kind: 'json', extension: '.json' }, plan: { kind: 'sqlplan', base: 'ExecutionPlan', extension: '.sqlplan' }
@@ -107,7 +118,7 @@ export function suggestedName(baseName: string, index: number): string {
  * user closes them; changing the connection or database keeps them, as SSMS does.
  */
 export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
-  private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>
+  private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
@@ -135,9 +146,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   readonly context: ExternalStore<Readonly<Record<string, true>>> = this.contextStore
   private scheduled = false
   private disposed = false
+  private announcedCount = 0
 
   constructor(o: {
-    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
+    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
     documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string
   }) {
     super({})
@@ -149,7 +161,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.now = o.now ?? (() => Date.now())
     this.newId = o.newId ?? (() => crypto.randomUUID())
     const events = o.events.subscribe(event => { if (event.type === 'documents.closed') this.release(event.tabId) })
-    this.subscriptions.push(() => events.dispose(), this.api.onResultsJob(progress => this.progress(progress)))
+    // A new backend lost every result: nothing is left to save or close.
+    const generations = this.client.onGeneration(() => this.updateContext())
+    this.subscriptions.push(() => events.dispose(), () => generations.dispose(), this.api.onResultsJob(progress => this.progress(progress)))
   }
 
   /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
@@ -163,7 +177,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.views.set(tabId, { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
     const run: Run = {
       queryId, startedAt: this.now(), status: 'running', sets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
-      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, jobs: this.savesOf(tabId), announcement: '', jobNotice: ''
+      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: ''
     }
     run.subscription = this.client.onQueryEvent(queryId, event => this.event(tabId, run, event))
     this.runs.set(tabId, run)
@@ -185,6 +199,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
       }
       if (!sameMessages(run.messages, summary.messages)) run.messages = summary.messages.slice(0, resultLimits.messages)
+      // The error that ended the run is always in Messages, whatever the backend could keep there.
+      if (summary.error && summary.status !== 'completed' && !run.messages.some(entry => entry.kind === 'error')) run.messages = [...run.messages, { text: summary.error.message, kind: 'error' }]
       run.messagesTruncated = summary.messagesTruncated
       run.completedBatches = summary.completedBatches
       run.totalBatches = summary.totalBatches
@@ -303,8 +319,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts }) }
     finally { this.endJob(running) }
     if (result.ok) {
-      const rows = result.value.rows
-      this.announce(tabId, `Copied ${formatCount(rows)} ${plural(rows, 'row')}${result.value.partial ? '; the query is still running.' : '.'}`)
+      const { rows, partial, truncatedCells } = result.value
+      const sentence = `Copied ${formatCount(rows)} ${plural(rows, 'row')}${partial ? '; the query is still running.' : '.'}${truncatedClause(truncatedCells)}`
+      // Values cut where they were stored are copied cut: that is shown, not only read out.
+      if (truncatedCells > 0) this.notify(tabId, sentence)
+      else this.announce(tabId, sentence)
       return undefined
     }
     if (result.code === 'CANCELLED') return undefined
@@ -336,7 +355,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (result.ok) {
       if (!result.value) return undefined
       const { rows, truncatedCells, fileName } = result.value
-      this.notify(running.tabId, `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedCells > 0 ? ` ${formatCount(truncatedCells)} ${truncatedCells === 1 ? 'value was' : 'values were'} truncated.` : ''}`)
+      this.notify(running.tabId, `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedClause(truncatedCells)}`)
       return undefined
     }
     if (result.code === 'CANCELLED') { this.notify(running.tabId, saveCancelled); return undefined }
@@ -401,6 +420,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (!run) return
       // The same sentence again must still be read out: a zero-width space makes it a change.
       run.announcement = run.announcement === text ? text + '\u200b' : text
+      run.announced = ++this.announcedCount
       this.publishNow(tabId)
     }, g.liveRegionMs))
   }
@@ -516,12 +536,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     void this.api.cancelResultsJob(running.job.jobId).catch(() => {})
   }
 
+  /** One release for all of a run's sets: main refuses requests past 64 at a time, and a request closes 1,024 ids. */
   private closeHandles(run: Run): void {
     if (this.copying && this.runs.get(this.copying.tabId) === run) this.cancelRunning(this.copying)
-    for (const set of run.sets) {
-      void set.handle.close().catch(() => {})
-      set.handle.dispose()
-    }
+    if (run.sets.length === 0) return
+    const keys: ResultKey[] = run.sets.map(set => set.handle.key)
+    void this.client.release(keys).catch(() => {})
+    for (const set of run.sets) set.handle.dispose()
   }
 
   private disposeRun(tabId: string): void {
@@ -561,12 +582,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     super.publish(snapshot)
     this.updateContext()
   }
-  /** `hasResults` per tab: a set exists, and the results were neither closed nor lost with the backend. */
+  /** `hasResults` per tab: a set the backend still holds, in results neither closed nor lost with the backend. */
   private updateContext(): void {
     const current = this.contextStore.getSnapshot(), next: Record<string, true> = {}
     let changed = false
     for (const [tabId, run] of this.runs) {
-      if (run.sets.length === 0 || run.status === 'closed' || run.status === 'lost') continue
+      if (run.status === 'closed' || run.status === 'lost' || !run.sets.some(held)) continue
       next[tabId] = true
       if (!current[tabId]) changed = true
     }
@@ -576,9 +597,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private snapshotOf(run: Run): TabResults {
     run.setsPublished = true
     return {
-      queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages,
+      queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
-      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, jobs: run.jobs, announcement: run.announcement,
+      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
       jobNotice: run.jobNotice
     }
   }
