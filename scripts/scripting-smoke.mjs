@@ -328,8 +328,17 @@ try {
 
   // 10. 1024×768 (Windows CI's display): the dialog and Script As's nested menus fit inside the window, and the dialog's
   // list scrolls; screenshots in Dark and Light.
+  // Menus close on a resize event, which Chromium dispatches with a frame after the viewport changes (about one a second
+  // in a hidden window): wait for the event that carries the final size, or it would close the menu opened next.
+  const contentSize = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
+  await page.evaluate(() => { addEventListener('resize', () => { window.variaResized = [innerWidth, innerHeight] }) })
+  const sizeBefore = await contentSize()
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1024, 768) })
-  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
+  await expect.poll(async () => {
+    const [size, resized] = await Promise.all([contentSize(), page.evaluate(() => window.variaResized ?? null)])
+    // A window already at that size (a screen that clamps it) has no resize event to wait for.
+    return size[0] === 1024 && (size[0] === sizeBefore[0] && size[1] === sizeBefore[1] || resized?.[0] === size[0] && resized[1] === size[1])
+  }).toBe(true)
   // A long warning is cut in the middle of the status bar; the other segments keep their one line, and the page never
   // scrolls. Enter on the notice shows the whole warning in the banner. (Before any new query opens here: its editor
   // takes focus on a later frame, which would close a context menu.)
