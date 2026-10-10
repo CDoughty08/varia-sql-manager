@@ -140,18 +140,26 @@ async function startTrace() {
     return main.map(event => ({ clock: event.dur / 1000, cpu: (event.tdur ?? event.dur) / 1000 }))
   }
 }
-/** Runs `segment` with the renderer traced; a segment over a limit runs once more before it fails. */
-async function measured(name, segment) {
+/**
+ * Runs `segment` with the renderer traced; a segment over a limit runs once more before it fails. `over` names a
+ * segment's own timing limit it went over (its frames' p95, say), or returns '': it gets the same second run.
+ */
+async function measured(name, segment, over = () => '') {
   for (let attempt = 1; ; attempt++) {
     const stop = await startTrace()
     await segment()
     const tasks = await stop(), long = tasks.filter(task => task.clock >= 50 || task.cpu >= 50)
     const shown = JSON.stringify(long.map(task => `${Math.round(task.clock)}/${Math.round(task.cpu)}`))
     console.log(`Results ${name}: of ${tasks.length} tasks, those of 50 ms by the clock / of CPU time: ${shown} (attempt ${attempt}).`)
-    if (!long.some(task => task.cpu >= cpuLimit || task.clock >= clockLimit)) return
-    if (attempt === 2) throw new Error(`${name}: renderer tasks ${shown} (limits ${cpuLimit} ms of CPU time, ${clockLimit} ms by the clock)`)
+    const exceeded = long.some(task => task.cpu >= cpuLimit || task.clock >= clockLimit)
+      ? `renderer tasks ${shown} (limits ${cpuLimit} ms of CPU time, ${clockLimit} ms by the clock)` : await over()
+    if (!exceeded) return
+    if (attempt === 2) throw new Error(`${name}: ${exceeded}`)
+    console.log(`Results ${name}: ${exceeded}; running it once more.`)
   }
 }
+/** `over` for `measured`: the frames' p95 when it is over `limit` ms on Linux, where the limits apply. */
+const framesOver = (frames, limit) => linux && p95(frames) > limit ? `frames p95 ${p95(frames).toFixed(2)} ms (limit ${limit} ms)` : ''
 /** A theme token's color as computed styles report it, for comparison with an element's computed color. */
 const tokenColor = name => page.evaluate(value => {
   const probe = document.createElement('div')
@@ -267,9 +275,8 @@ try {
     await expect.poll(async () => { order = await rowOrder(); return ascending(order) }, { message: 'rows in DOM order after the wheel' }).toBe(true)
     expect(order[0]).toBe(paged.row + 2)
     wheeled = await stats()
-  })
+  }, () => framesOver(wheeled.frames, 8))
   console.log(`Results frames over a million rows: jumps p95 ${p95(jumped.frames).toFixed(2)} ms of ${jumped.frames.length}, wheel p95 ${p95(wheeled.frames).toFixed(2)} ms of ${wheeled.frames.length}; tiles ${wheeled.hits} hits / ${wheeled.misses} misses; UI cache ${wheeled.client.uiWindows} windows / ${wheeled.client.uiUnits} units; worker ${wheeled.client.workerPages} pages / ${wheeled.client.workerBytes} bytes; ${wheeled.nodes} grid elements.`)
-  if (linux) expect(p95(wheeled.frames)).toBeLessThanOrEqual(8)
   expect(wheeled.client.uiWindows).toBeLessThanOrEqual(256)
   expect(wheeled.client.uiUnits).toBeLessThanOrEqual(16 * 1024 * 1024)
   expect(wheeled.client.workerBytes).toBeLessThanOrEqual(64 * 1024 * 1024)
@@ -310,11 +317,10 @@ try {
       await expect.poll(loadingInView).toBe(0)
       expect(await rowHeaderAtLeft()).toBe(true)
       expect(await stickyInRows()).toBe(0)
-    })
+    }, async () => framesOver((await stats()).frames, 16))
     const wide = await stats()
     console.log(`Results checks: 300 columns (${cap ? 'virtual' : 'native'} scrolling): ${wide.nodes} grid elements, frames p95 ${p95(wide.frames).toFixed(2)} ms of ${wide.frames.length}.`)
     expect(wide.nodes).toBeLessThanOrEqual(4000)
-    if (linux) expect(p95(wide.frames)).toBeLessThanOrEqual(16)
   }
   await page.evaluate(() => window.__variaGrid.setScrollCap())
 
