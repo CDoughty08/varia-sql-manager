@@ -19,7 +19,6 @@ export const requestSchemas = {
   'connections.discover': z.object({ scope: z.enum(['local', 'network']) }).strict(),
   'connections.disconnect': z.object({ connectionId }).strict(),
   'databases.list': z.object({ connectionId }).strict(),
-  'tables.script': z.object({ connectionId, database, schema: name, name }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
   'query.execute': z.object({
     connectionId, sessionId: z.uuid(), database, sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),

@@ -62,7 +62,7 @@ function hello(value) {
   generation = value.generation
   if (mode === 'no-hello') return
   if (mode === 'no-read') process.stdin.pause()
-  const methods = mode === 'missing-method' ? backendMethods.filter(method => method !== 'tables.script') : backendMethods
+  const methods = mode === 'missing-method' ? backendMethods.filter(method => method !== 'scripting.script') : backendMethods
   write(FrameKind.HELLO, 0, 0, { version: mode === 'wrong-version' ? 3 : 2, generation: value.generation, pid: process.pid, runtime: 'fake', platform: process.platform, sqlClientVersion: '0', maxFrameBytes: 4 * 1024 * 1024, methods })
 }
 
@@ -277,7 +277,6 @@ async function workbench(id, method, params, credit) {
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   switch (method) {
     case 'databases.list': return respond(id, workbenchDatabases)
-    case 'tables.script': return respond(id, { sql: 'CREATE TABLE dbo.Orders (Id int);' })
     case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, explorerChildren(params))

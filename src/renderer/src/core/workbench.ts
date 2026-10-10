@@ -112,7 +112,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
   const scriptingOptions = new ScriptingOptionsService(api, message => commands.reportError(message))
-  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => documents.boundEditor?.focus()) })
+  // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
+  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
   const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, scripting: scripting.running, editor: () => documents.boundEditor })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {

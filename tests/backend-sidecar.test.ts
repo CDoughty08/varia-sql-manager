@@ -119,14 +119,15 @@ describe('real .NET sidecar over protocol v2', () => {
   it('validates authentication without attempting a connection', async () => {
     await expect(call(backend(), 'connections.connect', { server: 'localhost', database: 'master', authentication: 'invalid' as 'sql', trustServerCertificate: false })).rejects.toThrow('Unsupported authentication mode.')
   })
-  it('no longer offers the v1 catalog methods that explorer.children replaced', async () => {
+  it('no longer offers the v1 catalog and table script methods that explorer.children and scripting.script replaced', async () => {
     const backend = raw()
     const hello = await backend.hello()
-    const retired = ['tables.list', 'server.objects.list']
+    const retired = ['tables.list', 'server.objects.list', 'tables.script']
     expect((hello.methods as string[]).filter(method => retired.includes(method))).toEqual([])
     backend.request(1, { method: 'tables.list', params: { connectionId: crypto.randomUUID(), database: 'master' } })
     backend.request(2, { method: 'server.objects.list', params: { connectionId: crypto.randomUUID(), kind: 'logins' } })
-    for (let index = 0; index < 2; index++) expect(body(await backend.next(FrameKind.RESPONSE))).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } })
+    backend.request(3, { method: 'tables.script', params: { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' } })
+    for (let index = 0; index < 3; index++) expect(body(await backend.next(FrameKind.RESPONSE))).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } })
   })
   it('reads a table\'s columns on the metadata lane, checking names before the connection', async () => {
     const connection = backend()
@@ -316,7 +317,7 @@ describe('real .NET sidecar frame handling', () => {
     expect(await backend.exit).toBe(0)
   })
   it('surfaces backend error codes on BackendError', async () => {
-    const error = await call(backend(), 'tables.script', { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' }).catch(value => value)
+    const error = await call(backend(), 'tables.columns', { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' }).catch(value => value)
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: 'NOT_CONNECTED' })
   })

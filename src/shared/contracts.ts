@@ -199,7 +199,6 @@ export interface RpcMethods {
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
-  'tables.script': { params: { connectionId: string; database: string; schema: string; name: string }; result: { sql: string } }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
@@ -265,7 +264,6 @@ export interface VariaApi {
   removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibrary>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
-  scriptTable(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<{ sql: string }>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */
   explorerChildren(params: ExplorerChildrenParams): Promise<ApiResult<ExplorerChildrenResult>>

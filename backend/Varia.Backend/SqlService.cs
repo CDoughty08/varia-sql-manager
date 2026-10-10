@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
-using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
@@ -19,7 +18,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
-        "databases.list", "tables.script", "tables.columns", "query.execute", "query.cancel", "query.session.close",
+        "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close",
         "results.read", "results.close", "explorer.children",
         "scripting.script"
     ];
@@ -123,7 +122,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
         "connections.disconnect" => Disconnect(Read<ConnectionArgs>(parameters, json)),
         "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
-        "tables.script" => await ScriptAsync(Read<TableArgs>(parameters, json), Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
@@ -257,31 +255,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var result = new List<DatabaseInfo>();
         while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetBoolean(1), reader.GetBoolean(2)));
         return result;
-    }
-
-    private async Task<object> ScriptAsync(TableArgs args, CancellationToken token)
-    {
-        Name(args.Schema);
-        Name(args.Name);
-        await using var connection = CreateConnection(args.ConnectionId, args.Database);
-        // SMO cannot be interrupted once it runs; the host answers TIMEOUT at the deadline and keeps the slot until it returns.
-        await connection.OpenAsync(token);
-        var serverConnection = new ServerConnection(connection) { StatementTimeout = 30 };
-        try
-        {
-            var server = new Server(serverConnection);
-            var database = server.Databases[args.Database]
-                ?? throw new RequestException("NOT_FOUND", "Database was not found.");
-            var table = database.Tables[args.Name, args.Schema]
-                ?? throw new RequestException("NOT_FOUND", "Table was not found.");
-            var script = table.Script(new ScriptingOptions
-            {
-                SchemaQualify = true, ScriptSchema = true, ScriptData = false,
-                DriAll = true, Indexes = true, IncludeHeaders = true
-            });
-            return new { Sql = string.Join(Environment.NewLine + Environment.NewLine, script.Cast<string>()) };
-        }
-        finally { serverConnection.Disconnect(); }
     }
 
     private const int MaxColumns = 4096;

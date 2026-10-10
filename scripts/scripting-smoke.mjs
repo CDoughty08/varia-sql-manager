@@ -112,6 +112,12 @@ const menusInside = () => page.evaluate(() => ({
   inside: [...document.querySelectorAll('.menu')].every(menu => { const box = menu.getBoundingClientRect(); return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight }),
   count: document.querySelectorAll('.menu').length, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight
 }))
+/** Whether the query tab strip scrolls, and whether the active tab lies wholly inside its visible part. */
+const activeTabInView = () => page.evaluate(() => {
+  const strip = document.querySelector('.query-tabs'), tab = strip.querySelector('.query-tab.active')
+  const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
+  return { overflows: strip.scrollWidth > strip.clientWidth, inView: box.left >= view.left - 1 && box.right <= view.right + 1 }
+})
 /** Opens Script Table as › CREATE To on dbo.Orders by mouse, with Clipboard under the pointer. */
 async function openNestedScriptMenu() {
   await (await explorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
@@ -295,6 +301,15 @@ try {
   // list scrolls; screenshots in Dark and Light.
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1024, 768) })
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
+  // A script's new query opens past the end of a full tab strip, which scrolls to show its tab.
+  // From the editor, so New Query does not defer focus to a frame that a hidden window only renders for the screenshot.
+  await textbox().focus()
+  const strip = await tabs().count()
+  for (let index = 0; index < 4; index++) await menu('file.new')
+  await expect(tabs()).toHaveCount(strip + 4)
+  await scriptFrom(ordersPath, 'Script Table as', 'CREATE To', 'New Query Editor Window')
+  await expect(tabs()).toHaveCount(strip + 5)
+  await expect.poll(activeTabInView).toEqual({ overflows: true, inView: true })
   await openOptions()
   await expect(option('Script USE <database>')).toHaveValue('false')
   expect(await weight('Script USE <database>')).toBe('700')
@@ -304,6 +319,8 @@ try {
   expect(small.height).toBeLessThanOrEqual(600)
   await option('Script USE <database>').focus()
   await page.screenshot({ path: resolve('artifacts', 'scripting-options-dark.png') })
+  // The new script's editor asked for focus on a frame this hidden window renders only now; the dialog keeps it.
+  await expect(option('Script USE <database>')).toBeFocused()
   await page.keyboard.press('Escape')
   await openNestedScriptMenu()
   expect(await menusInside()).toEqual({ inside: true, count: 3, overflow: false })
@@ -324,7 +341,7 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'scripting-light.png') })
   for (let presses = 0; presses < 3; presses++) await page.keyboard.press('Escape')
   await expect(openMenus()).toHaveCount(0)
-  console.log('Scripting checks: at 1024×768 the dialog and the nested Script menus fit, the dialog\'s list scrolls; screenshots in Dark and Light.')
+  console.log('Scripting checks: at 1024×768 a new script\'s tab scrolls into view, the dialog and the nested Script menus fit, the dialog\'s list scrolls; screenshots in Dark and Light.')
 
   // 11. The options persist across a restart; an invalid file is set aside with a warning and the defaults are used.
   await close()

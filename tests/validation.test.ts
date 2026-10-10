@@ -27,10 +27,10 @@ describe('IPC validation', () => {
   it('passes identifiers verbatim and explains oversized scripts', () => {
     const connectionId = crypto.randomUUID()
     const table = { connectionId, database: ' padded ', schema: 'dbo', name: 'Orders' }
-    expect(validateRequest('tables.script', table)).toEqual(table)
-    expect(() => validateRequest('tables.script', { ...table, database: '   ' })).toThrow('Invalid request')
+    expect(validateRequest('tables.columns', table)).toEqual(table)
+    expect(() => validateRequest('tables.columns', { ...table, database: '   ' })).toThrow('Invalid request')
     // IPC can deliver a cloneable non-string whose property key coerces to a real method name.
-    expect(() => validateRequest(['tables.script'] as unknown as string, table)).toThrow('Unsupported backend method')
+    expect(() => validateRequest(['tables.columns'] as unknown as string, table)).toThrow('Unsupported backend method')
     const query = { connectionId, sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'x'.repeat(1_000_001), maxRows: 1000, timeoutSeconds: 30 }
     expect(() => validateRequest('query.execute', query)).toThrow('too large to execute')
   })
@@ -42,11 +42,12 @@ describe('IPC validation', () => {
     }
     expect(validateRequest('tables.columns', { ...valid, name: 'x'.repeat(128) })).toMatchObject({ name: 'x'.repeat(128) })
   })
-  it('rejects the v1 catalog methods that Object Explorer replaced', () => {
+  it('rejects the v1 catalog and table script methods that Object Explorer and Script As replaced', () => {
     const connectionId = crypto.randomUUID()
     expect(() => validateRequest('tables.list', { connectionId, database: 'master' })).toThrow('Unsupported backend method')
     expect(() => validateRequest('server.objects.list', { connectionId, kind: 'logins' })).toThrow('Unsupported backend method')
-    expect(Object.hasOwn(methodPolicies, 'tables.list') || Object.hasOwn(methodPolicies, 'server.objects.list')).toBe(false)
+    expect(() => validateRequest('tables.script', { connectionId, database: 'master', schema: 'dbo', name: 'Orders' })).toThrow('Unsupported backend method')
+    for (const method of ['tables.list', 'server.objects.list', 'tables.script']) expect(Object.hasOwn(methodPolicies, method), method).toBe(false)
   })
   it('takes Object Explorer loads only in their strict catalogue shape', () => {
     const connectionId = crypto.randomUUID(), requestId = crypto.randomUUID()

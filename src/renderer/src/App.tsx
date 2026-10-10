@@ -136,6 +136,14 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
+  // A query opened or chosen from elsewhere (Script As, Go to Query, a menu) must not stay hidden past the strip's edge.
+  useEffect(() => {
+    const tab = activeId ? document.getElementById(`tab-${activeId}`)?.parentElement : undefined, strip = tab?.parentElement
+    if (!tab || !strip) return
+    const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
+    if (box.left < view.left) strip.scrollLeft -= view.left - box.left
+    else if (box.right > view.right) strip.scrollLeft += box.right - view.right
+  }, [activeId, tabs.length])
 
   function connected(info: ConnectionInfo, chosen: ConnectionOptions) {
     setOptions(chosen)
