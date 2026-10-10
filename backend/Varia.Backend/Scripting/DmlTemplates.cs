@@ -26,8 +26,9 @@ internal static class DmlTemplates
     public static string Object(string? schema, string name, bool schemaQualify) =>
         schemaQualify && schema is not null ? ScriptFormatter.Quote(schema) + "." + ScriptFormatter.Quote(name) : ScriptFormatter.Quote(name);
 
-    /// <summary>&lt;name, type,&gt; with every character that could end or split the placeholder replaced by _.</summary>
-    public static string Placeholder(string name, string type) => "<" + Clean(name) + ", " + Clean(type) + ",>";
+    /// <summary>&lt;name, type,&gt; with every character that could end or split the placeholder replaced by _ in the name
+    /// and in any name inside the type; system type text such as decimal(10,2) keeps its comma, as in SSMS.</summary>
+    public static string Placeholder(string name, TypeRow type, bool schemaQualify) => "<" + Clean(name) + ", " + SqlTypeText.ForTemplate(type, schemaQualify, Clean) + ",>";
 
     private static string Clean(string text)
     {
@@ -66,7 +67,7 @@ internal static class DmlTemplates
         for (var i = 0; i < listed.Count; i++) text.Append(NL).Append("           ").Append(i == 0 ? '(' : ',').Append(ScriptFormatter.Quote(listed[i].Name));
         text.Append(')').Append(NL).Append("     VALUES");
         for (var i = 0; i < listed.Count; i++)
-            text.Append(NL).Append("           ").Append(i == 0 ? '(' : ',').Append(Placeholder(listed[i].Name, SqlTypeText.ForTemplate(listed[i].Type, schemaQualify)));
+            text.Append(NL).Append("           ").Append(i == 0 ? '(' : ',').Append(Placeholder(listed[i].Name, listed[i].Type, schemaQualify));
         return text.Append(')').ToString();
     }
 
@@ -78,7 +79,7 @@ internal static class DmlTemplates
         var text = new StringBuilder("UPDATE ").Append(obj);
         for (var i = 0; i < listed.Count; i++)
             text.Append(NL).Append(i == 0 ? "   SET " : "      ,").Append(ScriptFormatter.Quote(listed[i].Name)).Append(" = ")
-                .Append(Placeholder(listed[i].Name, SqlTypeText.ForTemplate(listed[i].Type, schemaQualify)));
+                .Append(Placeholder(listed[i].Name, listed[i].Type, schemaQualify));
         return text.Append(NL).Append(" WHERE ").Append(SearchConditions).ToString();
     }
 
@@ -110,7 +111,7 @@ internal static class DmlTemplates
         var inputs = parameters.Where(parameter => parameter.Id > 0).ToList();
         var text = new StringBuilder(tableValued ? "SELECT * FROM " : "SELECT ").Append(obj).Append(" (");
         for (var i = 0; i < inputs.Count; i++)
-            text.Append(NL).Append(i == 0 ? "   " : "  ,").Append(Placeholder(inputs[i].Name, SqlTypeText.ForTemplate(inputs[i].Type, schemaQualify)));
+            text.Append(NL).Append(i == 0 ? "   " : "  ,").Append(Placeholder(inputs[i].Name, inputs[i].Type, schemaQualify));
         return text.Append(')').ToString();
     }
 

@@ -83,7 +83,7 @@ internal static class ScriptingErrors
             "PERMISSION_DENIED" => "You do not have permission to script " + o + ": " + Detail(detail ?? "", MaxServerText),
             "DATABASE_UNAVAILABLE" => "Database " + Display(subject.Database ?? "") + " is not available (" + Detail(detail ?? "", MaxState) + "), so " + o + " cannot be scripted.",
             "TOO_LARGE" when detail == "definition" => "The definition of " + o + " is larger than 8 MB, which Varia cannot open.",
-            "TOO_LARGE" => "The script for " + o + " is longer than 4,000,000 characters, which Varia cannot open. Turn off Generate script for dependent objects in Tools › Options › Scripting and try again.",
+            "TOO_LARGE" => "The script for " + o + " is longer than 4,000,000 characters, which Varia cannot open. Turn off Generate script for dependent objects and Script triggers in Tools › Options › Scripting and try again.",
             "EMPTY" => "SQL Server Management Objects produced no " + subject.Verb + " script for " + o + ".",
             "BLOCKED" => "Another session holds a lock on " + o + "'s metadata (for example an uncommitted ALTER). Scripting waited 10 seconds; retry after it commits.",
             "TIMEOUT" => "Scripting " + o + " took longer than 55 seconds and was stopped.",
@@ -96,6 +96,19 @@ internal static class ScriptingErrors
         return new(code, Clip(message, MaxMessage), catalog.Retryable(code));
     }
 
+    /// <summary>A trigger or dependent object the target's script would carry is encrypted or over the definition limit:
+    /// the message names that object and the option that brought it in, not the target.</summary>
+    public static ScriptError Dependent(ScriptingCatalog catalog, DependentDefinitionException error, ScriptSubject subject)
+    {
+        var o = error.Parent is { } parent ? Display(error.Name) + " of " + Display(error.Schema + "." + parent) : Display(error.Schema + "." + error.Name);
+        var message = error.Code == "ENCRYPTED"
+            ? (error.Parent is null ? "" : "Trigger ") + o + " is encrypted (WITH ENCRYPTION), so " + subject.Display + " cannot be scripted with " + error.Option
+                + " on. Turn it off in Tools › Options › Scripting and try again."
+            : "The definition of " + (error.Parent is null ? "" : "trigger ") + o + " is larger than 8 MB, which Varia cannot open. Turn off " + error.Option
+                + " in Tools › Options › Scripting and try again.";
+        return new(error.Code, Clip(message, MaxMessage), catalog.Retryable(error.Code));
+    }
+
     /// <summary>Maps an exception from the preflight or SMO to an error value (spec C9). Cancellation is the caller's to
     /// decide; anything unrecognised is null, so the request fails as a backend error.</summary>
     /// <param name="encrypted">The preflight found the module encrypted (PropertyCannotBeRetrieved then means ENCRYPTED).</param>
@@ -105,6 +118,7 @@ internal static class ScriptingErrors
         bool serverTrigger = false, bool connectionBroken = false)
     {
         var chain = Chain(error).ToList();
+        if (chain.OfType<DependentDefinitionException>().FirstOrDefault() is { } dependent) return Dependent(catalog, dependent, subject);
         if (chain.OfType<ScriptTooLargeException>().Any()) return Create(catalog, "TOO_LARGE", subject);
         if (chain.OfType<EmptyScriptException>().Any()) return Create(catalog, "EMPTY", subject);
         if (chain.OfType<SmoObjectMissingException>().Any()) return Create(catalog, "NOT_FOUND", subject);

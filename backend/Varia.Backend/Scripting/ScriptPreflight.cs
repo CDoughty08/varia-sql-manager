@@ -27,7 +27,24 @@ internal static partial class ScriptPreflight
         + "EXEC @module @stmt, @decl, @schema = @schema, @name = @name, @parent_schema = @parent_schema, @parent_name = @parent_name, @take = @take;";
     /// <summary>Scripting reads committed metadata, waits at most 10 s behind another session's DDL, and loses deadlocks.</summary>
     public const string Prologue = "SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCK_TIMEOUT 10000; SET DEADLOCK_PRIORITY LOW;";
+    public static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(10);
     public const long MaxDefinitionBytes = 8_000_000;
+
+    /// <summary>The definitions SMO reads besides the target's own when Script triggers or Generate script for dependent
+    /// objects is on: the modules @objects names and, where t = 1, the triggers on them. Names arrive as hex UTF-16, so
+    /// control characters and unpaired surrogates survive the XML. The first module that is encrypted or longer than @max
+    /// bytes comes back, so SMO never loads it (spec F).</summary>
+    public const string DefinitionCheck = "DECLARE @list xml = CONVERT(xml, @objects);\n"
+        + "SELECT TOP (1) q.schema_name, q.object_name, q.parent_name, CONVERT(bit, ISNULL(q.is_encrypted, 0)) AS is_encrypted FROM (SELECT "
+        + "CONVERT(sysname, CONVERT(varbinary(256), l.o.value('@s', 'varchar(512)'), 2)) AS s, CONVERT(sysname, CONVERT(varbinary(256), l.o.value('@n', 'varchar(512)'), 2)) AS n, "
+        + "l.o.value('@t', 'bit') AS t FROM @list.nodes('/d/o') AS l(o)) AS w "
+        + "JOIN sys.schemas AS sc ON sc.name = w.s JOIN sys.all_objects AS ob ON ob.schema_id = sc.schema_id AND ob.name = w.n "
+        + "CROSS APPLY (SELECT sc.name, ob.name, CONVERT(sysname, NULL), OBJECTPROPERTY(ob.object_id, N'IsEncrypted'), DATALENGTH(m.definition) FROM sys.all_sql_modules AS m "
+        + "WHERE m.object_id = ob.object_id UNION ALL SELECT sc.name, tr.name, ob.name, OBJECTPROPERTY(tr.object_id, N'IsEncrypted'), DATALENGTH(tm.definition) "
+        + "FROM sys.triggers AS tr JOIN sys.all_sql_modules AS tm ON tm.object_id = tr.object_id WHERE w.t = 1 AND tr.parent_id = ob.object_id) "
+        + "AS q(schema_name, object_name, parent_name, is_encrypted, bytes) WHERE q.is_encrypted = 1 OR q.bytes > @max ORDER BY q.is_encrypted DESC;";
+    public const string DefinitionCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
+        + "EXEC @module @stmt, N'@objects nvarchar(max), @max bigint', @objects = @objects, @max = @max;";
 
     /// <summary>The kinds whose statement runs at server scope (the rest run in the object's database).</summary>
     private static readonly HashSet<string> ServerKinds = ["database", "login", "serverRole", "credential", "linkedServer", "backupDevice", "serverTrigger", "audit", "serverAuditSpecification"];
@@ -51,14 +68,20 @@ internal static partial class ScriptPreflight
     /// template lists (<see cref="Rowset"/>).</summary>
     /// <param name="vector">The server has sys.all_columns.vector_dimensions (ServerProfile.VectorDimensions).</param>
     public static string Statement(string kind, int band, ScriptingCatalog catalog, string? parentKind = null, VerbClass verbs = VerbClass.Ddl, bool vector = false) =>
-        Lookup(kind, band, catalog, parentKind) + (Rowset(kind, verbs) switch
+        Lookup(kind, band, catalog, parentKind, verbs) + (Rowset(kind, verbs) switch
         {
             RowsetKind.Columns => "\n" + ObjectId(kind, catalog) + ColumnRows(new SqlRender(band, vector)),
             RowsetKind.Parameters => "\n" + ObjectId(kind, catalog) + ParameterRows,
             _ => ""
         });
 
-    private static string Lookup(string kind, int band, ScriptingCatalog catalog, string? parentKind)
+    /// <summary>Whether the login may see a table's whole definition, for the DDL verbs' warning. Database-wide VIEW
+    /// DEFINITION (also implied by db_owner, sysadmin and VIEW ANY DEFINITION) is checked first: the object-level check
+    /// waits out LOCK_TIMEOUT behind another session's schema lock (a TRUNCATE, an index rebuild) and then reads as 0.</summary>
+    private const string CanViewDefinition = "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, N'DATABASE', N'VIEW DEFINITION') = 1 THEN 1 "
+        + "ELSE ISNULL(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(t.name), N'OBJECT', N'VIEW DEFINITION'), 0) END) AS can_view_definition ";
+
+    private static string Lookup(string kind, int band, ScriptingCatalog catalog, string? parentKind, VerbClass verbs)
     {
         var render = new SqlRender(band);
         return kind switch
@@ -66,8 +89,9 @@ internal static partial class ScriptPreflight
             "table" => "SELECT t.object_id AS object_id, t.is_ms_shipped AS is_ms_shipped, " + render.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + " AS temporal_code, "
                 + render.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + " AS ledger_code, " + render.Col(14, "t.is_node", "CONVERT(bit, 0)") + " AS node_flag, "
                 + render.Col(14, "t.is_edge", "CONVERT(bit, 0)") + " AS edge_flag, t.is_filetable AS is_filetable, " + render.Col(13, "t.is_external", "CONVERT(bit, 0)") + " AS external_flag, "
-                + render.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " AS dropped_flag, "
-                + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(t.name), N'OBJECT', N'VIEW DEFINITION'), 0)) AS can_view_definition "
+                + render.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " AS dropped_flag"
+                // A template lists only the columns a login with SELECT already sees.
+                + (verbs == VerbClass.Ddl ? ", " + CanViewDefinition : " ")
                 + "FROM sys.tables AS t " + Schemed("t") + ";",
             "view" => "SELECT o.object_id AS object_id, o.type AS object_type, o.is_ms_shipped AS is_ms_shipped, " + Module("o") + ", "
                 + render.Col(16, "v.ledger_view_type", "CONVERT(tinyint, 0)") + " AS ledger_view_code, " + render.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + " AS dropped_flag "
@@ -191,7 +215,7 @@ internal static partial class ScriptPreflight
 
     // --- Lint -------------------------------------------------------------------------------------------------------
 
-    private static readonly HashSet<string> Literals = ["N'IsEncrypted'", "N'OBJECT'", "N'VIEW DEFINITION'", "N'.'", "N'.sys.sp_executesql'"];
+    private static readonly HashSet<string> Literals = ["N'IsEncrypted'", "N'OBJECT'", "N'DATABASE'", "N'VIEW DEFINITION'", "N'.'", "N'.sys.sp_executesql'"];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
     [GeneratedRegex(@"^'[A-Z]{1,4}'$")]
@@ -249,6 +273,7 @@ internal static partial class ScriptPreflight
         Add(command, "@take", SqlDbType.Int, 0, Take(rowset, catalog));
         Row? row = null;
         var rows = new List<Row>();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             await using var reader = await command.ExecuteReaderAsync(token);
@@ -261,7 +286,7 @@ internal static partial class ScriptPreflight
         {
             return new(null, ScriptingErrors.Create(catalog, "NOT_FOUND", subject), []);
         }
-        return Decide(catalog, target, verb, subject, database, row, rowset, rows);
+        return Decide(catalog, target, verb, subject, database, row, rowset, rows, waited: watch.Elapsed - (delay ?? TimeSpan.Zero) >= LockTimeout);
     }
 
     private static Row Read(SqlDataReader reader)
@@ -322,8 +347,10 @@ internal static partial class ScriptPreflight
         _ => ""
     };
 
+    /// <param name="waited">The statement took the whole lock timeout: a metadata function that answered 0 then was
+    /// blocked by another session's schema lock, not refused.</param>
     private static PreflightResult Decide(ScriptingCatalog catalog, ObjectRefDto target, ScriptVerbRow verb, ScriptSubject subject, string database, Row? row,
-        RowsetKind rowset = RowsetKind.None, IReadOnlyList<Row>? rows = null)
+        RowsetKind rowset = RowsetKind.None, IReadOnlyList<Row>? rows = null, bool waited = false)
     {
         if (row is null) return new(null, ScriptingErrors.Create(catalog, "NOT_FOUND", subject), []);
         var kind = target.Kind;
@@ -355,8 +382,11 @@ internal static partial class ScriptPreflight
             if (bytes > MaxDefinitionBytes) return new(null, ScriptingErrors.Create(catalog, "TOO_LARGE", subject, "definition"), []);
         }
         var warnings = new List<string>();
-        if (kind == "table" && resolved.CanViewDefinition == false)
+        if (kind == "table" && verb.Class == VerbClass.Ddl && resolved.CanViewDefinition == false)
+        {
+            if (waited) return new(null, ScriptingErrors.Create(catalog, "BLOCKED", subject), []);
             warnings.Add("You do not have VIEW DEFINITION permission on " + subject.Display + "; parts you cannot see (for example indexes or constraints) may be missing from the script.");
+        }
         return new(resolved, null, warnings);
     }
 

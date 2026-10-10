@@ -83,6 +83,10 @@ describe('Script As in Object Explorer\'s context menu', () => {
     const state = stateFor('win32', { kind: 'table' })
     expect(scripted(resolveMenu('explorer.context', { platform: 'win32', state, target: { explorerNode: 'background' }, commands: { isEnabled: () => true, isToggled: () => false }, keybindings: { lookup: () => undefined } }))).toBe(false)
     for (const target of [{ kind: 'folder' }, { kind: 'server' }, { kind: 'column', parentKind: 'table' }, { kind: 'certificate' }, { kind: 'table', subtype: 'droppedLedger' }] as const) expect(scripted(resolveFor('win32', target)), JSON.stringify(target)).toBe(false)
+    // System Stored Procedures marks sys.xp_msver 'extended' and an RF procedure 'replicationFilter' (a live .NET check pins
+    // the tree's subtypes); those are deferred, while the folder's other rows ('system') script.
+    for (const subtype of ['extended', 'replicationFilter'] as const) expect(scripted(resolveFor('win32', { kind: 'procedure', subtype })), subtype).toBe(false)
+    expect(scripted(resolveFor('win32', { kind: 'procedure', subtype: 'system' }))).toBe(true)
   })
   it('never opens a disabled verb submenu by hover, →, Enter, a mnemonic or a click, while enabled ones open', () => {
     const { timers, advance } = manualTimers()

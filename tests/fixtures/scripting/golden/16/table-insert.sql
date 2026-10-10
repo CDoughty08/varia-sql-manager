@@ -12,7 +12,7 @@ INSERT INTO [dbo].[KitchenSink]
      VALUES
            (<Code, nchar(8),>
            ,<Name, [dbo].[Name],>
-           ,<Price, decimal(10_2),>
+           ,<Price, decimal(10,2),>
            ,<Quantity, int,>
            ,<CustomerId, int,>
            ,<ReferrerId, int,>

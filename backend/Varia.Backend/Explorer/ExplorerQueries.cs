@@ -376,8 +376,9 @@ internal static class ExplorerQueries
             "p.type IN ('P', 'PC') AND p.is_ms_shipped = 0 AND ep.major_id IS NULL", "p.type, p.create_date, own.name",
             row => SchemaObject(row, "procedure", ExplorerLabels.ProcedureSubtype(row.Code(0)), detail: Owner(row.S(2)), created: row.D(1)), Full, owner: true),
         SchemaList("systemProcedures", "sys.all_objects AS p JOIN sys.schemas AS s ON s.schema_id = p.schema_id " + Tools("p"), "p",
-            "p.type IN ('P', 'PC', 'X', 'RF') AND (p.is_ms_shipped = 1 OR ep.major_id IS NOT NULL)", "p.create_date",
-            row => SchemaObject(row, "procedure", "system", created: row.D(0)), SchemaNamed),
+            "p.type IN ('P', 'PC', 'X', 'RF') AND (p.is_ms_shipped = 1 OR ep.major_id IS NOT NULL)", "p.type, p.create_date",
+            // Extended and replication-filter procedures keep their own subtype, which Script As defers.
+            row => SchemaObject(row, "procedure", row.Code(0) is "X" or "RF" ? ExplorerLabels.ProcedureSubtype(row.Code(0)) : "system", created: row.D(1)), SchemaNamed),
         Functions("tableValuedFunctions", "'IF', 'TF', 'FT'", Full),
         Functions("scalarFunctions", "'FN', 'FS'", Full),
         Functions("aggregateFunctions", "'AF'", SchemaNamed),

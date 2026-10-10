@@ -400,7 +400,74 @@ internal static partial class ScriptingLiveChecks
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json); }
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
+        await SchemaLockAsync(check, service, client, json, Schema("table", "dbo", "Victim"), db);
+        await DefinitionsAsync(check, client, Schema);
         await GoldenAsync(check, service, client, scratch, sql, live, json);
+    }
+
+    /// <summary>Another session's uncommitted TRUNCATE holds a schema-modification lock that sys.tables does not wait for
+    /// but object-level metadata functions and SMO do. The preflight decides VIEW DEFINITION without waiting when the
+    /// database grants it, and the command tracker's attention ends SMO's blocked statement on a CANCEL.</summary>
+    private static async Task SchemaLockAsync(Action<bool, string> check, SqlService service, Client client, JsonSerializerOptions json, ObjectRefDto table, string db)
+    {
+        var holder = Guid.NewGuid().ToString();
+        var truncate = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
+            new QueryArgs(client.ConnectionId, holder, db, "BEGIN TRANSACTION; TRUNCATE TABLE " + table.Schema + "." + table.Name + ";", Guid.NewGuid().ToString(), 10, 30), json), json);
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var select = await client.Script(table, "select");
+            check(truncate.Status == "completed" && Ok(select) && select.Warnings.Count == 0 && watch.ElapsedMilliseconds < 3000,
+                "behind another session's TRUNCATE the SELECT template answers at once, without a VIEW DEFINITION warning (" + watch.ElapsedMilliseconds + " ms)");
+            watch.Restart();
+            var create = await client.Script(table, "create");
+            check(create.Error is { Code: "BLOCKED" } && watch.ElapsedMilliseconds is >= 9000 and < 15_000,
+                "behind another session's TRUNCATE a CREATE is BLOCKED after one 10 s lock timeout (" + watch.ElapsedMilliseconds + " ms, " + create.Error?.Code + ")");
+            // The preflight passes at once, so after 2 s SMO's own statement is the one waiting on the lock.
+            using var context = new RequestContext(4, "scripting.script", RequestLane.Metadata, 0);
+            var pending = client.Script(table, "create", context: context);
+            await Task.Delay(2000);
+            context.Cancel(CancelReason.User);
+            var cancelled = Stopwatch.StartNew();
+            var stopped = await Stops(pending);
+            var released = SpinWait.SpinUntil(() => service.Scripting.ActiveJobs == 0, 1500);
+            check(stopped && released, "a CANCEL while SMO waits on a lock ends SMO's statement and frees the job's gates within 1.5 s (" + cancelled.ElapsedMilliseconds + " ms)");
+        }
+        finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json); }
+    }
+
+    /// <summary>Script triggers and Generate script for dependent objects make SMO read definitions besides the target's:
+    /// an encrypted or oversized one is refused before SMO loads it, naming that object and the option (spec F).</summary>
+    private static async Task DefinitionsAsync(Action<bool, string> check, Client client, Func<string, string, string, ObjectRefDto> schema)
+    {
+        var triggers = client.Options with { ScriptTriggers = true };
+        var dependents = client.Options with { GenerateDependentObjects = true };
+        var secretTrigger = await client.Script(schema("table", "dbo", "SecretTrigger"), "create", triggers);
+        check(secretTrigger.Error is { Code: "ENCRYPTED", Retryable: false } && secretTrigger.Error.Message == "Trigger TR_SecretTrigger of dbo.SecretTrigger is encrypted (WITH ENCRYPTION), "
+            + "so dbo.SecretTrigger cannot be scripted with Script triggers on. Turn it off in Tools › Options › Scripting and try again.",
+            "an encrypted trigger is named when Script triggers brings it in: " + secretTrigger.Error?.Message);
+        check(Ok(await client.Script(schema("table", "dbo", "SecretTrigger"), "create")) && Ok(await client.Script(schema("table", "dbo", "SecretTrigger"), "drop", triggers)),
+            "the table scripts without Script triggers, and its DROP needs no trigger text");
+        var secretView = await client.Script(schema("view", "dbo", "vSecret"), "create", dependents);
+        check(secretView.Error is { Code: "ENCRYPTED" } && secretView.Error.Message == "dbo.fn_Secret is encrypted (WITH ENCRYPTION), so dbo.vSecret cannot be scripted with "
+            + "Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.", "an encrypted dependent function is named: " + secretView.Error?.Message);
+        var allocated = GC.GetTotalAllocatedBytes(true);
+        var largeTrigger = await client.Script(schema("table", "dbo", "LargeTrigger"), "create", triggers);
+        var largeView = await client.Script(schema("view", "dbo", "vLarge"), "create", dependents);
+        allocated = GC.GetTotalAllocatedBytes(true) - allocated;
+        check(largeTrigger.Error is { Code: "TOO_LARGE" } && largeTrigger.Error.Message == "The definition of trigger TR_LargeTrigger of dbo.LargeTrigger is larger than 8 MB, which Varia "
+            + "cannot open. Turn off Script triggers in Tools › Options › Scripting and try again." && largeView.Error is { Code: "TOO_LARGE" }
+            && largeView.Error.Message == "The definition of dbo.fn_Large is larger than 8 MB, which Varia cannot open. Turn off Generate script for dependent objects in Tools › Options › "
+            + "Scripting and try again." && allocated < 48_000_000,
+            "a trigger or dependent definition over 8,000,000 bytes is refused before SMO loads it (" + allocated / 1_000_000 + " MB allocated): " + largeTrigger.Error?.Message + " " + largeView.Error?.Message);
+        check(Ok(await client.Script(schema("view", "dbo", "vLarge"), "create")), "the view over the large function scripts on its own");
+
+        // A stored line the query window reads as GO would run the rest of the definition as a batch of its own.
+        var split = await client.Script(schema("procedure", "dbo", "usp_go"), "create");
+        check(Ok(split) && split.Warnings.SequenceEqual([SmoScriptRunner.SplitWarning]) && split.Text!.Contains("\r\nGO\r\nDROP TABLE dbo.Victim", StringComparison.Ordinal),
+            "a definition with a GO line scripts as stored, with a warning that running it would split it: " + string.Join(" ", split.Warnings));
+        var drop = await client.Script(schema("procedure", "dbo", "usp_go"), "drop");
+        check(Ok(drop) && drop.Warnings.Count == 0, "its DROP carries no warning");
     }
 
     /// <summary>A module's stored text after its name; for a view, after its AS, since SMO writes a view's header up to it.</summary>

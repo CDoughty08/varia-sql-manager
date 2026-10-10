@@ -189,6 +189,7 @@
     "16/table-insert-no-schema-qualify.sql": "varia",
     "16/table-insert.sql": "varia",
     "16/table-ledger-create.sql": "varia",
+    "16/table-ledger-history-select.sql": "varia",
     "16/table-ledger-insert.sql": "varia",
     "16/table-ledger-select.sql": "varia",
     "16/table-orders-create.sql": "varia",

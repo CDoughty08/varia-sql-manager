@@ -300,6 +300,13 @@ internal static class ScriptingChecks
         var crafted = new[] { Header("a*/b"), Header("x/*y"), Header("x*/ DROP TABLE t /*"), Header("line\r\nbreak"), Header("a\u2028b"), Header("Orders") + " DROP TABLE t",
             "SET ANSI_NULLS ON\n" + Header("x******/\nDROP TABLE t--"), Header("x" + date + "\nDROP TABLE t--"), Header("Script Date: x"), "/****** Object:  Table [dbo].[x" };
         check(crafted.All(text => !HeaderGuard.Safe(text)), "headers a name ends early, opens a comment in, or splits over lines fail the guard");
+        var commented = Header("p") + "\r\nCREATE PROC p AS -- Script Date: kept from 2019\r\nSELECT 1 /* Script Date: */";
+        check(HeaderGuard.Safe(commented) && HeaderGuard.Dated(commented) == 1 && HeaderGuard.Dated("CREATE PROC p AS -- Script Date: x") == 0
+            && HeaderGuard.Dated("x\r" + Header("a") + "\u2028y") == 1, "a module's own mention of Script Date: is not a header, so it neither fails the guard nor counts");
+        check(SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\r\nGO\r\nDROP TABLE t") && SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\n:r other.sql")
+            && !SmoScriptRunner.Splits("CREATE PROC p AS SELECT N'\r\nGO\r\n' /*\nGO\n*/") && !SmoScriptRunner.Splits("CREATE TABLE [a\r\nGO\r\nb] (id int)"),
+            "a definition is flagged when the query window would split it at a GO or refuse a SQLCMD line, never for GO inside quotes, comments or names");
+        check(SmoScriptRunner.Hex("a\uD800") == "610000D8" && SmoScriptRunner.Hex("") == "", "names reach the definition check as UTF-16 hex, unpaired surrogates included");
         check(ScriptingErrors.UnpairedSurrogate("ab😀c") == -1 && ScriptingErrors.UnpairedSurrogate("a\uD800b") == 1 && ScriptingErrors.UnpairedSurrogate("ab\uDC00") == 2
             && ScriptingErrors.UnpairedSurrogate("\uD83D") == 0, "the surrogate scan finds unpaired halves only");
     }
@@ -323,6 +330,11 @@ internal static class ScriptingChecks
         check(Classify(new FailedOperationException("Script failed.", new UnsupportedVersionException("Ledger tables need SQL Server 2022.")), target: SqlServerVersion.Version150) is
             { Code: "NOT_SUPPORTED", Retryable: false, Message: "dbo.Orders cannot be scripted for SQL Server 2019: Ledger tables need SQL Server 2022." }
             && Classify(new UnsupportedFeatureException("x"))?.Code == "NOT_SUPPORTED", "SMO's version and feature refusals are NOT_SUPPORTED, naming the target");
+        check(Classify(new FailedOperationException("x", new DependentDefinitionException("ENCRYPTED", "dbo", "TR_\u202eA", "Orders", "Script triggers"))) is
+            { Code: "ENCRYPTED", Retryable: false, Message: "Trigger TR_⟨U+202E⟩A of dbo.Orders is encrypted (WITH ENCRYPTION), so dbo.Orders cannot be scripted with Script triggers on. Turn it off in Tools › Options › Scripting and try again." }
+            && Classify(new DependentDefinitionException("TOO_LARGE", "dbo", "fn_Rates", null, "Generate script for dependent objects")) is
+            { Code: "TOO_LARGE", Message: "The definition of dbo.fn_Rates is larger than 8 MB, which Varia cannot open. Turn off Generate script for dependent objects in Tools › Options › Scripting and try again." },
+            "a trigger or dependent definition SMO would read is refused naming that object and the option that brought it in");
         check(Classify(new PropertyCannotBeRetrievedException("Text"), encrypted: true)?.Code == "ENCRYPTED" && Classify(new PropertyCannotBeRetrievedException("Text"))?.Code == "NO_DEFINITION"
             && Classify(new PropertyCannotBeRetrievedException("Text"), serverTrigger: true)?.Message == "The definition of dbo.Orders is encrypted, or you do not have permission to view it.",
             "a definition SMO cannot read is ENCRYPTED or NO_DEFINITION");

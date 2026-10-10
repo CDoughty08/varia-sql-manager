@@ -4,8 +4,8 @@
 import { explorerStatics } from './explorer-tree.mjs'
 
 /**
- * What the stub serves below each connected server: Databases › AppData with Tables (dbo.Orders, and dbo.Slow, whose
- * scripts wait until cancelled), Views (dbo.OrderSummary), Programmability › Stored Procedures (dbo.ShipOrder, and
+ * What the stub serves below each connected server: Databases › AppData with Tables (dbo.Orders; dbo.Slow, whose
+ * scripts wait until cancelled; and dbo.Warned, whose scripts carry the backend's VIEW DEFINITION warning), Views (dbo.OrderSummary), Programmability › Stored Procedures (dbo.ShipOrder, and
  * dbo.Secret, which is encrypted), and Security › Logins (sa). A script is `-- <verb> <object>`.
  */
 export function scriptingStubData() {
@@ -13,6 +13,8 @@ export function scriptingStubData() {
 }
 /** B10's ENCRYPTED message for an object. */
 export const encryptedMessage = label => `${label} is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work.`
+/** The preflight's warning for a table the login may read but not see whole. */
+export const viewDefinitionWarning = label => `You do not have VIEW DEFINITION permission on ${label}; parts you cannot see (for example indexes or constraints) may be missing from the script.`
 
 /** Installs the stub; pass it to `application.evaluate` with `scriptingStubData()`. Runs in main, so it is self-contained. */
 export function installScriptingStub({ ipcMain }, { statics }) {
@@ -22,7 +24,7 @@ export function installScriptingStub({ ipcMain }, { statics }) {
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
     databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'svg:database')],
-    tables: owner => ['Orders', 'Slow'].map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'svg:table')),
+    tables: owner => ['Orders', 'Slow', 'Warned'].map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'svg:table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
     storedProcedures: owner => ['ShipOrder', 'Secret'].map(name => object({ kind: 'procedure', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'symbol-method', { subtype: 'sql' })),
     logins: () => [object({ kind: 'login', name: 'sa' }, 'sa', 'svg:login', { hasChildren: false })]
@@ -41,7 +43,8 @@ export function installScriptingStub({ ipcMain }, { statics }) {
       const cancelled = await new Promise(resolve => { stub.held.set(params.requestId, resolve) })
       if (cancelled) return { ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' }
     }
-    const result = { database: target.database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 }
+    const warnings = target.name === 'Warned' ? [`You do not have VIEW DEFINITION permission on ${label}; parts you cannot see (for example indexes or constraints) may be missing from the script.`] : []
+    const result = { database: target.database ?? 'master', warnings, commands: 1, elapsedMs: 1 }
     if (target.name === 'Secret' && ['create', 'alter', 'createOrAlter', 'dropAndCreate'].includes(params.verb)) {
       return ok({ ...result, error: { code: 'ENCRYPTED', message: `${label} is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work.`, retryable: false } })
     }

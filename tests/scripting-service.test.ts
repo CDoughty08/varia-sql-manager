@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ExplorerNode, VariaApi } from '../src/shared/contracts'
+import type { ApiResult, ExplorerNode, SqlFile, VariaApi } from '../src/shared/contracts'
 import type { ExplorerTarget, ObjectRef } from '../src/shared/explorer/refs'
 import type { NodeSubtype } from '../src/shared/explorer/catalog'
 import { kindSpecs } from '../src/shared/explorer/catalog'
@@ -285,6 +285,33 @@ describe('Script As commands', () => {
     expect(quickInput.getSnapshot().rows.map(row => row.item.label)).toEqual(['CREATE', 'ALTER', 'CREATE OR ALTER', 'DROP', 'DROP And CREATE', 'EXECUTE'].map(verb => `${verb} to Clipboard`))
     task.resolve()
     await busy
+  })
+  it('save a File… script that arrives during another file task once it ends, and two File… scripts one after the other', async () => {
+    const fixture = connected(), { api, scripting, files } = fixture
+    const dialogs: ReturnType<typeof deferred<ApiResult<SqlFile | null>>>[] = []
+    api.saveSqlFile.mockImplementation(() => { const dialog = deferred<ApiResult<SqlFile | null>>(); dialogs.push(dialog); return dialog.promise })
+    // An Open dialog (any file task) is up when the script arrives.
+    const task = deferred<void>(), busy = fixture.documents.runTask(() => task.promise)
+    const first = scripting.run('create', 'file', orders)
+    await vi.waitFor(() => expect(api.scriptObjects).toHaveBeenCalledOnce())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(api.saveSqlFile).not.toHaveBeenCalled()
+    task.resolve(); await busy
+    await vi.waitFor(() => expect(api.saveSqlFile).toHaveBeenCalledOnce())
+    expect(api.saveSqlFile.mock.calls[0][0]).toMatchObject({ name: 'dbo.Orders.sql', content: '-- create dbo.Orders', saveAs: true })
+    // A second File… script waits for the first Save dialog, then gets its own.
+    const second = scripting.run('drop', 'file', orders)
+    await vi.waitFor(() => expect(api.scriptObjects).toHaveBeenCalledTimes(2))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(api.saveSqlFile).toHaveBeenCalledOnce()
+    dialogs[0].resolve({ ok: true, value: { id: 'f1', name: 'dbo.Orders.sql', path: '/tmp/dbo.Orders.sql' } })
+    await first
+    await vi.waitFor(() => expect(api.saveSqlFile).toHaveBeenCalledTimes(2))
+    expect(api.saveSqlFile.mock.calls[1][0]).toMatchObject({ content: '-- drop dbo.Orders' })
+    dialogs[1].resolve({ ok: true, value: { id: 'f2', name: 'dbo.Orders.sql', path: '/tmp/dbo.Orders (2).sql' } })
+    await second
+    expect(files.getSnapshot().error).toBe('')
+    expect(scripting.getSnapshot().notice?.text).toBe('Saved dbo.Orders.sql.')
   })
   it('modify a T-SQL module as ALTER in a new query, but not a CLR one', async () => {
     const fixture = connected(), { commands, api, documents, model } = fixture

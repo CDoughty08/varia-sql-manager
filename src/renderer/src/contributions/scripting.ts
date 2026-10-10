@@ -38,7 +38,8 @@ export function scriptingContribution({ commands, scriptingOptions, scripting, e
       run: args => scripting.run('alter', 'newQuery', nodeOf(args))
     }),
     commands.register('explorer.cancelScripting', { run: () => scripting.cancelAll() }),
-    commands.register('preferences.options', { run: async () => { await scriptingOptions.load(); scriptingOptions.openDialog() } })
+    // A draft started from the defaults would replace the user's options on OK, so a failed read opens nothing.
+    commands.register('preferences.options', { run: async () => { if (await scriptingOptions.load()) scriptingOptions.openDialog() } })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

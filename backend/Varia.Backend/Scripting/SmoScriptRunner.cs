@@ -1,5 +1,8 @@
+using System.Data;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
 using Microsoft.SqlServer.Management.Sdk.Sfc;
@@ -55,6 +58,7 @@ internal sealed class SmoScriptRunner
         if (target.Kind == "credential") return Credential(target, verb, dto, max, warnings);
         var smo = Server();
         var urn = new Urn(UrnBuilder.Build(smo.Urn.Value, target.Kind, target.Row.Urn, target.Ref, target.ParentUrnType, target.Column));
+        if (SmoOptionsMapper.Passes(verb).Any(pass => pass != ScriptVerb.Drop)) CheckDefinitions(smo, urn, target, dto);
         if (verb == ScriptVerb.Alter)
         {
             // Without Touch, SMO writes nothing for ALTER (sqltoolsservice does the same).
@@ -63,10 +67,63 @@ internal sealed class SmoScriptRunner
         var text = Run(smo, urn, target, verb, dto, max, dto.IncludeHeaders, warnings);
         if (text is null)
         {
+            // SMO 181 writes no header when asked for none; one it writes anyway that fails the guard fails the job.
             text = Run(smo, urn, target, verb, dto, max, headers: false, warnings) ?? throw new InvalidOperationException("A script without headers failed the header guard.");
-            warnings.Add(HeaderGuard.Warning);
+            if (!warnings.Contains(HeaderGuard.Warning)) warnings.Add(HeaderGuard.Warning);
         }
         return text;
+    }
+
+    /// <summary>The preflight bounds the target's own definition; Script triggers and Generate script for dependent
+    /// objects make SMO read other modules too, which are bounded here before SMO runs (spec F: no definition over
+    /// 8,000,000 bytes reaches managed memory). The dependencies are SMO's own walk, which the scripter repeats.</summary>
+    private void CheckDefinitions(Server smo, Urn urn, ResolvedTarget target, ScriptingOptionsDto dto)
+    {
+        if (target.Ref.Database is not { } database || !dto.ScriptTriggers && !dto.GenerateDependentObjects) return;
+        var objects = new List<(string Schema, string Name, bool Triggers)>();
+        // A table's or view's triggers come with the object itself, not with one of its indexes or keys.
+        if (dto.ScriptTriggers && target.Kind is "table" or "view" && target.Ref is { Schema: { } schema, Name: { } name }) objects.Add((schema, name, true));
+        if (dto.GenerateDependentObjects)
+        {
+            var walker = new DependencyWalker(smo);
+            walker.DiscoveryProgress += (_, _) => token.ThrowIfCancellationRequested();
+            foreach (var node in walker.WalkDependencies(walker.DiscoverDependencies(new[] { urn }, DependencyType.Parents)))
+                if (node.Urn.GetAttribute("Schema") is { } s && node.Urn.GetAttribute("Name") is { } n && node.Urn.GetAttribute("Name", "Database") == database)
+                    objects.Add((s, n, dto.ScriptTriggers && node.Urn.Type is "Table" or "View"));
+        }
+        if (objects.Count == 0) return;
+        var list = new StringBuilder("<d>");
+        foreach (var (s, n, triggers) in objects) list.Append("<o s=\"").Append(Hex(s)).Append("\" n=\"").Append(Hex(n)).Append("\" t=\"").Append(triggers ? '1' : '0').Append("\"/>");
+        using var command = session.Connection.CreateCommand();
+        command.CommandTimeout = 30;
+        if (session.Cloud) command.CommandText = ScriptPreflight.DefinitionCheck;
+        else
+        {
+            command.CommandText = ScriptPreflight.DefinitionCall;
+            command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
+            command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = ScriptPreflight.DefinitionCheck });
+        }
+        command.Parameters.Add(new SqlParameter("@objects", SqlDbType.NVarChar, -1) { Value = list.Append("</d>").ToString() });
+        command.Parameters.Add(new SqlParameter("@max", SqlDbType.BigInt) { Value = ScriptPreflight.MaxDefinitionBytes });
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return;
+        var parent = reader.IsDBNull(2) ? null : reader.GetString(2);
+        throw new DependentDefinitionException(reader.GetBoolean(3) ? "ENCRYPTED" : "TOO_LARGE", reader.GetString(0), reader.GetString(1), parent,
+            parent is null ? "Generate script for dependent objects" : "Script triggers");
+    }
+
+    /// <summary>A name's UTF-16 code units as hex, unpaired surrogates included.</summary>
+    internal static string Hex(string name) => Convert.ToHexString(MemoryMarshal.AsBytes(name.AsSpan()));
+
+    /// <summary>A stored definition with a line the query window reads as GO (valid T-SQL, as a column alias) or as a
+    /// SQLCMD command: SSMS scripts it as is too, but whoever runs the script would run the rest as a batch of its own.</summary>
+    public const string SplitWarning = "A definition in this script has a line the query window reads as GO or as a SQLCMD command, so running the script "
+        + "would split that definition into separate batches. Review the script before running it.";
+
+    internal static bool Splits(string batch)
+    {
+        try { return SqlScript.Parse(batch).Count > 1; }
+        catch (RequestException) { return true; }
     }
 
     /// <summary>Kinds whose script lists child collections. Without prefetch SMO reads each column's and each index's
@@ -108,7 +165,6 @@ internal sealed class SmoScriptRunner
     private string? Run(Server smo, Urn urn, ResolvedTarget target, ScriptVerb verb, ScriptingOptionsDto dto, long max, bool headers, List<string> warnings)
     {
         var text = new StringBuilder();
-        var batches = 0;
         var first = true;
         foreach (var pass in SmoOptionsMapper.Passes(verb))
         {
@@ -120,22 +176,38 @@ internal sealed class SmoScriptRunner
             foreach (var warning in mapped.Warnings) if (!warnings.Contains(warning)) warnings.Add(warning);
             var scripter = new Scripter(smo) { Options = mapped.Options, PrefetchObjects = PrefetchKinds.Contains(target.Kind) };
             scripter.ScriptingProgress += (_, _) => token.ThrowIfCancellationRequested();
+            var batches = 0;
             foreach (var batch in scripter.EnumScript(new[] { urn }))
             {
                 token.ThrowIfCancellationRequested();
                 // SMO ends some scripts (Database ALTER) with an empty batch, which would frame as a lone GO.
                 if (string.IsNullOrWhiteSpace(batch)) continue;
-                if (headers && !HeaderGuard.Safe(batch)) return null;
+                // Without headers only a line SMO ends as a header is checked: a module's own comment is not one.
+                if (headers ? !HeaderGuard.Safe(batch) : HeaderGuard.Dated(batch) > 0 && !HeaderGuard.Safe(batch)) return null;
+                if (!warnings.Contains(SplitWarning) && Splits(batch)) warnings.Add(SplitWarning);
                 var framed = ScriptFormatter.Frame(batch, dto.DelimitStatements);
                 if (text.Length + framed.Length > max) throw new ScriptTooLargeException();
                 text.Append(framed);
                 batches++;
             }
+            // Each pass must write something: DROP And CREATE without its CREATE (a fixed role) is no script.
+            if (batches == 0) throw new EmptyScriptException();
         }
-        if (batches == 0) throw new EmptyScriptException();
         return text.ToString();
     }
 }
 
-/// <summary>SMO wrote no batch for the verb.</summary>
+/// <summary>SMO wrote no batch for the verb, or for one pass of DROP And CREATE.</summary>
 internal sealed class EmptyScriptException() : Exception("SMO produced no script.");
+
+/// <summary>A trigger or dependent object SMO would script with the target is encrypted or over the definition limit.</summary>
+/// <param name="parent">For a trigger, the table or view it is on (in <paramref name="schema"/>).</param>
+/// <param name="option">The scripting option that brought it in.</param>
+internal sealed class DependentDefinitionException(string code, string schema, string name, string? parent, string option) : Exception("A trigger or dependent object cannot be scripted.")
+{
+    public string Code { get; } = code;
+    public string Schema { get; } = schema;
+    public string Name { get; } = name;
+    public string? Parent { get; } = parent;
+    public string Option { get; } = option;
+}

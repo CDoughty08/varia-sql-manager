@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
-import { ScriptingOptionsStore } from '../src/main/scripting-options-store'
+import { ScriptingOptionsStore, unreadableScriptingOptions } from '../src/main/scripting-options-store'
 import { scriptLimits } from '../src/shared/scripting/catalog'
 import { defaultScriptingOptions, type ScriptingOptions } from '../src/shared/scripting/options'
 
@@ -90,5 +90,27 @@ describe('scripting options file', () => {
     await expect(store.save(defaultScriptingOptions)).rejects.toThrow()
     expect(await store.load()).toEqual({ options: changed })
     expect((await readdir(directory)).sort()).toEqual(['scripting-options.json'])
+  })
+  it('never replaces a file it cannot read, even after a failed load', async () => {
+    // Every read of a link to a folder fails, as it does for a file without read permission; a rename would replace the link.
+    await mkdir(join(directory, 'elsewhere'))
+    await symlink(join(directory, 'elsewhere'), path(), 'junction')
+    const store = new ScriptingOptionsStore(path())
+    await expect(store.load()).rejects.toThrow()
+    await expect(store.save(changed)).rejects.toThrow(unreadableScriptingOptions)
+    expect((await lstat(path())).isSymbolicLink()).toBe(true)
+    expect((await readdir(directory)).sort()).toEqual(['elsewhere', 'scripting-options.json'])
+    expect(await readdir(join(directory, 'elsewhere'))).toEqual([])
+  })
+  it('quarantines content a load would reject before a save replaces it', async () => {
+    const store = new ScriptingOptionsStore(path())
+    expect(await store.load()).toEqual({ options: defaultScriptingOptions })
+    // Changed by hand after the window read it.
+    await writeFile(path(), '{"version":1,')
+    expect(await store.save(changed)).toEqual(changed)
+    const [kept, ...rest] = (await readdir(directory)).filter(name => name !== 'scripting-options.json')
+    expect(rest).toEqual([])
+    expect(await readFile(join(directory, kept), 'utf8')).toBe('{"version":1,')
+    expect(JSON.parse(await readFile(path(), 'utf8'))).toEqual({ version: 1, options: changed })
   })
 })

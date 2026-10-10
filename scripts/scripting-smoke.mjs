@@ -1,9 +1,9 @@
-import { _electron as electron, expect } from '@playwright/test'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { encryptedMessage, installScriptingStub, scriptingStubData } from './fixtures/scripting-stub.mjs'
+import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -107,6 +107,15 @@ async function scriptFrom(path, ...items) {
     if (index === items.length - 1) await expect(openMenus()).toHaveCount(0)
   }
 }
+/** Whether every status bar segment lies within the bar (none wraps to a second line), whether the page overflows, and
+ *  whether the scripting text is cut with an ellipsis. */
+const statusLayout = () => page.evaluate(() => {
+  const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect(), text = bar.querySelector('.status-scripting-text')
+  return {
+    fits: [...bar.children].every(child => { const part = child.getBoundingClientRect(); return part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 && part.left >= box.left - 0.5 && part.right <= box.right + 0.5 }),
+    overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: !!text && text.scrollWidth > text.clientWidth
+  }
+})
 /** Whether every open menu lies inside the window, and whether the page itself overflows. */
 const menusInside = () => page.evaluate(() => ({
   inside: [...document.querySelectorAll('.menu')].every(menu => { const box = menu.getBoundingClientRect(); return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight }),
@@ -140,7 +149,12 @@ try {
   expect(await disabledRows()).toEqual(['Script for database engine edition', 'Script for database engine type', 'Script for server version'])
   await expect(option('Script for server version')).toHaveValue('160')
   expect(await weight('Script USE <database>')).toBe('400')
-  console.log('Scripting checks: Alt+T, O opens Tools › Options on the Scripting page, with the version rows greyed.')
+  // A greyed row cannot take focus; pressing its label still shows its description (Playwright counts a disabled
+  // control's label as disabled, so the press is forced).
+  await dialog().locator('label', { hasText: 'Script for server version' }).click({ force: true })
+  await expect(dialog().locator('.options-description strong')).toHaveText('Script for server version')
+  await option('Delimit individual statements').focus()
+  console.log('Scripting checks: Alt+T, O opens Tools › Options on the Scripting page, with the version rows greyed and their descriptions a click away.')
 
   // 2. A changed value is bold and its description shows; Reset to Defaults restores the draft only, and Escape discards it.
   await option('Script USE <database>').selectOption('false')
@@ -289,18 +303,32 @@ try {
   await expect(scriptStatus()).toContainText('Scripting dbo.Slow…')
   const slow = (await stubCalls('scripting.script')).at(-1)
   expect(slow.targets[0].name).toBe('Slow')
-  await scriptStatus().getByRole('button', { name: 'Cancel scripting', exact: true }).click()
+  // From the keyboard: the button goes with its request, and focus returns to the tree it came from, not to the page.
+  await expect(explorerTree(page)).toBeFocused()
+  await scriptStatus().getByRole('button', { name: 'Cancel scripting', exact: true }).focus()
+  await page.keyboard.press('Enter')
   await expect.poll(stubCancels).toEqual([slow.requestId])
   await expect(scriptStatus()).toHaveText('Scripting cancelled.')
+  await expect(explorerTree(page)).toBeFocused()
   await expect(tabs()).toHaveCount(opened)
   await expect(commandBanner()).toHaveCount(0)
   expect(failures).toEqual([])
-  console.log('Scripting checks: a slow script shows in the status bar, and Cancel cancels it in main with nothing opened.')
+  console.log('Scripting checks: a slow script shows in the status bar, and Cancel from the keyboard cancels it in main, opens nothing, and returns focus to the tree.')
 
   // 10. 1024×768 (Windows CI's display): the dialog and Script As's nested menus fit inside the window, and the dialog's
   // list scrolls; screenshots in Dark and Light.
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1024, 768) })
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
+  // A long warning is cut in the middle of the status bar; the other segments keep their one line, and the page never
+  // scrolls. Enter on the notice shows the whole warning in the banner. (Before any new query opens here: its editor
+  // takes focus on a later frame, which would close a context menu.)
+  await scriptFrom(['server-a', 'Databases', 'AppData', 'Tables', 'dbo.Warned'], 'Script Table as', 'CREATE To', 'Clipboard')
+  await expect(scriptStatus()).toHaveText('Scripted dbo.Warned with a warning: ' + viewDefinitionWarning('dbo.Warned'))
+  expect(await statusLayout()).toEqual({ fits: true, overflow: false, cut: true })
+  await scriptStatus().getByRole('button').focus()
+  await page.keyboard.press('Enter')
+  await expect(commandBanner()).toHaveText(viewDefinitionWarning('dbo.Warned'))
+  await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
   // A script's new query opens past the end of a full tab strip, which scrolls to show its tab.
   // From the editor, so New Query does not defer focus to a frame that a hidden window only renders for the screenshot.
   await textbox().focus()
@@ -341,7 +369,7 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'scripting-light.png') })
   for (let presses = 0; presses < 3; presses++) await page.keyboard.press('Escape')
   await expect(openMenus()).toHaveCount(0)
-  console.log('Scripting checks: at 1024×768 a new script\'s tab scrolls into view, the dialog and the nested Script menus fit, the dialog\'s list scrolls; screenshots in Dark and Light.')
+  console.log('Scripting checks: at 1024×768 a new script\'s tab scrolls into view, a long warning stays on the status bar\'s one line, the dialog and the nested Script menus fit, the dialog\'s list scrolls; screenshots in Dark and Light.')
 
   // 11. The options persist across a restart; an invalid file is set aside with a warning and the defaults are used.
   await close()

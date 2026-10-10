@@ -91,8 +91,12 @@ internal static class ScriptingTemplateChecks
         // Names that would close a placeholder, split it, or start a new line become _; quoted names keep every character.
         var crafted = new[] { C("a]b"), C("x<y>,z" + NL + "GO" + (char)0x2028 + (char)0x85, new TypeRow("t,>", "s<", true)) };
         check(DmlTemplates.Insert(obj, crafted, true) == Lines("INSERT INTO [dbo].[T]", "           ([a]]b]", "           ,[x<y>,z" + NL + "GO" + (char)0x2028 + (char)0x85 + "])", "     VALUES",
-            "           (<a]b, int,>", "           ,<x_y__z" + new string('_', NL.Length) + "GO__, [s_].[t__],>)") && DmlTemplates.Placeholder("a\tb\u007f", "c,d") == "<a_b_, c_d,>",
-            "placeholders replace <, >, commas, controls and line separators with _, and identifiers stay quoted");
+            "           (<a]b, int,>", "           ,<x_y__z" + new string('_', NL.Length) + "GO__, [s_].[t__],>)") && DmlTemplates.Placeholder("a\tb\u007f", new TypeRow("c,d", "s", true), true) == "<a_b_, [s].[c_d],>"
+            && DmlTemplates.Placeholder("p", new TypeRow("xml", "sys", XmlSchema: "s>", XmlCollection: "x,y"), true) == "<p, xml ([s_].[x_y]),>",
+            "placeholders replace <, >, commas, controls and line separators in names with _, and identifiers stay quoted");
+        check(DmlTemplates.Placeholder("Price", T("decimal", 9, 10, 2), true) == "<Price, decimal(10,2),>" && DmlTemplates.Placeholder("@r", T("numeric", 5, 5, 0), true) == "<@r, numeric(5,0),>"
+            && DmlTemplates.Update(obj, [C("Price", T("decimal", 9, 10, 2))], true) == Lines("UPDATE [dbo].[T]", "   SET [Price] = <Price, decimal(10,2),>", " WHERE <Search Conditions,,>"),
+            "system type text in a placeholder keeps its comma, as SSMS writes decimal(10,2)");
         check(DmlTemplates.Insert(DmlTemplates.Object("dbo", "T", false), [C("n", new TypeRow("Name", "dbo", true, 100))], false) == Lines("INSERT INTO [T]", "           ([n])", "     VALUES",
             "           (<n, [Name],>)"), "with option 9 off, neither the object nor user types are schema-qualified");
     }

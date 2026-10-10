@@ -166,14 +166,18 @@ const kindData: { readonly [K in NodeKind]?: Data | typeof later } = {
   partitionFunction: plain('partitionFunction', 'PartitionFunction', 'databaseObject'),
   searchPropertyList: plain('searchPropertyList', 'SearchPropertyList', 'databaseObject'),
   planGuide: plain('planGuide', 'PlanGuide', 'databaseObject'),
-  table: { title: 'table', urn: 'Table', preflight: 'table', verbs: verbRow([...ddl, ...dml], ['alter', 'createOrAlter', 'execute']), subtypeVerbs: { droppedLedger: later } },
+  table: {
+    title: 'table', urn: 'Table', preflight: 'table', verbs: verbRow([...ddl, ...dml], ['alter', 'createOrAlter', 'execute']),
+    // SMO writes nothing for a ledger table's history table, which SQL Server creates with the ledger table.
+    subtypeVerbs: { ledgerHistory: verbRow(dml, [...moduleVerbs, 'execute']), droppedLedger: later }
+  },
   view: {
     title: 'view', urn: 'View', preflight: 'module', objectTypes: ['V'], verbs: verbRow([...moduleVerbs, ...dml], ['execute']),
     subtypeVerbs: { ledger: verbRow(['create', 'select'], ['alter', 'createOrAlter', 'drop', 'dropAndCreate', 'insert', 'update', 'delete', 'execute']), droppedLedger: later }
   },
   synonym: plain('synonym', 'Synonym', 'schemaObject'),
   procedure: {
-    // The System Stored Procedures folder lists extended (X) and replication-filter (RF) procedures as `system`.
+    // System Stored Procedures lists extended (X) and replication-filter (RF) procedures under their own, deferred subtypes.
     title: 'procedure', urn: 'StoredProcedure', preflight: 'module', objectTypes: ['P', 'PC', 'X', 'RF'], verbs: verbRow([...moduleVerbs, 'execute']),
     subtypeVerbs: { extended: later, replicationFilter: later }, modifiable: ['sql']
   },

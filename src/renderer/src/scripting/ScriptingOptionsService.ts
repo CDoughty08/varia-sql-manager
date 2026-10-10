@@ -21,7 +21,7 @@ const errorText = (error: unknown) => error instanceof Error && error.message ? 
 /** Tools › Options › Scripting: main stores the options, and this holds the copy requests use and whether the dialog is open. */
 export class ScriptingOptionsService extends SnapshotStore<ScriptingOptionsSnapshot> implements Disposable {
   private readonly dialogStore = new FlagStore(false)
-  private loading?: Promise<void>
+  private loading?: Promise<boolean>
   private saved = false
   private disposed = false
   constructor(private readonly api: ScriptingOptionsApi, private readonly report: (message: string) => void) {
@@ -30,10 +30,16 @@ export class ScriptingOptionsService extends SnapshotStore<ScriptingOptionsSnaps
   get dialog(): ExternalStore<boolean> { return this.dialogStore }
   openDialog(): void { this.dialogStore.set(true) }
   closeDialog(): void { this.dialogStore.set(false) }
-  /** Reads main's options once; later calls wait for that read. A failure keeps the defaults and is reported. */
-  load(): Promise<void> {
-    this.loading ??= this.read()
-    return this.loading
+  /**
+   * Reads main's options; later calls share a read that succeeded or is in flight, and the next call after a failure
+   * reads again. Resolves to whether the stored options are in: a failure keeps the defaults and is reported.
+   */
+  load(): Promise<boolean> {
+    const pending = this.loading ??= this.read()
+    return pending.then(ok => {
+      if (!ok && this.loading === pending) this.loading = undefined
+      return ok
+    })
   }
   /** Stores a complete set through main, then publishes what main stored; throws main's error, leaving the snapshot as it was. */
   async save(next: ScriptingOptions): Promise<ScriptingOptions> {
@@ -48,7 +54,7 @@ export class ScriptingOptionsService extends SnapshotStore<ScriptingOptionsSnaps
     }
     return stored
   }
-  private async read(): Promise<void> {
+  private async read(): Promise<boolean> {
     let options: ScriptingOptions | undefined, warning: string | undefined, failure: string | undefined
     try {
       const result = await this.api.getScriptingOptions()
@@ -60,11 +66,12 @@ export class ScriptingOptionsService extends SnapshotStore<ScriptingOptionsSnaps
         warning = typeof result.value.warning === 'string' ? result.value.warning : undefined
       }
     } catch (error) { failure = errorText(error) }
-    if (this.disposed) return
+    if (this.disposed) return false
     // Options saved while the read was in flight are newer than what it returns.
     this.publish({ options: this.saved || !options ? this.getSnapshot().options : options, loaded: true, ...(warning ? { warning } : {}) })
     if (failure) this.report(`Scripting options could not be loaded, so the defaults are used: ${failure}`)
     else if (warning) this.report(warning)
+    return !failure
   }
   dispose(): void {
     this.disposed = true

@@ -14,10 +14,13 @@ internal sealed record TypeRow(string Name, string? Schema = null, bool UserDefi
 /// their quoted name, lengths as declared, everything else by the system type's name.</summary>
 internal static class SqlTypeText
 {
-    public static string ForTemplate(TypeRow type, bool schemaQualify)
+    /// <param name="names">Applied to the quoted names in the text (a user type's, an XML schema collection's), never to
+    /// the system type text the catalog's integers build.</param>
+    public static string ForTemplate(TypeRow type, bool schemaQualify, Func<string, string>? names = null)
     {
+        string Named(string text) => names is null ? text : names(text);
         if (type.Cursor) return "cursor";
-        if (type.UserDefined) return schemaQualify && type.Schema is { } schema ? ScriptFormatter.Quote(schema) + "." + ScriptFormatter.Quote(type.Name) : ScriptFormatter.Quote(type.Name);
+        if (type.UserDefined) return Named(schemaQualify && type.Schema is { } schema ? ScriptFormatter.Quote(schema) + "." + ScriptFormatter.Quote(type.Name) : ScriptFormatter.Quote(type.Name));
         var name = type.Name;
         return name switch
         {
@@ -25,7 +28,7 @@ internal static class SqlTypeText
             "nchar" or "nvarchar" => name + "(" + (type.MaxLength == -1 ? "max" : Number(type.MaxLength / 2)) + ")",
             "decimal" or "numeric" => name + "(" + Number(type.Precision) + "," + Number(type.Scale) + ")",
             "time" or "datetime2" or "datetimeoffset" => name + "(" + Number(type.Scale) + ")",
-            "xml" when type.XmlCollection is { } collection => "xml (" + ScriptFormatter.Quote(type.XmlSchema ?? "dbo") + "." + ScriptFormatter.Quote(collection) + ")",
+            "xml" when type.XmlCollection is { } collection => "xml (" + Named(ScriptFormatter.Quote(type.XmlSchema ?? "dbo") + "." + ScriptFormatter.Quote(collection)) + ")",
             "vector" when type.VectorDimensions is { } dimensions => "vector(" + Number(dimensions) + ")",
             _ => name
         };

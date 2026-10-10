@@ -3,19 +3,19 @@ namespace Varia.Backend.Scripting;
 /// <summary>SMO writes "/****** Object:  Table [dbo].[T]    Script Date: … ******/" with names unescaped, so a name
 /// containing */ could end the comment early and run the rest of the name as SQL; one with a line break could also move
 /// SMO's own ending onto a line of its own, behind a -- comment the name supplied. A header passes only when it is one
-/// line ending in ******/, with no other */ and no /* inside, and every "Script Date:" in the text belongs to exactly
-/// one such line. Otherwise the target is scripted again without headers (spec C7). SMO 181 already writes "?" for
-/// a name containing */; the guard does not rely on it.</summary>
+/// line ending in ******/, with no other */ and no /* inside, and every line that ends as SMO ends a header ("Script
+/// Date:" … "******/") is such a line. Otherwise the target is scripted again without headers (spec C7). SMO 181 already
+/// writes "?" for a name containing */; the guard does not rely on it.</summary>
 internal static class HeaderGuard
 {
     public const string Opening = "/****** Object:";
     private const string Closing = "******/";
     private const string Date = "Script Date:";
-    public const string Warning = "Descriptive headers were left out because an object name contains /*, */ or a line break.";
+    public const string Warning = "Descriptive headers were left out because an object name or definition would break them (it contains /*, */ or a line break).";
 
     public static bool Safe(string text)
     {
-        var dated = 0;
+        var headers = 0;
         for (var start = 0; start < text.Length;)
         {
             var at = text.IndexOf(Opening, start, StringComparison.Ordinal);
@@ -27,10 +27,24 @@ internal static class HeaderGuard
             var line = text.AsSpan(at, (end < 0 ? text.Length : end) - at);
             if (!line.EndsWith(Closing) || line.IndexOf("*/") != line.Length - 2 || line[2..].IndexOf("/*") >= 0 || line.IndexOfAny('\u2028', '\u2029') >= 0
                 || Count(line, Date) != 1) return false;
-            dated++;
+            headers++;
             start = at + line.Length;
         }
-        return Count(text, Date) == dated;
+        // A module's own comment may mention "Script Date:"; only a line ending as SMO ends a header must be one.
+        return Dated(text) == headers;
+    }
+
+    /// <summary>Lines ending as SMO ends a header: "Script Date:" followed, at the end of the line, by ******/. A lone CR
+    /// or a line separator ends a line too.</summary>
+    public static int Dated(string text)
+    {
+        var count = 0;
+        foreach (var range in text.AsSpan().SplitAny("\r\n\u2028\u2029"))
+        {
+            var line = text.AsSpan(range);
+            if (line.EndsWith(Closing) && line.IndexOf(Date) >= 0) count++;
+        }
+        return count;
     }
 
     private static int Count(ReadOnlySpan<char> text, string value)

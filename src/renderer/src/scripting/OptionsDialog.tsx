@@ -53,7 +53,8 @@ export default function OptionsDialog() {
       <div className="options-list" role="group" aria-label="Scripting">
         {optionCategories(draft).map(category => <div key={category.group} role="group" aria-labelledby={`scripting-group-${category.group}`}>
           <div className="options-category" id={`scripting-group-${category.group}`}>{category.label}</div>
-          {category.rows.map(row => <div key={row.key} className="options-row" data-focused={row.key === focused || undefined}>
+          {/* A greyed row cannot take focus, so pressing it (or its label) shows its description, as selecting one does in SSMS. */}
+          {category.rows.map(row => <div key={row.key} className="options-row" data-focused={row.key === focused || undefined} onPointerDown={() => setFocused(row.key)}>
             <label htmlFor={rowId(row.key)} title={row.label}>{row.label}</label>
             <select id={rowId(row.key)} value={row.value} disabled={row.disabled} data-changed={row.changed || undefined} autoFocus={row.key === 'delimitStatements'}
               aria-description={optionDescription(row.key).description} onFocus={() => setFocused(row.key)}

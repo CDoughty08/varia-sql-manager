@@ -93,3 +93,30 @@ IF CONVERT(int, SERVERPROPERTY('ProductMajorVersion')) >= 16
     EXEC (N'CREATE TABLE dbo.LedgerNamed (Id int NOT NULL CONSTRAINT PK_LedgerNamed PRIMARY KEY, Amount money NULL)
     WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.LedgerNamed_History), LEDGER = ON (LEDGER_VIEW = dbo.LedgerNamed_Ledger));');
 GO
+-- Definitions SMO reads besides the target's own: with Script triggers, an encrypted trigger and one just over
+-- 8,000,000 bytes; with Generate script for dependent objects, views over an encrypted function and one just over
+-- 8,000,000 bytes. The definition check refuses each before SMO loads it.
+CREATE TABLE dbo.SecretTrigger (id int NULL);
+GO
+CREATE TRIGGER dbo.TR_SecretTrigger ON dbo.SecretTrigger WITH ENCRYPTION AFTER INSERT AS SET NOCOUNT ON;
+GO
+CREATE TABLE dbo.LargeTrigger (id int NULL);
+DECLARE @sql nvarchar(max) = N'CREATE TRIGGER dbo.TR_LargeTrigger ON dbo.LargeTrigger AFTER INSERT AS SET NOCOUNT ON;' + NCHAR(10)
+    + REPLICATE(CONVERT(nvarchar(max), N'-'), 3999925) + NCHAR(10);
+EXEC (@sql);
+GO
+CREATE FUNCTION dbo.fn_Secret () RETURNS TABLE WITH ENCRYPTION AS RETURN SELECT 1 AS One;
+GO
+CREATE VIEW dbo.vSecret AS SELECT One FROM dbo.fn_Secret();
+GO
+DECLARE @sql nvarchar(max) = N'CREATE FUNCTION dbo.fn_Large () RETURNS TABLE AS RETURN SELECT 1 AS One' + NCHAR(10) + N'/*'
+    + REPLICATE(CONVERT(nvarchar(max), N'-'), 3999925) + N'*/' + NCHAR(10);
+EXEC (@sql);
+GO
+CREATE VIEW dbo.vLarge AS SELECT One FROM dbo.fn_Large();
+GO
+-- A stored definition with a line the query window reads as GO (SQL Server reads it as a column alias), so running a
+-- script of it would run its DROP TABLE as a batch of its own.
+DECLARE @sql nvarchar(max) = N'CREATE PROCEDURE dbo.usp_go AS SELECT 1' + NCHAR(13) + NCHAR(10) + N'GO' + NCHAR(13) + NCHAR(10) + N'DROP TABLE dbo.Victim';
+EXEC (@sql);
+GO

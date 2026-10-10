@@ -54,6 +54,16 @@ describe('scripting options service', () => {
       expect(reports).toEqual([`Scripting options could not be loaded, so the defaults are used: ${reason}`])
     }
   })
+  it('reads again after a failed read, and says whether the stored options are in', async () => {
+    const { api, service, reports } = setup(async () => ({ ok: false, error: 'EACCES' }))
+    expect(await service.load()).toBe(false)
+    api.getScriptingOptions.mockResolvedValueOnce({ ok: true, value: { options: stored } })
+    expect(await service.load()).toBe(true)
+    expect(await service.load()).toBe(true)
+    expect(api.getScriptingOptions).toHaveBeenCalledTimes(2)
+    expect(service.getSnapshot()).toEqual({ options: stored, loaded: true })
+    expect(reports).toEqual(['Scripting options could not be loaded, so the defaults are used: EACCES'])
+  })
   it('publishes saved options only once main has stored them, and keeps the old ones when it cannot', async () => {
     const { api, service } = setup()
     await service.load()

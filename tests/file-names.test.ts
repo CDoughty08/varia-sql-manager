@@ -18,11 +18,28 @@ describe('sanitizeFileName', () => {
     expect(sanitizeFileName('name...')).toBe('name')
   })
   it('prefixes reserved Windows device names, in any case and with any extension', () => {
-    for (const stem of ['CON', 'prn', 'Aux', 'nul', 'COM1', 'com9', 'LPT1', 'lpt9']) {
+    for (const stem of ['CON', 'prn', 'Aux', 'nul', 'COM0', 'COM1', 'com9', 'LPT0', 'LPT1', 'lpt9', 'COM\u00b9', 'lpt\u00b3', 'CONIN$', 'conout$']) {
       expect(sanitizeFileName(`${stem}.sql`), stem).toBe(`_${stem}.sql`)
       expect(sanitizeFileName(stem), stem).toBe(`_${stem}`)
     }
-    for (const name of ['CONSOLE.sql', 'com0.sql', 'com10.sql', 'lpt.sql', 'dbo.CON.sql']) expect(sanitizeFileName(name), name).toBe(name)
+    expect(sanitizeFileName('NUL  .sql')).toBe('_NUL  .sql')
+    for (const name of ['CONSOLE.sql', 'com10.sql', 'lpt.sql', 'dbo.CON.sql', 'CONIN.sql', 'COM\u2074.sql']) expect(sanitizeFileName(name), name).toBe(name)
+  })
+  it('checks reserved names after cutting a long one, so the cut never leaves one', () => {
+    expect(sanitizeFileName('CON' + ' '.repeat(125) + '.' + ' '.repeat(128) + '.sql')).toBe('_CON.sql')
+    const cut = sanitizeFileName('LPT1.' + 'x'.repeat(300) + '.sql')
+    expect(cut.startsWith('_LPT1.x') && cut.endsWith('x.sql') && cut.length === 200).toBe(true)
+  })
+  it('keeps at most 240 UTF-8 bytes, which ext4 and APFS can store, cutting between code points', () => {
+    const utf8 = (text: string) => Buffer.byteLength(text)
+    const cjk = sanitizeFileName('dbo.' + '\u6ce8\u6587'.repeat(50) + '.sql')
+    expect(utf8(cjk)).toBeLessThanOrEqual(240)
+    expect(cjk).toMatch(/^dbo\.(\u6ce8\u6587)+\u6ce8?\.sql$/)
+    const emoji = sanitizeFileName('Sales.' + '\u{1F600}'.repeat(80) + '.sql')
+    expect(utf8(emoji)).toBeLessThanOrEqual(240)
+    expect(utf8(emoji)).toBeGreaterThan(230)
+    expect(emoji.endsWith('\u{1F600}.sql')).toBe(true)
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(emoji)).toBe(false)
   })
   it('keeps at most 200 UTF-16 units with the extension, never splitting a surrogate pair', () => {
     const long = sanitizeFileName('dbo.' + 'x'.repeat(300) + '.sql')

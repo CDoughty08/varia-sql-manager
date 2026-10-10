@@ -245,7 +245,8 @@ internal static partial class ScriptingLiveChecks
             // Computed columns, defaults and checks are text only VIEW DEFINITION shows.
             var computed = await limited.Script(new ObjectRefDto("table", scratch.Name, "dbo", "KitchenSink"), "create");
             check(computed.Error is { Code: "NO_DEFINITION" }, "a readable table with computed columns and constraints is NO_DEFINITION, not a partial script: " + computed.Error?.Code);
-            check(Ok(await limited.Script(new ObjectRefDto("table", scratch.Name, "dbo", "KitchenSink"), "select")), "its SELECT template needs only the columns");
+            var select = await limited.Script(new ObjectRefDto("table", scratch.Name, "dbo", "KitchenSink"), "select");
+            check(Ok(select) && select.Warnings.Count == 0, "its SELECT template needs only the columns, so it carries no VIEW DEFINITION warning: " + string.Join(" ", select.Warnings));
             await sql("GRANT VIEW DEFINITION ON Sales.usp_Orders TO " + user + ";", scratch.Name);
             check(Ok(await limited.Script(procedure, "create")), "with VIEW DEFINITION the procedure's CREATE scripts");
         }
