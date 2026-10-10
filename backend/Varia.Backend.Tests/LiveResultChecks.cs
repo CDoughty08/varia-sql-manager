@@ -153,6 +153,7 @@ internal static class LiveResultChecks
                 "an error after 1,000 messages is kept in Messages (" + flooded.Messages.Count + " entries, error at " + errorAt + ")");
 
             await ResultText(check, service, store, info, options, json, Run, Close);
+            await SummaryReports(check, options, json);
 
             async Task<QueryResult> Cancelled(CancelReason reason, string sql = "WAITFOR DELAY '00:00:20';", int delayMs = 300)
             {
@@ -172,6 +173,33 @@ internal static class LiveResultChecks
             else Console.WriteLine("SQL Server 2025 type checks (json, vector) skipped: the server's major version is " + major + ".");
         }
         finally { await Close(session); }
+    }
+
+    /// <summary>The status bar shows each summary's budget, so the backend counts it as reported: closing a run that no
+    /// event announced (it grew by less than a report step) still reports the fall to 0, for the second run as for the first.</summary>
+    private static async Task SummaryReports(Action<bool, string> check, ConnectOptions options, JsonSerializerOptions json)
+    {
+        var reports = new List<long>();
+        using var service = new SqlService(new ResultStore(1L << 30, 1L << 29), publish: value => { lock (reports) reports.Add(JsonSerializer.SerializeToElement(value, json).GetProperty("usedBytes").GetInt64()); });
+        var info = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(options, json), json);
+        try
+        {
+            var session = Guid.NewGuid().ToString();
+            int Count() { lock (reports) return reports.Count; }
+            async Task<(long Shown, long[] Reported)> RunAndClose()
+            {
+                var result = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
+                    new QueryArgs(info.Id, session, "master", "SELECT TOP (2000) name FROM sys.all_objects;", Guid.NewGuid().ToString(), 1000, 60), json), json);
+                var before = Count();
+                await service.DispatchAsync("results.close", JsonSerializer.SerializeToElement(new { resultIds = result.ResultSets.Select(set => set.ResultId).ToArray() }, json), json);
+                lock (reports) return (result.Budget.UsedBytes, reports[before..].ToArray());
+            }
+            var first = await RunAndClose();
+            var second = await RunAndClose();
+            check(first.Shown > 0 && second.Shown > 0 && first.Reported is [.., 0] && second.Reported is [.., 0],
+                "closing a small run reports the fall to 0 after its summary showed " + second.Shown + " bytes, for every run of a session (" + string.Join(", ", first.Reported) + "; " + string.Join(", ", second.Reported) + ")");
+        }
+        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(info.Id), json), json); }
     }
 
     private delegate Task<QueryResult> Runner(string sql, RequestContext? context = null, string? sessionId = null, string? connectionId = null, int maxRows = 1000, int maxResultSets = 10);

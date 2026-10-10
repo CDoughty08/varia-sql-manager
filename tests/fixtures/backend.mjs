@@ -217,6 +217,21 @@ let nextResultId = 1
 const globalBytes = 256 * 1024 * 1024
 // The memory a directive's `memory=` pretends its results hold, until results.close frees the last of them.
 let held = { bytes: 0, results: new Set() }
+// What the status bar was last shown, by an event or a summary. As SqlService.ReportMemory does, an event goes out only
+// for a new band (50, 75, 90, 100 %), a 64 MiB rise, or any fall below it.
+let reported = { bytes: -1, band: 0 }
+const band = used => used >= globalBytes ? 4 : used * 10 >= globalBytes * 9 ? 3 : used * 4 >= globalBytes * 3 ? 2 : used * 2 >= globalBytes ? 1 : 0
+function reportMemory() {
+  const used = held.bytes
+  if (reported.bytes < 0 ? used === 0 : used >= reported.bytes && band(used) === reported.band && used - reported.bytes < 64 * 1024 * 1024) return
+  reported = { bytes: used, band: band(used) }
+  write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes })
+}
+/** A summary's budget, which counts as reported (SqlService.SummaryBudget). */
+function summaryBudget() {
+  reported = { bytes: held.bytes, band: band(held.bytes) }
+  return { usedBytes: held.bytes, globalBytes, queryBytes: globalBytes / 2 }
+}
 const column = (name, dataType) => ({ name, dataType, wire: 'text', nullable: true })
 const available = result => result.complete ? result.read : Math.floor(result.read / result.pageRows) * result.pageRows
 const describe = result => ({
@@ -258,7 +273,7 @@ function storeResults(id, sets) {
 const info = text => ({ text, kind: 'info' })
 const summary = (id, database, sets, patch = {}) => ({
   resultSets: storeResults(id, sets), discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
-  database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes, queryBytes: globalBytes / 2 }, completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...patch
+  database, messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...patch
 })
 const missing = (id, resultId) => fail(id, resultId < nextResultId ? 'RESULT_RELEASED' : 'RESULT_NOT_FOUND', resultId < nextResultId ? 'These results were closed. Execute the query again to see them.' : 'These results do not exist.')
 /** Sends `bodies` as DATA while credit lasts, then answers with `done()`. */
@@ -341,7 +356,7 @@ async function runDirective(id, params, directive) {
   runningDirectives.add(queryId)
   if (directive.memory !== undefined) {
     held = { bytes: Math.round(directive.memory * globalBytes), results: new Set() }
-    write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: held.bytes, globalBytes })
+    reportMemory()
   }
   let status = 'completed'
   try {
@@ -376,7 +391,7 @@ async function runDirective(id, params, directive) {
       ...failed ? { error: { code: 'SQL_ERROR', message: messages.find(message => message.kind === 'error').text, batchNumber: 1, iteration: 1 } } : {},
       ...status === 'cancelled' ? { error: { code: 'CANCELLED', message: 'The script was cancelled. Remaining batches were not executed.', batchNumber: 1, iteration: 1 } } : {},
       completedBatches: status === 'completed' && !failed ? 1 : 0, totalBatches: 1, database: params.database, messagesTruncated: false,
-      budget: { usedBytes: Math.round((directive.memory ?? 0) * globalBytes), globalBytes, queryBytes: globalBytes / 2 }, completedAt: new Date().toISOString().replace('Z', '0000+00:00')
+      budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00')
     })
   } finally {
     runningDirectives.delete(queryId)
@@ -447,10 +462,8 @@ async function workbench(id, method, params, credit) {
       let closed = 0
       for (const resultId of params.resultIds) if (stored.delete(resultId)) closed++
       // As the real backend does, the fall goes out as an event before the answer.
-      if (params.resultIds.filter(resultId => held.results.delete(resultId)).length && held.results.size === 0 && held.bytes > 0) {
-        held.bytes = 0
-        write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: 0, globalBytes })
-      }
+      if (params.resultIds.filter(resultId => held.results.delete(resultId)).length && held.results.size === 0) held.bytes = 0
+      if (closed) reportMemory()
       return respond(id, { closed, usedBytes: held.bytes })
     }
   }

@@ -258,7 +258,7 @@ when no port is open).
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
 | `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
-| `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event |
+| `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event; a summary's `budget` counts as a report, so closing results that only a summary showed still sends the fall |
 
 Progress and messages are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new ones are refused,
 and one over 256 KiB is dropped. `resultSet.opened` and `resultSet.closed` are essential: never refused, and up to

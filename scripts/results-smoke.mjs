@@ -814,6 +814,15 @@ try {
   await expect(outputTab(/^Results/)).toBeFocused()
   await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
   expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true)
+  // A run that grows by less than a report step is shown only by its summary, which the backend counts as reported, so
+  // closing it still sends the fall and the indicator hides.
+  await run('-- varia-fake: sets=W1*10 memory=0.1')
+  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await page.keyboard.press('F1')
+  await page.keyboard.type('close results')
+  await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+  await page.keyboard.press('Enter')
+  await expect(memory).toHaveCount(0)
   await run('-- varia-fake: sets=W1*10 memory=0')
   await expect(memory).toHaveCount(0)
   // Closing a tab of hundreds of sets frees every one of them: one request closes them all, where one request each ran

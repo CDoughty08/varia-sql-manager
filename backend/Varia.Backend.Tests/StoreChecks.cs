@@ -141,9 +141,9 @@ internal static class StoreChecks
         HostReads(check);
     }
 
-    /// <summary>results.memory waits for a 64 MiB rise or a new band, but reports every fall below what it last reported,
-    /// and results.close reports its fall before it answers, so the status bar (which follows only these events) never
-    /// keeps showing memory that a close or a finished lease returned.</summary>
+    /// <summary>results.memory waits for a 64 MiB rise or a new band, but reports every fall below what it last reported
+    /// or a summary last showed, and results.close reports its fall before it answers, so the status bar (which follows
+    /// only these events and the summaries) never keeps showing memory that a close or a finished lease returned.</summary>
     private static void MemoryReports(Action<bool, string> check)
     {
         var reports = new List<long>();
@@ -165,6 +165,21 @@ internal static class StoreChecks
         var closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
         check(reported > 0 && afterFirst == reported && afterRise == reported && closed.Closed == 2 && Last() == 0,
             "results.memory skips a small rise but reports the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
+
+        // A later run that grows by less than a step is shown only through its summary; closing it still reports 0.
+        int Count() { lock (reports) return reports.Count; }
+        var third = Open(store, store.BeginQuery("s3"));
+        Fill(third, 0, 1000);
+        third.Complete();
+        service.ReportMemory();
+        var before = Count();
+        var summary = service.SummaryBudget();
+        service.ReportMemory();
+        var afterSummary = Count();
+        close = JsonSerializer.SerializeToElement(new { resultIds = new[] { third.ResultId } }, HostChecks.Json);
+        closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
+        check(summary.UsedBytes > 0 && summary.UsedBytes < 64L * 1024 * 1024 && afterSummary == before && closed.Closed == 1 && Count() == before + 1 && Last() == 0,
+            "after a close to 0, a small run shown only by its summary reports the fall to 0 when it is closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

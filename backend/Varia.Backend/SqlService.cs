@@ -608,7 +608,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, new ResultBudget(store.UsedBytes, store.GlobalBytes, store.QueryBytes), completedAt);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt);
     }
 
     /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows
@@ -681,21 +681,36 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private static bool IsContextChange(SqlError error) => error.Number is 5701 or 5703;
 
     /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
-    /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls (results were closed, or a copy or save that leased them
-    /// ended).</summary>
+    /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below what the status bar was last shown (results were
+    /// closed, or a copy or save that leased them ended).</summary>
     internal void ReportMemory()
     {
         lock (memoryGate)
         {
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
-            var band = used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
+            var band = Band(used, global);
             if (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep) return;
             reportedBytes = used;
             reportedBand = band;
             publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
         }
     }
+
+    /// <summary>A summary's budget. The status bar shows it as it shows an event, so it counts as reported: otherwise a run
+    /// that grew by less than a report step, then closed, would leave the status bar showing memory already freed.</summary>
+    internal ResultBudget SummaryBudget()
+    {
+        lock (memoryGate)
+        {
+            var used = store.UsedBytes;
+            reportedBytes = used;
+            reportedBand = Band(used, store.GlobalBytes);
+            return new ResultBudget(used, store.GlobalBytes, store.QueryBytes);
+        }
+    }
+
+    private static int Band(long used, long global) => used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
 
     /// <summary>Reads past the rest of a result set that stores no more rows and has a long column, counting its rows.
     /// ReadAsync would skip each long value by buffering all of it, in time quadratic in its size and deaf to the token; a
