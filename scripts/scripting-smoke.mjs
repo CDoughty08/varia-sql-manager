@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -101,7 +101,7 @@ async function connect(server) {
 }
 /** Right-clicks the row at `path` and clicks through `items`, one menu level after the other. */
 async function scriptFrom(path, ...items) {
-  await (await explorerRow(page, ...path)).click({ button: 'right', force: true })
+  await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
   let level = explorerMenu()
   for (const [index, name] of items.entries()) {
     await level.getByRole('menuitem', { name, exact: true }).click(fast)
