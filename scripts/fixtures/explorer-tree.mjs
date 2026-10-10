@@ -30,6 +30,30 @@ export async function explorerRow(page, ...path) {
   return page.locator('#' + id)
 }
 
+/**
+ * The row at a path, scrolled into the tree's rendered rows first when it is not among them. The tree renders a window of
+ * rows around its viewport and re-windows on its scroll event, which Chromium dispatches with a frame: in a short window
+ * an earlier step's scroll can leave the row outside, and a window that draws few frames (a hidden or occluded one) can
+ * keep a stale window for long. So the scan sends the scroll event too, from the current position and then from the top,
+ * half a viewport at a time, and the tree's geometry and rendered rows are logged first.
+ */
+export async function revealExplorerRow(page, ...path) {
+  const found = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
+  if (found) return found
+  const tree = explorerTree(page), label = path.join(' › ')
+  const state = () => tree.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight, scrollHeight: element.scrollHeight }))
+  const before = await state()
+  console.log(`Object Explorer row ${label} was not rendered (scrollTop ${before.top}, height ${before.height}, scroll height ${before.scrollHeight}; rows: ${(await explorerLines(page)).join(' | ')}); scrolling to it.`)
+  const step = Math.max(22, Math.floor(before.height / 2))
+  for (let index = -1, top = before.top; top < before.scrollHeight; top = ++index * step) {
+    await tree.evaluate((element, top) => { element.scrollTop = top; element.dispatchEvent(new Event('scroll')) }, top)
+    const row = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
+    if (row) return row
+  }
+  const after = await state()
+  throw new Error(`Object Explorer row ${label} is not in the tree (scrollTop ${after.top}, height ${after.height}, scroll height ${after.scrollHeight}): ${(await explorerLines(page)).join(' | ')}`)
+}
+
 /** Expands each row of a path that is collapsed, from the server down, by its chevron. */
 export async function expandExplorerPath(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}
