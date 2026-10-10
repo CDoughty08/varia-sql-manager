@@ -94,6 +94,7 @@ describe('grid selection', () => {
     expect(describeRange({ top: 0, left: 0, bottom: 0, right: 0 })).toBe('1 row, 1 column selected')
     expect(describeRange({ top: 1, left: 0, bottom: 3, right: 2 })).toBe('3 rows, 3 columns selected')
     expect(describeRange({ top: 0, left: 0, bottom: -1, right: 2 })).toBe('No cells selected')
+    expect(describeRange({ top: 0, left: 0, bottom: 999_999, right: 1_199 })).toBe('1,000,000 rows, 1,200 columns selected')
     expect(describeSelection(cells([0, 0], [1, 1]), 5, 5)).toBe('2 rows, 2 columns selected')
     expect(describeSelection(selectAll(0), 0, 5)).toBe('No cells selected')
     // Overlapping blocks count their shared cells once: 4 + 4 − 1.

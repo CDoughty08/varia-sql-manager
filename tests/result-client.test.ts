@@ -190,6 +190,28 @@ describe('ResultClient', () => {
     expect(memory).toHaveBeenCalledWith({ usedBytes: 5, globalBytes: 50 })
   })
 
+  it('leaves memory to the backend\'s events after a close, and reports none once a new backend replaces the old one', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    await settle()
+    const memory = vi.fn()
+    client.onMemory(memory)
+    // The backend sends its fall as an event before the answer; an answer arriving after it must not undo it.
+    const closing = client.open(descriptor()).close()
+    await settle()
+    expect(worker().fromWorker.find(request => request.t === 'close')).toMatchObject({ rid: 1, resultIds: [3] })
+    worker().toWorker({ t: 'memory', usedBytes: 1000, globalBytes: 5000 })
+    worker().toWorker({ t: 'end', rid: 1, ok: true, result: { closed: 1, usedBytes: 1234 } })
+    await closing
+    expect(memory).toHaveBeenLastCalledWith({ usedBytes: 1000, globalBytes: 5000 })
+    worker().toWorker({ t: 'backend', generation: 2, status: 'ready' })
+    await settle()
+    expect(memory).toHaveBeenLastCalledWith({ usedBytes: 0, globalBytes: 0 })
+    expect(memory).toHaveBeenCalledTimes(2)
+  })
+
   it('closes results in the backend and refuses to read them afterwards', async () => {
     const { client, worker, handOver } = fixture()
     handOver()

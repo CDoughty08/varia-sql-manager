@@ -137,7 +137,34 @@ internal static class StoreChecks
         Leases(check);
         Collection(check);
         Events(check);
+        MemoryReports(check);
         HostReads(check);
+    }
+
+    /// <summary>results.memory waits for a 64 MiB rise or a new band, but reports every fall below what it last reported,
+    /// and results.close reports its fall before it answers, so the status bar (which follows only these events) never
+    /// keeps showing memory that a close or a finished lease returned.</summary>
+    private static void MemoryReports(Action<bool, string> check)
+    {
+        var reports = new List<long>();
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store, publish: value => { lock (reports) reports.Add(JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("usedBytes").GetInt64()); });
+        long? Last() { lock (reports) return reports.Count > 0 ? reports[^1] : null; }
+        var first = Open(store, store.BeginQuery("s1"));
+        Fill(first, 0, 1000);
+        first.Complete();
+        service.ReportMemory();
+        var reported = store.UsedBytes;
+        var afterFirst = Last();
+        var second = Open(store, store.BeginQuery("s2"));
+        Fill(second, 0, 1000);
+        second.Complete();
+        service.ReportMemory();
+        var afterRise = Last();
+        var close = JsonSerializer.SerializeToElement(new { resultIds = new[] { first.ResultId, second.ResultId } }, HostChecks.Json);
+        var closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
+        check(reported > 0 && afterFirst == reported && afterRise == reported && closed.Closed == 2 && Last() == 0,
+            "results.memory skips a small rise but reports the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

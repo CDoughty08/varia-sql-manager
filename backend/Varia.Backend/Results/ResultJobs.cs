@@ -60,6 +60,8 @@ internal sealed class ResultJobs(ResultStore store)
     private const int MaxParts = 64;
     private const int MaxRanges = 64;
     private const int MaxPathCharacters = 32_767;
+    /// <summary>Read, write and execute for owner, group and others: a replaced file's mode without set-id or sticky bits.</summary>
+    private const UnixFileMode PermissionBits = (UnixFileMode)0b111_111_111;
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(250);
 
     /// <summary>Called after each page is written: the checks release or cancel mid-job through it.</summary>
@@ -126,9 +128,22 @@ internal sealed class ResultJobs(ResultStore store)
             var writer = new ResultTextWriter(output, TextOptions.Export(format.Value, args.Headers, args.NullText), set.Columns);
             var progress = new Progress(context, set.RowsAvailable);
             int[] all = [.. Enumerable.Range(0, set.Columns.Count)];
-            // The target is touched only by the final rename, so a failure or cancel leaves it as it was.
-            await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 0, FileOptions.Asynchronous))
+            // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back
+            // readable by others. A symbolic link there is replaced, not followed, so it lends nothing.
+            var target = new FileInfo(args.Path);
+            var replacing = target.Exists && target.LinkTarget is null;
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, BufferSize = 0, Options = FileOptions.Asynchronous };
+            UnixFileMode? mode = null;
+            if (replacing && !OperatingSystem.IsWindows())
             {
+                // Created with them (never wider, as the umask only narrows), then set exactly.
+                mode = target.UnixFileMode & PermissionBits;
+                options.UnixCreateMode = mode;
+            }
+            // The target is touched only by the final rename, so a failure or cancel leaves it as it was.
+            await using (var file = new FileStream(temporary, options))
+            {
+                if (mode is { } exact && !OperatingSystem.IsWindows()) File.SetUnixFileMode(file.SafeFileHandle, exact);
                 async Task Drain()
                 {
                     while (output.TryTake(out var chunk))
@@ -146,7 +161,9 @@ internal sealed class ResultJobs(ResultStore store)
                 await Drain();
                 file.Flush(flushToDisk: true);
             }
-            File.Move(temporary, args.Path, overwrite: true);
+            // On Windows, Replace keeps the replaced file's ACLs and attributes, which a move over it would drop.
+            if (replacing && OperatingSystem.IsWindows()) File.Replace(temporary, args.Path, null);
+            else File.Move(temporary, args.Path, overwrite: true);
             temporary = null;
             return new ResultsJobResult(writer.Rows, writer.Bytes, writer.TruncatedCells, false);
         }

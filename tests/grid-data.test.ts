@@ -71,32 +71,38 @@ describe('grid data', () => {
     await settle()
     expect(data.error).toBeUndefined()
   })
-  it('reads nothing while scrolling faster than 3 views a frame, and resumes 50 ms after it settles', () => {
+  it('reads a single jump at once, nothing while scrolling goes on faster than 3 views a frame, and resumes 50 ms after it settles', () => {
     const { data, reads, changed, advance } = fixture()
+    // Ctrl+End, a click in the scroll bar's track: one frame moves far, and its tiles are read in that frame.
     data.ensure(range(50_000, 50_040), 1_000_000, 50_000, 30)
-    expect(reads).toHaveLength(0)
-    advance(20)
-    data.ensure(range(60_000, 60_040), 1_000_000, 10, 30)
-    expect(reads).toHaveLength(0)
-    advance(30)
-    expect(changed).toHaveBeenCalledOnce()
-    data.ensure(range(60_000, 60_040), 1_000_000, 0, 30)
-    expect(reads.map(read => read.first)).toEqual([59_904, 60_032])
+    expect(reads.map(read => read.first)).toEqual([49_920])
+    // A thumb dragged fast moves that far frame after frame: nothing more is read until it settles.
+    advance(16)
+    data.ensure(range(60_000, 60_040), 1_000_000, 10_000, 30)
+    advance(16)
+    data.ensure(range(70_000, 70_040), 1_000_000, 10_000, 30)
+    expect(reads).toHaveLength(1)
+    advance(50)
+    expect(changed).toHaveBeenCalled()
+    data.ensure(range(70_000, 70_040), 1_000_000, 0, 30)
+    expect(reads.slice(1).map(read => read.first)).toEqual([70_016, 69_888])
   })
   it('waits for a settle that a later fast frame extended, however early its timer fires', () => {
     const { data, reads, changed, advance } = fixture()
-    data.ensure(range(50_000, 50_040), 1_000_000, 50_000, 30)
+    data.ensure(range(10_000, 10_040), 1_000_000, 10_000, 30)
+    data.ensure(range(50_000, 50_040), 1_000_000, 40_000, 30)
     advance(40)
     data.ensure(range(90_000, 90_040), 1_000_000, 40_000, 30)
     advance(10)
     expect(changed).toHaveBeenCalledOnce()
     // The first timer's frame comes 40 ms early: nothing is read, and another frame is due when the settle ends.
+    const before = reads.length
     data.ensure(range(90_000, 90_040), 1_000_000, 0, 30)
-    expect(reads).toHaveLength(0)
+    expect(reads).toHaveLength(before)
     advance(40)
     expect(changed).toHaveBeenCalledTimes(2)
     data.ensure(range(90_000, 90_040), 1_000_000, 0, 30)
-    expect(reads.length).toBeGreaterThan(0)
+    expect(reads.length).toBeGreaterThan(before)
   })
   it('looks again shortly when other grids hold all the client\'s reads', () => {
     const inflight = { value: 16 }

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ResultColumn, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi } from '../src/shared/contracts'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { ResultsService, resultLimits } from '../src/renderer/src/results/ResultsService'
+import { ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
 import { deferred } from './fixtures/documents'
@@ -405,6 +405,64 @@ describe('results service', () => {
     client.lose()
     expect(await service.openValue('t1', 0, 0, 0)).toEqual({ opened: false, message: 'These results are no longer available because the SQL backend restarted.' })
     expect(await service.openValue('t9', 0, 0, 0)).toEqual({ opened: false })
+  })
+  it('opens a value once while it is opening, and names its tab without bidirectional controls', async () => {
+    const { client, service, documents } = fixture()
+    const columns: ResultColumn[] = [{ name: 'report\u202egpj.', dataType: 'xml', wire: 'text', nullable: true, role: 'xml' }]
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { columns })]) })
+    const handle = client.handle(1)!
+    const read = deferred<Awaited<ReturnType<typeof handle.getCell>>>()
+    handle.getCell.mockReturnValueOnce(read.promise)
+    // A double-click: the second press lands while the first one's value is still being read.
+    const first = service.openValue('t1', 0, 0, 0), second = service.openValue('t1', 0, 0, 0)
+    expect(await second).toEqual({ opened: false })
+    read.resolve({ text: '<a />', isNull: false, truncated: false, error: false, formatted: true })
+    expect(await first).toEqual({ opened: true })
+    expect(documents.openText.mock.calls.map(([o]) => o.name)).toEqual(['report_gpj.1.xml'])
+    // Once it has opened, another click opens it again, as SSMS does.
+    handle.getCell.mockResolvedValueOnce({ text: '<a />', isNull: false, truncated: false, error: false, formatted: true })
+    expect(await service.openValue('t1', 0, 0, 0)).toEqual({ opened: true })
+    expect(handle.getCell).toHaveBeenCalledTimes(2)
+  })
+  it('suggests a save name main accepts, however long the tab\'s name', () => {
+    const name = 'n'.repeat(200)
+    expect(suggestedName(name, 2)).toBe('n'.repeat(120) + '-Result3')
+    expect(suggestedName(name, 2)).toHaveLength(128)
+    expect(suggestedName('SQLQuery1', 0)).toBe('SQLQuery1-Result1')
+    // Never cut between the halves of a surrogate pair.
+    const astral = 'a'.repeat(119) + '😀'.repeat(10)
+    expect(suggestedName(astral, 2)).toBe('a'.repeat(119) + '-Result3')
+  })
+  it('passes the shortened name to main for a long tab name', async () => {
+    const { api, service } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
+    await service.saveAs('t1', 0, 'x'.repeat(200))
+    expect(api.saveResults.mock.lastCall?.[0].suggestedName).toHaveLength(128)
+  })
+  it('reads out a selection only when its size changes, and every copy\'s outcome', () => {
+    const { service, timers, tab } = fixture()
+    service.begin('t1', 'q1')
+    const heard: string[] = []
+    const settle = () => { timers.advance(300); heard.push(tab().announcement.replace('\u200b', '')) }
+    service.announceSelection('t1', '1 row, 1 column selected')
+    settle()
+    // Arrow keys move the active cell, which screen readers read themselves: the same size says nothing.
+    service.announceSelection('t1', '1 row, 1 column selected')
+    expect(timers.pending.size).toBe(0)
+    service.announceSelection('t1', '2 rows, 1 column selected')
+    settle()
+    service.announce('t1', 'Copied 2 rows.')
+    settle()
+    service.announce('t1', 'Copied 2 rows.')
+    timers.advance(300)
+    expect(tab().announcement).toBe('Copied 2 rows.\u200b')
+    expect(heard).toEqual(['1 row, 1 column selected', '2 rows, 1 column selected', 'Copied 2 rows.'])
+    // A new run starts afresh.
+    service.begin('t1', 'q2')
+    service.announceSelection('t1', '2 rows, 1 column selected')
+    expect(timers.pending.size).toBe(1)
   })
   it('stops listening and frees its timers when disposed', () => {
     const { client, service, timers, progress } = fixture()

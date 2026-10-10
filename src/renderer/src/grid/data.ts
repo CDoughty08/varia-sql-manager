@@ -15,8 +15,9 @@ export const portBusy = (error: unknown): boolean => (error as { code?: unknown 
 
 /**
  * What a grid has read of its result: tiles of 128 rows × 32 columns in the client's shared window cache, read centre
- * first, at most 4 at a time per grid and 16 per client. A tile the frame no longer wants for 2 frames is aborted. While
- * scrolling faster than 3 views a frame nothing is read; reading starts 50 ms after it settles. A tile read while its
+ * first, at most 4 at a time per grid and 16 per client. A tile the frame no longer wants for 2 frames is aborted. A
+ * single jump reads at once, but while scrolling goes on faster than 3 views a frame nothing is read; reading starts 50 ms
+ * after it settles. A tile read while its
  * rows were still arriving is read again (at most 10 a second) while it is in view. After 2 idle frames the tiles a view
  * above and below are read, and the worker prefetches pages 2 views either way. A failed read marks its tile until Retry.
  * A read refused while main's results port is full is tried again shortly, not marked. The active cell's tile is read
@@ -36,6 +37,8 @@ export class GridData {
   private readonly retried = new Set<number>()
   private refetches: number[] = []
   private settleUntil = 0
+  /** Frames in a row that moved more than 3 views. */
+  private fastFrames = 0
   private timer: unknown
   private idleFrames = 0
   private prefetched = ''
@@ -84,9 +87,12 @@ export class GridData {
       if (wanted.has(key)) tile.missed = 0
       else if (++tile.missed >= g.abortAfterFrames) { tile.controller.abort(); this.inflight.delete(key) }
     }
+    // One jump (a key, a click in the scroll bar's track) reads its tiles at once; a thumb dragged fast moves that far
+    // frame after frame, and reads only once it settles.
+    this.fastFrames = isFastScroll(rowDelta, visibleRows) ? this.fastFrames + 1 : 0
     if (plan.length === 0) return false
     const now = this.now()
-    if (isFastScroll(rowDelta, visibleRows)) {
+    if (this.fastFrames >= 2) {
       this.settleUntil = now + g.settleMs
       this.wake(g.settleMs)
       return false

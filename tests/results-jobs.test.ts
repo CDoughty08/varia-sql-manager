@@ -99,6 +99,21 @@ describe('ResultsJobHost copy', () => {
     calls[1].reject(new BackendError('TOO_LARGE', 'The selection is too large to copy (80 MB; the limit is 64 MB). Use Save Results As instead.'))
     expect(await failure(second)).toMatchObject({ code: 'TOO_LARGE', message: expect.stringContaining('80 MB') })
   })
+  it('leaves the clipboard alone when the backend finishes a copy cancelled late', async () => {
+    const { jobs, calls, cancels, clipboard } = host()
+    const request = copyRequest()
+    const copying = jobs.copy(request)
+    await settle()
+    const encode = (text: string) => new TextEncoder().encode(text).buffer
+    calls[0].sink!.data(1, encode('row0\nrow1\n'))
+    expect(jobs.cancel(request.jobId)).toEqual({ cancelled: true })
+    expect(cancels).toEqual([[1, cancelReasons.user]])
+    // Its credit already covered the rest, so the backend sends it and answers as if the copy had run.
+    calls[0].sink!.data(2, encode('row2\nrow3'))
+    calls[0].resolve({ rows: 4, bytes: 19, truncatedCells: 0, partial: false })
+    expect(await failure(copying)).toMatchObject({ code: 'CANCELLED', message: jobSentences.copyCancelled })
+    expect(clipboard).toEqual([])
+  })
   it('cancels by job id, forwards progress at most 4 times a second, and cancels everything on reset', async () => {
     const { jobs, calls, cancels, progress, tick } = host()
     const request = copyRequest()
@@ -158,6 +173,7 @@ describe('ResultsJobHost save', () => {
     expect([formatFromPath('/a/b.CSV'), formatFromPath('/a/b.txt'), formatFromPath('/a/b.tsv'), formatFromPath('/a/b.tab'), formatFromPath('/a/b.json'), formatFromPath('/a/b.xlsx'), formatFromPath('/a/b')])
       .toEqual(['csv', 'tsv', 'tsv', 'tsv', 'json', undefined, undefined])
     expect(sanitizeFileName('x'.repeat(200))).toHaveLength(128)
+    expect(sanitizeFileName('a/b:c\u202egpj.\u2066x')).toBe('a_b_c_gpj._x')
     const paths = ['/data/out.json', '/data/out.dat']
     const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: false, filePath: paths.shift() }))
     const { jobs, calls } = host({ showSaveDialog: dialog })

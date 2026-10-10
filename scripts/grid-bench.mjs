@@ -238,17 +238,39 @@ try {
   record('grid.cache.uiMiUnits', cached.uiUnits / 1048576, 'Mi units', 'after a sweep of 50 views and 300 jumps')
   record('grid.cache.workerMiB', cached.workerBytes / 1048576, 'MiB', `${cached.workerPages} pages after a sweep of 50 views and 300 jumps`)
 
+  /**
+   * Scroll bar jumps in grid 0 to fresh rows and columns: frame() times, and each jump's main-thread task time from the
+   * DevTools protocol, which adds the style, layout, paint and compositing a jump causes to frame()'s JS. A segment with
+   * a long task runs once more, as results-smoke's segments do; the long tasks of its last run count.
+   */
+  async function jumpSegment(name, count) {
+    for (let attempt = 1; ; attempt++) {
+      const label = attempt === 1 ? name : `${name} (again)`
+      await segment(label)
+      await resetStats()
+      const tops = fractions(count, 0.05), lefts = fractions(count, 0.05), tasks = []
+      for (let index = 0; index < count; index++) {
+        const before = await taskSeconds()
+        await jump(tops[index], lefts[index])
+        tasks.push((await taskSeconds() - before) * 1000)
+      }
+      const long = await page.evaluate(value => {
+        const start = window.__benchSegments.findLast(item => item.name === value).at
+        return window.__benchLongTasks.filter(task => task.at >= start && task.ms > 50).map(task => task.ms)
+      }, label)
+      if (long.length === 0 || attempt === 2) return { stats: await stats(), tasks, long, attempt }
+    }
+  }
+  const jumpLongTasks = []
   await segment('300 columns')
   await run('-- varia-fake: sets=X1*5000')
   await expect(cell(0, 0)).toHaveText(String(shapes.X1.row(0)[0]))
   await cell(0, 0).click()
-  await segment('300 columns: jumps')
-  await resetStats()
-  const tops = fractions(60, 0.05), lefts = fractions(60, 0.05)
-  for (let index = 0; index < 60; index++) await jump(tops[index], lefts[index])
-  const wide = await stats()
-  record('grid.x1.jumpFrameP95Ms', percentile(wide.frames, 95), 'ms', `${wide.frames.length} frames over 60 jumps, max ${Math.max(...wide.frames).toFixed(1)} ms`)
-  record('grid.x1.elements', wide.nodes, 'elements', `1 grid of 300 columns, ${view.width} × ${view.height} window`)
+  const wide = await jumpSegment('300 columns: jumps', 60)
+  jumpLongTasks.push(...wide.long)
+  record('grid.x1.jumpFrameP95Ms', percentile(wide.stats.frames, 95), 'ms', `${wide.stats.frames.length} frames over 60 jumps, max ${Math.max(...wide.stats.frames).toFixed(1)} ms`)
+  record('grid.x1.jumpTaskP95Ms', percentile(wide.tasks, 95), 'ms', `main-thread task time per jump over 60 jumps, median ${percentile(wide.tasks, 50).toFixed(1)} ms, max ${Math.max(...wide.tasks).toFixed(1)} ms`)
+  record('grid.x1.elements', wide.stats.nodes, 'elements', `1 grid of 300 columns, ${view.width} × ${view.height} window`)
   await jump(0, 0)
   await segment('300 columns: across')
   await resetStats()
@@ -265,6 +287,17 @@ try {
   })
   const across = await stats()
   record('grid.x1.horizontalFrameP95Ms', percentile(across.frames, 95), 'ms', `${across.frames.length} frames over ${steps} steps of 120 px, max ${Math.max(...across.frames).toFixed(1)} ms`)
+
+  // 300 bit columns: the narrowest columns put the most cells in view.
+  await segment('narrow columns')
+  await run('-- varia-fake: sets=X2*5000')
+  await expect(cell(0, 0)).toHaveText(shapes.X2.row(0)[0])
+  await cell(0, 0).click()
+  const narrow = await jumpSegment('narrow columns: jumps', 40)
+  jumpLongTasks.push(...narrow.long)
+  record('grid.x2.jumpTaskP95Ms', percentile(narrow.tasks, 95), 'ms', `main-thread task time per jump over 40 jumps, median ${percentile(narrow.tasks, 50).toFixed(1)} ms, max ${Math.max(...narrow.tasks).toFixed(1)} ms; frame() p95 ${percentile(narrow.stats.frames, 95).toFixed(1)} ms`)
+  record('grid.x2.elements', narrow.stats.nodes, 'elements', `1 grid of 300 bit columns, ${view.width} × ${view.height} window`)
+  record('grid.jump.longTasks', jumpLongTasks.length, 'tasks', `over 50 ms in the 300-column and bit-column jump segments (a segment with one runs once more): ${jumpLongTasks.length ? jumpLongTasks.join(', ') + ' ms' : 'none'}; attempts ${wide.attempt} and ${narrow.attempt}`)
 
   await segment('stacked sets')
   await run('-- varia-fake: sets=M1*1000')

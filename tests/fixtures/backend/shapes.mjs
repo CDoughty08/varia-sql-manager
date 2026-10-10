@@ -5,6 +5,7 @@
 //   N1  edge cases: NULLs, read errors, truncated cells, empty strings, astral characters, a BOM, TAB/LF/quotes, binary
 //   B1  two nvarchar(max) values of about 4 KB
 //   X1  300 columns cycling int, nvarchar(30) and datetime2
+//   X2  300 bit columns: the narrowest columns, so the most cells in view (fake backend only)
 //   L1  well-formed xml, json and plan documents of about 1 KB, 64 KB and 2 MB in turn
 //   M1  one int column (M1*n is n one-row sets)
 
@@ -69,6 +70,11 @@ export const shapes = {
     columns: Array.from({ length: 300 }, (_, i) => column('c' + pad(i, 3), ['int', 'nvarchar(30)', 'datetime2(7)'][i % 3])),
     pageRows: 64,
     row: r => Array.from({ length: 300 }, (_, c) => c % 3 === 0 ? String(r * 1000 + c) : c % 3 === 1 ? `r${r}c${c}` : datetime2(r * 1000 + c, 0))
+  },
+  X2: {
+    columns: Array.from({ length: 300 }, (_, i) => column('b' + pad(i, 3), 'bit')),
+    pageRows: 256,
+    row: r => Array.from({ length: 300 }, (_, c) => (r + c) % 3 === 0 ? '1' : '0')
   },
   L1: {
     columns: [column('id', 'int'), column('doc', 'xml', 'text', 'xml'), column('data', 'json', 'text', 'json'), column('plan', 'nvarchar(max)', 'text', 'plan')],

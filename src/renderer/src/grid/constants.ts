@@ -8,6 +8,8 @@ export const gridLimits = {
   rowHeaderMinWidth: 40, rowHeaderMinRows: 9999,
   columnMinWidth: 32, columnMaxWidth: 3000, initialMinWidth: 40, initialMaxWidth: 400,
   overscanRows: 8, overscanColumns: 2,
+  /** Past this many pooled cells (a 4K view of narrow columns) the overscan shrinks to the reduced one. */
+  poolCells: 4000, reducedOverscanRows: 2, reducedOverscanColumns: 1,
   /** Pools shrink only when this much too large, so a resize back and forth does not churn DOM nodes. */
   poolSlack: 0.25,
   tileRows: 128, tileColumns: 32, maxCellChars: 512, textBudget: 2_100_000,

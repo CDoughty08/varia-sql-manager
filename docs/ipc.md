@@ -253,7 +253,7 @@ when no port is open).
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
 | `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
-| `results.memory` (id 0) | At most once a second, when usage crosses 50, 75, 90 or 100 % of the budget or changes by 64 MiB |
+| `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event |
 
 Progress and messages are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new ones are refused,
 and one over 256 KiB is dropped. `resultSet.opened` and `resultSet.closed` are essential: never refused, and up to
@@ -350,6 +350,8 @@ Notes appended to the summary's messages:
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
 | column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
+| a batch's error skipped later batches or repetitions | "Batch {b} raised an error; later batches were not executed." ("Batch {b}, repetition {k}, raised …" for `GO n`); nothing when no later batch was skipped, since SQL Server may have run the batch to its end |
+| a cancel or timeout skipped later batches | "Stopped at batch {b}; {c} of {t} batch executions completed." (", repetition {k}" for `GO n`) |
 
 A cell whose typed read fails becomes NULL with the error flag; that column switches to its fallback reader and the
 messages get "Column ‘{name}’ ({type}): some values could not be read and are shown as NULL."
@@ -360,7 +362,9 @@ The summary's `messages` and the `messages` events carry `MessageEntry { text, k
 the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, since events may be dropped.
 
 - **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
-  affected)", no digit grouping), the notes above, and "The SQL session closed. …".
+  affected)", no digit grouping), the notes above, and "The SQL session closed. …". As in SSMS, "Changed database
+  context to …" (5701) and "Changed language setting to …" (5703) are left out, whether from USE, a session's login, or
+  the toolbar's database.
 - **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within
   the whole script or selection) or `Msg …, Procedure {p}, Line {k}` (the procedure's own line), then a line feed and the
   message. Errors that arrive with an exception are added unless InfoMessage already delivered them (matched by number,
@@ -404,7 +408,9 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   The path must be fully qualified, without NUL and without a `\\.\` or `\\?\` prefix (`INVALID_PARAMS`); the set
   must be complete (`RESULT_OPEN`). It writes `{folder}/.varia-{guid}.tmp` (`CreateNew`, `FileShare.None`, 1 MiB
   chunks), checking cancellation per page, flushes it to disk and renames it over the target (a symlink there is
-  replaced, not followed). Any failure or cancel deletes the temporary file; the target is never touched before the
+  replaced, not followed). A regular file it replaces keeps its permissions: on Linux and macOS the temporary file is
+  created with the target's mode (never wider) and set to it exactly; on Windows `File.Replace` keeps its ACLs and
+  attributes. Any failure or cancel deletes the temporary file; the target is never touched before the
   rename. Failures are `EXPORT_FAILED` whose message is one token, never a path or an OS message: `ACCESS`
   (`UnauthorizedAccessException`, HRESULT 0x80070005), `IN_USE` (0x80070020, 0x80070021), `DISK_FULL` (0x80070070,
   0x80070027, errno 28), `NOT_FOUND` (a missing folder), `IS_DIRECTORY`, otherwise `IO`.
@@ -418,7 +424,9 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   validated, and checked against `ResultsPortHost.owns(generation, resultId)` and the ready generation
   (`RESULT_UNAVAILABLE`). A copy decodes the chunks with a streaming `TextDecoder` (so a character split across chunks
   survives), regrants their credit, cancels with `TOO_LARGE` past 64 MiB + 1 MiB received, and writes the clipboard once,
-  on the RESPONSE; a new copy cancels the running one. A save runs one at a time (`JOB_BUSY`), shows the native dialog
+  on the RESPONSE, unless the copy was cancelled (its chunks after the cancel are dropped, so a RESPONSE the backend sends
+  anyway ends it with `CANCELLED` and leaves the clipboard alone); a new copy cancels the running one. A save runs one at
+  a time (`JOB_BUSY`), shows the native dialog
   ("Save Grid Results", the requested format's filter first, then CSV, Text, JSON and All Files) with the sanitised
   suggested name, takes the format from the chosen extension (any other extension keeps the requested format, and none
   is appended, so the dialog's overwrite confirmation stays valid), checks ownership again, and returns only the file's
@@ -746,7 +754,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
   while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
-  and while scroll bar jumps cross 300 columns, the DOM elements of a grid, scroll bar jumps to random rows of a million
+  and while scroll bar jumps cross 300 columns, each such jump's main-thread task time from the DevTools protocol (with
+  300 bit columns too, the narrowest cells), the DOM elements of a grid, scroll bar jumps to random rows of a million
   (each a cache miss), the window and page caches after a sweep and 300 jumps, heap growth after a collection, and long
   tasks. `--live` copies 100,000 rows and saves a million rows as CSV from SQL Server, comparing the text with the rows
   the query produces.
@@ -775,18 +784,20 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
-| Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 76 – 84 ms | 76 ms |
-| Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 12 – 16 % | 13 % |
+| Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 68 ms | 80 ms |
+| Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 8 % | 9 % |
 | Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |
 | Grid: animation-frame interval during that scroll, p95 / largest gap | ≤ 17.5 / 50 ms | gap ≤ 150 ms | 16.7 / 16.8 ms | 16.8 / 16.8 ms |
-| Grid: scroll bar jump to a random row of 1,000,000 → painted, p95 | ≤ 100 ms | ≤ 250 ms | 132 – 134 ms | 131 ms |
-| Grid: `frame()` after a scroll bar jump, 300 columns, p95 | ≤ 8 ms | ≤ 16 ms | 2.3 – 3.1 ms | 3.3 ms |
+| Grid: scroll bar jump to a random row of 1,000,000 → painted, p95 | ≤ 50 ms | ≤ 250 ms | 64 – 71 ms | 66 – 67 ms |
+| Grid: `frame()` after a scroll bar jump, 300 columns, p95 | ≤ 8 ms | ≤ 16 ms | 2.3 – 3.1 ms | 2.5 – 3.3 ms |
+| Grid: main-thread task time per scroll bar jump, 300 columns / 300 bit columns, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 73 – 85 / 102 – 128 ms | 75 – 76 / 99 – 129 ms |
+| Grid: UI long tasks over 50 ms in those two jump segments (one retry each) | 0 | ≤ 50 | 7 – 23 | 4 – 16 |
 | Grid: `frame()` scrolling across 300 columns, p95 | ≤ 6 ms | ≤ 12 ms | 0.5 – 0.8 ms | 0.7 ms |
-| Grid: DOM elements, 8 / 300 columns | ≤ 1,500 / 4,000 | same | 490 / 886 | 490 / 886 |
+| Grid: DOM elements, 8 / 300 / 300 bit columns | ≤ 1,500 / 4,000 / 4,000 | same | 535 / 931 / 1,811 | 535 / 931 / 1,811 |
 | Grid: UI window cache after a sweep and 300 jumps, windows / text | ≤ 256 / 16 Mi units | same | 256 / 5.8 Mi | 256 / 5.8 Mi |
 | Grid: worker page cache after the same | ≤ 64 MiB | same | 64 MiB | 64 MiB |
 | Grid: renderer heap growth, Ctrl+End then Ctrl+Home over 1,000,000 rows | ≤ 80 MB | ≤ 150 MB | 0.1 MB | 0.1 MB |
-| Grid: UI long tasks over 50 ms in the measured segments / the longest | 0 / ≤ 50 ms | reported / ≤ 250 ms | 0 – 5 / 0 – 82 ms | 3 / 74 ms |
+| Grid: UI long tasks over 50 ms in the measured segments / the longest | 0 / ≤ 50 ms | reported / ≤ 250 ms | 32 / 101 ms | 18 / 70 ms |
 | Grid, live: Ctrl+A, Ctrl+C of 100,000 × 8 rows → clipboard (16.7 MB) | ≤ 1.5 s | ≤ 6 s | 0.57 – 0.81 s | 0.61 s |
 | Grid, live: Save Results As CSV, 1,000,000 × 8 rows (172 MB) | ≤ 3 s | ≤ 15 s | 1.5 – 2.0 s | 1.5 s |
 
@@ -801,9 +812,13 @@ of them comes once with each read (it is decoded once); that is the extra page b
 pages, their bookkeeping and the column metadata, against the distinct page bytes main forwarded. The end-to-end W1 rate
 includes copying each page from main into the renderer and cloning every window's text to the UI thread.
 
-The grid's jump target is 100 ms rather than 50 because a jump is a fast scroll: the grid fetches tiles only after
-scrolling has settled for 50 ms. Its cache and element rows are bounds rather than speeds, so their floors are the
-bounds themselves. Long tasks are counted only for the report: `results-smoke.mjs` holds each of its measured segments
-to none over 50 ms on Linux (one retry), while here only the longest task has a floor, which a freeze would break; on 2
-CPUs, jumps across 300 columns cost about 50 ms of style, layout, paint and layerization now and then, and opening the
-2 MB value one task of about 70 ms.
+A single scroll bar jump reads its tiles at once; the grid waits for scrolling to settle (50 ms) only while it stays
+faster than three views a frame. The grid's cache and element rows are bounds rather than speeds, so their floors are
+the bounds themselves. Long tasks over the whole run are counted only for the report: `results-smoke.mjs` holds each of
+its measured segments to none over 50 ms on Linux (one retry), while over the whole run here only the longest task has
+a floor, which a freeze would break; opening the 2 MB value is one task of about 70 ms. Jumps across many columns miss
+their 50 ms target: each rewrites every cell in view, and styling, laying out and painting that many cells (most of a
+300 bit-column grid's 1,811 elements) takes 40 to 90 ms on these CPUs. Row numbers are one sticky column beside the
+rows, because a sticky header inside each pooled row made every row a composited layer and every narrow-column jump a
+long task (151 ms p95 before). `results-smoke.mjs` checks that nothing inside a row is sticky, and the jump segments'
+long tasks have a floor of half their 100 jumps.

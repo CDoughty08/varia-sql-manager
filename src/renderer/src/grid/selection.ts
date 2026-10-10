@@ -1,5 +1,6 @@
 import type { Platform } from '../../../shared/commands/keybindings'
 import type { ColumnRange, CopyPart, RowRange } from '../../../shared/contracts'
+import { formatCount, plural } from '../results/status'
 import { gridLimits, openEnd } from './constants'
 import type { GridAction, GridMove } from './keyboard'
 
@@ -236,7 +237,7 @@ export function copyPlan(selection: GridSelection, columns: number): CopyPart[] 
 export function describeRange(range: CellRange): string {
   if (isEmptyRange(range)) return 'No cells selected'
   const rows = range.bottom - range.top + 1, columns = range.right - range.left + 1
-  return `${rows} ${rows === 1 ? 'row' : 'rows'}, ${columns} ${columns === 1 ? 'column' : 'columns'} selected`
+  return `${formatCount(rows)} ${plural(rows, 'row')}, ${formatCount(columns)} ${plural(columns, 'column')} selected`
 }
 /** The cells the rectangles cover together, each counted once: a sweep over column slabs, O(k² log k) for k ≤ 64. */
 function unionCells(ranges: readonly CellRange[]): number {
@@ -253,5 +254,5 @@ function unionCells(ranges: readonly CellRange[]): number {
 export function describeSelection(selection: GridSelection, rows: number, columns: number): string {
   const ranges = resolveBlocks(selection, rows, columns)
   if (ranges.length <= 1) return describeRange(ranges[0] ?? emptyRange)
-  return `${ranges.length} ranges selected, ${unionCells(ranges)} cells`
+  return `${ranges.length} ranges selected, ${formatCount(unionCells(ranges))} cells`
 }

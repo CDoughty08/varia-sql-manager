@@ -68,8 +68,11 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['banner.errorForeground'], ['quickInput.background', 'banner.errorBackground']),
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground']),
-  // Selected cells keep their text color while the grid is not focused, NULL included.
-  ...text(['foreground'], ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
+  // Selected cells keep their text color while the grid is not focused (links, read errors and the truncation marker
+  // too); NULL takes the grid's foreground there (styles.css), as its tint is too faint on that fill.
+  ...text(['foreground', 'resultsGrid.foreground', 'resultsGrid.linkForeground', 'errorForeground', 'resultsGrid.truncationForeground'],
+    ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
+  ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
   ...text(['notifications.foreground'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),

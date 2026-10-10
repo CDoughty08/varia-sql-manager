@@ -44,6 +44,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
     private readonly bool hooks;
     private readonly Action<object>? publish;
     private readonly Timer? memoryTimer;
+    private readonly object memoryGate = new();
     private long reportedBytes = -1;
     private int reportedBand;
     private object? health;
@@ -359,7 +360,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
             // so SQL Server (not the client) decides whether the rest of the batch runs, as in SSMS.
             foreach (SqlError error in e.Errors)
             {
-                if (error.Class <= 10) { messages.Add(error.Message); continue; }
+                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message); continue; }
                 // An error while rows stream means the statement producing the current result set stopped early.
                 if (currentSet is not null) currentSet.Incomplete = true;
                 var text = Describe(error);
@@ -543,7 +544,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
             // Messages delivered with the exception (e.g. PRINT before a severe error, or the error itself) belong in Messages,
             // in order, except errors InfoMessage already reported.
             foreach (SqlError item in error.Errors)
-                if (item.Class <= 10) messages.Add(item.Message);
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
                 else if (status == "failed" && !Delivered(item)) messages.Add(Describe(item), MessageKind.Error);
             var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
             if (details.Count == 0)
@@ -606,7 +607,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString(CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
         if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
-        if (failure is not null && batchNumber > 0) Note("Stopped at batch " + batchNumber + ", repetition " + iteration + "; " + completed + " of " + totalBatches + " batch executions completed.");
+        // Only when something was skipped: an error ends its batch's script, not the batch, which SQL Server may run on.
+        if (failure is not null && batchNumber > 0 && completed + 1 < totalBatches)
+        {
+            var repeated = batches[batchNumber - 1].RepeatCount > 1;
+            Note(status == "failed"
+                ? "Batch " + batchNumber + (repeated ? ", repetition " + iteration + "," : "") + " raised an error; later batches were not executed."
+                : "Stopped at batch " + batchNumber + (repeated ? ", repetition " + iteration : "") + "; " + completed + " of " + totalBatches + " batch executions completed.");
+        }
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
@@ -644,6 +652,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
     {
         if (args.ResultIds is not { Length: >= 1 and <= 1024 } || args.ResultIds.Contains(0u)) throw new RequestException("INVALID_PARAMS", "Between 1 and 1024 result IDs are required.");
         var closed = store.Release(args.ResultIds);
+        // The fall goes out as an event before this answer, in order with the other results.memory events; the status bar
+        // follows only those, so an answer overtaken by a newer event cannot show stale usage.
+        if (closed > 0) ReportMemory();
         return new ResultsCloseResult(closed, store.UsedBytes);
     }
 
@@ -675,18 +686,25 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost
         }
     }
 
-    /// <summary>A global results.memory EVENT at most once a second, when usage crosses 50, 75, 90 or 100 % of the budget
-    /// or moves by 64 MiB.</summary>
-    private void ReportMemory()
+    /// <summary>"Changed database context to 'x'." (5701) and "Changed language setting to x." (5703): SQL Server sends
+    /// them for USE, a session's login, and the toolbar's database change, and SSMS leaves them out of Messages.</summary>
+    private static bool IsContextChange(SqlError error) => error.Number is 5701 or 5703;
+
+    /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
+    /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls (results were closed, or a copy or save that leased them
+    /// ended).</summary>
+    internal void ReportMemory()
     {
-        var used = store.UsedBytes;
-        var global = store.GlobalBytes;
-        var band = used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
-        var previous = Interlocked.Read(ref reportedBytes);
-        if (previous < 0 ? used == 0 : band == reportedBand && Math.Abs(used - previous) < MemoryReportStep) return;
-        Interlocked.Exchange(ref reportedBytes, used);
-        reportedBand = band;
-        publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
+        lock (memoryGate)
+        {
+            var used = store.UsedBytes;
+            var global = store.GlobalBytes;
+            var band = used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
+            if (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep) return;
+            reportedBytes = used;
+            reportedBand = band;
+            publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
+        }
     }
 
     /// <summary>Reads past the rest of a result set that stores no more rows and has a long column, counting its rows.

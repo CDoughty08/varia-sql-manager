@@ -47,7 +47,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
       resultIndex: index, resultCount: countRef.current, platform, stats: gridStats,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
-        results.announce(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
+        results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
       },
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),

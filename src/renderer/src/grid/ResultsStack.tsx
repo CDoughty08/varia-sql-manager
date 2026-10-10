@@ -109,8 +109,11 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
       {mounted.has(index) ? <ResultGrid tabId={tabId} entry={entry} count={count} focused={index === Math.min(focused, count - 1)} budget={tab.summary?.budget} onFocus={focus} /> : <GridPlaceholder entry={entry} />}
     </div>)
     if (index < count - 1) {
+      // The value is the upper grid's height, which the splitter moves between the two grids' minimum heights.
+      const height = Math.round(layout.heights[index])
       items.push(<div key={`splitter-${index}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize Result ${index + 1}`}
-        aria-valuenow={Math.round(layout.heights[index])} tabIndex={0} style={{ top: layout.offsets[index] + layout.heights[index] }}
+        aria-valuenow={height} aria-valuemin={Math.round(minHeight)} aria-valuemax={Math.round(layout.heights[index] + layout.heights[index + 1] - minHeight)}
+        aria-valuetext={`Result ${index + 1} height ${height} pixels`} tabIndex={0} style={{ top: layout.offsets[index] + layout.heights[index] }}
         onPointerDown={event => splitterDown(index, event)} onPointerMove={splitterMove} onPointerUp={splitterUp} onLostPointerCapture={() => { drag.current = undefined }}
         onDoubleClick={() => setWeights(undefined)} onKeyDown={event => splitterKey(index, event)} />)
     }

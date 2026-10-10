@@ -309,6 +309,23 @@ internal static class TextChecks
             var lines = Encoding.UTF8.GetString(File.ReadAllBytes(target)).Split("\r\n");
             check(result is { Rows: 1000, Partial: false } && lines.Length == 1002 && lines[0] == "\uFEFFid,name,created,amount,key,note,active,score" && lines[^1] == "" && Leftovers().Length == 0
                 && result.Bytes == new FileInfo(target).Length, "export writes a temporary file and renames it over the target (" + result.Bytes + " bytes)");
+            if (!OperatingSystem.IsWindows())
+            {
+                // A replaced file keeps its permissions, private or group-writable, whatever the umask; a new one gets the default.
+                var modes = new List<string>();
+                foreach (var mode in new[] { UnixFileMode.UserRead | UnixFileMode.UserWrite, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.GroupWrite })
+                {
+                    File.SetUnixFileMode(target, mode);
+                    await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, target, "csv", true, "empty"), null);
+                    modes.Add(Convert.ToString((int)File.GetUnixFileMode(target), 8));
+                }
+                var fresh = Path.Combine(folder.FullName, "fresh.csv");
+                await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, fresh, "csv", true, "empty"), null);
+                var freshMode = File.GetUnixFileMode(fresh);
+                File.Delete(fresh);
+                check(modes.SequenceEqual(["600", "660"]) && (freshMode & UnixFileMode.UserRead) != 0 && Leftovers().Length == 0,
+                    "an export over an existing file keeps its permissions (" + string.Join(", ", modes) + "), and a new file gets the default (" + Convert.ToString((int)freshMode, 8) + ")");
+            }
 
             string? Code(ResultsExportArgs args, RequestContext? context = null)
             {

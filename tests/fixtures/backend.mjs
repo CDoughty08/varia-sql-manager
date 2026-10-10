@@ -196,6 +196,8 @@ function explorerChildren({ node, subtype }) {
 const stored = new Map()
 let nextResultId = 1
 const globalBytes = 256 * 1024 * 1024
+// The memory a directive's `memory=` pretends its results hold, until results.close frees the last of them.
+let held = { bytes: 0, results: new Set() }
 const column = (name, dataType) => ({ name, dataType, wire: 'text', nullable: true })
 const available = result => result.complete ? result.read : Math.floor(result.read / result.pageRows) * result.pageRows
 const describe = result => ({
@@ -317,7 +319,10 @@ async function runDirective(id, params, directive) {
   const maxSets = params.maxResultSets ?? 10
   const queryId = params.queryId
   runningDirectives.add(queryId)
-  if (directive.memory !== undefined) write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: Math.round(directive.memory * globalBytes), globalBytes })
+  if (directive.memory !== undefined) {
+    held = { bytes: Math.round(directive.memory * globalBytes), results: new Set() }
+    write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: held.bytes, globalBytes })
+  }
   let status = 'completed'
   try {
     for (const [index, set] of directive.sets.entries()) {
@@ -325,6 +330,7 @@ async function runDirective(id, params, directive) {
       if (index >= maxSets) { discarded.push(set); continue }
       const result = storeResult({ columns: shape.columns, rowAt: shape.row, pageRows: shape.pageRows, read: set.rate === undefined ? set.rows : 0, complete: false }, index)
       results.push(result)
+      if (directive.memory !== undefined) held.results.add(result.resultId)
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.opened', descriptor: describe(result) })
       while (result.read < set.rows) {
         if (cancelledQueries.has(queryId)) { status = 'cancelled'; result.incomplete = true; break }
@@ -415,7 +421,12 @@ async function workbench(id, method, params, credit) {
     case 'results.close': {
       let closed = 0
       for (const resultId of params.resultIds) if (stored.delete(resultId)) closed++
-      return respond(id, { closed, usedBytes: 0 })
+      // As the real backend does, the fall goes out as an event before the answer.
+      if (params.resultIds.filter(resultId => held.results.delete(resultId)).length && held.results.size === 0 && held.bytes > 0) {
+        held.bytes = 0
+        write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: 0, globalBytes })
+      }
+      return respond(id, { closed, usedBytes: held.bytes })
     }
   }
   const connection = workbenchConnections.get(params.connectionId)

@@ -4,7 +4,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ResultsStack from '../grid/ResultsStack'
 import MessagesView from './MessagesView'
 import type { ResultJob, TabResults } from './ResultsService'
-import { formatCount, statusSentence } from './status'
+import { formatCount, plural, statusSentence } from './status'
 
 /** `query` is false for a value's document (XML, JSON, plan), which has no results of its own. */
 interface Props { tabId: string; query: boolean; connected: boolean; hint?: string }
@@ -48,15 +48,19 @@ function OutputPane({ tabId, query, connected, hint }: Props) {
   const hasSets = !!tab && (tab.sets.length > 0 || tab.status === 'closed')
   const view = tab ? (tab.view === 'results' && hasSets ? 'results' : 'messages') : undefined
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
+  // Closed results keep the tab, without a count of sets that are gone.
+  const sets = tab && tab.status !== 'closed' ? tab.sets.length : 0, messages = tab?.messages.length ?? 0
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
   return <section className="output-panel" aria-label="Query output">
     <div className="output-toolbar">
       <div role="tablist" aria-label="Query output views">
-        {hasSets && <button role="tab" aria-selected={view === 'results'} className={view === 'results' ? 'active' : ''} onClick={() => results.setView(tabId, 'results')}>Results<span>{tab!.sets.length}</span></button>}
-        {tab && <button role="tab" aria-selected={view === 'messages'} className={view === 'messages' ? 'active' : ''} onClick={() => results.setView(tabId, 'messages')}>Messages{errors ? <span className="error-count">!</span> : tab.messages.length > 0 && <span>{tab.messages.length}</span>}</button>}
+        {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}
+        {hasSets && <button role="tab" aria-selected={view === 'results'} aria-label={sets > 0 ? `Results, ${formatCount(sets)} ${plural(sets, 'result set')}` : 'Results'} className={view === 'results' ? 'active' : ''} onClick={() => results.setView(tabId, 'results')}>Results{sets > 0 && <span className="badge">{sets}</span>}</button>}
+        {tab && <button role="tab" aria-selected={view === 'messages'} aria-label={errors ? 'Messages, contains errors' : messages > 0 ? `Messages, ${formatCount(messages)} ${plural(messages, 'message')}` : 'Messages'} className={view === 'messages' ? 'active' : ''} onClick={() => results.setView(tabId, 'messages')}>Messages{errors ? <span className="badge error-count">!</span> : messages > 0 && <span className="badge">{messages}</span>}</button>}
       </div>
       {tab && <small className="output-status" data-status={tab.status}>{statusLine(tab, now)}</small>}
-      {jobs.map(job => <div key={job.jobId} className="job-strip" role="status"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
+      {/* Visual progress only: the pane's live region announces how a copy or save ended. */}
+      {jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
       {/* The live region below announces it; this is the visible copy. */}
       {tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
     </div>

@@ -316,6 +316,8 @@ export class ResultClient implements Disposable {
       const ids = [...set]
       for (let at = 0; at < ids.length; at += 1024) {
         const resultIds = ids.slice(at, at + 1024)
+        // The answer's usedBytes is not shown: the backend reports the fall as a results.memory event before it answers,
+        // and an answer could arrive after a newer event or summary.
         try { await this.request(id => ({ type: 'close', id, generation, resultIds })) }
         catch (error) {
           // The port or the worker went away before main had them: they wait for the next port.
@@ -425,14 +427,21 @@ export class ResultClient implements Disposable {
         return
       }
       case 'query': return this.queryEvent(message.queryId, message.event)
-      case 'memory': for (const listener of [...this.memoryListeners]) listener({ usedBytes: message.usedBytes, globalBytes: message.globalBytes }); return
+      case 'memory': return this.memoryChanged(message.usedBytes, message.globalBytes)
       case 'backend': return this.backend(message.generation, message.status)
     }
+  }
+
+  /** Memory listeners hear what the backend holds; a `globalBytes` of 0 leaves the budget as last reported. */
+  private memoryChanged(usedBytes: number, globalBytes: number): void {
+    for (const listener of [...this.memoryListeners]) listener({ usedBytes, globalBytes })
   }
 
   private backend(generation: number, status: BackendStatus): void {
     this.status = status
     if (generation === this.generation) return
+    // A new backend holds no results yet.
+    if (this.generation !== 0) this.memoryChanged(0, 0)
     this.generation = generation
     // The backend that held them is gone, and with it their results.
     for (const queued of [...this.closeQueue.keys()]) if (queued !== generation) this.closeQueue.delete(queued)

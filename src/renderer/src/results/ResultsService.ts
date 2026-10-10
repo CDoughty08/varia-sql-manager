@@ -1,4 +1,4 @@
-import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
+import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { MessageEntry, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -84,10 +84,20 @@ const runStatus = (summary: QueryResult): RunStatus => summary.status
 const valueKinds: Readonly<Record<string, { kind: TextDocument['kind']; base?: string; extension: string }>> = {
   xml: { kind: 'xml', extension: '.xml' }, json: { kind: 'json', extension: '.json' }, plan: { kind: 'sqlplan', base: 'ExecutionPlan', extension: '.sqlplan' }
 }
-/** Characters a file name cannot hold become '_'; a blank name becomes the kind's ('XML', 'JSON'). */
+/**
+ * Characters a file name cannot hold become '_', and so do bidirectional controls and line separators, with which a
+ * column alias could make 'report\u202egpj.xml' read as another file type; a blank name becomes the kind's ('XML', 'JSON').
+ */
 function valueBase(column: ResultColumn, kind: TextDocument['kind']): string {
-  const name = column.name.replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, '_').trim().slice(0, 100)
+  const name = column.name.replace(/[\\/:*?"<>|\x00-\x1f\x7f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, '_').trim().slice(0, 100)
   return name || kindInfo[kind].badge
+}
+/** Save Results As's suggested name, '{tab}-Result{n}', cut to the length main accepts (never inside a surrogate pair). */
+export function suggestedName(baseName: string, index: number): string {
+  const suffix = `-Result${index + 1}`
+  let end = Math.min(baseName.length, wire.jobs.suggestedName - suffix.length)
+  if (end > 0 && end < baseName.length && /[\ud800-\udbff]/.test(baseName[end - 1])) end--
+  return baseName.slice(0, end) + suffix
 }
 
 /**
@@ -111,6 +121,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly controllers = new Map<string, GridController>()
   private readonly dirty = new Set<string>()
   private readonly announcements = new Map<string, unknown>()
+  /** The last selection each tab's live region read out: an arrow key that leaves its size unchanged says nothing. */
+  private readonly selectionAnnounced = new Map<string, string>()
+  /** Values being opened, by tab, set, row and column: another click or Enter while one opens opens nothing more. */
+  private readonly opening = new Set<string>()
   private readonly subscriptions: (() => void)[] = []
   private readonly noticeTimers = new Map<string, unknown>()
   private copying: RunningJob | undefined
@@ -145,6 +159,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (this.disposed) return
     this.disposeRun(tabId)
     this.clearJobNotice(tabId)
+    this.selectionAnnounced.delete(tabId)
     this.views.set(tabId, { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
     const run: Run = {
       queryId, startedAt: this.now(), status: 'running', sets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
@@ -191,6 +206,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.clearJobNotice(tabId)
     this.disposeRun(tabId)
     this.views.delete(tabId)
+    this.selectionAnnounced.delete(tabId)
     const timer = this.announcements.get(tabId)
     if (timer !== undefined) this.timers.clearTimeout(timer)
     this.announcements.delete(tabId)
@@ -314,7 +330,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
-    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: `${baseName}-Result${index + 1}` }) }
+    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, index) }) }
     finally { this.endJob(running) }
     if (this.disposed) return undefined
     if (result.ok) {
@@ -337,6 +353,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!set || !info || !spec || !this.documents) return { opened: false }
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return { opened: false, message: state === 'lost' ? unavailable : closedResults }
+    const key = `${tabId}:${index}:${row}:${column}`
+    if (this.opening.has(key)) return { opened: false }
+    this.opening.add(key)
     try {
       const value = await set.handle.getCell(row, column, { format: spec.kind === 'json' ? 'json' : 'xml' })
       if (this.disposed || value.isNull || value.error) return { opened: false }
@@ -345,6 +364,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.documents.openText({ name: `${base}${number}${spec.extension}`, text: value.text, kind: spec.kind })
       return { opened: true, ...value.truncated ? { message: `This ${kindInfo[spec.kind].value} value was truncated at 2,097,152 characters, so it opened unformatted.` } : {} }
     } catch (error) { return { opened: false, message: 'Could not open the value: ' + (error instanceof Error ? error.message : 'The value could not be read.') } }
+    finally { this.opening.delete(key) }
   }
 
   /** Cancels a copy or save by its job id (Cancel on its strip). */
@@ -361,7 +381,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return false
   }
 
-  /** The live region's sentence, after the 300 ms debounce. */
+  /**
+   * A grid's selection changed: its size is read out when it differs from the last one read, so moving the active cell
+   * with the arrow keys (which screen readers announce themselves) adds nothing.
+   */
+  announceSelection(tabId: string, text: string): void {
+    if (this.selectionAnnounced.get(tabId) === text) return
+    this.selectionAnnounced.set(tabId, text)
+    this.announce(tabId, text)
+  }
+
+  /** The live region's sentence, after the 300 ms debounce; a copy's or save's outcome is read out again when repeated. */
   announce(tabId: string, text: string): void {
     const previous = this.announcements.get(tabId)
     if (previous !== undefined) this.timers.clearTimeout(previous)

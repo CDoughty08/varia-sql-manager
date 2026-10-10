@@ -5,8 +5,8 @@ import type { ResultClient } from './ResultClient'
 
 export interface ResultMemory { readonly usedBytes: number; readonly globalBytes: number }
 
-/** The memory the backend holds for query results, and its budget: pushed by the backend (at most once a second),
- *  reported with each summary, and after results are closed. */
+/** The memory the backend holds for query results, and its budget: pushed by the backend (checked once a second and after each close),
+ *  reported with each summary, and 0 once a new backend replaces a lost one. */
 export class ResultMemoryService extends SnapshotStore<ResultMemory> implements Disposable {
   private readonly subscriptions: Disposable[]
   constructor(client: Pick<ResultClient, 'onMemory'>, events: EventBus) {

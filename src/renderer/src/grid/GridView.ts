@@ -12,6 +12,7 @@ import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
 import { fitWidth, initialWidth, measureCharWidth, typeHintChars } from './measure'
+import { freshRing, ringStep, slotOf, type RowRing } from './ring'
 import { applyWheel, ensureVisible, normalizeWheel, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
@@ -25,8 +26,14 @@ const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: 
 let nextGridId = 1
 
 interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; label: string; shown: boolean; left: number; width: number }
+/**
+ * A pooled row. `header` is its row header for screen readers, inside the row; `mark` draws the number in the sticky
+ * row-number column (one composited layer for every row, where a sticky header in each row made a layer per row). The
+ * active row's spare slot has no mark: it is out of view.
+ */
 interface RowSlot {
-  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly cells: CellSlot[]; readonly pin: CellSlot
+  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: { readonly el: HTMLDivElement; readonly text: Text }
+  readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
 }
 interface HeaderSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; sel: boolean; shown: boolean; left: number; width: number }
@@ -76,6 +83,9 @@ export class GridView {
   private readonly head: HTMLDivElement
   private readonly corner: HTMLDivElement
   private readonly rowsEl: HTMLDivElement
+  /** The sticky row-number column (hidden from screen readers, which read each row's own header) and its rows. */
+  private readonly marks: HTMLDivElement
+  private readonly marksRows: HTMLDivElement
   private readonly data: GridData
   private readonly layout: ColumnLayout
   private readonly columns: number
@@ -84,7 +94,11 @@ export class GridView {
   private readonly slots = new WeakMap<Element, { row?: RowSlot; cell?: CellSlot; header?: HeaderSlot }>()
   private readonly cleanup: (() => void)[] = []
   private rowSlots: RowSlot[] = []
+  /** How rows map to `rowSlots` and their DOM order (ring.ts); undefined until the pool has rows to show. */
+  private ring: RowRing | undefined
   private pinSlot: RowSlot
+  /** Whether the active row's spare slot comes before the ring in the DOM (its row is above the rows shown). */
+  private pinFirst = true
   private headerSlots: HeaderSlot[] = []
   private cellsPerRow = 0
   private model: ScrollModel | undefined
@@ -122,6 +136,8 @@ export class GridView {
   private resultCount: number
   private measuring = false
   private measureAfter = 0
+  /** The click count of the last press (a double-click's second press opens no second value tab). */
+  private clicks = 0
   private status: GridStatus = {}
 
   constructor(o: GridViewOptions) {
@@ -154,7 +170,11 @@ export class GridView {
     this.corner.title = batchNumber > 1 || iteration > 1 ? `Select all · Batch ${batchNumber}${iteration > 1 ? ' / repeat ' + iteration : ''}` : 'Select all'
     this.head.append(this.corner)
     this.rowsEl = div('rg-rows', 'rowgroup')
-    this.spacer.append(this.head, this.rowsEl)
+    this.marks = div('rg-rhs')
+    this.marks.setAttribute('aria-hidden', 'true')
+    this.marksRows = div('rg-rhs-rows')
+    this.marks.append(this.marksRows)
+    this.spacer.append(this.marks, this.head, this.rowsEl)
     this.pinSlot = this.createRow(false)
     this.scroller.replaceChildren(this.spacer)
     this.root.setAttribute('aria-colcount', String(this.columns + 1))
@@ -180,6 +200,8 @@ export class GridView {
           if (this.drag) { this.endDrag(); return true }
           return this.o.onEscape()
         case 'open': {
+          // A held Enter opens one tab, not one per repeat.
+          if (event.repeat) return true
           const active = this.o.state.selection?.active
           if (!active || !this.links[active.column] || active.row >= this.rows()) return false
           this.o.onOpenValue?.(active.row, active.column)
@@ -188,7 +210,7 @@ export class GridView {
         default: {
           const rows = this.rows()
           if (rows <= 0 || this.columns <= 0) return true
-          const current = this.selection() ?? { resultIndex: this.o.resultIndex, blocks: [{ kind: 'cells' as const, anchor: { row: 0, column: 0 }, focus: { row: 0, column: 0 } }], active: { row: 0, column: 0 } }
+          const current = this.selection() ?? firstCell(this.o.resultIndex)
           const next = navigate(current, action, { rows, columns: this.columns, pageRows: pageStep(this.viewportHeight - g.headerHeight) })
           this.select(next)
           this.reveal(next.active.row, next.active.column)
@@ -287,8 +309,8 @@ export class GridView {
     }
     if (this.activeEl) return this.activeEl
     const range = this.lastRange
-    if (range && this.rowSlots.length > 0) {
-      const slot = this.rowSlots[range.firstRow % this.rowSlots.length]
+    if (range && this.rowSlots.length > 0 && this.ring) {
+      const slot = this.rowSlots[slotOf(this.ring, range.firstRow, this.rowSlots.length)]
       const first = slot.shown && slot.row === range.firstRow ? slot.cells.find(cell => cell.shown && cell.column === range.firstColumn) : undefined
       if (first) return first.el
     }
@@ -379,6 +401,7 @@ export class GridView {
 
   /** Presses inside the cells keep focus on the grid itself, not its scroller, and select no text. */
   private mouseDown(event: MouseEvent): void {
+    this.clicks = event.detail
     if (!this.point(event).inside) return
     event.preventDefault()
     this.root.focus({ preventScroll: true })
@@ -425,7 +448,8 @@ export class GridView {
     const drag = this.drag
     if (!drag || event.pointerId !== drag.pointerId) return
     this.endDrag()
-    if (!drag.dragging && !drag.modifiers && drag.hit.kind === 'cell' && this.links[drag.hit.column]) this.o.onOpenValue?.(drag.hit.row, drag.hit.column)
+    // A link opens on a single click: the second press of a double-click lands before the first one's tab has opened.
+    if (!drag.dragging && !drag.modifiers && drag.hit.kind === 'cell' && this.links[drag.hit.column] && this.clicks <= 1) this.o.onOpenValue?.(drag.hit.row, drag.hit.column)
   }
 
   private endDrag(): void {
@@ -575,7 +599,15 @@ export class GridView {
     header.setAttribute('aria-colindex', '1')
     header.append(number)
     el.append(header)
-    const slot: RowSlot = { el, header, number, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false }
+    let mark: RowSlot['mark']
+    if (withCells) {
+      mark = { el: doc.createElement('div'), text: doc.createTextNode('') }
+      mark.el.className = 'rg-rn'
+      mark.el.style.display = 'none'
+      mark.el.append(mark.text)
+      this.marksRows.append(mark.el)
+    }
+    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false }
     this.slots.set(el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
@@ -608,8 +640,13 @@ export class GridView {
     }
     if (rowSlots > this.rowSlots.length || rowSlots < this.rowSlots.length * (1 - g.poolSlack)) {
       while (this.rowSlots.length < rowSlots) this.rowSlots.push(this.createRow())
-      while (this.rowSlots.length > rowSlots) this.rowSlots.pop()!.el.remove()
+      while (this.rowSlots.length > rowSlots) { const slot = this.rowSlots.pop()!; slot.el.remove(); slot.mark?.el.remove() }
       for (const slot of this.rowSlots) slot.row = -1
+      // The ring starts again in slot order.
+      this.ring = undefined
+      this.rowsEl.prepend(this.pinSlot.el)
+      this.pinFirst = true
+      this.rowsEl.append(...this.rowSlots.map(slot => slot.el))
       changed = true
     }
     const headers = cellsPerRow
@@ -717,13 +754,28 @@ export class GridView {
     const rebased = baseRow !== this.baseRow
     this.baseRow = baseRow
     const containerY = rowsContainerY(model, top, virtualTop, baseRow)
-    if (containerY !== this.containerY) { this.containerY = containerY; this.rowsEl.style.transform = `translateY(${containerY}px)` }
+    if (containerY !== this.containerY) {
+      this.containerY = containerY
+      this.rowsEl.style.transform = this.marksRows.style.transform = `translateY(${containerY}px)`
+    }
+    // SSMS's current cell: once rows arrive, the first cell is selected until another is chosen, so Copy, Shift+click
+    // and the keys start from it and screen readers hear it. It is not announced as a selection change.
+    if (rows > 0 && this.columns > 0 && !this.selection()) state.selection = firstCell(this.o.resultIndex)
 
     this.dragStep()
-    const range = this.lastRange = visibleRange({ top: virtualTop, left, width, height }, rows, this.layout, rowHeader)
-    // An empty result still shows its column headers.
-    const headerRange = rows > 0 ? range : visibleRange({ top: 0, left, width, height }, 1, this.layout, rowHeader)
+    const viewport = { top: virtualTop, left, width, height }
     const bodyRows = Math.ceil(Math.max(0, height - g.headerHeight) / g.rowHeight)
+    let overscan: { rows: number; columns: number } = { rows: g.overscanRows, columns: g.overscanColumns }
+    let range = visibleRange(viewport, rows, this.layout, rowHeader, overscan)
+    // A very large view of narrow columns (a 4K screen) keeps less in reserve: every pooled cell costs style, layout and
+    // paint when a jump rewrites them all.
+    if ((bodyRows + 1 + 2 * overscan.rows) * (range.lastColumn - range.firstColumn + 1) > g.poolCells) {
+      overscan = { rows: g.reducedOverscanRows, columns: g.reducedOverscanColumns }
+      range = visibleRange(viewport, rows, this.layout, rowHeader, overscan)
+    }
+    this.lastRange = range
+    // An empty result still shows its column headers.
+    const headerRange = rows > 0 ? range : visibleRange({ top: 0, left, width, height }, 1, this.layout, rowHeader, overscan)
     if (snapshot.state !== 'lost' && snapshot.state !== 'released') {
       const again = this.data.ensure(range, rows, state.topRow - this.lastTopRow, Math.max(1, bodyRows), state.selection?.active)
       if (again) this.schedule()
@@ -732,7 +784,7 @@ export class GridView {
     const tileError = this.data.error
     if (tileError !== this.status.tileError) this.setStatus({ ...this.status, tileError })
     const visibleColumns = headerRange.lastColumn - headerRange.firstColumn + 1
-    if (this.pools(bodyRows + 1 + 2 * g.overscanRows, Math.max(1, visibleColumns))) columnsMoved = true
+    if (this.pools(bodyRows + 1 + 2 * overscan.rows, Math.max(1, visibleColumns))) columnsMoved = true
     this.paint(range, headerRange, rows, rebased, columnsMoved)
     this.aria(snapshot.state, rows)
   }
@@ -752,15 +804,26 @@ export class GridView {
     const count = this.rowSlots.length
     const used = new Set<RowSlot>()
     let activeCell: CellSlot | undefined
-    for (let row = range.firstRow; row <= range.lastRow; row++) {
-      const slot = this.rowSlots[row % count]
-      used.add(slot)
-      const cell = this.paintRow(slot, row, range, ranges, active, tile, rebased, columnsMoved)
-      if (cell) activeCell = cell
+    if (range.lastRow >= range.firstRow) this.orderRows(range.firstRow)
+    const ring = this.ring
+    if (ring) {
+      for (let row = range.firstRow; row <= range.lastRow; row++) {
+        const slot = this.rowSlots[slotOf(ring, row, count)]
+        used.add(slot)
+        const cell = this.paintRow(slot, row, range, ranges, active, tile, rebased, columnsMoved)
+        if (cell) activeCell = cell
+      }
     }
     for (const slot of this.rowSlots) if (!used.has(slot)) this.hideRow(slot)
-    // The active row always has a slot, so aria-activedescendant resolves even when it is scrolled out of view.
+    // The active row always has a slot, so aria-activedescendant resolves even when it is scrolled out of view; it sits
+    // before or after the rows shown, as its row does.
     if (active && (active.row < range.firstRow || active.row > range.lastRow)) {
+      const first = active.row < range.firstRow
+      if (first !== this.pinFirst) {
+        this.pinFirst = first
+        if (first) this.rowsEl.prepend(this.pinSlot.el)
+        else this.rowsEl.append(this.pinSlot.el)
+      }
       const cell = this.paintRow(this.pinSlot, active.row, { ...range, firstColumn: active.column, lastColumn: active.column - 1 }, ranges, active, tile, rebased, columnsMoved)
       if (cell) activeCell = cell
     } else this.hideRow(this.pinSlot)
@@ -779,9 +842,25 @@ export class GridView {
       this.root.setAttribute('aria-activedescendant', activeEl.id)
     }
     if (activeCell) {
-      const label = activeCell.value + (activeCell.bits & (NULL | ERR) ? ', NULL' : '') + (activeCell.bits & TRUNC ? ', truncated' : '') + (activeCell.bits & LINK ? ', link, press Enter to open' : '')
+      // A NULL and a value that could not be read both show NULL, as does the text 'NULL': the label tells them apart.
+      const bits = activeCell.bits
+      const label = activeCell.value + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
+  }
+
+  /** Keeps the slots of the rows shown in row order in the DOM, as browse-mode screen readers read them (ring.ts). */
+  private orderRows(firstRow: number): void {
+    const count = this.rowSlots.length
+    if (count === 0) return
+    if (!this.ring) { this.ring = freshRing(firstRow); return }
+    const front = this.rowSlots[this.ring.start].el
+    const step = ringStep(this.ring, firstRow, count)
+    this.ring = step.ring
+    const end = this.pinFirst ? null : this.pinSlot.el
+    for (const index of step.toEnd) this.rowsEl.insertBefore(this.rowSlots[index].el, end)
+    let before = front
+    for (const index of step.toFront) { const el = this.rowSlots[index].el; this.rowsEl.insertBefore(el, before); before = el }
   }
 
   /** Paints one row's cells over the frame's columns (and the active cell when it is out of them); returns the active cell. */
@@ -791,20 +870,21 @@ export class GridView {
       if (slot.row !== row) {
         slot.row = row
         slot.number.nodeValue = String(row + 1)
+        if (slot.mark) slot.mark.text.nodeValue = String(row + 1)
         slot.el.setAttribute('aria-rowindex', String(row + 2))
         for (const cell of slot.cells) cell.column = -1
         slot.pin.column = -1
       }
       const top = slot === this.pinSlot && this.model?.mode === 'virtual' && Math.abs(row - this.baseRow) > 50_000 ? -1000 : rowTop(row, this.baseRow)
-      if (top !== slot.top) { slot.top = top; slot.el.style.top = top + 'px' }
-      if (!slot.shown) { slot.shown = true; slot.el.style.display = '' }
+      if (top !== slot.top) { slot.top = top; slot.el.style.top = top + 'px'; if (slot.mark) slot.mark.el.style.top = top + 'px' }
+      if (!slot.shown) { slot.shown = true; slot.el.style.display = ''; if (slot.mark) slot.mark.el.style.display = '' }
     }
     const odd = row % 2 === 1
     if (odd !== slot.odd) { slot.odd = odd; slot.el.className = odd ? 'rg-row odd' : 'rg-row' }
     if (slot.width !== this.width) { slot.width = this.width; slot.el.style.width = this.width + 'px' }
     let headerSel = false
     for (const item of ranges) if (row >= item.top && row <= item.bottom) { headerSel = true; break }
-    if (headerSel !== slot.headerSel) { slot.headerSel = headerSel; slot.header.className = headerSel ? 'rg-rh sel' : 'rg-rh' }
+    if (headerSel !== slot.headerSel) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = headerSel ? 'rg-rn sel' : 'rg-rn' }
     let activeCell: CellSlot | undefined
     const perRow = slot.cells.length
     for (let column = range.firstColumn; column <= range.lastColumn; column++) {
@@ -856,6 +936,7 @@ export class GridView {
     slot.row = -1
     slot.el.style.display = 'none'
     slot.el.removeAttribute('aria-rowindex')
+    if (slot.mark) slot.mark.el.style.display = 'none'
   }
   private hideCell(cell: CellSlot): void {
     if (!cell.shown) return
@@ -910,6 +991,12 @@ export class GridView {
     this.root.setAttribute('aria-busy', String(open))
     this.root.setAttribute('aria-label', label)
   }
+}
+
+/** The first cell, as the current cell of a grid nothing has been selected in. */
+function firstCell(resultIndex: number): GridSelection {
+  const cell = { row: 0, column: 0 }
+  return { resultIndex, blocks: [{ kind: 'cells', anchor: cell, focus: cell }], active: cell }
 }
 
 /** The grid font's digit width and a header measurer (canvas measureText in the UI font). */

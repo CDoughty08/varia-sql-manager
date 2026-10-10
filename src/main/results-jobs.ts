@@ -25,6 +25,7 @@ export const jobSentences = {
   closedBeforeSave: 'These results were closed before they could be saved.',
   invalid: 'The results request was invalid.',
   copyTooLarge: `The selection is too large to copy (more than ${wire.jobs.copyBytes / 1024 / 1024} MB). Use Save Results As instead.`,
+  copyCancelled: 'The copy was cancelled.',
   /** EXPORT_FAILED tokens; the backend never sends a path or an OS message, so the sentence names only the file. */
   exportFailed: (token: string, fileName: string): string => 'Could not save the results: ' + (({
     ACCESS: `access to ${fileName} is denied.`,
@@ -35,9 +36,9 @@ export const jobSentences = {
   } as Partial<Record<string, string>>)[token] ?? `${fileName} could not be written.`)
 } as const
 
-/** Characters no file name may hold on any platform become '_'. */
+/** Characters no file name may hold on any platform become '_', as do bidirectional controls, which can disguise an extension. */
 export function sanitizeFileName(name: string): string {
-  return name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, wire.jobs.suggestedName)
+  return name.replace(/[\\/:*?"<>|\x00-\x1f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, '_').slice(0, wire.jobs.suggestedName)
 }
 
 /** The format an extension chooses; any other extension, or none, keeps the requested format. */
@@ -144,6 +145,9 @@ export class ResultsJobHost {
       const result = await this.deps.backend.copy(request.generation, { resultId: request.resultId, parts: request.parts, headers: request.headers, eol: this.deps.platform === 'win32' ? 'crlf' : 'lf', maxBytes },
         { sink, credit: wire.jobs.copyCredit, onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       if (overflow) throw new BackendError('TOO_LARGE', jobSentences.copyTooLarge)
+      // The backend may finish a copy cancelled late (its credit covered the rest), but the chunks after the cancel were
+      // dropped: the clipboard keeps its text rather than take a cut-off selection.
+      if (job.cancelled) throw new BackendError('CANCELLED', jobSentences.copyCancelled)
       parts.push(decoder.decode())
       this.deps.writeClipboard(parts.join(''))
       return result

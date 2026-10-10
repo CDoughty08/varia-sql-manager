@@ -199,10 +199,22 @@ internal static class LiveResultChecks
         // Messages: in order, errors in SSMS's two lines with the line in the whole script, and SSMS's row counts.
         var messages = await run("SELECT 1 AS one;\nPRINT 'a';\nSELECT 1/0;\nPRINT 'b';\nSELECT TOP (2) name FROM sys.objects;");
         var entries = messages.Messages;
-        check(messages.Status == "failed" && entries.Count == 6 && entries[0] == new MessageEntry("(1 row affected)", "info") && entries[1] == new MessageEntry("a", "info")
+        // A single batch that SQL Server ran to its end after an error says nothing more than SSMS does.
+        check(messages.Status == "failed" && entries.Count == 5 && entries[0] == new MessageEntry("(1 row affected)", "info") && entries[1] == new MessageEntry("a", "info")
             && entries[2] == new MessageEntry("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.", "error") && entries[3] == new MessageEntry("b", "info")
-            && entries[4] == new MessageEntry("(2 rows affected)", "info") && entries[5] == new MessageEntry("Stopped at batch 1, repetition 1; 0 of 1 batch executions completed.", "info") && messages.Error!.Message.StartsWith("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered."),
+            && entries[4] == new MessageEntry("(2 rows affected)", "info") && messages.Error!.Message.StartsWith("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered."),
             "messages keep their order and kinds in SSMS's formats: " + string.Join(" | ", entries.Select(entry => entry.Kind + ":" + entry.Text)));
+        var skipped = await run("PRINT 'one';\nGO\nRAISERROR('sev16', 16, 1);\nPRINT 'after';\nGO\nPRINT 'three';");
+        check(skipped.Status == "failed" && Texts(skipped).SequenceEqual(["one", "Msg 50000, Level 16, State 1, Line 3\nsev16", "after", "Batch 2 raised an error; later batches were not executed."]),
+            "a batch's error skips the later batches, and only then says so: " + string.Join(" | ", Texts(skipped)));
+        // SSMS leaves "Changed database context to …" out: USE says only that the commands completed, and the database
+        // the toolbar chose is changed to without a message.
+        var useSession = Guid.NewGuid().ToString();
+        var use = await run("USE tempdb;", sessionId: useSession);
+        var back = await run("SELECT 1 AS one;", sessionId: useSession);
+        await close(useSession);
+        check(use.Status == "completed" && use.Messages.Count == 0 && use.Database == "tempdb" && back.Database == "master" && Texts(back).SequenceEqual(["(1 row affected)"]),
+            "database context changes are not messages: " + string.Join(" | ", Texts(use).Concat(Texts(back))));
         check(System.Text.RegularExpressions.Regex.IsMatch(messages.CompletedAt, @"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{7}[+-]\d\d:\d\d$"), "the summary carries the completion time with 7 fractional digits: " + messages.CompletedAt);
         var procedure = await run("CREATE PROCEDURE #varia_fails AS\nBEGIN\n  SELECT 1/0;\nEND;\nGO\nEXEC #varia_fails;");
         check(procedure.Messages.Any(entry => entry.Kind == "error" && entry.Text.StartsWith("Msg 8134, Level 16, State 1, Procedure #varia_fails") && entry.Text.Contains(", Line 3\n")),
