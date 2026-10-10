@@ -27,6 +27,16 @@ describe('IPC wire lint', () => {
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
   })
+  it('loads the results worker core in plain Node 24, as the IPC benchmark\'s results thread does', () => {
+    const core = pathToFileURL(join('src', 'renderer', 'src', 'results', 'worker-core.ts')).href
+    // tests/bench/results-thread.mjs's resolve hook: the renderer's imports leave out the .ts extension.
+    const script = `import { registerHooks } from 'node:module'
+registerHooks({ resolve(specifier, context, next) { try { return next(specifier, context) } catch (error) { if (!specifier.startsWith('.') || /\\.[cm]?[jt]s$/.test(specifier)) throw error; return next(specifier + '.ts', context) } } })
+await import(${JSON.stringify(core)})`
+    const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+  })
   it('keeps the method policies loadable by the fake backend: erasable, with type-only imports', () => {
     const file = join('src', 'shared', 'ipc', 'methods.ts')
     const source = readFileSync(file, 'utf8')

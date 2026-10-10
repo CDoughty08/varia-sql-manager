@@ -15,7 +15,8 @@ const raw = (text: string): Formatted => ({ text, formatted: false })
 class Output {
   private readonly parts: string[] = []
   private length = 0
-  constructor(private readonly max: number) {}
+  private readonly max: number
+  constructor(max: number) { this.max = max }
   push(part: string): void {
     this.length += part.length
     if (this.length > this.max) throw malformed
