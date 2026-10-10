@@ -1,7 +1,8 @@
 import { commandDescriptor, type Codicon, type CommandId } from '../../../shared/commands/catalog'
 import { contextRecord, type ContextKeys, type TargetKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
-import { assignMnemonics, buildMenuModel, pruneMenu, trimSeparators, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
+import { assignMnemonics, buildMenuModel, pruneMenu, submenuTitle, trimSeparators, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
+import type { ScriptAsTitleKey } from '../../../shared/scripting/catalog.ts'
 import { evaluateWhen } from '../../../shared/commands/when'
 import type { CommandService } from '../core/commands'
 import { onUnexpectedError } from '../core/errors'
@@ -9,14 +10,19 @@ import type { CommandArgs } from '../core/types'
 
 /**
  * One item of an open menu, frozen while the menu is open. `key` is stable across resolutions (the native item id, a
- * dynamic item's id, or `sep:<n>`); `mnemonic` indexes the underlined character of `title`, or is -1.
+ * dynamic item's id, or `sep:<n>`); `mnemonic` indexes the underlined character of `title`, or is -1. A submenu is
+ * enabled while something in it is; a disabled one shows greyed and does not open, as SSMS greys a verb an object does
+ * not support. The Script submenu carries its title key for native menus, which show catalogue titles only.
  */
 export type ResolvedMenuItem =
   | {
     readonly kind: 'command'; readonly key: string; readonly id: CommandId; readonly args?: CommandArgs; readonly title: string; readonly mnemonic: number
     readonly icon?: Codicon; readonly keybinding?: KeybindingLabel; readonly enabled: boolean; readonly checked?: boolean; readonly radio?: true
   }
-  | { readonly kind: 'submenu'; readonly key: string; readonly title: string; readonly mnemonic: number; readonly items: readonly ResolvedMenuItem[] }
+  | {
+    readonly kind: 'submenu'; readonly key: string; readonly title: string; readonly mnemonic: number; readonly items: readonly ResolvedMenuItem[]; readonly enabled: boolean
+    readonly scriptAsTitle?: ScriptAsTitleKey
+  }
   | { readonly kind: 'separator'; readonly key: string }
 export type ResolvedCommandItem = Extract<ResolvedMenuItem, { kind: 'command' }>
 
@@ -61,8 +67,9 @@ function guarded<T>(read: () => T, fallback: T): T {
 
 type Draft =
   | (Omit<ResolvedCommandItem, 'mnemonic'> & { readonly mnemonic?: string | null })
-  | { readonly kind: 'submenu'; readonly key: string; readonly title: string; readonly mnemonic?: string | null; readonly items: readonly ResolvedMenuItem[] }
+  | (Omit<Extract<ResolvedMenuItem, { kind: 'submenu' }>, 'mnemonic' | 'enabled'> & { readonly mnemonic?: string | null })
   | { readonly kind: 'separator' }
+const isEnabled = (item: ResolvedMenuItem) => item.kind !== 'separator' && item.enabled
 
 /**
  * A menu as it shows now: catalogue placements whose `when` holds over the state and target keys, submenus with
@@ -92,7 +99,8 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
     const mnemonics = assignMnemonics(shown.map(draft => draft.kind === 'separator' ? null : draft))
     return Object.freeze(shown.map((draft, index): ResolvedMenuItem => draft.kind === 'separator'
       ? Object.freeze({ kind: 'separator', key: `sep:${separators++}` })
-      : Object.freeze({ ...draft, mnemonic: mnemonics[index] })))
+      : draft.kind === 'submenu' ? Object.freeze({ ...draft, mnemonic: mnemonics[index], enabled: draft.items.some(isEnabled) })
+        : Object.freeze({ ...draft, mnemonic: mnemonics[index] })))
   }
   const dynamic = (items: readonly DynamicMenuItem[]): Draft[] => items.map((item): Draft => {
     if (item.kind === 'separator') return item
@@ -106,7 +114,9 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
     const provider = entry.dynamic && options.dynamic?.[entry.dynamic]
     const provided = provider ? guarded(provider, []) : []
     // Dynamic items share the level with the catalogue's, so `finish` assigns their mnemonics together.
-    return { kind: 'submenu', key: entry.nativeId, title: entry.title, mnemonic: entry.mnemonic, items: finish([...level(children(entry.id), depth + 1), { kind: 'separator' }, ...dynamic(provided)]) }
+    const items = finish([...level(children(entry.id), depth + 1), { kind: 'separator' }, ...dynamic(provided)])
+    const scriptAsTitle = entry.dynamicTitle === 'scriptAs' && keys.explorerScriptTitle ? { scriptAsTitle: keys.explorerScriptTitle } : {}
+    return { kind: 'submenu', key: entry.nativeId, title: submenuTitle(entry, keys), mnemonic: entry.mnemonic, items, ...scriptAsTitle }
   })
   return finish(level(model(menu), 0))
 }

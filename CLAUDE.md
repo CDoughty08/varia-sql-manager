@@ -11,7 +11,7 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the eight Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the nine Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
@@ -26,8 +26,10 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 277 checks instead of 196
-  (330 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer scratch-database checks),
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 433 checks instead of 316
+  (553 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer and Script As
+  scratch-database checks and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
+  rewrites the goldens whose manifest source is `varia`),
   and `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
   session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
   (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
@@ -86,6 +88,14 @@ pages, limits, error codes, display formats, benchmarks).
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
   renders and checks every variant.
+- Script As verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, and scripting
+  options only in `options.ts`; after changing them, regenerate `docs/scripting.md` and the backend's embedded
+  `Scripting/scripting-catalog.json` with `npx vitest run tests/scripting-catalog.test.ts -u`. Scripting uses its own
+  pool (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling), runs SMO only through
+  `ScriptPipeline` with a fresh `Server` per job and prefetch limited to one object's own children, applies
+  `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
+  unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
+  DDL, and never logs scripts, names or options.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 
@@ -95,7 +105,9 @@ pages, limits, error codes, display formats, benchmarks).
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
   first; live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
-  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age).
+  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
+  scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each
+  script in a rolled-back transaction, which must change only what its verb implies; keep it when changing scripting.
 - UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
 - IPC performance: `tests/bench/*.bench.ts` and `scripts/ipc-bench.mjs` only measure; a new metric needs a
   `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in docs/ipc.md. Floors must

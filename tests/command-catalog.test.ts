@@ -11,6 +11,7 @@ import type { CommandId as RendererCommandId } from '../src/renderer/src/core/ty
 import { workbenchFixture } from './fixtures/workbench'
 import { folderIds, nodeKinds } from '../src/shared/explorer/catalog'
 import { noExplorerContext } from '../src/renderer/src/explorer/ExplorerService'
+import { scriptAsTitleKeys, scriptCommandIds, scriptVerbContextKey, scriptVerbs } from '../src/shared/scripting/catalog'
 
 const rule = (command: CommandId, spec: KeybindingSpec, platform: Platform = 'win32') => resolveKeybinding(command, spec, platform)!
 const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConflicts(rules, platform).map(conflict => [conflict.kind, conflict.chord, ...conflict.commands])
@@ -18,7 +19,9 @@ const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConfl
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    expect(commandIds).toHaveLength(74)
+    // 72 commands, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel.
+    expect(commandIds).toHaveLength(105)
+    expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
     const fixture = workbenchFixture()
@@ -200,6 +203,11 @@ describe('context keys', () => {
     expect(contextKeys.explorerSelectionFolder.values).toEqual(['', ...folderIds])
     const explorerKeys = contextKeyNames.filter(key => key.startsWith('explorer') && contextKeys[key].scope === 'state')
     expect(explorerKeys.sort()).toEqual(Object.keys(noExplorerContext).sort())
+    // Script As's keys are among them; scriptingRunning, though not Object Explorer's, stays out of keys too.
+    expect(explorerKeys).toEqual(expect.arrayContaining(['explorerScriptTitle', 'explorerScriptCreate', 'explorerScriptExecute', 'explorerSelectionModifiable']))
+    expect(contextKeys.explorerScriptTitle.values).toEqual(['', ...scriptAsTitleKeys])
+    for (const verb of scriptVerbs) expect(contextKeys[scriptVerbContextKey(verb)]).toMatchObject({ type: 'enum', scope: 'state', values: ['', 'disabled', 'enabled'] })
+    explorerKeys.push('scriptingRunning')
     // findConflicts enumerates every value of the keys two clauses share; these enums would make that explode.
     for (const id of commandIds) for (const spec of commandDescriptor(id).keybindings ?? []) {
       if (spec.when !== undefined) expect(referencedKeys(parseWhen(spec.when)).filter(key => explorerKeys.includes(key as never)), id).toEqual([])

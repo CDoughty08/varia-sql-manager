@@ -10,6 +10,7 @@ import {
   menuRoots, menuStateSchema, menuTitle, mnemonicIndex, nativeItemId, nativeMenuIds, pruneMenu, toggleCommandIds, trimSeparators, type ContextMenuId, type MenuEntry, type MenuId, type SubmenuId
 } from '../src/shared/commands/menus'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
+import { scriptCommandIds } from '../src/shared/scripting/catalog'
 
 const brief = (entry: MenuEntry) => entry.kind === 'command' ? entry.nativeId : entry.kind === 'separator' ? '-' : entry.kind === 'role' ? `role:${entry.role}` : `submenu:${entry.nativeId}`
 const raw = (menu: MenuId, platform: Platform) => buildMenuModel(menu, platform).map(brief)
@@ -34,25 +35,32 @@ describe('menu model', () => {
       expect(raw('query', platform)).toEqual(outline('query', platform))
       expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
+      expect(outline('tools', platform)).toEqual(['preferences.options'])
     }
     expect(buildMenuModel('file', 'win32').at(-1)).toMatchObject({ id: 'window.close', title: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
     expect(buildMenuModel('file', 'linux').at(-1)).toMatchObject({ id: 'window.close', title: 'Quit', role: 'quit', accelerator: 'Ctrl+Q' })
     expect(buildMenuModel('file', 'linux').at(-1)).not.toHaveProperty('mnemonic')
-    expect(applicationMenus.map(menu => menu.id)).toEqual(['file', 'edit', 'view', 'query', 'window'])
+    expect(applicationMenus.map(menu => menu.id)).toEqual(['file', 'edit', 'view', 'query', 'tools', 'window'])
   })
   it('places submenus like commands, with their own native ids', () => {
     const submenu = (menu: MenuId, platform: Platform) => buildMenuModel(menu, platform).filter(entry => entry.kind === 'submenu')
     expect(submenu('view', 'linux')).toEqual([{ kind: 'submenu', id: 'theme', nativeId: 'view.theme', title: 'Theme', mnemonic: 'h', dynamic: 'theme' }])
     expect(submenu('editor.context', 'win32')).toEqual([{ kind: 'submenu', id: 'query.connection', nativeId: 'query.connection@editor.context', title: 'Connection', mnemonic: 'o' }])
     const [scriptAs] = submenu('explorer.context', 'darwin')
-    expect(scriptAs).toMatchObject({ id: 'explorer.scriptTableAs', nativeId: 'explorer.scriptTableAs', title: 'Script Table as' })
-    expect(scriptAs.kind === 'submenu' && scriptAs.when && [evaluateWhen(scriptAs.when, { explorerNode: 'table' }), evaluateWhen(scriptAs.when, { explorerNode: 'database' })]).toEqual([true, false])
-    expect(submenu('explorer.scriptTableAs', 'win32')).toMatchObject([{ id: 'explorer.scriptTableAs.create', nativeId: 'explorer.scriptTableAs.create', title: 'CREATE To' }])
-    expect(menuRoots('explorer.scriptTableAs.create')).toEqual(['explorer.context'])
+    expect(scriptAs).toMatchObject({ id: 'explorer.scriptAs', nativeId: 'explorer.scriptAs', title: 'Script as', dynamicTitle: 'scriptAs' })
+    expect(scriptAs.kind === 'submenu' && scriptAs.when && [evaluateWhen(scriptAs.when, { explorerScriptTitle: 'table', explorerNode: 'table' }), evaluateWhen(scriptAs.when, { explorerScriptTitle: '', explorerNode: 'database' }),
+      evaluateWhen(scriptAs.when, { explorerScriptTitle: 'table', explorerNode: 'background' })]).toEqual([true, false, false])
+    expect(submenu('explorer.scriptAs', 'win32').map(entry => entry.kind === 'submenu' && [entry.nativeId, entry.title, entry.mnemonic])).toEqual([
+      ['explorer.scriptAs.create', 'CREATE To', 'c'], ['explorer.scriptAs.alter', 'ALTER To', 'a'], ['explorer.scriptAs.createOrAlter', 'CREATE OR ALTER To', 'r'],
+      ['explorer.scriptAs.drop', 'DROP To', 'd'], ['explorer.scriptAs.dropAndCreate', 'DROP And CREATE To', 'n'], ['explorer.scriptAs.select', 'SELECT To', 's'],
+      ['explorer.scriptAs.insert', 'INSERT To', 'i'], ['explorer.scriptAs.update', 'UPDATE To', 'u'], ['explorer.scriptAs.delete', 'DELETE To', 'e'], ['explorer.scriptAs.execute', 'EXECUTE To', 'x']
+    ])
+    expect(buildMenuModel('explorer.scriptAs', 'linux').map(entry => entry.kind)).toEqual(['submenu', 'submenu', 'submenu', 'submenu', 'submenu', 'separator', 'submenu', 'submenu', 'submenu', 'submenu', 'separator', 'submenu'])
+    expect(menuRoots('explorer.scriptAs.create')).toEqual(['explorer.context'])
     expect(menuRoots('query.connection')).toEqual(['query', 'editor.context'])
     expect(menuRoots('theme')).toEqual(['view'])
     expect(menuRoots('file')).toEqual(['file'])
-    expect(nativeMenuIds).toEqual(['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'window'])
+    expect(nativeMenuIds).toEqual(['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'tools', 'window'])
   })
   it('carries placement mnemonics, platform titles, and compiled when clauses', () => {
     expect(buildMenuModel('file', 'win32').find(entry => entry.kind === 'command' && entry.id === 'file.saveAs')).toMatchObject({ title: 'Save As…', mnemonic: 'a' })
@@ -73,14 +81,14 @@ describe('menu model', () => {
     const submenu = (id: SubmenuId, when?: string, dynamic?: 'theme'): MenuEntry => ({ kind: 'submenu', id, nativeId: id, title: id, ...(when ? { when: compileWhen(when) } : {}), ...(dynamic ? { dynamic } : {}) })
     const separator: MenuEntry = { kind: 'separator' }
     const trees: Partial<Record<SubmenuId, MenuEntry[]>> = {
-      'explorer.scriptTableAs': [submenu('explorer.scriptTableAs.create')], 'explorer.scriptTableAs.create': [command('file.save', 'queryRunning')],
+      'explorer.scriptAs': [submenu('explorer.scriptAs.create')], 'explorer.scriptAs.create': [command('file.save', 'queryRunning')],
       'query.connection': [command('file.open')], theme: []
     }
     const children = (id: SubmenuId) => trees[id] ?? []
     const keep = (context: Record<string, boolean>) => (entry: MenuEntry) => entry.kind !== 'command' && entry.kind !== 'submenu' || !entry.when || evaluateWhen(entry.when, context)
-    const entries = [separator, command('file.new', 'hasConnection'), separator, submenu('explorer.scriptTableAs'), separator, separator, command('file.close'), submenu('query.connection', '!hasConnection'), separator, submenu('theme', undefined, 'theme'), separator]
+    const entries = [separator, command('file.new', 'hasConnection'), separator, submenu('explorer.scriptAs'), separator, separator, command('file.close'), submenu('query.connection', '!hasConnection'), separator, submenu('theme', undefined, 'theme'), separator]
     expect(pruneMenu(entries, keep({}), children).map(brief)).toEqual(['file.close', 'submenu:query.connection', '-', 'submenu:theme'])
-    expect(pruneMenu(entries, keep({ hasConnection: true, queryRunning: true }), children).map(brief)).toEqual(['file.new', '-', 'submenu:explorer.scriptTableAs', '-', 'file.close', '-', 'submenu:theme'])
+    expect(pruneMenu(entries, keep({ hasConnection: true, queryRunning: true }), children).map(brief)).toEqual(['file.new', '-', 'submenu:explorer.scriptAs', '-', 'file.close', '-', 'submenu:theme'])
     expect(pruneMenu([command('file.new', 'queryRunning'), separator, command('file.open', 'queryRunning')], keep({}), children)).toEqual([])
     // Nesting deeper than maxSubmenuDepth counts as empty, so a cycle cannot recurse forever.
     const cycle = (id: SubmenuId) => id === 'theme' ? [submenu('query.connection')] : [submenu('theme'), command('file.new')]
@@ -119,6 +127,9 @@ describe('menu model', () => {
     expect(find('view', 'win32', 'workbench.showCommands')).toEqual({ kind: 'command', id: 'workbench.showCommands', nativeId: 'workbench.showCommands', title: 'Command Palette…', mnemonic: 'c', toggle: false, accelerator: 'Ctrl+Shift+P' })
     expect(find('view', 'darwin', 'workbench.quickOpen')).toMatchObject({ title: 'Go to Query…', accelerator: 'Cmd+P' })
     expect(find('query', 'linux', 'query.changeDatabase')).toMatchObject({ title: 'Change Database…', accelerator: 'Ctrl+U' })
+    // Tools › Options… carries macOS's settings key, ⌘,; Windows and Linux have none.
+    expect(find('tools', 'darwin', 'preferences.options')).toEqual({ kind: 'command', id: 'preferences.options', nativeId: 'preferences.options', title: 'Options…', mnemonic: 'o', toggle: false, accelerator: 'Cmd+,' })
+    expect(find('tools', 'win32', 'preferences.options')).not.toHaveProperty('accelerator')
     expect(find('file', 'darwin', 'connection.disconnect')).toEqual({ kind: 'command', id: 'connection.disconnect', nativeId: 'connection.disconnect', title: 'Disconnect from Server…', mnemonic: 'd', toggle: false })
   })
   it('gives each command and submenu item a unique native id, the first placement keeping the bare id', () => {
@@ -134,7 +145,7 @@ describe('menu model', () => {
     expect(() => nativeItemId('file.new', 'edit')).toThrow('file.new has no placement in the edit menu')
   })
   it('finds menus by mnemonic', () => {
-    expect(['f', 'E', 'v', 'q', 'W'].map(menuForMnemonic)).toEqual(['file', 'edit', 'view', 'query', 'window'])
+    expect(['f', 'E', 'v', 'q', 't', 'W'].map(menuForMnemonic)).toEqual(['file', 'edit', 'view', 'query', 'tools', 'window'])
     expect(['x', '', 'fi', 'alt+f', 'f10'].map(menuForMnemonic)).toEqual([undefined, undefined, undefined, undefined, undefined])
   })
 })
@@ -210,8 +221,8 @@ describe('application menu template', () => {
     for (const platform of platforms) {
       const { items } = template(platform)
       const menubar = items.filter(entry => entry.id)
-      expect(menubar.map(entry => entry.id), platform).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.window'])
-      expect(items.map(entry => entry.id ?? entry.role), platform).toEqual(platform === 'darwin' ? ['appMenu', 'menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.window'] : menubar.map(entry => entry.id))
+      expect(menubar.map(entry => entry.id), platform).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.tools', 'menu.window'])
+      expect(items.map(entry => entry.id ?? entry.role), platform).toEqual(platform === 'darwin' ? ['appMenu', 'menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.tools', 'menu.window'] : menubar.map(entry => entry.id))
       expect(item(items, 'menu.window').role, platform).toBe(platform === 'darwin' ? 'window' : undefined)
       for (const top of menubar) {
         const menu = top.id!.slice('menu.'.length) as Parameters<typeof buildMenuModel>[0]
@@ -293,8 +304,8 @@ describe('menu state', () => {
     const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
-      'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.scriptCreateToNewQuery',
-      'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
+      'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', ...scriptCommandIds,
+      'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.

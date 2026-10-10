@@ -707,7 +707,7 @@ try {
   await expandExplorerPath(page, 'server-a', 'Databases')
   const appData = await row('server-a', 'Databases', 'AppData')
   await appData.click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['New Query', 'Copy Name', 'Refresh'])
+  expect(await labels()).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[AppData]')
   await expect(tree).toBeFocused()
@@ -796,7 +796,7 @@ try {
   // A login's name; the server's Disconnect needs no picker.
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['Copy Name', 'Refresh'])
+  expect(await labels()).toEqual(['Script Login as', 'Copy Name', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[sa]')
   await serverA.click({ button: 'right', force: true })
@@ -1108,7 +1108,12 @@ try {
   await nativeTable.click({ button: 'right', position: { x: 12, y: 6 } })
   await expect.poll(async () => (await popups()).length).toBe(2)
   const tablePopup = (await popups())[1]
-  expect(tablePopup.items).toEqual(['Select Top 1000 Rows', '---', ['Script Table as', [['CREATE To', ['New Query Editor Window', 'File…', 'Clipboard']]]], '---', 'Copy Name', '---', 'Refresh'])
+  // Main titles the Script submenu from the request's key, and disables the verbs a table does not support.
+  const verbs = names => names.map(name => [name, ['New Query Editor Window', 'File…', 'Clipboard']])
+  const tableScripts = [...verbs(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To']), '---', ...verbs(['SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To']), '---', ...verbs(['EXECUTE To'])]
+  expect(tablePopup.items).toEqual(['Select Top 1000 Rows', '---', ['Script Table as', tableScripts], '---', 'Copy Name', '---', 'Refresh'])
+  expect(await application.evaluate(() => ['explorer.scriptAs', 'explorer.scriptAs.create', 'explorer.scriptAs.alter', 'explorer.scriptAs.execute']
+    .map(id => globalThis.variaPopups.at(-1).menu.getMenuItemById(id).enabled))).toEqual([true, true, false, false])
   expect(Math.abs(tablePopup.x - (tableBox.x + 12))).toBeLessThanOrEqual(1)
   expect(Math.abs(tablePopup.y - (tableBox.y + 6))).toBeLessThanOrEqual(1)
   await expect(openMenus()).toHaveCount(0)

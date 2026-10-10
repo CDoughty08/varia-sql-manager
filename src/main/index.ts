@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
@@ -8,10 +8,13 @@ import { backendSpawnSpec } from './backend/spawn-spec'
 import { installTestHooks } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
+import { ScriptingRequests } from './backend/scripting-requests'
+import { sanitizeFileName } from './file-names'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
+import { ScriptingOptionsStore } from './scripting-options-store'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
@@ -24,6 +27,7 @@ import { parseWorkspaceLayout } from '../shared/layouts'
 import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
+import { scriptCancelSchema } from '../shared/scripting/schema.ts'
 import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
@@ -268,7 +272,7 @@ app.whenReady().then(async () => {
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
   const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN
   const liveness = Number.isInteger(livenessMs) && livenessMs >= 200 ? { unresponsiveMs: livenessMs, limits: { pingMs: Math.floor(livenessMs / 4) } } : {}
-  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env }), {
+  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale() }), {
     appVersion: app.getVersion(),
     // Frame kinds, ids and lengths only; never bodies.
     trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined,
@@ -281,6 +285,7 @@ app.whenReady().then(async () => {
   })
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
   const explorerRequests = new ExplorerRequests(backend)
+  const scriptingRequests = new ScriptingRequests(backend)
   backend.onState(state => {
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
@@ -289,6 +294,7 @@ app.whenReady().then(async () => {
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
+  const scriptingOptions = new ScriptingOptionsStore(join(app.getPath('userData'), 'scripting-options.json'))
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
   await appearance.initialize()
@@ -320,6 +326,8 @@ app.whenReady().then(async () => {
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
   handle('varia:connections-save', value => connectionStore.save(connectionProfileInputSchema.parse(value)))
   handle('varia:connections-remove', value => connectionStore.remove(z.uuid().parse(value)))
+  handle('varia:scripting-options-get', () => scriptingOptions.load())
+  handle('varia:scripting-options-set', value => scriptingOptions.save(value))
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
   handle('varia:layout-import', async () => {
@@ -348,8 +356,9 @@ app.whenReady().then(async () => {
       const validated = validateRequest(method, params)
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
-      // An Object Explorer load is registered before it is sent, so varia:explorer-cancel can always find it.
-      const load = method === 'explorer.children' ? explorerRequests.begin((validated as RpcMethods['explorer.children']['params']).requestId) : undefined
+      // An Object Explorer load or a script is registered before it is sent, so its cancel channel can always find it.
+      const cancellable = method === 'explorer.children' ? explorerRequests : method === 'scripting.script' ? scriptingRequests : undefined
+      const load = cancellable?.begin((validated as RpcMethods['explorer.children' | 'scripting.script']['params']).requestId)
       let result: unknown
       try {
         result = await backend.request(method as RpcMethod, validated as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
@@ -363,6 +372,7 @@ app.whenReady().then(async () => {
     } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
+  handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   handle('varia:files-open', async () => {
     const selected = await dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] })
     if (selected.canceled) return []
@@ -372,7 +382,7 @@ app.whenReady().then(async () => {
     const options = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxSqlFileBytes), saveAs: z.boolean() }).strict().parse(value)
     let selectedPath: string | undefined
     if (!options.fileId || options.saveAs) {
-      const safeName = basename(options.name.replace(/[\\/:*?"<>|]/g, '_'))
+      const safeName = sanitizeFileName(options.name)
       const selection = await dialog.showSaveDialog(mainWindow!, { title: 'Save SQL query', defaultPath: options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName), filters: [{ name: 'SQL files', extensions: ['sql'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] })
       if (selection.canceled || !selection.filePath) return null
       selectedPath = selection.filePath

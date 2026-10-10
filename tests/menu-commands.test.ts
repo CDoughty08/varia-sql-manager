@@ -269,6 +269,13 @@ describe('Object Explorer commands', () => {
     await vi.waitFor(() => { id = fixture.explorer.getSnapshot().rows.nodes.find(node => node?.label === label)?.id; expect(id, label).toBeDefined() })
     return id!
   }
+  /** Selects dbo.Orders, as a right-click on it does, and returns its menu's arguments. */
+  const selectOrders = async (fixture: ReturnType<typeof setup>): Promise<CommandArgs> => {
+    for (const label of ['Databases', 'AppData', 'Tables']) fixture.explorer.expand(await find(fixture, label))
+    const id = await find(fixture, 'dbo.Orders')
+    fixture.explorer.select(id)
+    return { target: { kind: 'explorer', node: fixture.explorer.menuNode(id)! } }
+  }
   it('open a new query on a server\'s or database\'s connection and put focus in its editor', async () => {
     const { commands, documents } = connected()
     const editor = new FocusableEditor()
@@ -301,8 +308,8 @@ describe('Object Explorer commands', () => {
     explorer.select(await find(fixture, 'dbo.Orders'))
     expect(await commands.execute('explorer.scriptCreateToClipboard', undefined, 'palette')).toBe(true)
     expect(await commands.execute('explorer.copyName', undefined, 'palette')).toBe(true)
-    expect(api.writeClipboardText.mock.calls).toEqual([['server-a.example'], ['CREATE TABLE [dbo].[Orders] (Id int);'], ['[dbo].[Orders]']])
-    expect(api.scriptTable.mock.calls).toEqual([['server-a', 'AppData', 'dbo', 'Orders']])
+    expect(api.writeClipboardText.mock.calls).toEqual([['server-a.example'], ['-- create dbo.Orders'], ['[dbo].[Orders]']])
+    expect(api.scriptObjects.mock.calls.map(([params]) => [params.connectionId, params.targets, params.verb])).toEqual([['server-a', [{ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }], 'create']])
   })
   it('select the top 1000 rows of a table by its columns and run them on its database', async () => {
     const { commands, documents, api, model } = connected()
@@ -320,22 +327,25 @@ describe('Object Explorer commands', () => {
     expect(documents.getSnapshot().documents).toHaveLength(1)
     expect(commands.isEnabled('explorer.selectTopRows', tables)).toBe(false)
   })
-  it('script a table as CREATE to a new query, a file, or the clipboard', async () => {
-    const { commands, documents, api, model } = connected()
-    const created = 'CREATE TABLE [dbo].[Orders] (Id int);'
-    expect(await commands.execute('explorer.scriptCreateToNewQuery', orders, 'toolbar')).toBe(true)
-    expect(documents.active).toMatchObject({ name: 'dbo.Orders.sql', connectionId: 'server-a', database: 'AppData', dirty: true })
-    expect(model(documents.active!.id).getValue()).toBe(created)
-    expect(await commands.execute('explorer.scriptCreateToFile', orders, 'menu')).toBe(true)
-    expect(api.saveSqlFile.mock.calls).toEqual([[{ name: 'dbo.Orders.sql', content: created, saveAs: true }]])
+  it('script a table from its menu to a new query, a file, or the clipboard, and report a failure in the banner', async () => {
+    const fixture = connected(), { commands, documents, api, model } = fixture
+    const menu = await selectOrders(fixture)
+    expect(await commands.execute('explorer.scriptCreateToNewQuery', menu, 'menu')).toBe(true)
+    expect(documents.active).toMatchObject({ name: expect.stringMatching(/^SQLQuery\d+\.sql$/), connectionId: 'server-a', database: 'AppData', dirty: false })
+    expect(model(documents.active!.id).getValue()).toBe('-- create dbo.Orders')
+    expect(await commands.execute('explorer.scriptDropToFile', menu, 'menu')).toBe(true)
+    expect(api.saveSqlFile.mock.calls).toEqual([[{ name: 'dbo.Orders.sql', content: '-- drop dbo.Orders', saveAs: true }]])
     expect(api.releaseSqlFile.mock.calls).toEqual([['file-id']])
-    expect(await commands.execute('explorer.scriptCreateToClipboard', orders, 'menu')).toBe(true)
-    expect(api.writeClipboardText.mock.calls).toEqual([[created]])
-    expect(api.scriptTable).toHaveBeenCalledTimes(3)
+    expect(await commands.execute('explorer.scriptSelectToClipboard', menu, 'menu')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([['-- select dbo.Orders']])
+    expect(api.scriptObjects.mock.calls.map(([params]) => params.verb)).toEqual(['create', 'drop', 'select'])
+    // A table has no ALTER or EXECUTE script, and the empty area's menu scripts nothing.
+    for (const id of ['explorer.scriptAlterToNewQuery', 'explorer.scriptExecuteToClipboard', 'explorer.modify'] as const) expect(commands.isEnabled(id, menu), id).toBe(false)
+    expect(commands.isEnabled('explorer.scriptCreateToClipboard', background)).toBe(false)
     expect(documents.getSnapshot().documents).toHaveLength(1)
-    api.scriptTable.mockResolvedValueOnce({ ok: false, error: 'Table was not found.' })
-    expect(await commands.execute('explorer.scriptCreateToNewQuery', orders, 'toolbar')).toBe(false)
-    expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Script Table as CREATE to New Query Editor Window”: Table was not found.')
+    api.scriptObjects.mockResolvedValueOnce({ ok: true, value: { database: 'AppData', warnings: [], commands: 1, elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'dbo.Orders no longer exists.', retryable: false } } })
+    expect(await commands.execute('explorer.scriptCreateToNewQuery', menu, 'menu')).toBe(false)
+    expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Script as CREATE to New Query Editor Window”: dbo.Orders no longer exists.')
   })
   it('copy a node\'s name: the server as connected to, or the quoted object name', async () => {
     const { commands, api } = connected()
@@ -418,22 +428,27 @@ describe('Object Explorer commands', () => {
     expect(quickInput.getSnapshot()).toMatchObject({ visible: true, ariaLabel: 'Remove Lost Connection', rows: [{ item: { id: 'server-l' } }] })
   })
   it('leave a server lost with a backend restart alone, even when the restart comes while a command waits', async () => {
-    const { commands, documents, api, connections } = connected()
-    const columns = deferred<Awaited<ReturnType<typeof api.tableColumns>>>(), script = deferred<Awaited<ReturnType<typeof api.scriptTable>>>()
+    const fixture = connected(), { commands, documents, api, connections } = fixture
+    const menu = await selectOrders(fixture)
+    const columns = deferred<Awaited<ReturnType<typeof api.tableColumns>>>(), script = deferred<Awaited<ReturnType<typeof api.scriptObjects>>>()
     api.tableColumns.mockReturnValueOnce(columns.promise)
-    api.scriptTable.mockReturnValueOnce(script.promise)
-    const selecting = commands.execute('explorer.selectTopRows', orders, 'menu'), scripting = commands.execute('explorer.scriptCreateToNewQuery', orders, 'menu')
+    api.scriptObjects.mockReturnValueOnce(script.promise)
+    const selecting = commands.execute('explorer.selectTopRows', orders, 'menu'), scripting = commands.execute('explorer.scriptCreateToNewQuery', menu, 'menu')
     // The backend restarts: server-a's generation is gone, and Object Explorer shows it as lost.
     api.push({ status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 1, queries: 0 }, retryInMs: 0 })
     expect(connections.get('server-a')).toMatchObject({ lost: true })
     columns.resolve({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }], truncated: false } })
-    script.resolve({ ok: true, value: { sql: 'CREATE TABLE [dbo].[Orders] (Id int);' } })
-    await Promise.all([selecting, scripting])
+    script.resolve({ ok: true, value: { text: 'CREATE TABLE [dbo].[Orders] (Id int);', database: 'AppData', warnings: [], commands: 1, elapsedMs: 1 } })
+    expect(await selecting).toBe(true)
+    // The script's server went away while it ran: nothing opens, and the banner says why.
+    expect(await scripting).toBe(false)
+    expect(commands.getSnapshot().error).toContain('The server was disconnected before scripting finished.')
     expect(documents.getSnapshot().documents).toHaveLength(0)
     expect(api.execute).not.toHaveBeenCalled()
     api.push(readyBackend(2))
     for (const id of ['explorer.newQuery', 'explorer.copyName', 'connection.disconnect'] as const) expect(commands.isEnabled(id, server), id).toBe(false)
     for (const id of ['explorer.selectTopRows', 'explorer.scriptCreateToNewQuery', 'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName'] as const) expect(commands.isEnabled(id, orders), id).toBe(false)
+    for (const id of ['explorer.scriptCreateToNewQuery', 'explorer.scriptCreateToClipboard'] as const) expect(commands.isEnabled(id, menu), id).toBe(false)
     expect(await commands.execute('explorer.newQuery', server, 'menu')).toBe(false)
     expect(documents.getSnapshot().documents).toHaveLength(0)
   })

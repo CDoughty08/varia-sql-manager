@@ -79,6 +79,8 @@
   {"type":"separator"}
   {"id":"query.execute","label":"Execute","registerAccelerator":false,"type":"normal","click":[["command","query.execute"]]}
   {"id":"query.cancel","label":"Cancel Executing Query","registerAccelerator":false,"type":"normal","click":[["command","query.cancel"]]}
+{"id":"menu.tools","label":"Tools"}
+  {"accelerator":"Cmd+,","id":"preferences.options","label":"Options…","registerAccelerator":false,"type":"normal","click":[["command","preferences.options"]]}
 {"id":"menu.window","label":"Window","role":"window"}
   {"id":"window.explorer","label":"Object Explorer","registerAccelerator":false,"type":"normal","click":[["command","window.explorer"]]}
   {"id":"window.editor","label":"Query Editor","registerAccelerator":false,"type":"normal","click":[["command","window.editor"]]}

@@ -10,6 +10,7 @@ const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error
 
 export class FileService extends SnapshotStore<FileSnapshot> implements Disposable {
   private disposed = false
+  private readonly waiters = new Set<() => void>()
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
   constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning'>, private api: FileApi) { super({ error: '' }) }
@@ -20,6 +21,14 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (!this.disposed && error !== this.getSnapshot().error) this.publish({ error })
   }
   clearError(): void { this.reportError('') }
+  /** Resolves once no file task runs, or on disposal. */
+  private idle(): Promise<void> {
+    return new Promise(resolve => {
+      const done = () => { unsubscribe(); this.waiters.delete(done); resolve() }
+      const unsubscribe = this.documents.subscribe(() => { if (!this.documents.getSnapshot().busy) done() })
+      this.waiters.add(done)
+    })
+  }
   private async perform(action: () => Promise<void>): Promise<void> {
     if (!this.canRun()) return
     this.clearError()
@@ -54,12 +63,19 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (!this.canSave(id)) return
     await this.perform(async () => { await this.documents.save(id, saveAs) })
   }
-  /** Saves text to a file the user picks (Script … to File…), without opening it as a query; Cancel saves nothing. */
-  async saveCopy(name: string, content: string): Promise<void> {
+  /**
+   * Saves text to a file the user picks (Script … to File…), without opening it as a query. Resolves with the saved
+   * file, or undefined when the user cancelled or the save failed (reported like any file error). A script arrives
+   * whenever its request ends, so behind another file task (a Save dialog, Open, a close prompt) it waits its turn.
+   */
+  async saveCopy(name: string, content: string): Promise<SqlFile | undefined> {
+    while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
+    let saved: SqlFile | undefined
     await this.perform(async () => {
       const file = unwrap(await this.api.saveSqlFile({ name, content, saveAs: true }))
-      if (file) unwrap(await this.api.releaseSqlFile(file.id))
+      if (file) { unwrap(await this.api.releaseSqlFile(file.id)); saved = file }
     })
+    return saved
   }
   private async confirmClose(id: string): Promise<boolean> {
     const document = this.documents.get(id), model = this.documents.getModel(id)
@@ -124,5 +140,10 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       try { await this.api.closeWindow() } catch (error) { this.exiting = false; throw error }
     })
   }
-  dispose(): void { this.disposed = true; this.clearListeners(); this.publish({ error: '' }) }
+  dispose(): void {
+    this.disposed = true
+    for (const done of [...this.waiters]) done()
+    this.clearListeners()
+    this.publish({ error: '' })
+  }
 }

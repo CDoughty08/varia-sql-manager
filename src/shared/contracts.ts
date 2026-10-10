@@ -7,6 +7,8 @@ import type { MenuStyle } from './menu-style'
 import type { ErrorCode } from './ipc/wire/protocol'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
+import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
+import type { ScriptingOptions } from './scripting/options.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -197,12 +199,12 @@ export interface RpcMethods {
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
-  'tables.script': { params: { connectionId: string; database: string; schema: string; name: string }; result: { sql: string } }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
   'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
+  'scripting.script': { params: ScriptRequest; result: ScriptResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
@@ -262,13 +264,21 @@ export interface VariaApi {
   removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibrary>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
-  scriptTable(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<{ sql: string }>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */
   explorerChildren(params: ExplorerChildrenParams): Promise<ApiResult<ExplorerChildrenResult>>
   /** Cancels Object Explorer loads by their `requestId`s (1–256); `cancelled` counts those still running. A load cancelled
    *  this way answers `CANCELLED`. */
   explorerCancel(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Scripts one Object Explorer object (Script As). Failures the user can act on come back as `result.error`. */
+  scriptObjects(params: ScriptRequest): Promise<ApiResult<ScriptResult>>
+  /** Cancels scripting requests by their `requestId`s (1–64); `cancelled` counts those still running. A request
+   *  cancelled this way answers `CANCELLED`. */
+  cancelScripting(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Tools › Options › Scripting as main stored it; `warning` reports a file that was invalid and was reset. */
+  getScriptingOptions(): Promise<ApiResult<{ options: ScriptingOptions; warning?: string }>>
+  /** Stores a complete set of scripting options; main validates it strictly and resolves to what it stored. */
+  setScriptingOptions(options: ScriptingOptions): Promise<ApiResult<ScriptingOptions>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>

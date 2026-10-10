@@ -118,6 +118,18 @@ describe('menu access keys', () => {
     expect(query.items[query.active]).toMatchObject({ kind: 'submenu', title: 'Connection' })
     expect(titles(query.items)).toEqual(['Connection', 'Change Database…', '-', 'Execute', 'Cancel Executing Query'])
   })
+  it('opens Tools with Alt+T, where Options… opens the Options dialog once the stored options are in', async () => {
+    const { menus, fixture, order } = setup()
+    expect(menus.handleAccessKey('alt+t', key('t', { alt: true }))).toBe(true)
+    const [tools] = menus.controller.view.levels
+    expect(menus.controller.view.menubar).toEqual({ focused: 'tools', open: 'tools' })
+    expect(titles(tools.items)).toEqual(['Options…'])
+    expect(tools.items[tools.active]).toMatchObject({ kind: 'command', id: 'preferences.options', enabled: true, mnemonic: 0 })
+    expect(menus.handleKeyDown(key('o'))).toBe('consumed')
+    expect(order).toEqual(['closed', 'restore editor', 'execute preferences.options from menu'])
+    await vi.waitFor(() => expect(fixture.scriptingOptions.dialog.getSnapshot()).toBe(true))
+    expect(fixture.api.getScriptingOptions).toHaveBeenCalledTimes(1)
+  })
   it('leaves other keys alone, and Alt+W to Monaco\'s find widget', () => {
     const { menus, state } = setup()
     for (const [chord, event] of [['alt+x', key('x', { alt: true })], ['shift+alt+f', key('f', { alt: true, shift: true })], ['ctrl+f10', key('F10', { ctrl: true })]] as const) {

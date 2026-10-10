@@ -3,6 +3,8 @@ import { validateRequest } from '../src/main/validation'
 import { portRequestSchema, queryEventSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
 import { methodPolicies } from '../src/shared/ipc/methods'
+import { scriptCancelSchema } from '../src/shared/scripting/schema'
+import { defaultScriptingOptions } from '../src/shared/scripting/options'
 
 describe('IPC validation', () => {
   it('rejects arbitrary or inherited backend method names', () => {
@@ -25,10 +27,10 @@ describe('IPC validation', () => {
   it('passes identifiers verbatim and explains oversized scripts', () => {
     const connectionId = crypto.randomUUID()
     const table = { connectionId, database: ' padded ', schema: 'dbo', name: 'Orders' }
-    expect(validateRequest('tables.script', table)).toEqual(table)
-    expect(() => validateRequest('tables.script', { ...table, database: '   ' })).toThrow('Invalid request')
+    expect(validateRequest('tables.columns', table)).toEqual(table)
+    expect(() => validateRequest('tables.columns', { ...table, database: '   ' })).toThrow('Invalid request')
     // IPC can deliver a cloneable non-string whose property key coerces to a real method name.
-    expect(() => validateRequest(['tables.script'] as unknown as string, table)).toThrow('Unsupported backend method')
+    expect(() => validateRequest(['tables.columns'] as unknown as string, table)).toThrow('Unsupported backend method')
     const query = { connectionId, sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'x'.repeat(1_000_001), maxRows: 1000, timeoutSeconds: 30 }
     expect(() => validateRequest('query.execute', query)).toThrow('too large to execute')
   })
@@ -40,11 +42,12 @@ describe('IPC validation', () => {
     }
     expect(validateRequest('tables.columns', { ...valid, name: 'x'.repeat(128) })).toMatchObject({ name: 'x'.repeat(128) })
   })
-  it('rejects the v1 catalog methods that Object Explorer replaced', () => {
+  it('rejects the v1 catalog and table script methods that Object Explorer and Script As replaced', () => {
     const connectionId = crypto.randomUUID()
     expect(() => validateRequest('tables.list', { connectionId, database: 'master' })).toThrow('Unsupported backend method')
     expect(() => validateRequest('server.objects.list', { connectionId, kind: 'logins' })).toThrow('Unsupported backend method')
-    expect(Object.hasOwn(methodPolicies, 'tables.list') || Object.hasOwn(methodPolicies, 'server.objects.list')).toBe(false)
+    expect(() => validateRequest('tables.script', { connectionId, database: 'master', schema: 'dbo', name: 'Orders' })).toThrow('Unsupported backend method')
+    for (const method of ['tables.list', 'server.objects.list', 'tables.script']) expect(Object.hasOwn(methodPolicies, method), method).toBe(false)
   })
   it('takes Object Explorer loads only in their strict catalogue shape', () => {
     const connectionId = crypto.randomUUID(), requestId = crypto.randomUUID()
@@ -62,6 +65,26 @@ describe('IPC validation', () => {
     expect(explorerCancelParamsSchema.parse({ requestIds: [requestId] })).toEqual({ requestIds: [requestId] })
     for (const params of [{ requestIds: [] }, { requestIds: [requestId, requestId] }, { requestIds: Array.from({ length: 257 }, () => crypto.randomUUID()) }, { requestIds: ['x'] }, { requestIds: [requestId], extra: 1 }])
       expect(explorerCancelParamsSchema.safeParse(params).success, JSON.stringify(params).slice(0, 80)).toBe(false)
+  })
+  it('takes Script As requests for one scriptable object, a verb it offers, and every option', () => {
+    const valid = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), targets: [{ kind: 'view', database: 'Sales', schema: 'dbo', name: ' v]1 ' }], verb: 'alter', options: defaultScriptingOptions }
+    expect(validateRequest('scripting.script', valid)).toEqual(valid)
+    expect(validateRequest('scripting.script', { ...valid, targets: [{ kind: 'trigger', database: 'd', name: 't', parent: { kind: 'view', schema: 'dbo', name: 'v' } }] })).toBeTruthy()
+    const { scriptOwner: _, ...missing } = defaultScriptingOptions
+    for (const patch of [
+      { targets: [] }, { targets: [valid.targets[0], valid.targets[0]] }, { targets: [{ ...valid.targets[0], name: 'x'.repeat(129) }] }, { targets: [{ ...valid.targets[0], name: 'a\u0000b' }] },
+      { targets: [{ kind: 'certificate', database: 'd', name: 'c' }] }, { targets: [{ kind: 'column', database: 'd', name: 'c', parent: { kind: 'table', schema: 'dbo', name: 't' } }] },
+      { targets: [{ kind: 'index', database: 'd', name: 'i', parent: { kind: 'tableType', schema: 'dbo', name: 't' } }] }, { verb: 'execute' }, { verb: 'Create' },
+      { options: missing }, { options: { ...defaultScriptingOptions, extra: true } }, { options: { ...defaultScriptingOptions, targetServerVersion: '120' } }, { options: { ...defaultScriptingOptions, includeHeaders: 'true' } },
+      { requestId: 'r1' }, { extra: 1 }
+    ]) expect(() => validateRequest('scripting.script', { ...valid, ...patch }), JSON.stringify(patch).slice(0, 80)).toThrow('Invalid request')
+    // SMO can run for a while: a 60 s deadline around the backend's own 55 s budget, on the metadata lane.
+    expect(methodPolicies['scripting.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 60_000 })
+    // Cancellation is main's own channel (varia:scripting-cancel), not a backend method.
+    expect(() => validateRequest('scripting.cancel', { requestIds: [valid.requestId] })).toThrow('Unsupported backend method')
+    expect(scriptCancelSchema.parse({ requestIds: [valid.requestId] })).toEqual({ requestIds: [valid.requestId] })
+    for (const params of [{ requestIds: [] }, { requestIds: [valid.requestId, valid.requestId] }, { requestIds: Array.from({ length: 65 }, () => crypto.randomUUID()) }, { requestIds: ['x'] }, { requestIds: [valid.requestId], extra: 1 }])
+      expect(scriptCancelSchema.safeParse(params).success, JSON.stringify(params).slice(0, 80)).toBe(false)
   })
   it('validates results port requests strictly', () => {
     const read = { t: 'read', rid: 1, generation: 1, resultId: 1, firstRow: 0, maxRows: 65_536, credit: 16 * 1024 * 1024 }

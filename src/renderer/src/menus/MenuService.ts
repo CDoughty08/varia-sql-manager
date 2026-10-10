@@ -164,7 +164,7 @@ export class MenuService implements Disposable {
     if (owned) { event.preventDefault(); event.stopPropagation() }
   }
   /**
-   * F10 and Alt+F/E/V/Q/W on Windows and Linux: F10 focuses the menubar, and Alt plus a menu's letter opens that menu
+   * F10 and Alt+F/E/V/Q/T/W on Windows and Linux: F10 focuses the menubar, and Alt plus a menu's letter opens that menu
    * with its first item active. Not while a dialog is open, nor Alt+W in the editor's find widget (Whole Word).
    */
   handleAccessKey(chord: string, event: KeyDownEvent): boolean {

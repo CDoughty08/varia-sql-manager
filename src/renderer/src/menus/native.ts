@@ -1,6 +1,7 @@
 import { isCommandId, type CommandId } from '../../../shared/commands/catalog'
 import type { ContextMenuId, ContextMenuRequest } from '../../../shared/commands/menus'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import type { ScriptAsTitleKey } from '../../../shared/scripting/catalog.ts'
 import type { CommandService } from '../core/commands'
 import { onUnexpectedError } from '../core/errors'
 import { browserTimers, type Timers } from '../core/timers'
@@ -15,14 +16,15 @@ const maxCoordinate = 32767
 
 /**
  * What main needs to show a resolved context menu natively: its command ids, flattened through submenus (the visible
- * ones are an allowlist, so a mistake hides items rather than showing them), which are disabled and checked, and where,
- * in whole CSS pixels. Titles, targets, and arguments stay here.
+ * ones are an allowlist, so a mistake hides items rather than showing them), which are disabled and checked, the
+ * Script submenu's title key, and where, in whole CSS pixels. Titles, targets, and arguments stay here.
  */
 export function nativeMenuRequest(token: number, menu: ContextMenuId, items: readonly ResolvedMenuItem[], at: Point): ContextMenuRequest {
   const visible: CommandId[] = [], disabled: CommandId[] = [], checked: CommandId[] = []
+  let scriptAsTitle: ScriptAsTitleKey | undefined
   const visit = (level: readonly ResolvedMenuItem[]) => {
     for (const item of level) {
-      if (item.kind === 'submenu') visit(item.items)
+      if (item.kind === 'submenu') { scriptAsTitle ??= item.scriptAsTitle; visit(item.items) }
       if (item.kind !== 'command' || visible.includes(item.id)) continue
       visible.push(item.id)
       if (!item.enabled) disabled.push(item.id)
@@ -31,7 +33,7 @@ export function nativeMenuRequest(token: number, menu: ContextMenuId, items: rea
   }
   visit(items)
   const pixel = (value: number) => Number.isFinite(value) ? Math.min(maxCoordinate, Math.max(0, Math.round(value))) : 0
-  return { token, menu, x: pixel(at.x), y: pixel(at.y), visible, disabled, checked }
+  return { token, menu, x: pixel(at.x), y: pixel(at.y), visible, disabled, checked, ...(scriptAsTitle ? { scriptAsTitle } : {}) }
 }
 
 export interface NativeMenuHandlers {

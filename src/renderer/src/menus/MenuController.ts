@@ -221,7 +221,8 @@ export class MenuController extends SnapshotStore<MenuView> {
   }
   private openSubmenu(level: number, keyboard: boolean): void {
     const { levels } = this.view, parent = levels[level], item = parent?.items[parent.active]
-    if (item?.kind !== 'submenu' || level + 1 >= maxLevels) return
+    // A disabled submenu can be active, as a disabled command can, but never opens: not on hover, →, Enter, or a click.
+    if (item?.kind !== 'submenu' || !item.enabled || level + 1 >= maxLevels) return
     const indexes = itemIndexes(item.items)
     if (levels[level + 1]) {
       if (keyboard && levels[level + 1].active < 0) this.update([...levels.slice(0, level + 1), { ...levels[level + 1], active: indexes[0] ?? -1 }])

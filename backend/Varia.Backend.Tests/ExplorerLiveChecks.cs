@@ -94,6 +94,8 @@ internal static class ExplorerLiveChecks
         var labels = procedures.Nodes.Select(node => node.Label).ToList();
         check(procedures.Error is null && procedures.Pages > 10 && labels.Count == procedures.Total && labels.Distinct().Count() == labels.Count
             && labels.SequenceEqual(expected.Sets[0].Select(row => row[0]!)), "System Stored Procedures pages of 97 have no gaps or duplicates and match one ORDER BY (" + procedures.Pages + " pages)");
+        check(procedures.Nodes.Any(node => node is { Label: "sys.xp_msver", Subtype: "extended" }) && procedures.Nodes.Any(node => node is { Label: "sys.sp_who", Subtype: "system" }),
+            "System Stored Procedures marks extended procedures (sys.xp_msver) 'extended' and the others (sys.sp_who) 'system'");
         var columns = await client.All(Folder(new ObjectRefDto("view", "master", "INFORMATION_SCHEMA", "TABLES"), "columns"));
         check(columns.Nodes.Any(node => Show(node) == "TABLE_CATALOG (nvarchar(128), null)"), "System Views › INFORMATION_SCHEMA.TABLES › Columns shows TABLE_CATALOG (nvarchar(128), null)");
 

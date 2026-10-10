@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { scriptAsTitleKeys, scriptAsTitles, scriptCommandIds, scriptSubmenuEntries, scriptSubmenuIds, type ScriptAsTitleKey } from '../scripting/catalog.ts'
 import { commandDescriptor, commandIds, type CommandId, type RoleName } from './catalog'
 import { primaryRule, splitChord, toAccelerator, type Platform } from './keybindings'
 import { compileWhen, type WhenAst } from './when'
@@ -6,18 +7,18 @@ import { compileWhen, type WhenAst } from './when'
 /** The menubar, in title-bar order. Alt plus the mnemonic opens a menu on Windows and Linux. */
 export const applicationMenus = [
   { id: 'file', label: 'File', mnemonic: 'f' }, { id: 'edit', label: 'Edit', mnemonic: 'e' }, { id: 'view', label: 'View', mnemonic: 'v' },
-  { id: 'query', label: 'Query', mnemonic: 'q' }, { id: 'window', label: 'Window', mnemonic: 'w' }
+  { id: 'query', label: 'Query', mnemonic: 'q' }, { id: 'tools', label: 'Tools', mnemonic: 't' }, { id: 'window', label: 'Window', mnemonic: 'w' }
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
 /** Context menus, one per kind of target: the editor, an Object Explorer node, a query tab, Query Output, a panel tab, a text field. */
 export const contextMenuIds = ['editor.context', 'explorer.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
-export const submenuIds = ['theme', 'query.connection', 'explorer.scriptTableAs', 'explorer.scriptTableAs.create'] as const
+export const submenuIds = ['theme', 'query.connection', ...scriptSubmenuIds] as const
 export type SubmenuId = typeof submenuIds[number]
 export type MenuId = MenubarId | SubmenuId | ContextMenuId
 /** Every menu in native-id order: a submenu follows the menu it first appears in, and context menus come last. */
-export const menuIds: readonly MenuId[] = ['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'window', 'editor.context', 'explorer.context',
-  'explorer.scriptTableAs', 'explorer.scriptTableAs.create', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context']
+export const menuIds: readonly MenuId[] = ['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'tools', 'window', 'editor.context', 'explorer.context',
+  ...scriptSubmenuIds, 'documentTab.context', 'output.context', 'dockTab.context', 'input.context']
 export const menubarIds: readonly MenubarId[] = applicationMenus.map(menu => menu.id)
 export const isContextMenuId = (menu: MenuId): menu is ContextMenuId => (contextMenuIds as readonly MenuId[]).includes(menu)
 
@@ -36,6 +37,8 @@ export interface SubmenuDescriptor {
   readonly nativeId: string
   /** Items built from the theme state follow the catalogue's: main and the renderer each add them. */
   readonly dynamic?: 'theme'
+  /** The title names the selected object ("Script Table as"): `scriptAsTitles[explorerScriptTitle]`, else `title`. */
+  readonly dynamicTitle?: 'scriptAs'
   readonly placements: readonly SubmenuPlacement[]
 }
 /** Submenus, placed like commands. One with nothing visible in it is left out (`pruneMenu`). */
@@ -45,12 +48,8 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
     title: 'Connection', nativeId: 'query.connection',
     placements: [{ menu: 'query', group: '0_connection', order: 1, mnemonic: 'o' }, { menu: 'editor.context', group: '1_connection', order: 1, mnemonic: 'o' }]
   },
-  'explorer.scriptTableAs': {
-    title: 'Script Table as', nativeId: 'explorer.scriptTableAs', placements: [{ menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerNode == 'table'" }]
-  },
-  'explorer.scriptTableAs.create': {
-    title: 'CREATE To', nativeId: 'explorer.scriptTableAs.create', placements: [{ menu: 'explorer.scriptTableAs', group: '1_create', order: 1, mnemonic: 'c' }]
-  }
+  // Script as › <verb> To, from src/shared/scripting/catalog.ts.
+  ...scriptSubmenuEntries()
 }
 /** The deepest a submenu may nest below a menu, so at most four menu levels are ever open. */
 export const maxSubmenuDepth = 3
@@ -62,7 +61,10 @@ export type MenuEntry =
     readonly kind: 'command'; readonly id: CommandId; readonly nativeId: string; readonly title: string; readonly mnemonic?: string; readonly toggle: boolean
     readonly role?: RoleName; readonly accelerator?: string; readonly when?: WhenAst
   }
-  | { readonly kind: 'submenu'; readonly id: SubmenuId; readonly nativeId: string; readonly title: string; readonly mnemonic?: string; readonly when?: WhenAst; readonly dynamic?: 'theme' }
+  | {
+    readonly kind: 'submenu'; readonly id: SubmenuId; readonly nativeId: string; readonly title: string; readonly mnemonic?: string; readonly when?: WhenAst; readonly dynamic?: 'theme'
+    readonly dynamicTitle?: 'scriptAs'
+  }
   | { readonly kind: 'role'; readonly role: MenuRole }
   | { readonly kind: 'separator' }
 interface Slot { readonly group: string; readonly order: number; readonly platforms?: readonly Platform[] }
@@ -137,7 +139,8 @@ export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
     for (const placement of submenu.placements) {
       if (placement.menu !== menu || !applies(placement.platforms, platform)) continue
       items.push({ group: placement.group, order: placement.order, title: submenu.title, entry: {
-        kind: 'submenu', id, nativeId: nativeSubmenuId(id, menu), title: submenu.title, ...optional(placement), ...(submenu.dynamic ? { dynamic: submenu.dynamic } : {})
+        kind: 'submenu', id, nativeId: nativeSubmenuId(id, menu), title: submenu.title, ...optional(placement), ...(submenu.dynamic ? { dynamic: submenu.dynamic } : {}),
+        ...(submenu.dynamicTitle ? { dynamicTitle: submenu.dynamicTitle } : {})
       } })
     }
   }
@@ -151,6 +154,12 @@ export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
     entries.push(item.entry)
   })
   return entries
+}
+
+const isScriptAsTitleKey = (value: unknown): value is ScriptAsTitleKey => typeof value === 'string' && (scriptAsTitleKeys as readonly string[]).includes(value)
+/** A submenu's title as it shows: a dynamic one from its key (catalogue strings only), else the descriptor's. */
+export function submenuTitle(entry: { readonly title: string; readonly dynamicTitle?: 'scriptAs' }, keys: { readonly explorerScriptTitle?: string }): string {
+  return entry.dynamicTitle === 'scriptAs' && isScriptAsTitleKey(keys.explorerScriptTitle) ? scriptAsTitles[keys.explorerScriptTitle] : entry.title
 }
 
 /** Drops leading, trailing, and repeated separators. */
@@ -256,16 +265,21 @@ export const menuStateSchema = z.object({
 export interface MenuState { disabled: CommandId[]; checked: CommandId[] }
 
 const maxContextItems = 64
+const scriptCommands: ReadonlySet<CommandId> = new Set(scriptCommandIds)
 /**
  * The schema of a native context-menu request for menus whose commands `commandsOf` lists. Only ids, an integer
- * token, and integer coordinates cross IPC: the visible commands (an allowlist, so a resolution bug hides items rather
- * than showing them), the disabled ones, and the checked toggles, each a subset of the menu's commands.
+ * token, integer coordinates, and a title key cross IPC: the visible commands (an allowlist, so a resolution bug hides
+ * items rather than showing them), the disabled ones, the checked toggles, each a subset of the menu's commands, and
+ * the Script submenu's title key, present exactly when a script command shows.
  */
 export function createContextMenuRequestSchema(commandsOf: (menu: ContextMenuId) => readonly CommandId[]) {
   const allowed = commandIds.filter(id => contextMenuIds.some(menu => commandsOf(menu).includes(id)))
   const list = z.array(z.enum(allowed)).max(maxContextItems)
   const pixel = z.number().int().min(0).max(32767)
-  return z.object({ token: z.number().int().min(1).max(2 ** 31 - 1), menu: z.enum(contextMenuIds), x: pixel, y: pixel, visible: list.min(1), disabled: list, checked: list }).strict()
+  return z.object({
+    token: z.number().int().min(1).max(2 ** 31 - 1), menu: z.enum(contextMenuIds), x: pixel, y: pixel, visible: list.min(1), disabled: list, checked: list,
+    scriptAsTitle: z.enum(scriptAsTitleKeys).optional()
+  }).strict()
     .superRefine((request, context) => {
       const inMenu = commandsOf(request.menu)
       const issue = (path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message })
@@ -275,6 +289,8 @@ export function createContextMenuRequestSchema(commandsOf: (menu: ContextMenuId)
       }
       for (const key of ['disabled', 'checked'] as const) for (const id of request[key]) if (!request.visible.includes(id)) issue(key, `${id} is not visible.`)
       for (const id of request.checked) if (!toggleCommandIds.includes(id)) issue('checked', `${id} has no checkbox.`)
+      const scripts = request.visible.some(id => scriptCommands.has(id))
+      if (scripts !== (request.scriptAsTitle !== undefined)) issue('scriptAsTitle', scripts ? 'A Script submenu needs its title key.' : 'Only a menu with script commands has a Script title.')
     })
 }
 export const contextMenuRequestSchema = createContextMenuRequestSchema(contextCommandIds)

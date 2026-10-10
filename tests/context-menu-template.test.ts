@@ -51,7 +51,7 @@ describe('native context menu template', () => {
   })
   it('shows only the visible commands, without empty submenus or stray separators', () => {
     const table: CommandId[] = ['explorer.selectTopRows', 'explorer.scriptCreateToNewQuery', 'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName']
-    expect(describeTemplate(contextMenuTemplate(request('explorer.context', { visible: table }), 'darwin', () => {}))).toEqual([
+    expect(describeTemplate(contextMenuTemplate(request('explorer.context', { visible: table, scriptAsTitle: 'table' }), 'darwin', () => {}))).toEqual([
       'Select Top 1000 Rows (click)', '---', 'Script Table as >', '  CREATE To >', '    New Query Editor Window (click)', '    File… (click)', '    Clipboard (click)', '---', 'Copy Name (click)'
     ])
     expect(describeTemplate(contextMenuTemplate(request('explorer.context', { visible: ['explorer.copyName', 'explorer.refresh'] }), 'darwin', () => {}))).toEqual(['Copy Name (click)', '---', 'Refresh (click, F5)'])
@@ -66,7 +66,9 @@ describe('native context menu template', () => {
     ;(clipboard?.click as () => void)()
     ;(connect?.click as () => void)()
     expect(send.mock.calls).toEqual([['explorer.scriptCreateToClipboard'], ['connection.connect']])
-    expect(find(items, 'explorer.scriptTableAs.create')?.label).toBe('CREATE To')
+    expect(find(items, 'explorer.scriptAs.create')?.label).toBe('CREATE To')
+    // Without a title key the Script submenu keeps its generic title; main never takes a title from the renderer.
+    expect(find(items, 'explorer.scriptAs')?.label).toBe('Script as')
   })
   it('shows toggles as checkboxes, and escapes access-key markers outside macOS', () => {
     const model = (menu: MenuId): readonly MenuEntry[] => menu === 'editor.context'

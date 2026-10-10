@@ -72,6 +72,10 @@ jobs:
       - name: Electron smoke tests
         timeout-minutes: 20
         run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
+      - name: Scripting smoke test on a 1024x768 display
+        # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere.
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/scripting-smoke.mjs
       - name: IPC benchmarks
         # Floors (tests/bench/floors.json) are enforced here only; the table goes to the job summary.
         timeout-minutes: 10

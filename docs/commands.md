@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (74)
+## Commands (105)
 
 ### File
 
@@ -98,9 +98,39 @@ keys it uses are listed below.
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
 | Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
-| Script Table as CREATE to New Query Editor Window | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › New Query Editor Window |
-| Script Table as CREATE to File… | `explorer.scriptCreateToFile` | — | — | — | `backendReady && !documentBusy` | Object Explorer context menu › Script Table as › CREATE To › File… |
-| Script Table as CREATE to Clipboard | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady` | Object Explorer context menu › Script Table as › CREATE To › Clipboard |
+| Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
+| Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
+| Script as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady && explorerScriptCreate == 'enabled'` | Object Explorer context menu › Script … as › CREATE To › Clipboard |
+| Script as ALTER to New Query Editor Window (not in the palette) | `explorer.scriptAlterToNewQuery` | — | — | — | `backendReady && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › ALTER To › New Query Editor Window |
+| Script as ALTER to File… (not in the palette) | `explorer.scriptAlterToFile` | — | — | — | `backendReady && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › ALTER To › File… |
+| Script as ALTER to Clipboard (not in the palette) | `explorer.scriptAlterToClipboard` | — | — | — | `backendReady && explorerScriptAlter == 'enabled'` | Object Explorer context menu › Script … as › ALTER To › Clipboard |
+| Script as CREATE OR ALTER to New Query Editor Window (not in the palette) | `explorer.scriptCreateOrAlterToNewQuery` | — | — | — | `backendReady && explorerScriptCreateOrAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE OR ALTER To › New Query Editor Window |
+| Script as CREATE OR ALTER to File… (not in the palette) | `explorer.scriptCreateOrAlterToFile` | — | — | — | `backendReady && explorerScriptCreateOrAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE OR ALTER To › File… |
+| Script as CREATE OR ALTER to Clipboard (not in the palette) | `explorer.scriptCreateOrAlterToClipboard` | — | — | — | `backendReady && explorerScriptCreateOrAlter == 'enabled'` | Object Explorer context menu › Script … as › CREATE OR ALTER To › Clipboard |
+| Script as DROP to New Query Editor Window (not in the palette) | `explorer.scriptDropToNewQuery` | — | — | — | `backendReady && explorerScriptDrop == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › DROP To › New Query Editor Window |
+| Script as DROP to File… (not in the palette) | `explorer.scriptDropToFile` | — | — | — | `backendReady && explorerScriptDrop == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › DROP To › File… |
+| Script as DROP to Clipboard (not in the palette) | `explorer.scriptDropToClipboard` | — | — | — | `backendReady && explorerScriptDrop == 'enabled'` | Object Explorer context menu › Script … as › DROP To › Clipboard |
+| Script as DROP And CREATE to New Query Editor Window (not in the palette) | `explorer.scriptDropAndCreateToNewQuery` | — | — | — | `backendReady && explorerScriptDropAndCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › DROP And CREATE To › New Query Editor Window |
+| Script as DROP And CREATE to File… (not in the palette) | `explorer.scriptDropAndCreateToFile` | — | — | — | `backendReady && explorerScriptDropAndCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › DROP And CREATE To › File… |
+| Script as DROP And CREATE to Clipboard (not in the palette) | `explorer.scriptDropAndCreateToClipboard` | — | — | — | `backendReady && explorerScriptDropAndCreate == 'enabled'` | Object Explorer context menu › Script … as › DROP And CREATE To › Clipboard |
+| Script as SELECT to New Query Editor Window (not in the palette) | `explorer.scriptSelectToNewQuery` | — | — | — | `backendReady && explorerScriptSelect == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › SELECT To › New Query Editor Window |
+| Script as SELECT to File… (not in the palette) | `explorer.scriptSelectToFile` | — | — | — | `backendReady && explorerScriptSelect == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › SELECT To › File… |
+| Script as SELECT to Clipboard (not in the palette) | `explorer.scriptSelectToClipboard` | — | — | — | `backendReady && explorerScriptSelect == 'enabled'` | Object Explorer context menu › Script … as › SELECT To › Clipboard |
+| Script as INSERT to New Query Editor Window (not in the palette) | `explorer.scriptInsertToNewQuery` | — | — | — | `backendReady && explorerScriptInsert == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › INSERT To › New Query Editor Window |
+| Script as INSERT to File… (not in the palette) | `explorer.scriptInsertToFile` | — | — | — | `backendReady && explorerScriptInsert == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › INSERT To › File… |
+| Script as INSERT to Clipboard (not in the palette) | `explorer.scriptInsertToClipboard` | — | — | — | `backendReady && explorerScriptInsert == 'enabled'` | Object Explorer context menu › Script … as › INSERT To › Clipboard |
+| Script as UPDATE to New Query Editor Window (not in the palette) | `explorer.scriptUpdateToNewQuery` | — | — | — | `backendReady && explorerScriptUpdate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › UPDATE To › New Query Editor Window |
+| Script as UPDATE to File… (not in the palette) | `explorer.scriptUpdateToFile` | — | — | — | `backendReady && explorerScriptUpdate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › UPDATE To › File… |
+| Script as UPDATE to Clipboard (not in the palette) | `explorer.scriptUpdateToClipboard` | — | — | — | `backendReady && explorerScriptUpdate == 'enabled'` | Object Explorer context menu › Script … as › UPDATE To › Clipboard |
+| Script as DELETE to New Query Editor Window (not in the palette) | `explorer.scriptDeleteToNewQuery` | — | — | — | `backendReady && explorerScriptDelete == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › DELETE To › New Query Editor Window |
+| Script as DELETE to File… (not in the palette) | `explorer.scriptDeleteToFile` | — | — | — | `backendReady && explorerScriptDelete == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › DELETE To › File… |
+| Script as DELETE to Clipboard (not in the palette) | `explorer.scriptDeleteToClipboard` | — | — | — | `backendReady && explorerScriptDelete == 'enabled'` | Object Explorer context menu › Script … as › DELETE To › Clipboard |
+| Script as EXECUTE to New Query Editor Window (not in the palette) | `explorer.scriptExecuteToNewQuery` | — | — | — | `backendReady && explorerScriptExecute == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › EXECUTE To › New Query Editor Window |
+| Script as EXECUTE to File… (not in the palette) | `explorer.scriptExecuteToFile` | — | — | — | `backendReady && explorerScriptExecute == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › EXECUTE To › File… |
+| Script as EXECUTE to Clipboard (not in the palette) | `explorer.scriptExecuteToClipboard` | — | — | — | `backendReady && explorerScriptExecute == 'enabled'` | Object Explorer context menu › Script … as › EXECUTE To › Clipboard |
+| Script As… | `explorer.scriptAs` | — | — | — | `backendReady && explorerScriptTitle != ''` | — |
+| Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
+| Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 
 ### Preferences
@@ -112,6 +142,7 @@ keys it uses are listed below.
 | Open Themes Folder | `preferences.openThemesFolder` | — | — | — | Always | View › Theme › Open Themes Folder |
 | Reload Themes | `preferences.reloadThemes` | — | — | — | Always | View › Theme › Reload Themes |
 | Set Color Theme (not in the palette) | `preferences.setTheme` | — | — | — | Always | View › Theme › Dark, Light, Follow System, and each theme under Dark Theme and Light Theme |
+| Options… | `preferences.options` | — | — | ⌘, | Always | Tools › Options… |
 
 ### Developer
 
@@ -220,6 +251,12 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_connect` | **R**econnect… | `connection.reconnect` | Always |
 | `2_change` | C**h**ange Connection… | `query.changeConnection` | Always |
 
+#### Tools (Alt+T)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_options` | **O**ptions… | `preferences.options` | Always |
+
 #### Window (Alt+W)
 
 | Group | Item | Command | Shown |
@@ -255,7 +292,7 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 
 #### Object Explorer context menu (`explorer.context`)
 
-Right-click an Object Explorer node (which selects it) or the empty area below the servers, or press Shift+F10 or the context-menu key in the tree for the selected node. Items act on that node.
+Right-click an Object Explorer node (which selects it) or the empty area below the servers, or press Shift+F10 or the context-menu key in the tree for the selected node. Items act on that node. Script … as names the node's kind (Script Table as, Script View as, …) and greys the verbs it does not support; docs/scripting.md lists them.
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
@@ -265,25 +302,107 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | Re**m**ove | `connection.removeLost` | `explorerServerLost` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerNode == 'table'` |
-| `2_script` | **S**cript Table as › | Submenu: Object Explorer context menu › Script Table as | `explorerNode == 'table'` |
+| `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
+| `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remo**v**e Filter | `explorer.removeFilter` | `explorerFolderFiltered` |
 | `5_copy` | Copy **N**ame | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
 | `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 
-#### Object Explorer context menu › Script Table as
+#### Object Explorer context menu › Script … as
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `1_create` | **C**REATE To › | Submenu: Object Explorer context menu › Script Table as › CREATE To | Always |
+| `1_ddl` | **C**REATE To › | Submenu: Object Explorer context menu › Script … as › CREATE To | `explorerScriptCreate != ''` |
+| `1_ddl` | **A**LTER To › | Submenu: Object Explorer context menu › Script … as › ALTER To | `explorerScriptAlter != ''` |
+| `1_ddl` | C**R**EATE OR ALTER To › | Submenu: Object Explorer context menu › Script … as › CREATE OR ALTER To | `explorerScriptCreateOrAlter != ''` |
+| `1_ddl` | **D**ROP To › | Submenu: Object Explorer context menu › Script … as › DROP To | `explorerScriptDrop != ''` |
+| `1_ddl` | DROP A**n**d CREATE To › | Submenu: Object Explorer context menu › Script … as › DROP And CREATE To | `explorerScriptDropAndCreate != ''` |
+| `2_dml` | **S**ELECT To › | Submenu: Object Explorer context menu › Script … as › SELECT To | `explorerScriptSelect != ''` |
+| `2_dml` | **I**NSERT To › | Submenu: Object Explorer context menu › Script … as › INSERT To | `explorerScriptInsert != ''` |
+| `2_dml` | **U**PDATE To › | Submenu: Object Explorer context menu › Script … as › UPDATE To | `explorerScriptUpdate != ''` |
+| `2_dml` | D**E**LETE To › | Submenu: Object Explorer context menu › Script … as › DELETE To | `explorerScriptDelete != ''` |
+| `3_execute` | E**X**ECUTE To › | Submenu: Object Explorer context menu › Script … as › EXECUTE To | `explorerScriptExecute != ''` |
 
-#### Object Explorer context menu › Script Table as › CREATE To
+#### Object Explorer context menu › Script … as › CREATE To
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_destination` | **N**ew Query Editor Window | `explorer.scriptCreateToNewQuery` | Always |
 | `1_destination` | **F**ile… | `explorer.scriptCreateToFile` | Always |
 | `1_destination` | C**l**ipboard | `explorer.scriptCreateToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › ALTER To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptAlterToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptAlterToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptAlterToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › CREATE OR ALTER To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptCreateOrAlterToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptCreateOrAlterToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptCreateOrAlterToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › DROP To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptDropToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptDropToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptDropToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › DROP And CREATE To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptDropAndCreateToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptDropAndCreateToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptDropAndCreateToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › SELECT To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptSelectToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptSelectToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptSelectToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › INSERT To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptInsertToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptInsertToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptInsertToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › UPDATE To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptUpdateToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptUpdateToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptUpdateToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › DELETE To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptDeleteToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptDeleteToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptDeleteToClipboard` | Always |
+
+#### Object Explorer context menu › Script … as › EXECUTE To
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_destination` | **N**ew Query Editor Window | `explorer.scriptExecuteToNewQuery` | Always |
+| `1_destination` | **F**ile… | `explorer.scriptExecuteToFile` | Always |
+| `1_destination` | C**l**ipboard | `explorer.scriptExecuteToClipboard` | Always |
 
 #### Query tab context menu (`documentTab.context`)
 
@@ -334,7 +453,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (38)
+## Context keys (50)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -372,8 +491,20 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerSelectionFilterable` | boolean | state | The selected Object Explorer node is a folder that Filter Settings can filter. |
 | `explorerSelectionFiltered` | boolean | state | The selected Object Explorer folder has a filter. |
 | `explorerSelectionInsertable` | boolean | state | The selected Object Explorer node has a name to copy: a server, an object, or a fully loaded Columns folder. |
-| `explorerSelectionScriptable` | boolean | state | The selected Object Explorer node is an object SMO can script. |
+| `explorerScriptTitle` | `''`, `'table'`, `'view'`, `'procedure'`, `'function'`, `'trigger'`, `'databaseTrigger'`, `'serverTrigger'`, `'database'`, `'index'`, `'key'`, `'constraint'`, `'statistic'`, `'synonym'`, `'sequence'`, `'userDefinedDataType'`, `'userDefinedType'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'schema'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'login'`, `'serverRole'`, `'credential'`, `'linkedServer'`, `'backupDevice'`, `'audit'`, `'serverAuditSpecification'`, `'databaseAuditSpecification'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'searchPropertyList'`, `'partitionScheme'`, `'partitionFunction'`, `'planGuide'` | state | The selected Object Explorer node's Script submenu title key from `src/shared/scripting/catalog.ts` ('table' shows Script Table as), or '' when it has none. Keep it out of keybinding `when` clauses. |
+| `explorerScriptCreate` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › CREATE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptAlter` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › ALTER To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptCreateOrAlter` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › CREATE OR ALTER To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptDrop` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › DROP To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptDropAndCreate` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › DROP And CREATE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptSelect` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › SELECT To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptInsert` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › INSERT To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptUpdate` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › UPDATE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › DELETE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerScriptExecute` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › EXECUTE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerSelectionModifiable` | boolean | state | The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger. |
 | `explorerLoading` | boolean | state | Object Explorer is loading or waiting to load nodes. |
+| `scriptingRunning` | boolean | state | A Script As request is running. |
 | `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
 | `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
@@ -388,7 +519,7 @@ Workbench keybindings never use these keys, because menus, Electron, the operati
 
 | Reason | Windows | Linux | macOS |
 | --- | --- | --- | --- |
-| opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+W, F10 | — |
+| opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, F10 | — |
 | an Electron role or system key | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4 | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Ctrl+Q | — |
 | clipboard or text editing | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | — |
 | find or comment in the editor | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\ | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\, Ctrl+Shift+A | ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, ⌘E, ⌘/, ⌥⌘C, ⌥⌘W, ⌥⌘R, ⌥⌘P, ⌥⌘L |

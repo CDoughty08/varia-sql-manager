@@ -10,6 +10,8 @@ import QueryEditor from './QueryEditor'
 import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
+import OptionsDialog from './scripting/OptionsDialog'
+import ScriptingStatus from './scripting/ScriptingStatus'
 import BackendBanner from './BackendBanner'
 import QueryOutput from './QueryOutput'
 import TitleBar from './TitleBar'
@@ -53,13 +55,14 @@ export default function App() {
   const [health, setHealth] = useState<BackendHealth>()
   const databaseLists = useServiceSnapshot(workbench.databaseList)
   const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
+  const optionsOpen = useServiceSnapshot(workbench.scriptingOptions.dialog)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(connectionDefaults)
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
   const { error: fileError } = useServiceSnapshot(files)
-  const { error: commandError } = useServiceSnapshot(commands)
+  const { error: commandError, kind: commandKind } = useServiceSnapshot(commands)
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
   const enabled = {
     connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'),
@@ -133,6 +136,14 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
+  // A query opened or chosen from elsewhere (Script As, Go to Query, a menu) must not stay hidden past the strip's edge.
+  useEffect(() => {
+    const tab = activeId ? document.getElementById(`tab-${activeId}`)?.parentElement : undefined, strip = tab?.parentElement
+    if (!tab || !strip) return
+    const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
+    if (box.left < view.left) strip.scrollLeft -= view.left - box.left
+    else if (box.right > view.right) strip.scrollLeft += box.right - view.right
+  }, [activeId, tabs.length])
 
   function connected(info: ConnectionInfo, chosen: ConnectionOptions) {
     setOptions(chosen)
@@ -194,7 +205,9 @@ export default function App() {
     </div>
     <BackendBanner />
     {fileError && <div className="global-error" role="alert"><span>{fileError}</span><button aria-label="Dismiss file error" onClick={() => files.clearError()}><Icon name="close" /></button></div>}
-    {commandError && <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>}
+    {commandError && (commandKind === 'warning'
+      ? <div className="global-error warning" role="status"><span>{commandError}</span><button aria-label="Dismiss warning" onClick={() => commands.clearError()}><Icon name="close" /></button></div>
+      : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
         <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
@@ -206,9 +219,10 @@ export default function App() {
           <div className="editor-container"><QueryEditor /></div>
         </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
       </main>} output={<QueryOutput tabId={active.id} result={active.result} error={active.error} running={!!activeRunning} rowsRead={activeRunning?.rowsRead} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}<span className="status-divider">|</span>1,000 row display limit</span></footer>
+    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}<span className="status-divider">|</span>1,000 row display limit</span></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
+    {optionsOpen && <OptionsDialog />}
     <QuickInput />
     <MenuLayer />
   </div>

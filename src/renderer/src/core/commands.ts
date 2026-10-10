@@ -9,7 +9,8 @@ import type { CommandArgs, Disposable } from './types'
 export type CommandSource = 'keybinding' | 'menu' | 'palette' | 'toolbar' | 'api'
 export interface CommandHandler { run(args?: CommandArgs): void | Promise<void>; when?(args?: CommandArgs): boolean }
 export interface CommandEvent { readonly id: CommandId; readonly source: CommandSource }
-export interface CommandSnapshot { readonly error: string }
+/** The command banner's message; a warning (`kind`) is shown as a notice, not as a failure. */
+export interface CommandSnapshot { readonly error: string; readonly kind?: 'warning' }
 
 const maxErrorLength = 300
 // Before the workbench supplies its context, every key is false and no platform is assumed.
@@ -97,6 +98,8 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
   clearError(): void { if (this.getSnapshot().error) this.publish({ error: '' }) }
   /** Shows a failure outside a command (a menu that could not render) in the command banner. */
   reportError(message: string): void { this.publish({ error: truncate(message) }) }
+  /** Shows a warning in the command banner: something worked, but the user should know more (a script's warnings). */
+  reportWarning(message: string): void { this.publish({ error: truncate(message), kind: 'warning' }) }
   private warnOnce(id: string): void {
     if (this.warned.has(id)) return
     this.warned.add(id)
