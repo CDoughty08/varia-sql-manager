@@ -425,7 +425,7 @@ Right-click a query tab, or press Shift+F10 or the context-menu key on a focused
 
 #### Query Output context menu (`output.context`)
 
-Right-click the results grid, Messages, or an XML plan, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid's selection selects that cell first.
+Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid's selection selects that cell first.
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |

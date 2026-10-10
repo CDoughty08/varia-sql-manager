@@ -391,7 +391,7 @@ export const commandCatalog = {
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
   },
   // The Query Output menu and the results grid's keys: the grid copies its selected cells (Ctrl+C reaches its copy
-  // event, and Ctrl+A is its own), and Messages and the XML plan their selected text.
+  // event, and Ctrl+A is its own), and Messages its selected text.
   'output.copy': {
     title: 'Copy', category: 'Query', icon: 'copy', palette: false,
     keybindings: [{ key: 'mod+c', when: 'outputGridFocus', native: true }], menus: [{ menu: 'output.context', group: '1_copy', order: 1, mnemonic: 'c' }]
