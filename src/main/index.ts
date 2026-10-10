@@ -56,6 +56,9 @@ let unresponsivePrompt: Promise<void> | undefined
 // The user chose Reload in the reload prompt: the next unload is allowed.
 let reloadApproved = false
 let closeApproved = false
+// Main asked the page to close (a quit or the window's close button) and the page has not said that its close ended
+// without closing. A page that reloads or crashes first cannot finish it, so it goes to the next page.
+let closePending = false
 /** The app is quitting (before-quit went ahead), so a closed window needs no new backend. */
 let quitting = false
 let backendStopped = false
@@ -130,11 +133,19 @@ function resetRendererState(relaunch = true): void {
 }
 
 /** A dialog the page asked for, on the window, in turn. If the page reloads or crashes before the user answers, the
- *  answer is `cancelled`: that page is gone, and what it asked for must not happen for the next one. */
-function pageDialog<T>(show: (window: BrowserWindow) => Promise<T>, cancelled: T): Promise<T> {
+ *  answer is `cancelled`: that page is gone, and what it asked for must not happen for the next one. A message box is
+ *  `abortable`: it gets a signal, and the reset closes it then, so the crash prompt and the next page's dialogs do not
+ *  wait behind it (a file chooser cannot be closed from main). */
+function pageDialog<T>(show: (window: BrowserWindow, signal?: AbortSignal) => Promise<T>, cancelled: T, abortable = false): Promise<T> {
   const asked = rendererGeneration
-  return oneDialog(() => mainWindow && !mainWindow.isDestroyed() ? show(mainWindow) : Promise.resolve(cancelled), cancelled)
+  return oneDialog(signal => mainWindow && !mainWindow.isDestroyed() ? show(mainWindow, signal) : Promise.resolve(cancelled), cancelled, abortable)
     .then(answer => asked === rendererGeneration ? answer : cancelled)
+}
+
+/** Asks the page to close, as the window's close button and a quit do; the request outlives a reload or crash. */
+function requestClose(): void {
+  closePending = true
+  command('window.close')
 }
 
 /** Restarting closes every connection and rolls back open transactions, so main asks first when there are any. The
@@ -144,10 +155,10 @@ function restartBackend(): Promise<boolean> {
   restarting ??= (async () => {
     try {
       if (backend.connectionCount() > 0) {
-        const { response } = await pageDialog(window => {
+        const { response } = await pageDialog((window, signal) => {
           const count = backend.connectionCount()
-          return count === 0 ? Promise.resolve({ response: 0 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true })
-        }, { response: 1 })
+          return count === 0 ? Promise.resolve({ response: 0 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal })
+        }, { response: 1 }, true)
         if (response !== 0) return false
       }
       await backend.restart('manual')
@@ -241,6 +252,7 @@ function applyAppearance(state: ThemeState): void {
 function createWindow(): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
+  closePending = false
   windowActive = true
   rendererLoaded = false
   rendererReady = false
@@ -287,8 +299,8 @@ function createWindow(): void {
   contents.on('will-prevent-unload', event => {
     if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
     const generation = rendererGeneration
-    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: 'Unsaved queries will be lost. Connections are closed and uncommitted transactions are rolled back.', buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true }),
-      { response: 1 }).then(({ response }) => {
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: 'Unsaved queries will be lost. Connections are closed and uncommitted transactions are rolled back.', buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+      { response: 1 }, true).then(({ response }) => {
       if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) return
       reloadApproved = true
       // Once the page has finished cancelling this unload (a round trip to it): a reload asked for before then is dropped.
@@ -313,7 +325,7 @@ function createWindow(): void {
   else void window.loadFile(rendererFile)
   window.on('close', event => {
     if (closeApproved) return
-    if (rendererCanConfirm(window)) { event.preventDefault(); command('window.close'); return }
+    if (rendererCanConfirm(window)) { event.preventDefault(); requestClose(); return }
     // A crashed, hung, or unmounted workbench cannot run the unsaved-query prompts, so never trap the user. A hung one
     // is asked about first; the close (and a quit under way) waits for the answer.
     if (rendererUnresponsive) {
@@ -389,7 +401,15 @@ app.whenReady().then(async () => {
   handle('varia:themes-reload', () => appearance.reload())
   handle('varia:themes-open-folder', () => openThemesFolder())
   handle('varia:themes-create', async () => { shell.showItemInFolder(await appearance.createStarterTheme()) })
-  ipcMain.on('varia:commands-ready', (event, ready: unknown) => { if (trusted(event)) rendererReady = ready === true })
+  ipcMain.on('varia:commands-ready', (event, ready: unknown) => {
+    if (!trusted(event)) return
+    rendererReady = ready === true
+    // A close or quit that the previous page could not finish (it reloaded or crashed first) goes to this one; a page
+    // whose close is already under way shares it.
+    if (rendererReady && closePending) command('window.close')
+  })
+  // Only the live page can end a close: a page being unloaded (not ready since the reset) may still report its own.
+  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) closePending = false })
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
@@ -471,7 +491,7 @@ app.whenReady().then(async () => {
   handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
-    const response = await pageDialog(window => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true }), { response: 2, checkboxChecked: false })
+    const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)
     return (['save', 'discard', 'cancel'] as const)[response.response]
   })
   ipcMain.handle('varia:close-window', event => {
@@ -488,7 +508,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
-  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); command('window.close'); return }
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); requestClose(); return }
   quitting = true
 })
 // A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is

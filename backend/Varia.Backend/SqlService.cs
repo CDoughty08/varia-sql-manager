@@ -44,7 +44,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ResultStore store;
     private readonly ResultJobs jobs;
     private readonly bool hooks;
-    private readonly Action<object>? publish;
+    private readonly Func<object, bool>? publish;
     private readonly Timer? memoryTimer;
     private readonly object memoryGate = new();
     private long reportedBytes = -1;
@@ -64,8 +64,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
-    /// <param name="publish">Sends a global EVENT; result memory usage is reported through it at most once a second.</param>
-    public SqlService(ResultStore? store = null, bool hooks = false, Action<object>? publish = null)
+    /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
+    /// at most once a second.</param>
+    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null)
     {
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
@@ -79,7 +80,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
     /// apply only with VARIA_BACKEND_TEST_HOOKS=1; main passes those variables only to unpackaged smoke runs.</summary>
-    public static SqlService FromEnvironment(Action<object>? publish)
+    public static SqlService FromEnvironment(Func<object, bool>? publish)
     {
         var hooks = Environment.GetEnvironmentVariable("VARIA_BACKEND_TEST_HOOKS") == "1";
         long? budget = hooks && long.TryParse(Environment.GetEnvironmentVariable("VARIA_RESULT_BUDGET_BYTES"), NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) && bytes > 0 ? bytes : null;
@@ -684,7 +685,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
     /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below what the status bar was last shown (results were
-    /// closed, or a copy or save that leased them ended).</summary>
+    /// closed, or a copy or save that leased them ended). An event the full control lane refused does not count as
+    /// reported, so the next check sends it again.</summary>
     internal void ReportMemory()
     {
         lock (memoryGate)
@@ -692,10 +694,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
             var band = Band(used, global);
-            if (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep) return;
+            if (publish is null || (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep)) return;
+            if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
+            memorySeq++;
             reportedBytes = used;
             reportedBand = band;
-            publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = ++memorySeq });
         }
     }
 

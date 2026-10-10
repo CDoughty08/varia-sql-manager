@@ -339,6 +339,9 @@ export interface VariaApi {
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
   closeWindow(): Promise<void>
+  /** The page's close ended without closing (a prompt was cancelled, or a save failed). Main hands a close it asked for
+   *  to the next page when this one reloads or crashes first, but not one that ended. */
+  closeWindowCancelled(): void
   loadLayouts(): Promise<ApiResult<LayoutLoad>>
   saveLayouts(state: LayoutState): Promise<ApiResult<void>>
   importLayout(): Promise<ApiResult<WorkspaceLayout | null>>

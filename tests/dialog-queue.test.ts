@@ -69,4 +69,35 @@ describe('dialogQueue', () => {
     queue.reset()
     expect(await queue(async () => 'after', 'cancel')).toBe('after')
   })
+  it('closes the open message box of a page that is gone, so the crash prompt follows at once', async () => {
+    const queue = dialogQueue(), opened: string[] = [], signals: (AbortSignal | undefined)[] = []
+    // As Electron does: an aborted message box closes, answering its cancelId.
+    const messageBox = (title: string, cancelId: number) => (signal?: AbortSignal) => {
+      opened.push(title); signals.push(signal)
+      return new Promise<{ response: number }>(resolve => signal?.addEventListener('abort', () => resolve({ response: cancelId })))
+    }
+    const prompt = queue(messageBox('Unsaved query', 2), { response: 2 }, true)
+    const queued = queue(messageBox('Restart SQL backend', 1), { response: 1 }, true)
+    await settle()
+    expect(opened).toEqual(['Unsaved query'])
+    expect(signals[0]?.aborted).toBe(false)
+    queue.reset()
+    expect(signals[0]?.aborted).toBe(true)
+    expect(await prompt).toEqual({ response: 2 })
+    expect(await queued).toEqual({ response: 1 })
+    const crash = queue(async () => { opened.push('Workbench stopped'); return { response: 0 } }, { response: -1 })
+    expect(await crash).toEqual({ response: 0 })
+    expect(opened).toEqual(['Unsaved query', 'Workbench stopped'])
+    // A file chooser gets no signal: it cannot be closed from main, so the next dialog still waits for it.
+    const grid = held<{ canceled: boolean }>()
+    const chooser = queue(signal => { opened.push('Save Grid Results'); signals.push(signal); return grid.shown }, cancelled)
+    const after = queue(async () => { opened.push('Open SQL query'); return { canceled: true } }, cancelled)
+    await settle()
+    queue.reset()
+    expect(signals.at(-1)).toBeUndefined()
+    expect(await after).toEqual(cancelled)
+    expect(opened.at(-1)).toBe('Save Grid Results')
+    grid.answer({ canceled: false })
+    expect(await chooser).toEqual({ canceled: false })
+  })
 })

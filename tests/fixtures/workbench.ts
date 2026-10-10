@@ -131,6 +131,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
+    closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
     databases: vi.fn<VariaApi['databases']>(async () => ({ ok: true, value: [] })),
     previewTheme: vi.fn<VariaApi['previewTheme']>(async () => ({ ok: true, value: null })),
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),

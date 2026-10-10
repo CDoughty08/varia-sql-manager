@@ -63,6 +63,7 @@ const api: VariaApi = {
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),
+  closeWindowCancelled: () => { ipcRenderer.send('varia:close-cancelled') },
   loadLayouts: () => ipcRenderer.invoke('varia:layouts-load'),
   saveLayouts: state => ipcRenderer.invoke('varia:layouts-save', state),
   importLayout: () => ipcRenderer.invoke('varia:layout-import'),

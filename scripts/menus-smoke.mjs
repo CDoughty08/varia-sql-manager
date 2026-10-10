@@ -1212,14 +1212,14 @@ try {
   console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, the fallback, and none for an idle page.')
 
   // 16. Main's dialogs across the page's lifecycle, in fresh apps (fixtures/dialog-lifecycle.mjs): Restart asked for
-  // twice restarts once; a crash's prompt waits for the open Save dialog and the dead page's queued save never opens;
-  // the reload and not-responding prompts take their turn too; a quit while a Script As save waits exits once the
-  // dialogs are answered.
+  // twice restarts once; a crash's prompt waits for the open Save dialog and the dead page's queued save never opens,
+  // but the dead page's open message box closes; the reload and not-responding prompts take their turn too; a quit
+  // while a Script As save waits exits once the dialogs are answered, and one during the reload prompt survives Reload.
   expect(failures).toEqual([])
   await application.close()
   application = undefined
   await dialogLifecycle(launchOptions)
-  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open dialog and drops the dead page\'s, the reload and not-responding prompts wait their turn, and a quit waits for queued dialogs.')
+  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload.')
 
   // 17. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
   // master, and the server's Refresh reloads its lists without an error.

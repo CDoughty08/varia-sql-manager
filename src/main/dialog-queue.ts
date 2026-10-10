@@ -1,9 +1,11 @@
 export interface DialogQueue {
   /** Shows the dialog once every dialog asked for before it has settled, whether it resolved or failed. If reset() comes
-   *  first, it is never shown and settles with `cancelled`, the answer its Cancel button would give. */
-  <T>(show: () => Promise<T>, cancelled: T): Promise<T>
-  /** Settles every dialog not yet shown with its `cancelled` answer. The open one stays: a native file dialog cannot be
-   *  closed from main, and the next dialog waits for it as before. */
+   *  first, it is never shown and settles with `cancelled`, the answer its Cancel button would give. An `abortable`
+   *  dialog (a message box) gets a signal to pass to Electron, which closes it as Cancel when reset() comes while it is
+   *  open. */
+  <T>(show: (signal?: AbortSignal) => Promise<T>, cancelled: T, abortable?: boolean): Promise<T>
+  /** Settles every dialog not yet shown with its `cancelled` answer, and closes the open one if it is abortable. A native
+   *  file dialog cannot be closed from main, so the next dialog waits for it as before. */
   reset(): void
 }
 
@@ -14,21 +16,25 @@ export interface DialogQueue {
  * the answers it asked for, so main resets the queue then, and the new page's dialogs do not wait behind them.
  */
 export function dialogQueue(): DialogQueue {
-  interface Waiting { readonly show: () => Promise<unknown>; readonly cancel: () => void; readonly settle: (shown: Promise<unknown>) => void }
+  interface Waiting { readonly show: (signal?: AbortSignal) => Promise<unknown>; readonly abort?: AbortController; readonly cancel: () => void; readonly settle: (shown: Promise<unknown>) => void }
   const waiting: Waiting[] = []
-  let open = false
+  let open: Waiting | undefined
   const next = (): void => {
     const entry = open ? undefined : waiting.shift()
     if (!entry) return
-    open = true
+    open = entry
     // A dialog that throws before it opens (a destroyed window) is a failure like any other.
-    const shown = (async () => entry.show())()
+    const shown = (async () => entry.show(entry.abort?.signal))()
     entry.settle(shown)
-    void shown.catch(() => undefined).then(() => { open = false; next() })
+    void shown.catch(() => undefined).then(() => { open = undefined; next() })
   }
-  const queue = <T>(show: () => Promise<T>, cancelled: T): Promise<T> => new Promise<T>((resolve, reject) => {
-    waiting.push({ show, cancel: () => resolve(cancelled), settle: shown => { (shown as Promise<T>).then(resolve, reject) } })
+  const queue = <T>(show: (signal?: AbortSignal) => Promise<T>, cancelled: T, abortable = false): Promise<T> => new Promise<T>((resolve, reject) => {
+    waiting.push({ show, ...(abortable ? { abort: new AbortController() } : {}), cancel: () => resolve(cancelled), settle: shown => { (shown as Promise<T>).then(resolve, reject) } })
     queueMicrotask(next)
   })
-  return Object.assign(queue, { reset: () => { for (const entry of waiting.splice(0)) entry.cancel() } })
+  return Object.assign(queue, { reset: () => {
+    for (const entry of waiting.splice(0)) entry.cancel()
+    // The aborted message box settles with its cancelId through Electron, and only then does the next dialog open.
+    open?.abort?.abort()
+  } })
 }

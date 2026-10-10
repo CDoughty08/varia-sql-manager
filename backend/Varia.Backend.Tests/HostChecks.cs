@@ -216,6 +216,7 @@ internal static class HostChecks
 
         OutboundChecks(check);
         MemoryOrder(check);
+        MemoryBackpressure(check);
 
         // HELLO announces MethodNames and main refuses a backend missing any of its methods, so every name must dispatch.
         using var service = new SqlService();
@@ -282,6 +283,42 @@ internal static class HostChecks
             && reports.Select(report => report.Seq).Distinct().Count() == reports.Count && shown == store.UsedBytes && shown == 0,
             "a summary overtaken by a close's fall carries an older sequence number, so the newest report is what the store holds: "
             + string.Join(", ", reports.Select(report => report.Kind + " #" + report.Seq + " " + report.Used)));
+    }
+
+    /// <summary>results.memory is droppable: while main is not reading, the control lane refuses it. A refused fall must
+    /// not count as reported, or the status bar keeps showing memory a close already returned; the 1 s timer sends it
+    /// once the lane drains.</summary>
+    private static void MemoryBackpressure(Action<bool, string> check)
+    {
+        HostHarness? harness = null;
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var host = harness = new HostHarness(dispatcher: () => new SqlService(store, hooks: true, publish: value => harness!.Host.Publish(value)), valve: true);
+        host.Hello();
+        host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
+        var resultId = Body(host.Next(FrameKind.Response)!.Value).GetProperty("result").GetProperty("resultId").GetUInt32();
+        long Memory(int timeoutMs, Func<long, bool> wanted)
+        {
+            var deadline = Environment.TickCount64 + timeoutMs;
+            while (deadline - Environment.TickCount64 > 0 && host.Next(FrameKind.Event, (int)Math.Max(1, deadline - Environment.TickCount64)) is { } frame)
+                if (frame.Header.Id == 0 && Body(frame) is var body && body.GetProperty("type").GetString() == "results.memory" && wanted(body.GetProperty("usedBytes").GetInt64()))
+                    return body.GetProperty("usedBytes").GetInt64();
+            return -1;
+        }
+        var rise = Memory(3000, used => used > 0);
+        // Main stops reading: the writer blocks on its first frame, then a thousand queued events fill the control lane.
+        host.Valve!.Shut();
+        host.Host.Publish(new { Type = "test.filler" });
+        var blocked = SpinWait.SpinUntil(() => host.Valve.Blocked, 2000);
+        for (var i = 0; i < Outbound.MaxDroppableFrames + 10; i++) host.Host.Publish(new { Type = "test.filler" });
+        host.Request(2, "results.close", new { resultIds = new[] { resultId } });
+        var closedWhileFull = SpinWait.SpinUntil(() => store.UsedBytes == 0 && host.Host.InFlight == 0, 5000);
+        // A timer tick while the lane is still full.
+        Thread.Sleep(1200);
+        host.Valve.Open();
+        var closed = host.Next(FrameKind.Response);
+        var fall = Memory(3000, used => used == 0);
+        check(rise > 0 && blocked && closedWhileFull && closed?.Header.Id == 2 && fall == 0 && store.UsedBytes == 0,
+            "a results.memory fall refused while the control lane is full is sent once it drains (rise " + rise + ", fall " + fall + ")");
     }
 
     private static void OutboundChecks(Action<bool, string> check)
@@ -429,11 +466,13 @@ internal sealed class HostHarness : IDisposable
     private long arrivals;
 
     /// <param name="dispatcher">Replaces the stub dispatcher, for example with a SqlService.</param>
-    public HostHarness(HostOptions? options = null, Stream? output = null, Func<IRequestDispatcher>? dispatcher = null)
+    /// <param name="valve">Puts a <see cref="ValveStream"/> in front of the pipe the frames are read from.</param>
+    public HostHarness(HostOptions? options = null, Stream? output = null, Func<IRequestDispatcher>? dispatcher = null, bool valve = false)
     {
         hostInput = new AnonymousPipeClientStream(PipeDirection.In, toHost.ClientSafePipeHandle);
         hostOutput = new AnonymousPipeClientStream(PipeDirection.Out, fromHost.ClientSafePipeHandle);
-        Host = new ProtocolHost(hostInput, output ?? hostOutput, () => { Dispatcher.Created = true; return dispatcher?.Invoke() ?? Dispatcher; }, HostChecks.Json,
+        if (valve && output is null) Valve = new ValveStream(hostOutput);
+        Host = new ProtocolHost(hostInput, output ?? Valve ?? (Stream)hostOutput, () => { Dispatcher.Created = true; return dispatcher?.Invoke() ?? Dispatcher; }, HostChecks.Json,
             (options ?? new HostOptions()) with { Exit = code => { Exits.Enqueue(code); Exited.Set(); }, Diagnostic = _ => { } });
         hostThread = new Thread(() => Host.Run()) { IsBackground = true, Name = "test-host" };
         hostThread.Start();
@@ -441,6 +480,7 @@ internal sealed class HostHarness : IDisposable
     }
 
     public ProtocolHost Host { get; }
+    public ValveStream? Valve { get; }
     public StubDispatcher Dispatcher { get; } = new();
     public ConcurrentQueue<int> Exits { get; } = new();
     public ManualResetEventSlim Exited { get; } = new();
@@ -501,6 +541,7 @@ internal sealed class HostHarness : IDisposable
 
     public void Dispose()
     {
+        Valve?.Open();
         toHost.Dispose();
         hostThread.Join(5000);
         // Closing the write end first ends the frame reader's blocked read.
@@ -508,4 +549,31 @@ internal sealed class HostHarness : IDisposable
         hostInput.Dispose();
         fromHost.Dispose();
     }
+}
+
+/// <summary>Passes writes through, but holds them while shut, as when main stops reading the backend's stdout.</summary>
+internal sealed class ValveStream(Stream inner) : Stream
+{
+    private readonly ManualResetEventSlim open = new(true);
+    private int blocked;
+    /// <summary>A write is waiting for the valve to open.</summary>
+    public bool Blocked => Volatile.Read(ref blocked) != 0;
+    public void Shut() => open.Reset();
+    public void Open() => open.Set();
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+        if (!open.IsSet) Volatile.Write(ref blocked, 1);
+        open.Wait();
+        Volatile.Write(ref blocked, 0);
+        inner.Write(buffer, offset, count);
+    }
+    public override void Flush() => inner.Flush();
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
 }

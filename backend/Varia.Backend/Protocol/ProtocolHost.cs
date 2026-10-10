@@ -347,17 +347,18 @@ internal sealed class ProtocolHost
 
     private void SendEvent(RequestContext context, object value, bool droppable) => Event(context.Id, value, droppable);
 
-    /// <summary>A global EVENT (id 0), such as results.memory. Always droppable.</summary>
-    public void Publish(object value) => Event(0, value, droppable: true);
+    /// <summary>A global EVENT (id 0), such as results.memory. Always droppable: false when it was not queued (the control
+    /// lane is full while main is not reading), so the publisher can send it again later.</summary>
+    public bool Publish(object value) => Event(0, value, droppable: true);
 
-    private void Event(uint id, object value, bool droppable)
+    private bool Event(uint id, object value, bool droppable)
     {
         byte[] body;
         try { body = JsonBridge.Encode(value, json); }
-        catch (InvalidOperationException) { return; }
+        catch (InvalidOperationException) { return false; }
         // Events are best effort and bounded at the source; the summary carries everything that matters.
-        if (body.Length > (droppable ? ProtocolLimits.EventBody : ProtocolLimits.EssentialEventBody) || Volatile.Read(ref exitCode) >= 0) return;
-        outbound.Control(Frames.Encode(FrameKind.Event, id, 0, body), droppable);
+        if (body.Length > (droppable ? ProtocolLimits.EventBody : ProtocolLimits.EssentialEventBody) || Volatile.Read(ref exitCode) >= 0) return false;
+        return outbound.Control(Frames.Encode(FrameKind.Event, id, 0, body), droppable);
     }
 
     private int Fatal(string code, string message, int exit, string? diagnostic, bool supported = false)

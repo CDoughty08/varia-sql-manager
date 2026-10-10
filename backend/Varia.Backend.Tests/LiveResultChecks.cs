@@ -180,7 +180,7 @@ internal static class LiveResultChecks
     private static async Task SummaryReports(Action<bool, string> check, ConnectOptions options, JsonSerializerOptions json)
     {
         var reports = new List<long>();
-        using var service = new SqlService(new ResultStore(1L << 30, 1L << 29), publish: value => { lock (reports) reports.Add(JsonSerializer.SerializeToElement(value, json).GetProperty("usedBytes").GetInt64()); });
+        using var service = new SqlService(new ResultStore(1L << 30, 1L << 29), publish: value => { lock (reports) reports.Add(JsonSerializer.SerializeToElement(value, json).GetProperty("usedBytes").GetInt64()); return true; });
         var info = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(options, json), json);
         try
         {

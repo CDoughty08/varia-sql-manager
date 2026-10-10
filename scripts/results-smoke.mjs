@@ -1082,29 +1082,39 @@ try {
     }
   })).toEqual({ fits: true, overflow: false, cut: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
-  // A Script As held in the backend keeps Cancel and the start of its text: the server and database give way, and no
-  // segment covers another.
+  // Script As requests held in the backend keep Cancel and the start of their text: the server and database give way,
+  // no segment covers another, and the text keeps a gap from the backend status even when it fills its segment (two
+  // requests), so the two do not read as one phrase.
   await writeFile(join(control, 'hold', 'scripting.script'), '')
   const ordersPath = [longServer, 'Databases', 'AppData', 'Tables', 'dbo.Orders']
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
-  await (await explorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
   const contextMenu = name => page.getByRole('menu', { name, exact: true })
-  await contextMenu('Object Explorer').getByRole('menuitem', { name: 'Script Table as', exact: true }).click({ force: true })
-  await contextMenu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click({ force: true })
-  await contextMenu('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }).click({ force: true })
-  const cancelScripting = page.getByRole('button', { name: 'Cancel scripting', exact: true })
-  await expect(cancelScripting).toBeVisible()
-  expect(await page.evaluate(() => {
+  const scriptOrders = async (verb, destination) => {
+    await (await explorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
+    await contextMenu('Object Explorer').getByRole('menuitem', { name: 'Script Table as', exact: true }).click({ force: true })
+    await contextMenu('Script Table as').getByRole('menuitem', { name: verb, exact: true }).click({ force: true })
+    await contextMenu(verb).getByRole('menuitem', { name: destination, exact: true }).click({ force: true })
+  }
+  const statusLayout = () => page.evaluate(() => {
     const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect()
     const parts = { backend: bar.firstElementChild, cancel: bar.querySelector('button[aria-label="Cancel scripting"]'), place: bar.querySelector('.status-place'), memory: bar.querySelector('.memory-indicator') }
     const boxes = Object.entries(parts).map(([name, part]) => [name, part.getBoundingClientRect()])
     const overlaps = boxes.flatMap(([name, a], i) => boxes.slice(i + 1).filter(([, b]) => a.left < b.right - 0.5 && b.left < a.right - 0.5).map(([other]) => name + '/' + other))
+    const text = bar.querySelector('.status-scripting-text').getBoundingClientRect(), gap = text.left - parts.backend.getBoundingClientRect().right
     return {
       overlaps, inside: boxes.every(([, part]) => part.left >= box.left - 0.5 && part.right <= box.right + 0.5),
-      text: bar.querySelector('.status-scripting-text').getBoundingClientRect().width >= 40, placeShown: parts.place.getBoundingClientRect().width >= 40
+      text: text.width >= 40, gap: gap >= 8 || gap, placeShown: parts.place.getBoundingClientRect().width >= 40
     }
-  })).toEqual({ overlaps: [], inside: true, text: true, placeShown: true })
+  })
+  await scriptOrders('CREATE To', 'Clipboard')
+  const cancelScripting = page.getByRole('button', { name: 'Cancel scripting', exact: true })
+  await expect(cancelScripting).toBeVisible()
+  expect(await statusLayout()).toEqual({ overlaps: [], inside: true, text: true, gap: true, placeShown: true })
   await page.locator('.status-bar').screenshot({ path: resolve('artifacts', 'results-small-scripting.png') })
+  await scriptOrders('DROP To', 'New Query Editor Window')
+  await expect(page.locator('.status-scripting-more')).toHaveText('(+1 more)')
+  expect(await statusLayout()).toEqual({ overlaps: [], inside: true, text: true, gap: true, placeShown: true })
+  await page.locator('.status-bar').screenshot({ path: resolve('artifacts', 'results-small-scripting-2.png') })
   await rm(join(control, 'hold', 'scripting.script'))
   await expect(cancelScripting).toHaveCount(0)
   expect(failures).toEqual([])

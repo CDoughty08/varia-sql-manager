@@ -148,7 +148,7 @@ internal static class StoreChecks
     {
         var reports = new List<long>();
         var store = new ResultStore(1L << 30, 1L << 29);
-        using var service = new SqlService(store, publish: value => { lock (reports) reports.Add(JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("usedBytes").GetInt64()); });
+        using var service = new SqlService(store, publish: value => { lock (reports) reports.Add(JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("usedBytes").GetInt64()); return true; });
         long? Last() { lock (reports) return reports.Count > 0 ? reports[^1] : null; }
         var first = Open(store, store.BeginQuery("s1"));
         Fill(first, 0, 1000);

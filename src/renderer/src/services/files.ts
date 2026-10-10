@@ -4,7 +4,7 @@ import type { Disposable } from '../core/types'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
 
-type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow'>
+type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
 export interface FileSnapshot { readonly error: string }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
@@ -124,14 +124,18 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   /**
    * Asks about each unsaved query, then closes the window. A close or quit that arrives while a file task runs (a Script
    * As File… waiting behind another dialog) waits for it rather than being dropped, so the app exits once the dialogs
-   * are answered; requests made meanwhile are the same close.
+   * are answered; requests made meanwhile are the same close. A close that ends without closing tells main, which
+   * otherwise hands a close it asked for to the next page if this one reloads or crashes first.
    */
   closeWindow(beforeClose: () => Promise<void>): Promise<void> {
     this.closing ??= (async () => {
       try {
         while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
         await this.closeDocuments(beforeClose)
-      } finally { this.closing = undefined }
+      } finally {
+        this.closing = undefined
+        if (!this.exiting && !this.disposed) this.api.closeWindowCancelled()
+      }
     })()
     return this.closing
   }

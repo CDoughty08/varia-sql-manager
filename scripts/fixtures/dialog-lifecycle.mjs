@@ -1,8 +1,9 @@
-// Main's dialogs across the page's lifecycle (menus-smoke.mjs step 16), in two fresh apps on the fake backend, each with
-// its own profile: Restart SQL Backend asked for twice restarts once; a renderer crash while Save Grid Results is open
-// waits for it before its prompt, and drops the dead page's queued Script As save without showing it; a reload asks
-// first (Cancel keeps the page, Reload reloads it); and a quit while a Script As File… waits behind Save Grid Results
-// exits once the dialogs are answered.
+// Main's dialogs across the page's lifecycle (menus-smoke.mjs step 16), in three fresh apps on the fake backend, each
+// with its own profile: Restart SQL Backend asked for twice restarts once; a renderer crash while Save Grid Results is
+// open waits for it before its prompt, and drops the dead page's queued Script As save without showing it; a crash
+// while the page's Unsaved query prompt is open closes that prompt, and the crash prompt follows at once; a reload asks
+// first (Cancel keeps the page, Reload reloads it); a quit while a Script As File… waits behind Save Grid Results exits
+// once the dialogs are answered; and a quit while the reload prompt is open, answered Reload, still exits.
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
@@ -14,10 +15,13 @@ const exists = path => access(path).then(() => true, () => false)
 
 /** Mocks main's dialogs, recording each as it is shown with how many are open. Save Grid Results stays open until
  *  released; other saves choose `path`; Restart is answered after 300 ms; the crash prompt Reload; the reload prompt
- *  `globalThis.variaReloadAnswer`; every other prompt its second button (Don't Save, Cancel). */
-async function mockDialogs(application, path) {
-  await application.evaluate(({ dialog }, filePath) => {
+ *  `globalThis.variaReloadAnswer`; every other prompt its second button (Don't Save, Cancel). A message box titled in
+ *  `hold` stays open until answer() or, as Electron's does, until its signal aborts it (it then answers its cancelId and
+ *  is listed in `globalThis.variaAborted`). */
+async function mockDialogs(application, path, hold = []) {
+  await application.evaluate(({ dialog }, [filePath, held]) => {
     const log = globalThis.variaDialogs = [], { appendFileSync } = process.getBuiltinModule('node:fs')
+    const answers = globalThis.variaAnswers = {}, aborted = globalThis.variaAborted = []
     let open = 0
     const track = async (options, answer) => {
       log.push({ title: options.title, open: ++open })
@@ -32,13 +36,27 @@ async function mockDialogs(application, path) {
     })
     dialog.showOpenDialog = (_window, options) => track(options, async () => ({ canceled: true, filePaths: [] }))
     dialog.showMessageBox = (_window, options) => track(options, async () => {
+      if (held.includes(options.title)) {
+        return new Promise(resolve => {
+          answers[options.title] = response => resolve({ response, checkboxChecked: false })
+          options.signal?.addEventListener('abort', () => { aborted.push(options.title); resolve({ response: options.cancelId, checkboxChecked: false }) })
+        })
+      }
       if (options.title === 'Restart SQL backend') { await new Promise(done => setTimeout(done, 300)); return { response: 0, checkboxChecked: false } }
       if (options.title === 'Reload workbench') return { response: globalThis.variaReloadAnswer ?? 1, checkboxChecked: false }
       return { response: options.title === 'Workbench stopped' ? 0 : 1, checkboxChecked: false }
     })
-  }, path)
+  }, [path, hold])
 }
 const shown = application => application.evaluate(() => globalThis.variaDialogs.map(entry => entry.title))
+/** Answers a held message box, as a person would; false when it is not open (it was aborted, or never shown). */
+const answer = (application, title, response) => application.evaluate((_electron, [name, value]) => {
+  const reply = globalThis.variaAnswers[name]
+  delete globalThis.variaAnswers[name]
+  reply?.(value)
+  return !!reply
+}, [title, response])
+const crash = application => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
 
 async function launch(launchOptions, name) {
   const profile = await mkdtemp(resolve('artifacts', `menus-${name}-profile-`)), control = await mkdtemp(resolve('artifacts', `menus-${name}-backend-`))
@@ -123,7 +141,7 @@ export async function dialogLifecycle(launchOptions) {
     await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].emit('responsive') })
     // The renderer crashes while Save Grid Results is open: the crash prompt waits for it rather than opening over it,
     // and what the dead page asked for and was not shown yet (the Script As save, the close prompt) never is.
-    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+    await crash(application)
     await wait(1000)
     expect(await shown(application)).toEqual(['Save Grid Results'])
     await application.evaluate(() => globalThis.variaReleaseGridSave())
@@ -138,6 +156,18 @@ export async function dialogLifecycle(launchOptions) {
       { title: 'Save Grid Results', open: 1 }, { title: 'Workbench stopped', open: 1 }, { title: 'Open SQL query', open: 1 }
     ])
     expect(await exists(scriptFile)).toBe(false)
+    // A message box the page asked for is closed when the page crashes (a file chooser cannot be): the crash prompt
+    // follows at once instead of waiting for an answer that page can no longer use.
+    await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
+    await mockDialogs(application, scriptFile, ['Unsaved query'])
+    await js("void window.varia.confirmClose('Query 1.sql'); 0")
+    await expect.poll(() => shown(application)).toEqual(['Unsaved query'])
+    await crash(application)
+    await expect.poll(() => shown(application), { timeout: 5000 }).toEqual(['Unsaved query', 'Workbench stopped'])
+    expect(await application.evaluate(() => ({ dialogs: globalThis.variaDialogs, aborted: globalThis.variaAborted }))).toEqual({
+      dialogs: [{ title: 'Unsaved query', open: 1 }, { title: 'Workbench stopped', open: 1 }], aborted: ['Unsaved query']
+    })
+    await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
     expect(errors).toEqual([])
   } finally { await run.cleanup() }
 
@@ -177,6 +207,32 @@ export async function dialogLifecycle(launchOptions) {
     await expect.poll(() => exited, { timeout: 30000 }).toBe(true)
     expect(await readFile(scriptFile, 'utf8')).toBe(createScript)
     expect((await readFile(scriptFile + '.dialogs', 'utf8')).trim().split('\n')).toEqual(['Save Grid Results', 'Save SQL query', 'Unsaved query'])
+    expect(errors).toEqual([])
+  } finally { await run.cleanup() }
+
+  // C: a quit (SIGTERM) while the reload prompt is open with a query unsaved. Its Unsaved query prompt waits behind the
+  // reload prompt, which is answered Reload: that prompt belongs to the page that reloads, so main closes it then and
+  // hands the quit to the new page, which has nothing unsaved, so the app exits. A person who still sees the prompt a
+  // moment later answers Don't Save, which on its own would not exit: that page is gone.
+  run = await launch(launchOptions, 'reload-quit')
+  try {
+    const { application, child, page, profile, errors } = run
+    const dialogs = join(profile, 'reload-quit')
+    await mockDialogs(application, dialogs, ['Reload workbench', 'Unsaved query'])
+    await page.locator('.monaco-editor [role="textbox"]').focus()
+    await page.keyboard.insertText('SELECT 1 -- unsaved')
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())
+    await expect.poll(() => shown(application)).toEqual(['Reload workbench'])
+    let exited = false
+    child.once('exit', () => { exited = true })
+    child.kill('SIGTERM')
+    await wait(1000)
+    expect({ exited, shown: await shown(application) }).toEqual({ exited: false, shown: ['Reload workbench'] })
+    expect(await answer(application, 'Reload workbench', 0)).toBe(true)
+    await wait(2000)
+    if (!exited) await answer(application, 'Unsaved query', 1).catch(() => false)
+    await expect.poll(() => exited, { timeout: 30000 }).toBe(true)
+    expect((await readFile(dialogs + '.dialogs', 'utf8')).trim().split('\n')).toEqual(['Reload workbench', 'Unsaved query'])
     expect(errors).toEqual([])
   } finally { await run.cleanup() }
 }
