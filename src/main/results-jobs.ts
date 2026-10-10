@@ -186,7 +186,9 @@ export class ResultsJobHost {
     try {
       this.check(request.generation, request.resultId)
       const requested = request.format ?? this.lastFormat ?? 'csv'
-      const name = sanitizeFileName(request.suggestedName + '.' + extensions[requested])
+      // '{tab}-Result{n}' (ResultsService.suggestedName): a long tab name gives way, never the number that tells sets apart.
+      const [, base, suffix] = /^([\s\S]*?)(-Result\d+)?$/.exec(request.suggestedName)!
+      const name = sanitizeFileName(base + '.' + extensions[requested], suffix)
       const order: ResultsFormat[] = [requested, ...(['csv', 'tsv', 'json'] as const).filter(format => format !== requested)]
       const selection = await this.deps.showSaveDialog({
         title: 'Save Grid Results', defaultPath: join(this.lastDir ?? this.deps.documentsDir(), name),

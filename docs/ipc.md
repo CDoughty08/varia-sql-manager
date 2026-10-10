@@ -443,7 +443,8 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   anyway ends it with `CANCELLED` and leaves the clipboard alone); a new copy cancels the running one. A save runs one at
   a time (`JOB_BUSY`), shows the native dialog
   ("Save Grid Results", the requested format's filter first, then CSV, Text, JSON and All Files) with the suggested name
-  and extension sanitised as Script As's File… names are (`src/main/file-names.ts`), takes the format from the chosen
+  and extension sanitised as Script As's File… names are (`src/main/file-names.ts`; a name too long is cut in the tab's
+  name, never in its `-Result{n}`), takes the format from the chosen
   extension (any other extension keeps the requested format, and none is appended, so the dialog's overwrite
   confirmation stays valid), checks ownership again, and returns only the file's
   name; `EXPORT_FAILED` tokens become sentences naming only that name. `varia:results-job-cancel` sends CANCEL reason 1;

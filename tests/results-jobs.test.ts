@@ -152,15 +152,19 @@ describe('ResultsJobHost save', () => {
     expect(await saving).toEqual({ ...done, fileName: 'out.csv', format: 'csv' })
   })
   it('suggests a name with Script As\'s rules, whatever the tab name holds', async () => {
-    // C1 controls, the BOM, separators, bidi controls, a reserved Windows stem, and a name too long in UTF-8 bytes.
+    // C1 controls, the BOM, separators, bidi controls and marks, a reserved Windows stem, and names too long in UTF-8
+    // bytes, whose sets still get distinct names: the stem gives way, never -Result{n}.
     const cases: [string, string][] = [
       ['Q\u0085uery\ufeff1\u2028-Result1', 'Q_uery_1_-Result1.csv'], ['a/b:c\u202egpj.\u2066x-Result1', 'a_b_c_gpj._x-Result1.csv'],
-      ['CON', '_CON.csv'], ['データ'.repeat(40) + '-Result1', 'データ'.repeat(26) + '.csv']
+      ['invoice\u200f-Result1', 'invoice_-Result1.csv'], ['invoice\u200e-Result1', 'invoice_-Result1.csv'], ['invoice\u061c-Result1', 'invoice_-Result1.csv'],
+      ['CON', '_CON.csv'], ['CON-Result1', 'CON-Result1.csv'], ['データ'.repeat(40) + '-Result1', 'データ'.repeat(25) + 'デ-Result1.csv'],
+      ['報告'.repeat(50) + '-Result1', '報告'.repeat(38) + '-Result1.csv'], ['報告'.repeat(50) + '-Result2', '報告'.repeat(38) + '-Result2.csv']
     ]
     for (const [suggestedName, expected] of cases) {
       const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: true }))
       expect(await host({ showSaveDialog: dialog }).jobs.save(saveRequest({ format: 'csv', suggestedName }))).toBeNull()
       expect(dialog.mock.calls[0][0].defaultPath, suggestedName).toBe(join('/home/me/Documents', expected))
+      expect(Buffer.byteLength(expected)).toBeLessThanOrEqual(240)
     }
   })
   it('reports a save as soon as its file is chosen, and names the file (never the path) in every report', async () => {
