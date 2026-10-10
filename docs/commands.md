@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (77)
+## Commands (78)
 
 ### File
 
@@ -70,7 +70,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
-| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
+| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
 | Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
@@ -79,6 +79,7 @@ keys it uses are listed below.
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A * (`outputGridFocus`) | Ctrl+A * (`outputGridFocus`) | ⌘A * (`outputGridFocus`) | Always | Query Output context menu › Select All |
 | Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | `hasResults` | Query Output context menu › Save Results As… |
 | Close Results | `output.closeResults` | — | — | — | `hasResults && !queryRunning` | — |
+| Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
 ### Connection
 
@@ -338,7 +339,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (39)
+## Context keys (40)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -360,6 +361,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
+| `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
 | `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |

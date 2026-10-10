@@ -214,7 +214,7 @@ describe('results worker core', () => {
     window(0, 64)
     serve(1)
     core.handle({ type: 'cell', id: 50, key, wires, row: 5, col: 1 })
-    expect(posted.at(-1)).toEqual({ type: 'cell', id: 50, text: 'name 5', isNull: false, truncated: false })
+    expect(posted.at(-1)).toEqual({ type: 'cell', id: 50, text: 'name 5', isNull: false, truncated: false, error: false, formatted: false })
     core.handle({ type: 'close', id: 51, generation: 1, resultIds: [5] })
     expect(sent.at(-1)).toEqual({ t: 'close', rid: 2, generation: 1, resultIds: [5] })
     expect(core.cachedPages).toBe(0)
@@ -226,6 +226,34 @@ describe('results worker core', () => {
     const detached = new ResultsWorkerCore({ post: message => { posted.push(message) } })
     detached.handle({ type: 'window', id: 60, key, wires, first: 0, count: 1, colStart: 0, colEnd: 3, maxCellChars: 10, textBudget: 10 })
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 60, code: 'PORT_CLOSED' })
+  })
+
+  it('formats a whole XML or JSON value in the worker, but never a stored prefix, a NULL, a read error, or malformed text', () => {
+    const documentWires: WireKind[] = ['text']
+    const values: PageCell[] = ['<a><b>1</b><b>x</b></a>', '{"a":[1,2.50,{"b":null}]}', { value: '<a><b>', truncated: true }, null, { error: true }, '<a><b></a>', 'x'.repeat(70_000)]
+    const posted: WorkerResponse[] = [], sent: PortRequest[] = []
+    const core = new ResultsWorkerCore({ post: message => { posted.push(message) } })
+    core.attach({ postMessage: message => { sent.push(message as PortRequest) } })
+    core.receive({ t: 'backend', generation: 1, status: 'ready' })
+    const cell = (row: number, format?: 'xml' | 'json') => {
+      core.handle({ type: 'cell', id: 100 + row, key, wires: documentWires, row, col: 0, ...format ? { format } : {} })
+      const read = sent.findLast(request => request.t === 'read')
+      if (read?.t === 'read' && !posted.some(message => 'id' in message && message.id === 100 + row)) {
+        const bytes = encodePage({ resultId: 5, firstRow: 0, columns: [{ wire: 'text' }], rows: values.map(value => [value]) })
+        core.receive({ t: 'page', rid: read.rid, seq: 1, body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer })
+        core.receive({ t: 'end', rid: read.rid, ok: true, result: { nextRow: values.length, rowsAvailable: values.length, complete: true, pages: 1, rows: values.length } })
+      }
+      return posted.find(message => 'id' in message && message.id === 100 + row)
+    }
+    expect(cell(0, 'xml')).toEqual({ type: 'cell', id: 100, text: '<a>\n  <b>1</b>\n  <b>x</b>\n</a>', isNull: false, truncated: false, error: false, formatted: true })
+    expect(cell(1, 'json')).toMatchObject({ text: '{\n  "a": [\n    1,\n    2.50,\n    {\n      "b": null\n    }\n  ]\n}', formatted: true })
+    expect(cell(2, 'xml')).toMatchObject({ text: '<a><b>', truncated: true, formatted: false })
+    expect(cell(3, 'xml')).toMatchObject({ text: '', isNull: true, error: false, formatted: false })
+    expect(cell(4, 'xml')).toMatchObject({ text: '', isNull: true, error: true, formatted: false })
+    expect(cell(5, 'xml')).toMatchObject({ text: '<a><b></a>', formatted: false })
+    // Without a format the whole value comes back as stored, beyond any display cap.
+    expect(cell(6)).toMatchObject({ formatted: false, truncated: false })
+    expect((cell(6) as { text: string }).text).toHaveLength(70_000)
   })
 
   it('bounds windows to 4,096 rows and 262,144 cells', () => {

@@ -105,9 +105,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
-  const documents = new DocumentService((sql, uri) => monaco.editor.createModel(sql, 'sql', monaco.Uri.parse(uri)), api, events)
+  const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) })
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
-  const results = new ResultsService({ client: resultClient, api, events, frame: callback => { frame(callback) } })
+  const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results)

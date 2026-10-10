@@ -12,14 +12,18 @@ export function focusedOutput(menuTargets: Pick<MenuTargetService, 'targetFor'>)
   return hit?.target.kind === 'output' ? hit.target : undefined
 }
 
+/** Columns whose values open in a document tab: XML (FOR XML too), JSON (FOR JSON too) and execution plans. */
+const valueRoles: ReadonlySet<string> = new Set(['xml', 'json', 'plan'])
+
 /** "SQLQuery1" for SQLQuery1.sql: the start of Save Results As's suggested file name. */
 const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
 
 /**
- * Copy, Copy with Headers, Select All, Save Results As and Close Results in Query Output. A grid copies its selected
- * cells through the backend (ResultsService.copy: SSMS's tab-separated text, with Windows line breaks on Windows);
- * Messages copy the text selected in them. The commands act on the menu's target, else on the view that has focus
- * (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had focus.
+ * Copy, Copy with Headers, Select All, Save Results As, Close Results and Open Value in Query Output. A grid copies its
+ * selected cells through the backend (ResultsService.copy: SSMS's tab-separated text, with Windows line breaks on
+ * Windows); Messages copy the text selected in them. The commands act on the menu's target, else on the view that has
+ * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
+ * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell.
  */
 export function outputContribution({ commands, results, menuTargets, documents }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
@@ -29,6 +33,16 @@ export function outputContribution({ commands, results, menuTargets, documents }
     const set = results.getSnapshot()[target.tabId]?.sets[target.resultIndex]
     const state = set?.handle.getSnapshot()
     return set && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
+  }
+  const valueCell = (args?: CommandArgs) => {
+    let cell: { tabId: string; resultIndex: number; row: number; column: number } | undefined
+    if (args?.cell && args.tabId) cell = { tabId: args.tabId, ...args.cell }
+    else {
+      const target = targetOf(args), active = target?.view === 'grid' ? results.selection(target.tabId, target.resultIndex)?.active : undefined
+      if (target && active) cell = { tabId: target.tabId, resultIndex: target.resultIndex, row: active.row, column: active.column }
+    }
+    const role = cell && results.getSnapshot()[cell.tabId]?.sets[cell.resultIndex]?.descriptor.columns[cell.column]?.role
+    return role && valueRoles.has(role) ? cell : undefined
   }
   const selected = (target: OutputTarget | undefined) => {
     const shown = grid(target)
@@ -61,6 +75,17 @@ export function outputContribution({ commands, results, menuTargets, documents }
         const name = documents.getSnapshot().documents.find(document => document.id === tabId)?.name ?? ''
         const failure = await results.saveAs(tabId, index, baseName(name))
         if (failure) commands.reportError(failure)
+      }
+    }),
+    commands.register('output.openValue', {
+      when: args => !!valueCell(args),
+      run: async args => {
+        const cell = valueCell(args)
+        if (!cell) return
+        const { opened, message } = await results.openValue(cell.tabId, cell.resultIndex, cell.row, cell.column)
+        if (message) commands.reportError(message)
+        // The value's tab is active now; typing goes to it, as in SSMS.
+        if (opened) documents.boundEditor?.focus()
       }
     }),
     commands.register('output.closeResults', { run: () => { const tabId = documents.getSnapshot().activeId; if (tabId) results.closeResults(tabId) } }),

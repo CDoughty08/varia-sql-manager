@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { deferred, TestEditor } from './fixtures/documents'
-import type { QueryResult } from '../src/shared/contracts'
+import type { QueryResult, ResultColumn } from '../src/shared/contracts'
 import { descriptor } from './fixtures/results'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import type { Platform } from '../src/shared/commands/keybindings'
@@ -548,6 +548,31 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.closeResults')).toBe(false)
     await running.finish()
     expect(commands.isEnabled('output.closeResults')).toBe(true)
+  })
+  it('open an XML, JSON or plan value from a click or Enter in a new tab, and focus the editor there', async () => {
+    const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B', dataType: 'ntext', wire: 'text', role: 'xml', nullable: true }]
+    const { commands, documents, resultClient, resultSelection, tab, on } = await ran('win32', { ...results, resultSets: [descriptor(1, { columns })] })
+    const editor = new TestEditor(), focus = vi.fn()
+    documents.bindEditor(Object.assign(editor, { focus }).asEditor())
+    resultClient.handle(1)!.getCell.mockResolvedValue({ text: '<a>\n  <b />\n</a>', isNull: false, truncated: false, error: false, formatted: true })
+    const cell = (column: number): CommandArgs => ({ tabId: tab.id, cell: { resultIndex: 0, row: 1, column } })
+    // Only a value column opens; the grid makes only those cells links.
+    expect(commands.isEnabled('output.openValue', cell(0))).toBe(false)
+    expect(await commands.execute('output.openValue', cell(1), 'keybinding')).toBe(true)
+    expect(resultClient.handle(1)!.getCell).toHaveBeenCalledWith(1, 1, { format: 'xml' })
+    const opened = documents.active!
+    expect(opened).toMatchObject({ name: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B1.xml', kind: 'xml', dirty: false })
+    expect(opened.connectionId).toBeUndefined()
+    expect(focus).toHaveBeenCalledOnce()
+    // Without a cell, the grid's active cell; a value that opened unformatted says why in the banner.
+    resultSelection.set(tab.id, { resultIndex: 0, blocks: [{ kind: 'cells', anchor: { row: 0, column: 1 }, focus: { row: 0, column: 1 } }], active: { row: 0, column: 1 } })
+    resultClient.handle(1)!.getCell.mockResolvedValueOnce({ text: '<a><b>', isNull: false, truncated: true, error: false, formatted: false })
+    expect(await commands.execute('output.openValue', on('grid'), 'menu')).toBe(true)
+    expect(documents.active!.name).toBe('XML_F52E2B61-18A1-11d1-B105-00805F49916B2.xml')
+    expect(commands.getSnapshot().error).toBe('This XML value was truncated at 2,097,152 characters, so it opened unformatted.')
+    // A value tab runs nothing and changes no connection.
+    expect(commands.isEnabled('query.execute')).toBe(false)
+    expect(commands.isEnabled('query.changeConnection')).toBe(false)
   })
   it('copy and select the text of Messages', async () => {
     const { commands, api, doc, on } = await ran()

@@ -28,6 +28,16 @@ describe('query targets', () => {
     expect(update).not.toHaveBeenCalled()
     expect(queries.getSnapshot()[tab.id]?.summary).toBeDefined()
   })
+  it('never give a value opened from the results a server or a database', async () => {
+    const { targets, documents, api } = await fixture()
+    const value = documents.openText({ name: 'doc1.xml', text: '<a/>', kind: 'xml' })
+    targets.update(value.id, { connectionId: 'server-a', database: 'AppData' })
+    await targets.changeConnection(value.id, 'server-b')
+    targets.changeDatabase(value.id, 'master')
+    expect(documents.get(value.id)).toMatchObject({ database: '' })
+    expect(documents.get(value.id)?.connectionId).toBeUndefined()
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+  })
   it('keep results when the database changes', async () => {
     const { targets, documents, queries, results, tab } = await fixture()
     targets.changeDatabase(tab.id, 'master')

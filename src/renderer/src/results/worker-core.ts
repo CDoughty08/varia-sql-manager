@@ -4,11 +4,12 @@
 import type { BackendStatus, ResultsCloseResult, ResultsReadResult, WireKind } from '../../../shared/contracts'
 import type { PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
-import { CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
+import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { gridLimits as g } from '../grid/constants'
 import { displayColumns } from '../grid/measure'
-import { FLAG_CAPPED, FLAG_OVER_BUDGET, type MeasureRequest, type ResultKey, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
+import { formatJson, formatXml } from './doc-format'
+import { FLAG_CAPPED, FLAG_OVER_BUDGET, type MeasureRequest, type ResultKey, type ValueFormat, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
 
 /** The parts of a MessagePort the core uses. */
 export interface PortLike { postMessage(message: unknown): void }
@@ -105,7 +106,7 @@ export class ResultsWorkerCore {
     switch (request.type) {
       case 'attach': return
       case 'window': return this.window(request)
-      case 'cell': return this.cell(request.id, request.key, request.wires, request.row, request.col)
+      case 'cell': return this.cell(request.id, request.key, request.wires, request.row, request.col, request.format)
       case 'prefetch': return this.prefetch(request.key, request.wires, request.first, request.count)
       case 'cancel': return this.cancel(request.id)
       case 'close': return this.close(request.id, request.generation, request.resultIds)
@@ -185,15 +186,17 @@ export class ResultsWorkerCore {
     })
   }
 
-  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number): void {
+  /** A whole stored value. Formatting runs here, off the UI thread; a value stored as a prefix is never formatted. */
+  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number, format?: ValueFormat): void {
     this.wait(id, key, wires, row, 1, () => {
       const page = this.pageAt(resultOf(key), row)
       if (!page || col < 0 || col >= wires.length) return this.error(id, 'RESULT_UNAVAILABLE', 'That row is not available.')
       this.touch(page)
       const flags = cellFlags(page.view, col, row - page.firstRow)
-      const isNull = (flags & CELL_NULL) !== 0
-      const value = isNull ? { text: '', truncated: false } : cellText(page.view, col, row - page.firstRow)
-      this.post({ type: 'cell', id, text: value.text, isNull, truncated: value.truncated })
+      const isNull = (flags & CELL_NULL) !== 0, error = (flags & CELL_ERROR) !== 0
+      const value = isNull || error ? { text: '', truncated: false } : cellText(page.view, col, row - page.firstRow)
+      const shown = format && value.text && !value.truncated ? (format === 'json' ? formatJson : formatXml)(value.text) : { text: value.text, formatted: false }
+      this.post({ type: 'cell', id, text: shown.text, isNull, truncated: value.truncated, error, formatted: shown.formatted })
     })
   }
 

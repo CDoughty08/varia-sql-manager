@@ -296,7 +296,7 @@ describe('menu state', () => {
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.scriptCreateToNewQuery',
       'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
-      'output.saveResultsAs', 'output.closeResults']
+      'output.saveResultsAs', 'output.closeResults', 'output.openValue']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

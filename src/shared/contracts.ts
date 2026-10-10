@@ -261,7 +261,11 @@ export type BackendStatus = BackendState['status']
 
 export interface SqlFile { id: string; name: string; path: string }
 export interface OpenSqlFile extends SqlFile { content: string }
-export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean }
+/** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
+export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
+export type DocumentKind = typeof documentKinds[number]
+/** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
+export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
 export interface VariaApi {
   readonly platform: string

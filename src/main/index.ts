@@ -10,7 +10,7 @@ import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { validateRequest } from './validation'
-import { SqlFileStore, maxSqlFileBytes } from './sql-files'
+import { SqlFileStore, fileKinds, saveFileSchema } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { AppearanceService, windowChromeFor } from './appearance'
@@ -383,15 +383,15 @@ app.whenReady().then(async () => {
     return Promise.all(selected.filePaths.map(path => files.read(path)))
   })
   handle('varia:files-save', async value => {
-    const options = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxSqlFileBytes), saveAs: z.boolean() }).strict().parse(value)
+    const options = saveFileSchema.parse(value), kind = fileKinds[options.kind ?? 'sql']
     let selectedPath: string | undefined
     if (!options.fileId || options.saveAs) {
       const safeName = basename(options.name.replace(/[\\/:*?"<>|]/g, '_'))
-      const selection = await dialog.showSaveDialog(mainWindow!, { title: 'Save SQL query', defaultPath: options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName), filters: [{ name: 'SQL files', extensions: ['sql'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] })
+      const selection = await dialog.showSaveDialog(mainWindow!, { title: kind.title, defaultPath: options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName), filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] })
       if (selection.canceled || !selection.filePath) return null
       selectedPath = selection.filePath
     }
-    return files.save(options.content, options.fileId, selectedPath)
+    return files.save(options.content, options.fileId, selectedPath, options.kind)
   })
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })

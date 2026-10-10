@@ -24,8 +24,12 @@ export const gridLimits = {
   copyStripDelayMs: 300,
   /** How long the toolbar shows how a save ended ("Saved 400 rows to results.csv."). */
   jobNoticeMs: 8000,
-  /** Stored values, formatted documents, nesting accepted by the formatters, and the chunk a large document fills per frame. */
-  storedChars: 2_097_152, formattedChars: 4_194_304, xmlDepth: 256, jsonDepth: 512, documentChunk: 1_048_576
+  /**
+   * Stored values, formatted documents, and nesting accepted by the formatters. A large value document opens with a small
+   * first chunk and fills a chunk a frame (Monaco's cost grows with the text added at once); over documentBracketChars it
+   * has no bracket matching or colours, which Monaco computes over the whole document in one task.
+   */
+  storedChars: 2_097_152, formattedChars: 4_194_304, xmlDepth: 256, jsonDepth: 512, documentFirstChunk: 16_384, documentChunk: 131_072, documentBracketChars: 65_536
 } as const
 
 /** The last row of an open-ended range (whole columns, everything): a copy runs to the end of the result. */

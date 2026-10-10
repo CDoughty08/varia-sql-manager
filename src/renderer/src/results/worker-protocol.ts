@@ -14,6 +14,9 @@ export const FLAG_ERROR = 4
 export const FLAG_OVER_BUDGET = 8
 export const FLAG_CAPPED = 16
 
+/** How the worker formats a value opened in a document tab (plans are XML). */
+export type ValueFormat = 'xml' | 'json'
+
 export interface WindowRequest {
   readonly type: 'window'
   readonly id: number
@@ -45,7 +48,8 @@ export type WorkerRequest =
   | { readonly type: 'attach'; readonly port: MessagePort }
   | WindowRequest
   | MeasureRequest
-  | { readonly type: 'cell'; readonly id: number; readonly key: ResultKey; readonly wires: readonly WireKind[]; readonly row: number; readonly col: number }
+  /** One cell's whole stored value; with `format`, pretty-printed as XML or JSON when it is well formed and complete. */
+  | { readonly type: 'cell'; readonly id: number; readonly key: ResultKey; readonly wires: readonly WireKind[]; readonly row: number; readonly col: number; readonly format?: ValueFormat }
   | { readonly type: 'prefetch'; readonly key: ResultKey; readonly wires: readonly WireKind[]; readonly first: number; readonly count: number }
   | { readonly type: 'cancel'; readonly id: number }
   | { readonly type: 'close'; readonly id: number; readonly generation: number; readonly resultIds: readonly number[] }
@@ -55,7 +59,7 @@ export type WorkerRequest =
 export type WorkerResponse =
   | { readonly type: 'window'; readonly id: number; readonly first: number; readonly count: number; readonly colStart: number; readonly colEnd: number; readonly text: string[]; readonly flags: Uint8Array }
   | { readonly type: 'measure'; readonly id: number; readonly rows: number; readonly widths: Uint16Array }
-  | { readonly type: 'cell'; readonly id: number; readonly text: string; readonly isNull: boolean; readonly truncated: boolean }
+  | { readonly type: 'cell'; readonly id: number; readonly text: string; readonly isNull: boolean; readonly truncated: boolean; readonly error: boolean; readonly formatted: boolean }
   | { readonly type: 'closed'; readonly id: number; readonly closed: number; readonly usedBytes: number }
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi } from '../src/shared/contracts'
+import type { ApiResult, ResultColumn, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi } from '../src/shared/contracts'
+import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultsService, resultLimits } from '../src/renderer/src/results/ResultsService'
 import { selectAll } from '../src/renderer/src/grid/selection'
@@ -19,12 +20,13 @@ function fixture() {
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
-  const service = new ResultsService({ client, api, events, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => 1000, newId: () => `job-${++ids}` })
+  const documents = { openText: vi.fn<DocumentService['openText']>(o => ({ id: 'doc', name: o.name, kind: o.kind, database: '', dirty: false, savedVersionId: 1 })) }
+  const service = new ResultsService({ client, api, events, documents, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => 1000, newId: () => `job-${++ids}` })
   const published = { count: 0 }
   service.subscribe(() => { published.count++ })
   const flush = () => { for (const callback of frames.splice(0)) callback() }
   const tab = (id = 't1') => service.getSnapshot()[id]
-  return { client, events, timers, api, service, published, flush, tab, progress }
+  return { client, events, timers, api, service, published, flush, tab, progress, documents }
 }
 
 describe('results service', () => {
@@ -365,6 +367,44 @@ describe('results service', () => {
     registration.dispose()
     service.selectAll('t1', 0)
     expect(controller.selectAll).toHaveBeenCalledOnce()
+  })
+  it('opens XML, JSON and plan values as documents named as SSMS names them, formatted by the worker', async () => {
+    const { client, service, documents } = fixture()
+    const column = (name: string, role?: ResultColumn['role']): ResultColumn => ({ name, dataType: 'nvarchar', wire: 'text', nullable: true, ...role ? { role } : {} })
+    const columns = [column('XML_F52E2B61-18A1-11d1-B105-00805F49916B', 'xml'), column('data', 'json'), column('Microsoft SQL Server 2005 XML Showplan', 'plan'), column('a:b/c*', 'xml'), column(' ', 'xml'), column('Id')]
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { columns })]) })
+    const handle = client.handle(1)!
+    const value = (patch: Partial<Awaited<ReturnType<typeof handle.getCell>>> = {}) => ({ text: '<a />', isNull: false, truncated: false, error: false, formatted: true, ...patch })
+    handle.getCell.mockResolvedValue(value())
+    const open = async (row: number, column: number) => { const outcome = await service.openValue('t1', 0, row, column); return [outcome, documents.openText.mock.lastCall?.[0].name] }
+    expect(await open(0, 0)).toEqual([{ opened: true }, 'XML_F52E2B61-18A1-11d1-B105-00805F49916B1.xml'])
+    expect(await open(1, 0)).toEqual([{ opened: true }, 'XML_F52E2B61-18A1-11d1-B105-00805F49916B2.xml'])
+    expect(await open(0, 1)).toEqual([{ opened: true }, 'data1.json'])
+    expect(await open(0, 2)).toEqual([{ opened: true }, 'ExecutionPlan1.sqlplan'])
+    expect(await open(0, 3)).toEqual([{ opened: true }, 'a_b_c_1.xml'])
+    expect(await open(0, 4)).toEqual([{ opened: true }, 'XML1.xml'])
+    expect(handle.getCell.mock.calls.map(([row, col, o]) => [row, col, o?.format])).toEqual([[0, 0, 'xml'], [1, 0, 'xml'], [0, 1, 'json'], [0, 2, 'xml'], [0, 3, 'xml'], [0, 4, 'xml']])
+    expect(documents.openText.mock.calls.map(([o]) => o.kind)).toEqual(['xml', 'xml', 'json', 'sqlplan', 'xml', 'xml'])
+    expect(documents.openText.mock.calls[0][0].text).toBe('<a />')
+    // Not a value column, a NULL, or a read error: nothing opens.
+    const calls = documents.openText.mock.calls.length
+    expect(await service.openValue('t1', 0, 0, 5)).toEqual({ opened: false })
+    handle.getCell.mockResolvedValueOnce(value({ text: '', isNull: true }))
+    expect(await service.openValue('t1', 0, 0, 0)).toEqual({ opened: false })
+    handle.getCell.mockResolvedValueOnce(value({ text: '', isNull: true, error: true }))
+    expect(await service.openValue('t1', 0, 0, 0)).toEqual({ opened: false })
+    expect(documents.openText.mock.calls.length).toBe(calls)
+    // A value stored as a prefix opens unformatted, and says so; a failed read says why.
+    handle.getCell.mockResolvedValueOnce(value({ truncated: true, formatted: false }))
+    expect(await service.openValue('t1', 0, 0, 2)).toEqual({ opened: true, message: 'This execution plan value was truncated at 2,097,152 characters, so it opened unformatted.' })
+    handle.getCell.mockResolvedValueOnce(value({ truncated: true, formatted: false }))
+    expect(await service.openValue('t1', 0, 0, 1)).toEqual({ opened: true, message: 'This JSON value was truncated at 2,097,152 characters, so it opened unformatted.' })
+    handle.getCell.mockRejectedValueOnce(new Error('The results worker stopped. Try again.'))
+    expect(await service.openValue('t1', 0, 0, 0)).toEqual({ opened: false, message: 'Could not open the value: The results worker stopped. Try again.' })
+    client.lose()
+    expect(await service.openValue('t1', 0, 0, 0)).toEqual({ opened: false, message: 'These results are no longer available because the SQL backend restarted.' })
+    expect(await service.openValue('t9', 0, 0, 0)).toEqual({ opened: false })
   })
   it('stops listening and frees its timers when disposed', () => {
     const { client, service, timers, progress } = fixture()

@@ -1,13 +1,20 @@
 import type { editor } from 'monaco-editor'
-import type { VariaApi } from '../../../shared/contracts'
-import { afterClose, type QueryDocument } from '../documents'
+import type { DocumentKind, VariaApi } from '../../../shared/contracts'
+import { afterClose, isQueryDocument, kindInfo, type QueryDocument } from '../documents'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
+import { gridLimits } from '../grid/constants'
 
 export const documentUri = (id: string): string => `varia-sql://query/${id}`
-export type ModelFactory = (sql: string, uri: string) => editor.ITextModel
-interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null }
+/** A Monaco model for a document's text in its language ('sql', 'xml' or 'json'). */
+export type ModelFactory = (text: string, uri: string, language: string) => editor.ITextModel
+/** A large text still being appended, one chunk a frame; edits the user makes meanwhile keep the document dirty. */
+interface Fill { appending: boolean; userEdited: boolean }
+/** `plain`: a large value document, shown without bracket matching and colours. */
+interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null; fill?: Fill; plain?: boolean }
+/** A text document opened from a value: its tab name, its text, and what it holds. */
+export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'> }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
 type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
@@ -17,7 +24,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   private editor?: editor.IStandaloneCodeEditor
   private disposed = false
   private queryCounter = 1
-  constructor(private createModel: ModelFactory, private api: DocumentApi, private events: EventBus) {
+  private matchingBrackets = true
+  /** `frame` schedules the next chunk of a large text document: an animation frame in the app. */
+  constructor(private createModel: ModelFactory, private api: DocumentApi, private events: EventBus, private frame: (callback: () => void) => void = callback => { requestAnimationFrame(() => callback()) }) {
     super({ documents: [], activeId: '', busy: false })
   }
   get(id: string): QueryDocument | undefined { return this.getSnapshot().documents.find(document => document.id === id) }
@@ -33,25 +42,61 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.changed({ ...current, documents: current.documents.map(document => document.id === id ? { ...document, ...patch } : document) })
   }
   update(id: string, patch: DocumentPatch): void { this.replace(id, patch) }
-  newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database = this.active?.database ?? 'master', unsaved = false): QueryDocument {
+  newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database = this.active?.database || 'master', unsaved = false): QueryDocument {
     return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database, connectionId, unsaved)
   }
   create(name: string, sql: string, database: string, connectionId?: string, unsaved = false, file?: QueryDocument['file']): QueryDocument {
+    return this.add(name, sql, database, connectionId, unsaved, file)
+  }
+  /**
+   * Opens a value from the results as a text document: no connection, not dirty, in its language. A long text opens
+   * with its first 16,384 characters and appends 131,072 a frame without undo stops, so a 4 MB value never blocks the
+   * window; the document counts as saved once the last chunk is in. A value over 65,536 characters has no bracket
+   * matching or bracket colours, which Monaco would compute over all of it at once.
+   */
+  openText(o: TextDocument): QueryDocument {
+    const first = chunkEnd(o.text, 0, gridLimits.documentFirstChunk)
+    const document = this.add(o.name, o.text.slice(0, first), '', undefined, false, undefined, o.kind, o.text.length > gridLimits.documentBracketChars)
+    if (first < o.text.length) this.fill(document.id, o.text, first)
+    return document
+  }
+  private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
-    const model = this.createModel(sql, documentUri(id))
-    const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!sql, savedVersionId: unsaved && sql ? null : model.getAlternativeVersionId() }
+    const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
+    if (plain) model.updateOptions({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } })
+    const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {} }
     const subscription = model.onDidChangeContent(() => {
-      const current = this.get(id)
+      const current = this.get(id), fill = this.entries.get(id)?.fill
       if (!current) return
+      if (fill) { if (!fill.appending) fill.userEdited = true; return }
       const dirty = current.savedVersionId === null ? model.getValueLength() > 0 : model.getAlternativeVersionId() !== current.savedVersionId
       // SQL never enters a React snapshot; ordinary typing only publishes a dirty transition.
       if (dirty !== current.dirty) this.replace(id, { dirty })
     })
-    this.entries.set(id, { model, subscription })
+    this.entries.set(id, { model, subscription, plain })
     this.changed({ ...this.getSnapshot(), documents: [...this.getSnapshot().documents, document] })
     this.activate(id)
     return document
+  }
+  /** Appends `text` from `at`, a chunk a frame, until the end or until the document closes. */
+  private fill(id: string, text: string, at: number): void {
+    const entry = this.entries.get(id)
+    if (!entry) return
+    const fill: Fill = entry.fill = { appending: false, userEdited: false }
+    const step = () => {
+      if (this.disposed || this.entries.get(id) !== entry) return
+      const { model } = entry, end = chunkEnd(text, at), line = model.getLineCount(), column = model.getLineMaxColumn(line)
+      fill.appending = true
+      try { model.applyEdits([{ range: { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column }, text: text.slice(at, end) }]) }
+      finally { fill.appending = false }
+      at = end
+      if (at < text.length) { this.frame(step); return }
+      entry.fill = undefined
+      // Typing during the fill is not part of the value, so it leaves the document dirty.
+      this.replace(id, { savedVersionId: fill.userEdited ? null : model.getAlternativeVersionId(), dirty: fill.userEdited })
+    }
+    this.frame(step)
   }
   private rememberView(): void {
     const entry = this.entries.get(this.getSnapshot().activeId)
@@ -59,6 +104,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   private showModel(id: string): void {
     const entry = this.entries.get(id)
+    // Matching is an editor option; it changes before the model does, so it never runs over a large value.
+    const matching = !entry?.plain
+    if (this.editor && matching !== this.matchingBrackets) { this.matchingBrackets = matching; this.editor.updateOptions({ matchBrackets: matching ? 'always' : 'never' }) }
     this.editor?.setModel(entry?.model ?? null)
     if (entry?.viewState) this.editor?.restoreViewState(entry.viewState)
   }
@@ -76,6 +124,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   bindEditor(instance: editor.IStandaloneCodeEditor): Disposable {
     if (this.editor) throw new Error('A query editor is already bound.')
     this.editor = instance
+    this.matchingBrackets = true
     this.showModel(this.getSnapshot().activeId)
     return { dispose: () => {
       if (this.editor !== instance) return
@@ -103,7 +152,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (!document || !model) return false
     model.pushStackElement()
     const content = model.getValue(), savedVersionId = model.getAlternativeVersionId()
-    const result = await this.api.saveSqlFile({ fileId: document.file?.id, name: document.name, content, saveAs })
+    const result = await this.api.saveSqlFile({ fileId: document.file?.id, name: document.name, content, saveAs, ...document.kind ? { kind: document.kind } : {} })
     if (!result.ok) throw new Error(result.error)
     if (!result.value || this.disposed || this.entries.get(id)?.model !== model) return false
     model.pushStackElement()
@@ -115,8 +164,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const entry = this.entries.get(id)
     if (!entry) return
     const version = entry.model.getVersionId()
-    const result = await this.api.closeQuerySession(id)
-    if (!result.ok) throw new Error(result.error)
+    // Only a query has a SQL session to end.
+    if (isQueryDocument(this.get(id))) {
+      const result = await this.api.closeQuerySession(id)
+      if (!result.ok) throw new Error(result.error)
+    }
     if (this.disposed || this.entries.get(id) !== entry) return
     if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
     const current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)
@@ -137,4 +189,12 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.clearListeners()
     this.publish({ documents: [], activeId: '', busy: false })
   }
+}
+
+/** Where the chunk of `text` that starts at `at` ends: never inside a surrogate pair or a CRLF, which the model would split. */
+function chunkEnd(text: string, at: number, size: number = gridLimits.documentChunk): number {
+  let end = Math.min(text.length, at + size)
+  if (end < text.length && (text.charCodeAt(end - 1) & 0xfc00) === 0xd800) end--
+  if (end < text.length && text.charCodeAt(end - 1) === 13 && text.charCodeAt(end) === 10) end--
+  return end
 }

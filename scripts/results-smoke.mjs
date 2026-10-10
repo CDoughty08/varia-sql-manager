@@ -1,7 +1,7 @@
 // The results grid against the fake backend's synthetic result sets (`-- varia-fake:` scripts, tests/fixtures/backend):
 // streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, column resizing,
-// Save Results As, Messages, lifecycle, the memory indicator, the grid's menu, styling, panes and tabs. No assertion
-// depends on absolute pixel sizes.
+// Save Results As, XML, JSON and plan values in their own tabs, Messages, lifecycle, the memory indicator, the grid's
+// menu, styling, panes and tabs. No assertion depends on absolute pixel sizes.
 import { _electron as electron, expect } from '@playwright/test'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -519,6 +519,92 @@ try {
   await expect(page.locator('.messages')).toContainText('Completion time:')
   console.log('Results checks: Save Results As writes CSV, tab-delimited text and JSON, shows a cancellable strip, and outlives running again; Close Results frees the results.')
 
+  // 9. Values: XML, JSON and plan cells are links. A click opens the whole value, formatted, in a new tab named as SSMS
+  // names it, in its language, not dirty and with no connection, where Execute and F5 do nothing and the output pane
+  // has no results; Enter opens a plan; a value tab saves with its own filter and closes without a SQL session; a 2 MB
+  // value fills in without a long task.
+  const valueTab = name => queryTabs().filter({ hasText: name })
+  const editorLanguage = () => page.locator('[data-mode-id]').first().getAttribute('data-mode-id')
+  /** The active document's whole text, copied from the editor as a user would. */
+  const editorText = async () => {
+    await textbox().focus()
+    await setClipboard('')
+    await page.keyboard.press('Control+A')
+    await page.keyboard.press('Control+C')
+    let text = ''
+    await expect.poll(async () => (text = await clipboard())).not.toBe('')
+    return text.replaceAll('\r\n', '\n')
+  }
+  const calls = async method => (await readFile(join(control, 'calls.jsonl'), 'utf8')).split('\n').filter(line => line.includes(`"method":"${method}"`)).length
+  const lastLine = async () => Math.max(...(await page.locator('.margin-view-overlays .line-numbers').allTextContents()).map(Number))
+  await run('SELECT 1 -- FOR_XML_FIXTURE')
+  const forXml = cell(0, 0)
+  await expect(forXml).toHaveClass(/is-link/)
+  expect((await computed(forXml)).color).toBe(await tokenColor('resultsGrid.linkForeground'))
+  await forXml.hover()
+  await expect(forXml).toHaveAttribute('title', 'Open in a new tab (Enter)')
+  const sessionCloses = await calls('query.session.close'), executes = await calls('query.execute')
+  await forXml.click()
+  const forXmlName = 'XML_F52E2B61-18A1-11d1-B105-00805F49916B1.xml'
+  await expect(valueTab(forXmlName)).toHaveAttribute('aria-selected', 'true')
+  await expect(textbox()).toBeFocused()
+  expect(await editorLanguage()).toBe('xml')
+  await expect(page.locator('.query-context')).toHaveText('XML document')
+  await expect(page.locator('.query-tab.active .sql-icon')).toHaveText('XML')
+  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+  await expect(server()).toBeDisabled()
+  await expect(server()).toHaveValue('')
+  await expect(page.locator('.toolbar-actions button.execute')).toBeDisabled()
+  await expect(page.locator('.output-empty')).toContainText('Query results appear here for query tabs.')
+  const forXmlText = '<objects>\n  <o>\n    <name>Orders</name>\n    <object_id>1</object_id>\n  </o>\n  <o>\n    <name>Customers</name>\n    <object_id>2</object_id>\n  </o>\n</objects>'
+  expect(await editorText()).toBe(forXmlText)
+  await page.keyboard.press('F5')
+  await page.waitForTimeout(200)
+  expect(await calls('query.execute')).toBe(executes)
+  // Save offers XML; closing needs no SQL session.
+  await choose(join(saveDir, 'objects.xml'))
+  await page.keyboard.press('Control+S')
+  await expect(valueTab('objects.xml')).toHaveAttribute('aria-selected', 'true')
+  expect(await lastDialog()).toMatchObject({ title: 'Save XML document', defaultPath: expect.stringMatching(/XML_F52E2B61-18A1-11d1-B105-00805F49916B1\.xml$/), filters: [{ name: 'XML files', extensions: ['xml'] }] })
+  expect(await readFile(join(saveDir, 'objects.xml'), 'utf8')).toBe(forXmlText)
+  await page.keyboard.press('Control+W')
+  await expect(valueTab('objects.xml')).toHaveCount(0)
+  expect(await calls('query.session.close')).toBe(sessionCloses)
+  // Enter on a plan cell opens it as an execution plan, in XML.
+  await run('SELECT 1 -- XML_PLAN_FIXTURE')
+  await cell(0, 0, grid(1)).click({ modifiers: ['Shift'] })
+  await expect(queryTabs()).toHaveCount(1)
+  await page.keyboard.press('Enter')
+  await expect(valueTab('ExecutionPlan1.sqlplan')).toHaveAttribute('aria-selected', 'true')
+  expect(await editorLanguage()).toBe('xml')
+  await expect(page.locator('.query-context')).toHaveText('Execution plan')
+  await expect(page.locator('.query-tab.active .sql-icon')).toHaveText('PLAN')
+  expect(await editorText()).toBe('<ShowPlanXML>\n  <BatchSequence>\n    <Batch />\n  </BatchSequence>\n</ShowPlanXML>')
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
+  // A JSON value opens formatted, in JSON.
+  await run('-- varia-fake: sets=L1*3')
+  await cell(0, 2).click()
+  await expect(valueTab('data1.json')).toHaveAttribute('aria-selected', 'true')
+  expect(await editorLanguage()).toBe('json')
+  await expect(page.locator('.query-context')).toHaveText('JSON document')
+  expect((await editorText()).startsWith('{\n  "items": [\n    {\n      "id": 1,\n      "name": "Item 1",\n')).toBe(true)
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
+  // A 2 MB XML value (about 2.9 million characters formatted) fills in a chunk a frame without blocking the window.
+  const items = shapes.L1.row(2)[1].split('<item ').length - 1
+  let opened = 0
+  await measured('opening a 2 MB value', async () => {
+    await cell(2, 1).click()
+    await expect(valueTab(`doc${++opened}.xml`)).toHaveAttribute('aria-selected', 'true', { timeout: 30000 })
+    await expect.poll(async () => { await textbox().focus(); await page.keyboard.press('Control+End'); return lastLine() }, { timeout: 30000 }).toBe(2 + 4 * items)
+    await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+    await page.keyboard.press('Control+W')
+    await expect(queryTabs()).toHaveCount(1)
+  })
+  expect(await calls('query.session.close')).toBe(sessionCloses)
+  console.log('Results checks: XML, JSON and plan values open formatted in their own tabs, save as XML, and close without a session; a 2 MB value fills in without a long task.')
+
   // 10. Messages stream while the script runs; errors are red and in order; the completion time and the error badge.
   await writeFile(join(control, 'hold', 'query.execute'), '')
   await run('-- varia-fake: sets=N1*10 messages=3 errors=2 hold', { running: true })
@@ -691,7 +777,7 @@ try {
   }
   await page.screenshot({ path: resolve('artifacts', 'results-small.png') })
   expect(failures).toEqual([])
-  console.log('Results checks passed: streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, resizing, Save Results As, Messages, lifecycle, memory, the menu, styling, F6, Ctrl+R, tabs and a small window.')
+  console.log('Results checks passed: streaming, a million rows past the scroll cap, wide results, stacked sets, ARIA, selection and copy, resizing, Save Results As, values in their own tabs, Messages, lifecycle, memory, the menu, styling, F6, Ctrl+R, tabs and a small window.')
 } catch (error) {
   await page.screenshot({ path: resolve('artifacts', 'results-failure.png') }).catch(() => {})
   throw error

@@ -1,11 +1,13 @@
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
-import type { MessageEntry, QueryEvent, QueryResult, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
+import type { MessageEntry, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import { gridLimits as g } from '../grid/constants'
 import { copyPlan, selectAll, type GridSelection } from '../grid/selection'
+import { kindInfo } from '../documents'
+import type { DocumentService, TextDocument } from '../services/documents'
 import type { ResultClient, ResultHandle } from './ResultClient'
 import { completionSentence, formatCount, plural } from './status'
 
@@ -39,6 +41,8 @@ export interface TabViewState { stackScrollTop: number; weights?: number[]; focu
 export interface GridController { selectAll(): void; repaint(): void }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string }
+/** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
+export interface OpenedValue { readonly opened: boolean; readonly message?: string }
 
 interface Run {
   readonly queryId: string
@@ -76,6 +80,15 @@ const saveCancelled = 'Saving was cancelled. The file was not written.'
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
 const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
 const runStatus = (summary: QueryResult): RunStatus => summary.status
+/** The document a link cell opens in: its kind, and the name its tabs count from (SSMS: XML_F52E2B61-…1.xml, ExecutionPlan1.sqlplan). */
+const valueKinds: Readonly<Record<string, { kind: TextDocument['kind']; base?: string; extension: string }>> = {
+  xml: { kind: 'xml', extension: '.xml' }, json: { kind: 'json', extension: '.json' }, plan: { kind: 'sqlplan', base: 'ExecutionPlan', extension: '.sqlplan' }
+}
+/** Characters a file name cannot hold become '_'; a blank name becomes the kind's ('XML', 'JSON'). */
+function valueBase(column: ResultColumn, kind: TextDocument['kind']): string {
+  const name = column.name.replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, '_').trim().slice(0, 100)
+  return name || kindInfo[kind].badge
+}
 
 /**
  * Each query tab's results: the run's result sets (handles from ResultClient, opened as the backend announces them),
@@ -86,6 +99,9 @@ const runStatus = (summary: QueryResult): RunStatus => summary.status
 export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
   private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
+  private readonly documents: Pick<DocumentService, 'openText'> | undefined
+  /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
+  private readonly valueNumbers = new Map<string, number>()
   private readonly frame: (callback: () => void) => void
   private readonly timers: Timers
   private readonly now: () => number
@@ -108,11 +124,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   constructor(o: {
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
-    frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string
+    documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string
   }) {
     super({})
     this.client = o.client
     this.api = o.api
+    this.documents = o.documents
     this.frame = o.frame ?? (callback => { requestAnimationFrame(() => callback()) })
     this.timers = o.timers ?? browserTimers
     this.now = o.now ?? (() => Date.now())
@@ -308,6 +325,26 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     if (result.code === 'CANCELLED') { this.notify(running.tabId, saveCancelled); return undefined }
     return result.code && saveSentences.has(result.code) ? result.error : 'Could not save the results: ' + result.error
+  }
+
+  /**
+   * Open Value in New Tab for an XML, JSON or plan cell: the worker reads the whole stored value and formats it, and it
+   * opens as a text document. A value the backend stored as a prefix opens unformatted, with a sentence saying so; a
+   * NULL or unreadable value opens nothing.
+   */
+  async openValue(tabId: string, index: number, row: number, column: number): Promise<OpenedValue> {
+    const set = this.runs.get(tabId)?.sets[index], info = set?.descriptor.columns[column], spec = info?.role ? valueKinds[info.role] : undefined
+    if (!set || !info || !spec || !this.documents) return { opened: false }
+    const state = set.handle.getSnapshot().state
+    if (state === 'lost' || state === 'released') return { opened: false, message: state === 'lost' ? unavailable : closedResults }
+    try {
+      const value = await set.handle.getCell(row, column, { format: spec.kind === 'json' ? 'json' : 'xml' })
+      if (this.disposed || value.isNull || value.error) return { opened: false }
+      const base = spec.base ?? valueBase(info, spec.kind), number = (this.valueNumbers.get(base + spec.extension) ?? 0) + 1
+      this.valueNumbers.set(base + spec.extension, number)
+      this.documents.openText({ name: `${base}${number}${spec.extension}`, text: value.text, kind: spec.kind })
+      return { opened: true, ...value.truncated ? { message: `This ${kindInfo[spec.kind].value} value was truncated at 2,097,152 characters, so it opened unformatted.` } : {} }
+    } catch (error) { return { opened: false, message: 'Could not open the value: ' + (error instanceof Error ? error.message : 'The value could not be read.') } }
   }
 
   /** Cancels a copy or save by its job id (Cancel on its strip). */

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CommandId } from '../src/shared/commands/catalog'
+import { commandDescriptor, type CommandId } from '../src/shared/commands/catalog'
 import { contextRecord } from '../src/shared/commands/context-keys'
+import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { menuCommandIds } from '../src/shared/commands/menus'
 import { CommandService, type CommandSource } from '../src/renderer/src/core/commands'
 import { computeContextKeys, ContextKeyService, focusFacts, type FocusElement } from '../src/renderer/src/core/contextkeys'
@@ -168,6 +169,14 @@ describe('context keys', () => {
     expect(computeContextKeys({ ...base, documents, results: { a: true } })).toMatchObject({ hasResults: true })
     expect(computeContextKeys({ ...base, documents, results: { b: true } })).toMatchObject({ hasResults: false })
     expect(computeContextKeys({ ...base, documents })).toMatchObject({ hasResults: false })
+    // A value opened from the results is a document but not a query: Change Connection is off there.
+    expect(computeContextKeys({ ...base, documents })).toMatchObject({ activeDocumentIsQuery: true })
+    expect(computeContextKeys({ ...base, documents: snapshot() })).toMatchObject({ activeDocumentIsQuery: false })
+    const values = snapshot({ documents: [doc('a'), { ...doc('x'), kind: 'xml' as const, database: '' }], activeId: 'x' })
+    const keys = computeContextKeys({ ...base, documents: values, connections: [connectionInfo('server-a')] })
+    expect(keys).toMatchObject({ hasActiveDocument: true, activeDocumentIsQuery: false, activeDocumentConnected: false })
+    expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), keys)).toBe(false)
+    expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), computeContextKeys({ ...base, documents: { ...documents, busy: false } }))).toBe(true)
   })
   it('derive focus keys from the focused element', () => {
     const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editable?: boolean; grid?: boolean } = {}): FocusElement & { tag: string } => ({

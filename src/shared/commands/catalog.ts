@@ -298,7 +298,7 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]
   },
   'query.changeConnection': {
-    title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && !queryRunning && !documentBusy',
+    title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy',
     menus: [{ menu: 'query.connection', group: '2_change', order: 1, mnemonic: 'h' }]
   },
   'query.disconnect': {
@@ -406,6 +406,8 @@ export const commandCatalog = {
     title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: 'hasResults && !queryRunning',
     unavailableHint: 'There are no results to close, or the query is still running.'
   },
+  // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
+  'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
   // A panel tab's menu: the panel comes from the menu's target, so these have no keys and are not in the palette.
   'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },
   'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }] },

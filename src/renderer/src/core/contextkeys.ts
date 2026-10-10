@@ -1,6 +1,7 @@
 import type { BackendStatus } from '../../../shared/contracts'
 import { contextRecord, type ContextKeys } from '../../../shared/commands/context-keys'
 import type { Platform } from '../../../shared/commands/keybindings'
+import { isQueryDocument } from '../documents'
 import type { DocumentSnapshot } from '../services/documents'
 import type { EditorOptions } from '../services/editor-options'
 import type { PaneVisibility } from '../services/panes'
@@ -53,7 +54,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   return contextRecord(inputs.platform, {
     ...focus, textInputFocus: focus.editorTextFocus || focus.inputFocus,
     quickInputVisible: inputs.quickInputVisible, backendStatus: inputs.backendStatus, backendReady: inputs.backendStatus === 'ready', editorWordWrap: inputs.wordWrap,
-    hasActiveDocument: !!active, multipleDocuments: documents.documents.length > 1, documentBusy: documents.busy,
+    hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), multipleDocuments: documents.documents.length > 1, documentBusy: documents.busy,
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,
     anyDocumentConnected: documents.documents.some(document => !!document.connectionId && connections.some(connection => connection.id === document.connectionId && !connection.lost)),

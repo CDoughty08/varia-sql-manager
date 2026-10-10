@@ -45,7 +45,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         for (const file of opened) {
           const existing = this.documents.getSnapshot().documents.find(document => document.file?.path === file.path)
           if (existing) { this.documents.activate(existing.id); continue }
-          this.documents.create(file.name, file.content, target?.database ?? 'master', target?.connectionId, false, { id: file.id, name: file.name, path: file.path })
+          this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, { id: file.id, name: file.name, path: file.path })
         }
       } finally { await this.releaseUnclaimed(opened) }
     })

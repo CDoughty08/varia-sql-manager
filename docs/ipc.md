@@ -462,7 +462,9 @@ fails pending work with `RESULT_UNAVAILABLE` and drops older pages.
 **`ResultClient`** (`ResultClient.ts`) is the renderer's API, the contract the PR7 grid builds on: `open(descriptor)`
 returns a `ResultHandle` with `getSnapshot`, `subscribe` (coalesced per animation frame), `getWindow(first, count, o)`
 (at most 4,096 rows, 262,144 cells and 4,000,000 characters; 1,024 characters per cell by default, at most 2,097,152;
-flags 1 NULL, 2 truncated, 4 read error, 8 over the text budget), `peekWindow`, `prefetch`, `getCell` and `close`, plus
+flags 1 NULL, 2 truncated, 4 read error, 8 over the text budget), `peekWindow`, `prefetch`, `getCell` (a cell's whole stored
+value; with `format: 'xml' | 'json'` the worker pretty-prints it with `doc-format.ts`, unless the backend stored only a
+prefix, and reports `formatted`) and `close`, plus
 `onQueryEvent`, `onMemory` and `applySummary`. It forgets a result once it is released or its generation is gone
 (handles keep reporting `released` or `lost`), and remembers at most 64 windows and 4,000,000 characters per result. A
 worker that fails is recreated and reattached at most 3 times a minute; after that, results show "Results cannot be

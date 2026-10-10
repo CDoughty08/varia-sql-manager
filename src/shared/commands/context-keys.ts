@@ -30,6 +30,7 @@ export const contextKeys = {
   backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
   backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },
   hasActiveDocument: { type: 'boolean', scope: 'state', description: 'A query is open.' },
+  activeDocumentIsQuery: { type: 'boolean', scope: 'state', description: 'The active document is a query, not an XML, JSON, or execution plan value opened from the results.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
   hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected (lost connections do not count).' },

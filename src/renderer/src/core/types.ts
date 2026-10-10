@@ -12,6 +12,8 @@ export interface CommandContext {
   readonly theme?: ThemePreferencePatch
   /** What the context menu that runs the command was opened for. */
   readonly target?: MenuTarget
+  /** The results grid cell a click or Enter opens (Open Value in New Tab), in the query tab `tabId`. */
+  readonly cell?: { readonly resultIndex: number; readonly row: number; readonly column: number }
 }
 export type CommandArgs = CommandContext
 export type WorkbenchEvent =

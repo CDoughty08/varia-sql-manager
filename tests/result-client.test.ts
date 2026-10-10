@@ -85,7 +85,7 @@ describe('ResultClient', () => {
   })
 
   it('reads windows through the worker and remembers recent ones', async () => {
-    const { client, handOver, serve } = fixture()
+    const { client, handOver, serve, worker } = fixture()
     handOver()
     const handle = client.open(descriptor())
     const pending = handle.getWindow(2, 100)
@@ -96,7 +96,10 @@ describe('ResultClient', () => {
     expect(handle.peekWindow(2, 100)).toBe(window)
     expect(handle.peekWindow(0, 100)).toBeUndefined()
     expect(await handle.getWindow(20, 5)).toMatchObject({ count: 0, text: [] })
-    expect(await handle.getCell(4, 0)).toEqual({ text: '4', isNull: false, truncated: false })
+    expect(await handle.getCell(4, 0)).toEqual({ text: '4', isNull: false, truncated: false, error: false, formatted: false })
+    // A value to open asks the worker to format it; '4' is a JSON number, so it formats as itself.
+    expect(await handle.getCell(4, 0, { format: 'json' })).toEqual({ text: '4', isNull: false, truncated: false, error: false, formatted: true })
+    expect(worker().received.filter(message => message.type === 'cell').map(message => message.type === 'cell' && message.format)).toEqual([undefined, 'json'])
   })
 
   it('fails pending requests when the worker fails, recreates it at most 3 times a minute, then gives up', async () => {

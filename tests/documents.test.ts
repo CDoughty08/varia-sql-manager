@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { afterClose } from '../src/renderer/src/documents'
+import { gridLimits } from '../src/renderer/src/grid/constants'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
 describe('query documents', () => {
@@ -123,5 +124,83 @@ describe('query documents', () => {
     expect(documents.getExecuteText()).toEqual({ sql: ' ', startLine: 2 })
     instance.selection = { startLineNumber: 2, startColumn: 7, endLineNumber: 2, endColumn: 7, selectionStartLineNumber: 2, selectionStartColumn: 7, positionLineNumber: 2, positionColumn: 7 }
     expect(documents.getExecuteText()).toEqual({ sql: '-- heading\nSELECT 1;\nSELECT 2;', startLine: 1 })
+  })
+  it('opens a value as a text document in its language, with no connection or session, saved with its kind', async () => {
+    const { documents, api, model } = documentFixture()
+    const query = documents.create('query.sql', 'SELECT 1', 'AppData', 'server-a')
+    const xml = documents.openText({ name: 'doc1.xml', text: '<a/>', kind: 'xml' })
+    expect(documents.get(xml.id)).toMatchObject({ name: 'doc1.xml', kind: 'xml', database: '', dirty: false })
+    expect(documents.get(xml.id)?.connectionId).toBeUndefined()
+    expect(documents.getSnapshot().activeId).toBe(xml.id)
+    expect([model(xml.id).language, model(query.id).language]).toEqual(['xml', 'sql'])
+    expect(model(documents.openText({ name: 'ExecutionPlan1.sqlplan', text: '<ShowPlanXML/>', kind: 'sqlplan' }).id).language).toBe('xml')
+    expect(model(documents.openText({ name: 'data1.json', text: '{}', kind: 'json' }).id).language).toBe('json')
+    // A new query from a value's tab gets master, not the value's empty database.
+    documents.activate(xml.id)
+    expect(documents.newQuery().database).toBe('master')
+    await documents.save(xml.id)
+    expect(api.saveSqlFile).toHaveBeenLastCalledWith({ fileId: undefined, name: 'doc1.xml', content: '<a/>', saveAs: false, kind: 'xml' })
+    await documents.save(query.id)
+    expect(api.saveSqlFile).toHaveBeenLastCalledWith({ fileId: undefined, name: 'query.sql', content: 'SELECT 1', saveAs: false })
+    // Only a query has a SQL session to end.
+    await documents.close(xml.id)
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+    expect(model(xml.id).disposed).toBe(true)
+    await documents.close(query.id)
+    expect(api.closeQuerySession).toHaveBeenCalledWith(query.id)
+  })
+  it('fills a large value a chunk a frame, never splitting a surrogate pair or a CRLF, and counts it saved after the last chunk', () => {
+    const { documents, model, frames, frame } = documentFixture()
+    const first = gridLimits.documentFirstChunk, chunk = gridLimits.documentChunk
+    // The small first chunk opens the tab at once. It would end inside the emoji, and the next between CR and LF.
+    const text = 'a'.repeat(first - 1) + '😀' + 'b'.repeat(chunk - 3) + '\r\n' + 'c'.repeat(2 * chunk + 10)
+    const changes: boolean[] = []
+    const value = documents.openText({ name: 'big.xml', text, kind: 'xml' })
+    documents.subscribe(() => changes.push(documents.get(value.id)!.dirty))
+    expect(model(value.id).getValueLength()).toBe(first - 1)
+    expect(frames).toHaveLength(1)
+    frame()
+    expect(model(value.id).getValueLength()).toBe(first + chunk - 2)
+    expect(model(value.id).getValue() === text.slice(0, first + chunk - 2)).toBe(true)
+    frame()
+    expect(model(value.id).getValueLength()).toBe(first + 2 * chunk - 2)
+    expect(documents.get(value.id)?.dirty).toBe(false)
+    while (frames.length) frame()
+    expect(model(value.id).getValue() === text).toBe(true)
+    expect(documents.get(value.id)).toMatchObject({ dirty: false, savedVersionId: model(value.id).getAlternativeVersionId() })
+    expect(changes.every(dirty => !dirty)).toBe(true)
+    model(value.id).edit(text + '!')
+    expect(documents.get(value.id)?.dirty).toBe(true)
+  })
+  it('keeps a value dirty when it is typed in while it fills, and stops filling when it closes', async () => {
+    const { documents, model, frames, frame } = documentFixture()
+    const text = 'x'.repeat(3 * gridLimits.documentChunk)
+    const typed = documents.openText({ name: 'typed.json', text, kind: 'json' })
+    model(typed.id).edit('typed ' + model(typed.id).getValue())
+    expect(documents.get(typed.id)?.dirty).toBe(false)
+    while (frames.length) frame()
+    expect(model(typed.id).getValueLength()).toBe(text.length + 6)
+    expect(documents.get(typed.id)?.dirty).toBe(true)
+    const closed = documents.openText({ name: 'closed.json', text, kind: 'json' })
+    await documents.close(closed.id)
+    frame()
+    expect(frames).toHaveLength(0)
+    expect(model(closed.id).getValueLength()).toBe(gridLimits.documentFirstChunk)
+  })
+  it('shows a large value without bracket matching or bracket colours, and turns matching back on for the others', () => {
+    const { documents, model } = documentFixture()
+    const query = documents.create('query.sql', 'SELECT (1)', 'master')
+    const editor = new TestEditor()
+    documents.bindEditor(editor.asEditor())
+    const small = documents.openText({ name: 'small.json', text: '[' + '1,'.repeat(100) + '1]', kind: 'json' })
+    const large = documents.openText({ name: 'large.xml', text: '<a>' + 'x'.repeat(gridLimits.documentBracketChars) + '</a>', kind: 'xml' })
+    expect([model(query.id).options, model(small.id).options]).toEqual([{}, {}])
+    expect(model(large.id).options).toEqual({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } })
+    // Matching is off before the large value is shown, and on again for the next document.
+    expect(editor.options).toEqual([{ matchBrackets: 'never' }])
+    expect(editor.model).toBe(model(large.id))
+    documents.activate(small.id)
+    documents.activate(query.id)
+    expect(editor.options).toEqual([{ matchBrackets: 'never' }, { matchBrackets: 'always' }])
   })
 })

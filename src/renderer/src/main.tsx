@@ -2,6 +2,8 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
 import 'monaco-editor/languages/definitions/sql/register.js'
+// XML, JSON and plan values open from the results grid in their own tabs.
+import 'monaco-editor/languages/definitions/xml/register.js'
 import 'monaco-editor/editor/contrib/find/browser/findController.js'
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js'
@@ -14,6 +16,7 @@ import 'monaco-editor/features/codicon/register.js'
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
 import App from './App'
 import { createWorkbench } from './core/workbench'
+import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
 import 'dockview-react/dist/styles/dockview.css'
@@ -21,6 +24,7 @@ import './styles.css'
 
 // Bundle Monaco locally; the editor never downloads scripts from a CDN.
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
+registerJson(monaco)
 async function start() {
   // React renders only after a theme is applied, so the first frame already has its colors.
   const theme = await ThemeService.create(window.varia, domThemeTarget(monaco))

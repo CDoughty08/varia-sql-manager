@@ -146,7 +146,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const resultClient = fakeResultClient()
-  const results = new ResultsService({ client: resultClient, api, events, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
+  const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(results)

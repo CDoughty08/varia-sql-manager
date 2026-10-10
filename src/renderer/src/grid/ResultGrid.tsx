@@ -52,7 +52,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),
       onStatus: setStatus,
-      onError: onUnexpectedError
+      onError: onUnexpectedError,
+      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') }
     })
     viewRef.current = view
     const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })

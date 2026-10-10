@@ -6,7 +6,8 @@ import MessagesView from './MessagesView'
 import type { ResultJob, TabResults } from './ResultsService'
 import { formatCount, statusSentence } from './status'
 
-interface Props { tabId: string; connected: boolean; hint?: string }
+/** `query` is false for a value's document (XML, JSON, plan), which has no results of its own. */
+interface Props { tabId: string; query: boolean; connected: boolean; hint?: string }
 
 /** Re-renders once a second while `running`, for the elapsed time. */
 function useTicker(running: boolean): number {
@@ -39,7 +40,7 @@ function statusLine(tab: TabResults, now: number): string {
  * copy and save strips (and how the last save ended), and one live region for the pane. Results switch automatically
  * (Messages until a set opens, Messages again when the run fails) until the user picks a tab.
  */
-function OutputPane({ tabId, connected, hint }: Props) {
+function OutputPane({ tabId, query, connected, hint }: Props) {
   const { results } = useWorkbench()
   const all = useServiceSnapshot(results)
   const tab = tabId ? all[tabId] : undefined
@@ -59,7 +60,7 @@ function OutputPane({ tabId, connected, hint }: Props) {
       {/* The live region below announces it; this is the visible copy. */}
       {tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
     </div>
-    {!tab ? <div className="output-empty"><strong>Query results</strong><p>{hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>
+    {!tab ? <div className="output-empty"><strong>Query results</strong><p>{!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>
       : view === 'results' ? tab.status === 'closed' ? <div className="output-empty"><p>Results were closed to free memory. Execute the query again to see them.</p></div> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
         : <MessagesView tabId={tabId} tab={tab} />}
     <div role="status" className="visually-hidden">{tab?.announcement ?? ''}</div>

@@ -1,4 +1,4 @@
-import type { SqlFile } from '../../shared/contracts'
+import type { DocumentKind, SqlFile } from '../../shared/contracts'
 
 export interface QueryDocument {
   readonly id: string
@@ -10,10 +10,23 @@ export interface QueryDocument {
   readonly file?: SqlFile
   /** Reconnect moved this query to a new session; its next execution says so before its own messages. */
   readonly sessionNotice?: boolean
+  /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes. */
+  readonly kind?: DocumentKind
 }
 
 // Presentation projection; results are owned by ResultsService.
 export type QueryTab = QueryDocument
+
+export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): DocumentKind => document?.kind ?? 'sql'
+/** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
+export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
+/** Each kind's editor language, tab badge, and the sentence that names it (the query context bar, banners). */
+export const kindInfo: Readonly<Record<DocumentKind, { readonly language: string; readonly badge: string; readonly label: string; readonly value: string }>> = {
+  sql: { language: 'sql', badge: 'SQL', label: 'Transact-SQL', value: 'SQL' },
+  xml: { language: 'xml', badge: 'XML', label: 'XML document', value: 'XML' },
+  json: { language: 'json', badge: 'JSON', label: 'JSON document', value: 'JSON' },
+  sqlplan: { language: 'xml', badge: 'PLAN', label: 'Execution plan', value: 'execution plan' }
+}
 
 export function afterClose<T extends { id: string }>(tabs: readonly T[], activeId: string, closingId: string): { tabs: T[]; activeId: string } {
   const index = tabs.findIndex(tab => tab.id === closingId)

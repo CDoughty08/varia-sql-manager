@@ -1,22 +1,23 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { parseThemeFile } from '../src/shared/theme/format'
-import { toMonacoTheme } from '../src/shared/theme/monaco'
+import { documentTokenScopes, toMonacoTheme } from '../src/shared/theme/monaco'
+import { jsonLanguage } from '../src/renderer/src/languages/json'
 import { colorKeys, sqlScopes } from '../src/shared/theme/registry'
 import { resolveBuiltin, resolveTheme } from '../src/shared/theme/resolve'
 
 type Action = string | { token?: string; cases?: Record<string, Action> } | Action[]
-interface Language { tokenPostfix: string; defaultToken: string; brackets: { token: string }[]; tokenizer: Record<string, (unknown[] | { include: string })[]> }
+interface Language { tokenPostfix?: string; defaultToken?: string; brackets?: { token: string }[]; tokenizer: Record<string, (unknown[] | { include: string })[]> }
 
-/** Every token Monaco's SQL tokenizer can emit, read from the installed monaco-editor so an upgrade cannot drift silently. */
-async function sqlTokens(): Promise<Set<string>> {
-  const specifier = 'monaco-editor/languages/definitions/sql/sql.js'
-  const { language } = await import(specifier) as { language: Language }
+/** Every token a Monarch tokenizer can emit, with its postfix; '' (plain text) is left out. */
+function tokensOf(language: Language): Set<string> {
   const tokens = new Set<string>()
   const collect = (action: Action): void => {
     if (Array.isArray(action)) action.forEach(collect)
     else if (typeof action === 'string') {
-      if (action === '@brackets') language.brackets.forEach(bracket => tokens.add(bracket.token))
+      if (action === '@brackets') language.brackets?.forEach(bracket => tokens.add(bracket.token))
       else if (action && !action.startsWith('@')) tokens.add(action)
     } else {
       if (action.token !== undefined) collect(action.token)
@@ -24,10 +25,27 @@ async function sqlTokens(): Promise<Set<string>> {
     }
   }
   for (const rules of Object.values(language.tokenizer)) for (const rule of rules) if (Array.isArray(rule)) collect(rule[1] as Action)
-  expect(language.tokenPostfix).toBe('.sql')
   expect(language.defaultToken).toBe('')
   return new Set([...tokens].map(token => token + language.tokenPostfix))
 }
+/**
+ * Every token one of Monaco's tokenizers can emit, read from the installed monaco-editor so an upgrade cannot drift
+ * silently. The XML module imports the browser-only editor API (for its indent rules), so its source is evaluated
+ * without that import.
+ */
+async function monacoTokens(name: 'sql' | 'xml'): Promise<Set<string>> {
+  let language: Language
+  if (name === 'sql') ({ language } = await import('monaco-editor/languages/definitions/sql/sql.js' as string) as { language: Language })
+  else {
+    const source = readFileSync(join('node_modules', 'monaco-editor', 'esm', 'vs', 'languages', 'definitions', 'xml', 'xml.js'), 'utf8')
+    const body = source.replace(/^import .*$/m, 'const languages = { IndentAction: {} };').replace(/^export \{ conf, language \};$/m, 'return language;')
+    expect(body).not.toBe(source)
+    language = new Function(body)() as Language
+  }
+  expect(language.tokenPostfix).toBe('.' + name)
+  return tokensOf(language)
+}
+const sqlTokens = () => monacoTokens('sql')
 
 describe('Monaco theme', () => {
   it('has an exact rule for every token the SQL tokenizer emits except whitespace', async () => {
@@ -41,6 +59,21 @@ describe('Monaco theme', () => {
       for (const token of emitted) expect(tokens.filter(value => value === token), token).toHaveLength(1)
     }
   })
+  it('colours every token of the XML and JSON tokenizers exactly once, as the SQL scope it stands for', async () => {
+    const emitted = [...await monacoTokens('xml'), ...tokensOf(jsonLanguage as Language)]
+    expect(emitted.sort()).toEqual(Object.keys(documentTokenScopes).sort())
+    for (const type of ['dark', 'light'] as const) {
+      const theme = resolveBuiltin(type), data = toMonacoTheme(theme)
+      for (const token of emitted) {
+        const rules = data.rules.filter(rule => rule.token === token), scope = documentTokenScopes[token]
+        expect(rules, token).toEqual([{ token, foreground: theme.syntax[scope].foreground.slice(1), fontStyle: theme.syntax[scope].fontStyle }])
+      }
+      // Tags and JSON literals are keywords; names are identifiers; values are strings.
+      expect(data.rules.find(rule => rule.token === 'tag.xml')?.foreground).toBe(data.rules.find(rule => rule.token === 'keyword.sql')?.foreground)
+      expect(data.rules.find(rule => rule.token === 'string.key.json')?.foreground).toBe(data.rules.find(rule => rule.token === 'identifier.sql')?.foreground)
+      expect(data.rules.find(rule => rule.token === 'attribute.value.xml')?.foreground).toBe(data.rules.find(rule => rule.token === 'string.sql')?.foreground)
+    }
+  })
   it('carries every color key, opaque rule colors without "#", and the base of the type', () => {
     for (const type of ['dark', 'light'] as const) {
       const theme = resolveBuiltin(type)
@@ -51,7 +84,7 @@ describe('Monaco theme', () => {
       expect(Object.keys(data.colors)).toEqual([...colorKeys])
       for (const value of Object.values(data.colors)) expect(value).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       expect(data.rules[0]).toEqual({ token: '', foreground: theme.colors['editor.foreground'].slice(1), background: theme.colors['editor.background'].slice(1) })
-      expect(data.rules).toHaveLength(17)
+      expect(data.rules).toHaveLength(17 + Object.keys(documentTokenScopes).length)
       for (const rule of data.rules) {
         expect(rule.foreground).toMatch(/^[0-9a-f]{6}$/)
         if (rule.background !== undefined) expect(rule.background).toMatch(/^[0-9a-f]{6}$/)
@@ -65,6 +98,7 @@ describe('Monaco theme', () => {
     const data = toMonacoTheme(resolveTheme([parsed], 'dark').theme)
     expect(data.rules[0]).toEqual({ token: '', foreground: '888a8e', background: '11151c' })
     expect(data.colors['editor.foreground']).toBe('#ffffff80')
-    expect(data.rules.filter(rule => rule.token.startsWith('comment')).map(rule => rule.fontStyle)).toEqual(['italic underline', 'italic underline'])
+    // comment.sql, comment.quote.sql, and the three XML comment tokens.
+    expect(data.rules.filter(rule => rule.token.startsWith('comment')).map(rule => rule.fontStyle)).toEqual(Array(5).fill('italic underline'))
   })
 })

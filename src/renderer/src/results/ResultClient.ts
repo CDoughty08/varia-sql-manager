@@ -4,7 +4,7 @@ import type { BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescri
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { Disposable } from '../core/types'
 import { gridLimits as g } from '../grid/constants'
-import type { ResultKey, WorkerRequest, WorkerResponse } from './worker-protocol'
+import type { ResultKey, ValueFormat, WorkerRequest, WorkerResponse } from './worker-protocol'
 
 /** A failed result request; `code` is a protocol error code (docs/ipc.md). */
 export class ResultError extends Error {
@@ -38,6 +38,8 @@ export interface RowWindow {
   /** Per cell: 1 NULL, 2 truncated where stored, 4 read error, 8 over the window's text budget, 16 cut at maxCellChars. */
   flags: Uint8Array
 }
+/** One cell's whole value: `truncated` when the backend stored only a prefix (never formatted), `error` for a read error. */
+export interface CellValue { text: string; isNull: boolean; truncated: boolean; error: boolean; formatted: boolean }
 export interface ResultSnapshot {
   rowsRead: number
   rowsStored: number
@@ -64,8 +66,8 @@ export interface ResultHandle extends Disposable {
   prefetch(first: number, count: number): void
   /** The widest display text of each column in [colStart, colEnd) over the rows, in monospace columns (≤ 512). */
   measure(first: number, count: number, colStart: number, colEnd: number, signal?: AbortSignal): Promise<{ rows: number; widths: Uint16Array }>
-  /** The full stored value of one cell. */
-  getCell(row: number, col: number, signal?: AbortSignal): Promise<{ text: string; isNull: boolean; truncated: boolean }>
+  /** The full stored value of one cell; with `format`, the worker pretty-prints it (`formatted`) when it can. */
+  getCell(row: number, col: number, o?: { format?: ValueFormat; signal?: AbortSignal }): Promise<CellValue>
   /** Releases the result in the backend (results.close); queued while the results port is down. */
   close(): Promise<void>
 }
@@ -228,11 +230,11 @@ export class ResultClient implements Disposable {
         if (response.type !== 'measure') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return { rows: response.rows, widths: response.widths }
       },
-      getCell: async (row, col, signal) => {
+      getCell: async (row, col, o) => {
         this.usable(state)
-        const response = await this.request(id => ({ type: 'cell', id, key: state.key, wires: state.wires, row, col }), signal)
+        const response = await this.request(id => ({ type: 'cell', id, key: state.key, wires: state.wires, row, col, ...o?.format ? { format: o.format } : {} }), o?.signal)
         if (response.type !== 'cell') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
-        return { text: response.text, isNull: response.isNull, truncated: response.truncated }
+        return { text: response.text, isNull: response.isNull, truncated: response.truncated, error: response.error, formatted: response.formatted }
       },
       close: () => this.release([{ generation: state.key.generation, resultId: state.key.resultId }]),
       dispose: () => {

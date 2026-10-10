@@ -18,6 +18,7 @@ export interface FakeHandle extends ResultHandle {
   snapshot: ResultSnapshot
   readonly close: ReturnType<typeof vi.fn<() => Promise<void>>>
   readonly dispose: ReturnType<typeof vi.fn<() => void>>
+  readonly getCell: ReturnType<typeof vi.fn<ResultHandle['getCell']>>
 }
 
 /**
@@ -45,7 +46,7 @@ export function fakeResultClient() {
         getSnapshot: () => handle.snapshot, subscribe: () => () => {},
         getWindow: async first => ({ first, count: 0, colStart: 0, colEnd: value.columns.length, text: [], flags: new Uint8Array(0) }),
         peekWindow: () => undefined, prefetch: () => {}, measure: async () => ({ rows: 0, widths: new Uint16Array(value.columns.length) }),
-        getCell: async () => ({ text: '', isNull: true, truncated: false }),
+        getCell: vi.fn<ResultHandle['getCell']>(async () => ({ text: '', isNull: true, truncated: false, error: false, formatted: false })),
         close: vi.fn(async () => { handle.snapshot = { ...handle.snapshot, state: 'released' } }),
         dispose: vi.fn()
       }
