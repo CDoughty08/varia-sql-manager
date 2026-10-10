@@ -790,6 +790,9 @@ try {
   await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
+  // Only Script As's segment gives way to a long text: the status bar's others, the indicator included, keep one line.
+  expect(await page.locator('.status-bar > :not(.status-scripting)').evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
+    .toEqual(Array(3).fill('0 nowrap'))
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides.
   await textbox().focus()
   await page.keyboard.press('F1')

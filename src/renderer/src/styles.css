@@ -353,7 +353,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-bar > span:nth-child(2) { margin-left: auto; }
 .status-divider { margin: 0 12px; color: var(--varia-statusBar-separatorForeground); }
 /* The outer segments keep their size; only scripting's text, in the middle, gives way to a long name or warning. */
-.status-bar > span:first-child, .status-bar > span:last-child { flex-shrink: 0; white-space: nowrap; }
+.status-bar > :not(.status-scripting) { flex-shrink: 0; white-space: nowrap; }
 .status-scripting { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1 1 0; min-width: 0; margin: 0 12px; }
 .status-scripting-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-scripting-more { flex-shrink: 0; white-space: nowrap; }
