@@ -127,44 +127,78 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .dock-move { height: 24px; padding: 0 3px; margin-right: 4px; font-size: 10px; width: 68px; border-color: transparent; background: transparent; }
 .dock-move:focus-visible { outline-offset: -2px; }
 .explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; }
-.panel-heading { height: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; color: var(--varia-sideBarTitle-foreground); font-size: 10px; line-height: 16px; letter-spacing: 1px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
-.explorer-scroll { flex: 1; overflow: auto; min-height: 0; padding: 7px 0; }
+.explorer-toolbar { height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 1px; padding: 0 6px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
+.explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
+.explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .explorer-empty { padding: 25px 18px; }
 .explorer-empty > .icon { width: 24px; height: 24px; color: var(--varia-icon-foreground); margin-bottom: 14px; }
 .explorer-empty p { color: var(--varia-descriptionForeground); line-height: 1.6; font-size: 12px; }
 .explorer-empty button { border: 1px solid var(--varia-button-border); margin-top: 8px; }
 .explorer-footer { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: 10px; padding: 12px; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
-.server-section { margin-bottom: 5px; }
-.server-row { display: flex; align-items: center; gap: 4px; margin: 0 6px; height: 32px; border-radius: 3px; }
-.server-row.selected { background: var(--varia-objectExplorer-activeConnectionBackground); }
-.server-toggle { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; height: 32px; text-align: left; padding: 0 6px; }
-.server-toggle > span { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.server-toggle > .icon { color: var(--varia-icon-foreground); }
-.lost-server-label { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; padding: 0 6px; font-size: 12px; line-height: 16px; color: var(--varia-descriptionForeground); }
-.lost-server-label > .node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.lost-server-actions { display: flex; gap: 4px; padding: 0 12px 4px 30px; }
-.lost-server-actions button { border: 1px solid var(--varia-button-border); }
-.server-row > .icon-button { margin-right: 4px; color: var(--varia-objectExplorer-actionForeground); }
-.tree-children { padding-left: 12px; }
-.tree-children[hidden] { display: none; }
-.server-objects { padding-right: 6px; }
-.tree-heading { display: flex; align-items: center; gap: 4px; width: 100%; height: 27px; padding: 0 4px; text-align: left; color: var(--varia-objectExplorer-headingForeground); font-size: 11px; line-height: 16px; }
-.tree-heading .icon { width: 14px; height: 14px; flex-basis: 14px; color: var(--varia-objectExplorer-chevronForeground); }
-.tree-heading .folder-icon { color: var(--varia-objectExplorer-folderIconForeground); }
-.tree-heading .tree-count { flex-shrink: 0; color: var(--varia-objectExplorer-countForeground); font-size: 10px; line-height: 16px; margin-left: auto; padding-right: 2px; }
-.tree-heading:focus-visible, .tree-node:focus-visible, .node-toggle:focus-visible, .server-toggle:focus-visible { outline-offset: -2px; }
-.tree-node { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; height: 27px; margin: 0; padding: 0 4px; text-align: left; border-radius: 3px; font-size: 11px; line-height: 16px; }
-.tree-node > .icon { width: 14px; height: 14px; flex-basis: 14px; color: var(--varia-icon-foreground); }
-.database-row { display: flex; align-items: center; border-radius: 3px; padding-left: 4px; }
-.database-row.selected { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
-.database-node { flex: 1; color: inherit; }
-.node-toggle { display: flex; align-items: center; justify-content: center; flex: 0 0 14px; width: 14px; height: 25px; border: 0; padding: 0; color: var(--varia-objectExplorer-chevronForeground); }
-.node-toggle .icon { width: 14px; height: 14px; flex-basis: 14px; }
-.node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.object-node, .table-node { padding-left: 22px; }
-.object-node > .icon { color: var(--varia-objectExplorer-objectIconForeground); }
-.explorer-hint, .explorer-error { font-size: 11px; color: var(--varia-descriptionForeground); line-height: 1.6; padding: 0 4px 0 22px; margin: 5px 0 8px; overflow-wrap: anywhere; }
-.explorer-error { color: var(--varia-errorForeground); }
+/* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
+.explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
+.explorer-spacer { position: relative; width: 100%; }
+.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: 22px; display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: 12px; line-height: 16px; white-space: nowrap; cursor: default; }
+.explorer-row:hover { background: var(--varia-list-hoverBackground); }
+.explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); }
+.explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; }
+.oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
+.oe-indent { flex: none; }
+.oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
+.oe-icon { position: relative; flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--varia-objectExplorer-objectIconForeground); }
+.oe-icon.folder { color: var(--varia-objectExplorer-folderIconForeground); }
+.oe-icon .icon { width: 15px; height: 15px; flex-basis: 15px; }
+.oe-icon .codicon { font-size: 15px; }
+.oe-icon .oe-badge { position: absolute; right: -3px; bottom: -3px; font-size: 9px; line-height: 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--varia-sideBar-background); }
+.oe-badge[data-badge="disabled"], .oe-badge[data-badge="error"] { color: var(--varia-errorForeground); }
+.oe-badge[data-badge="unavailable"], .oe-badge[data-badge="lost"] { color: var(--varia-disabledForeground); }
+.oe-badge[data-badge="loading"] { animation: oe-spin 1.5s steps(30) infinite; }
+@keyframes oe-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .oe-badge[data-badge="loading"] { animation: none; } }
+.oe-label { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-row.folder .oe-label { color: var(--varia-objectExplorer-headingForeground); }
+.explorer-row.server .oe-label { font-weight: 600; }
+.explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
+/* The sublabel takes only the space the label leaves (basis 0), so a label that fits never ellipsizes for its sublabel. */
+.oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-objectExplorer-sublabelForeground); }
+.oe-filtered, .explorer-row.progress .oe-text { color: var(--varia-objectExplorer-countForeground); }
+.explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button { color: inherit; }
+.oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-row.synthetic .oe-icon { color: var(--varia-icon-foreground); }
+.explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
+.oe-actions { display: flex; gap: 2px; margin-left: auto; padding-left: 4px; flex: none; }
+.oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
+.oe-actions .codicon { font-size: 14px; }
+/* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
+.monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
+.filter-dialog { width: min(640px, calc(100vw - 40px)); }
+.filter-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.filter-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 7px 8px 3px 0; vertical-align: top; line-height: 20px; }
+.filter-grid thead th { width: 112px; padding: 0 8px 6px 0; }
+.filter-grid thead th:nth-child(2) { width: 176px; }
+.filter-grid thead th:last-child { width: auto; }
+.filter-grid td { padding: 3px 8px 3px 0; vertical-align: top; min-width: 0; }
+.filter-grid td:last-child { padding-right: 0; }
+.filter-grid input, .filter-grid select { width: 100%; min-width: 0; height: 28px; }
+.filter-dates { display: flex; gap: 6px; }
+.filter-dates input { flex: 1; }
+.filter-problem { margin-top: 4px; font-size: 11px; color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
+.filter-dialog .field-note { margin-top: 12px; }
+.filter-dialog .connect-error { margin: 12px 0 0; }
+.explorer-fault { padding: 18px; font-size: 12px; color: var(--varia-errorForeground); }
+.explorer-fault button { margin-top: 8px; border: 1px solid var(--varia-button-border); }
+.explorer-error { flex-shrink: 0; font-size: 11px; color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
+@media (forced-colors: active) {
+  .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .explorer-row[aria-selected="true"] .oe-sublabel, .explorer-row[aria-selected="true"] .oe-icon, .explorer-row[aria-selected="true"] .oe-twistie { color: HighlightText; }
+  .explorer-row[aria-selected="true"] .oe-icon .oe-badge { color: HighlightText; background: Highlight; }
+  /* Offline, inaccessible and disabled rows stay dimmed, as disabled menu items are. */
+  .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
+  /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
+  .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
+}
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .query-tabs { display: flex; flex-shrink: 0; height: 38px; background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .query-tab { display: flex; align-items: center; flex-shrink: 0; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }

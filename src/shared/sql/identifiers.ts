@@ -32,19 +32,3 @@ export function selectTopRowsScript(source: SelectTopRowsSource, count = 1000): 
   const script = lines.join('\n')
   return script.length > maxSelectTopScriptLength ? star : script
 }
-
-/** The Object Explorer nodes Copy Name applies to, with the names it reads. */
-export type CopyNameNode =
-  | { readonly kind: 'server' }
-  | { readonly kind: 'database'; readonly database: string }
-  | { readonly kind: 'table'; readonly schema: string; readonly name: string }
-  | { readonly kind: 'serverObject'; readonly name: string }
-/** What Copy Name puts on the clipboard: the server as connected to, or the quoted (schema-qualified) object name. */
-export function copyName(node: CopyNameNode, connection: { readonly server: string }): string {
-  switch (node.kind) {
-    case 'server': return connection.server
-    case 'database': return quoteName(node.database)
-    case 'table': return quoteName(node.schema) + '.' + quoteName(node.name)
-    case 'serverObject': return quoteName(node.name)
-  }
-}

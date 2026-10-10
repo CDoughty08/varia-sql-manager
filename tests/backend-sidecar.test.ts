@@ -7,7 +7,7 @@ import { BackendError } from '../src/main/backend/errors'
 import { backendMethods, deadlineFor } from '../src/shared/ipc/methods'
 import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/ipc/wire/frames'
 import { decodeControl, encodeControl } from '../src/shared/ipc/wire/msgpack'
-import { serverObjectKinds, type BackendMethod, type BackendMethods, type ResultDescriptor, type ServerObjectKind } from '../src/shared/contracts'
+import type { BackendMethod, BackendMethods, ResultDescriptor } from '../src/shared/contracts'
 import { decodePage } from '../src/shared/ipc/wire/pages'
 import { cellText } from '../src/shared/ipc/wire/cells'
 import { fuzzSeed, mulberry32 } from './fuzz/prng'
@@ -118,11 +118,14 @@ describe('real .NET sidecar over protocol v2', () => {
   it('validates authentication without attempting a connection', async () => {
     await expect(call(backend(), 'connections.connect', { server: 'localhost', database: 'master', authentication: 'invalid' as 'sql', trustServerCertificate: false })).rejects.toThrow('Unsupported authentication mode.')
   })
-  it('dispatches server catalogs and rejects unsupported categories before connecting', async () => {
-    const connection = backend()
-    const connectionId = crypto.randomUUID()
-    for (const kind of serverObjectKinds) await expect(call(connection, 'server.objects.list', { connectionId, kind })).rejects.toThrow('Connect to a SQL Server first.')
-    await expect(call(connection, 'server.objects.list', { connectionId, kind: 'sys.credentials' as ServerObjectKind })).rejects.toThrow('Unsupported server object category.')
+  it('no longer offers the v1 catalog methods that explorer.children replaced', async () => {
+    const backend = raw()
+    const hello = await backend.hello()
+    const retired = ['tables.list', 'server.objects.list']
+    expect((hello.methods as string[]).filter(method => retired.includes(method))).toEqual([])
+    backend.request(1, { method: 'tables.list', params: { connectionId: crypto.randomUUID(), database: 'master' } })
+    backend.request(2, { method: 'server.objects.list', params: { connectionId: crypto.randomUUID(), kind: 'logins' } })
+    for (let index = 0; index < 2; index++) expect(body(await backend.next(FrameKind.RESPONSE))).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } })
   })
   it('reads a table\'s columns on the metadata lane, checking names before the connection', async () => {
     const connection = backend()
@@ -130,6 +133,19 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'tables.columns', { ...table, name: 'x'.repeat(129) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(call(connection, 'tables.columns', { ...table, name: 'Orders' })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('tables.columns', { ...table, name: 'Orders' })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
+  })
+  it('checks Object Explorer refs against the catalogue before the connection', async () => {
+    const connection = backend()
+    const base = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }
+    const folder = { type: 'folder', owner: { kind: 'database', name: 'master' }, folder: 'tables' } as const
+    // Shapes zod would also refuse reach the backend only through tests; it re-checks them on its own.
+    for (const node of [{ type: 'folder', owner: { kind: 'server' }, folder: 'tables' }, { type: 'object', object: { kind: 'table', database: 'x', name: 'y' } }, { type: 'object', object: { kind: 'nope' } }])
+      await expect(call(connection, 'explorer.children', { ...base, node } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'explorer.children', { ...base, node: folder, cursor: 'v1.tables.AQ' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'explorer.children', { ...base, node: folder, extra: 1 } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'explorer.children', { ...base, node: folder })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    await expect(call(connection, 'explorer.children', { ...base, node: { type: 'object', object: { kind: 'server' } } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    expect(deadlineFor('explorer.children', { ...base, node: folder })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
   })
   it('handles cancellation of a completed or unknown query', async () => {
     await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
@@ -284,7 +300,7 @@ describe('real .NET sidecar frame handling', () => {
     expect(await backend.exit).toBe(0)
   })
   it('surfaces backend error codes on BackendError', async () => {
-    const error = await call(backend(), 'tables.list', { connectionId: crypto.randomUUID(), database: 'master' }).catch(value => value)
+    const error = await call(backend(), 'tables.script', { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' }).catch(value => value)
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: 'NOT_CONNECTED' })
   })

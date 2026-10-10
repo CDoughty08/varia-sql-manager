@@ -223,9 +223,19 @@ internal static class HostChecks
             catch (RequestException error) when (error.Code == "METHOD_NOT_FOUND") { undispatched.Add(method); }
             catch (Exception) { /* Empty parameters are invalid for most methods; any other failure means it was dispatched. */ }
         }
-        check(undispatched.Count == 0 && service.LaneOf("query.execute") == RequestLane.Query && service.LaneOf("tables.list") == RequestLane.Metadata
+        check(undispatched.Count == 0 && service.LaneOf("query.execute") == RequestLane.Query && service.LaneOf("tables.script") == RequestLane.Metadata
             && service.LaneOf("query.cancel") == RequestLane.Control && service.LaneOf("no.such.method") == RequestLane.Control,
             "every method announced in HELLO is dispatched, on its lane: " + string.Join(", ", undispatched));
+        // explorer.children replaced the v1 catalog lists; a stale renderer or main must get METHOD_NOT_FOUND, not data.
+        var retired = new List<string>();
+        foreach (var method in new[] { "tables.list", "server.objects.list" })
+        {
+            try { service.DispatchAsync(method, JsonDocument.Parse("{}").RootElement, Json).GetAwaiter().GetResult(); }
+            catch (RequestException error) when (error.Code == "METHOD_NOT_FOUND") { retired.Add(method); }
+            catch (Exception) { }
+        }
+        check(retired.Count == 2 && !SqlService.MethodNames.Contains("tables.list") && !SqlService.MethodNames.Contains("server.objects.list"),
+            "the retired v1 catalog methods are neither announced nor dispatched");
     }
 
     private static void OutboundChecks(Action<bool, string> check)

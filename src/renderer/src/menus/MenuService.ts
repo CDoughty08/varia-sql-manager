@@ -64,6 +64,12 @@ export interface MenuServiceOptions {
 const guard = (action: () => void) => { try { action() } catch (error) { onUnexpectedError(error) } }
 const hasItems = (items: readonly ResolvedMenuItem[]) => items.some(item => item.kind !== 'separator')
 const inside = (target: EventTarget | null, selector: string) => typeof (target as Partial<Element> | null)?.closest === 'function' && !!(target as Element).closest(selector)
+/** The item a focused composite widget names as active (`aria-activedescendant`), when it is inside the widget. */
+function activeDescendant(element: Element | null): Element | undefined {
+  if (typeof element?.getAttribute !== 'function') return undefined
+  const id = element.getAttribute('aria-activedescendant'), found = id ? element.ownerDocument?.getElementById(id) : null
+  return found && element.contains(found) ? found : undefined
+}
 /** The menubar menu whose button `target` is in, if any. */
 function menubarButton(target: EventTarget | null): MenubarId | undefined {
   if (typeof (target as Partial<Element> | null)?.closest !== 'function') return undefined
@@ -97,6 +103,8 @@ export class MenuService implements Disposable {
   private marked?: Element
   /** The same for an open native menu. */
   private nativeMarked?: Element
+  /** A widget scrolled to show its active item for a keyboard menu: that scroll does not close the menu. */
+  private revealed?: { readonly widget: Element; readonly top: number }
   private readonly native?: NativeMenuPresenter
   private readonly subscriptions: Disposable[]
   private detach?: () => void
@@ -183,8 +191,16 @@ export class MenuService implements Disposable {
     if (inside(event.target, '.menu-layer')) return
     this.openFor(event.target as Element | null, { kind: 'point', x: event.clientX, y: event.clientY }, false)
   }
-  /** Shift+F10 and the context-menu key: the focused element's menu, below it, with its first item active. */
-  openForElement(element: Element | null, _how: { keyboard: true }): boolean { return this.openFor(element, undefined, true) }
+  /**
+   * Shift+F10 and the context-menu key: the focused element's menu, below it, with its first item active. A widget that
+   * keeps focus on itself and names its active item with `aria-activedescendant` (Object Explorer's tree) gets that
+   * item's menu.
+   */
+  openForElement(element: Element | null, _how: { keyboard: true }): boolean {
+    const item = activeDescendant(element)
+    if (item && element) this.reveal(element, item)
+    return this.openFor(item ?? element, undefined, true, item ? element ?? undefined : undefined)
+  }
 
   /** A menubar button activated without a pointer press (assistive technology): toggles its menu. */
   toggleMenubarMenu(id: MenubarId): void {
@@ -210,7 +226,14 @@ export class MenuService implements Disposable {
       // Items report their own release: a menubar press dragged onto an item activates it there.
       if (!inside(pointer.target, '.menu-layer .menu-item')) this.controller.pointerUp(-1, -1, { x: pointer.clientX, y: pointer.clientY }, pointer.button)
     })
-    const scroll = (event: Event) => guard(() => { if (this.controller.view.levels.length && !inside(event.target, '.menu')) this.close('scroll') })
+    const scroll = (event: Event) => guard(() => {
+      const revealed = this.revealed
+      if (revealed && event.target === revealed.widget) {
+        this.revealed = undefined
+        if (revealed.widget.scrollTop === revealed.top) return
+      }
+      if (this.controller.view.levels.length && !inside(event.target, '.menu')) this.close('scroll')
+    })
     // Alt with the wheel scrolls faster in the editor; it is not an Alt tap.
     const wheel = (event: Event) => { guard(() => this.access.disarm()); scroll(event) }
     const resize = () => guard(() => this.close('resize'))
@@ -265,7 +288,7 @@ export class MenuService implements Disposable {
    * editor) with its first item active. While a dialog is open only text fields in it have menus. Focus moves to what
    * the menu is for first, so the menu returns it there and its commands act on it.
    */
-  private openFor(element: Element | null, anchor: Anchor | undefined, keyboard: boolean): boolean {
+  private openFor(element: Element | null, anchor: Anchor | undefined, keyboard: boolean, widget?: Element): boolean {
     const { targets } = this.options
     if (!targets || !element) return false
     const hit = targets.targetFor(element)
@@ -278,7 +301,7 @@ export class MenuService implements Disposable {
     const target = targets.refresh(hit.target), menu = menuForTarget[target.kind]
     const items = this.resolve(menu, target)
     if (!hasItems(items)) return false
-    const at = anchor ?? this.keyboardAnchor(hit), open = () => this.openContext(menu, items, at, keyboard, hit.mark)
+    const at = anchor ?? this.keyboardAnchor(hit, widget), open = () => this.openContext(menu, items, at, keyboard, hit.mark)
     if (!this.native) return open()
     this.showNative(this.native, menu, items, at, hit.mark, open)
     return true
@@ -302,11 +325,27 @@ export class MenuService implements Disposable {
     this.nativeMarked?.removeAttribute('data-menu-target')
     this.nativeMarked = undefined
   }
-  private keyboardAnchor(hit: TargetHit): Anchor {
+  /** Below the item (the editor's caret), kept within the widget that names it as its active item. */
+  private keyboardAnchor(hit: TargetHit, widget?: Element): Anchor {
     const caret = hit.target.kind === 'editor' ? this.options.editorCaret?.() : undefined
     if (caret) return { kind: 'below', rect: caret }
-    const { left, top, right, bottom } = (hit.anchor ?? hit.element).getBoundingClientRect()
+    let { left, top, right, bottom } = (hit.anchor ?? hit.element).getBoundingClientRect()
+    if (widget) {
+      const box = widget.getBoundingClientRect()
+      top = Math.min(Math.max(top, box.top), box.bottom)
+      bottom = Math.min(Math.max(bottom, top), box.bottom)
+    }
     return { kind: 'below', rect: { left: left + 8, top, right, bottom } }
+  }
+  /** Scrolls a widget (Object Explorer's tree) just enough to show its active item, as a keyboard menu opens for it. */
+  private reveal(widget: Element, item: Element): void {
+    const box = widget.getBoundingClientRect(), rect = item.getBoundingClientRect()
+    const top = box.top + widget.clientTop, bottom = top + widget.clientHeight
+    const delta = rect.top < top ? rect.top - top : rect.bottom > bottom ? Math.min(rect.bottom - bottom, rect.top - top) : 0
+    if (!delta) return
+    const before = widget.scrollTop
+    widget.scrollTop = before + delta
+    if (widget.scrollTop !== before) this.revealed = { widget, top: widget.scrollTop }
   }
   /** The menus took the keyboard: remember where focus was, unless a menu replaced another one. */
   private ownershipChanged(): void {

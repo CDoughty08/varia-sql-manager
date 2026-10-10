@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
+import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -153,7 +154,7 @@ try {
     await dialog.getByText('Development', { exact: true }).click()
   }
   // Keep native profile persistence but supply deterministic discovery/failure fixtures.
-  await app.evaluate(({ ipcMain }) => {
+  await app.evaluate(({ ipcMain }, statics) => {
     globalThis.connectionCalls = []
     globalThis.dbPending = []
     ipcMain.removeHandler('varia:request')
@@ -170,10 +171,16 @@ try {
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
       if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }] }
+      // Object Explorer expands each new server: the catalogue's static folders.
+      if (method === 'explorer.children') {
+        const { node } = params, owner = node.type === 'object' ? node.object : node.owner
+        const nodes = (node.type === 'object' ? statics.objects[node.object.kind] : statics.folders[node.folder]).map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
+        return { ok: true, value: { nodes, total: nodes.length, elapsedMs: 1 } }
+      }
       if (method === 'query.execute') return { ok: true, value: { resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 } } }
       return { ok: false, error: 'Unsupported fixture method.' }
     })
-  })
+  }, explorerStatics())
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await dialog.getByLabel('Server source', { exact: true }).selectOption('network')
   await expect(dialog.getByRole('button', { name: /network-server/ })).toBeVisible()
@@ -212,13 +219,18 @@ try {
   await expect(dialog).toHaveCount(0)
   await expect(page.locator('.query-context')).toContainText('Development')
   expect(await page.locator('.query-context').evaluate(element => getComputedStyle(element).borderBottomColor)).toBe('rgb(230, 107, 115)')
+  // Object Explorer shows the server by its name and color, expanded to its folders.
+  const serverRow = await explorerRow(page, 'Development')
+  await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
+  expect(await serverRow.locator('.oe-accent').evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(230, 107, 115)')
+  await expect(await explorerRow(page, 'Development', 'Server Objects')).toBeVisible()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText('SELECT 1;')
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect.poll(() => app.evaluate(() => globalThis.connectionCalls.find(call => call.method === 'query.execute')?.params.timeoutSeconds)).toBe(7)
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, colors, timeout routing, compact sizing, and keyboard focus.')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, colors in the query and Object Explorer, timeout routing, compact sizing, and keyboard focus.')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())

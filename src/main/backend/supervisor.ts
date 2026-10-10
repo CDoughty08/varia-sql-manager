@@ -33,8 +33,8 @@ export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
   onEvent?: (event: QueryEvent) => void
   /** Only this generation may serve the request, and only while it is ready: results belong to one generation. */
   generation?: number
-  /** The request's id once it is written, for CREDIT and CANCEL frames. */
-  onSent?: (id: number) => void
+  /** The request's id and generation once it is written, for CREDIT and CANCEL frames. */
+  onSent?: (id: number, generation: number) => void
 }
 
 const connectResultSchema = z.object({ id: z.string().min(1).max(128) }).loose()
@@ -145,7 +145,7 @@ export class BackendSupervisor {
         onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? { ...event, descriptor: stamp(event.descriptor, connection.generation) } : event)
       })
     })
-    if (sent.id) o.onSent?.(sent.id)
+    if (sent.id) o.onSent?.(sent.id, connection.generation)
     const result = await sent.done
     return this.registered(method, params, result, connection) as BackendMethods[M]['result']
   }

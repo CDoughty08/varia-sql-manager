@@ -6,19 +6,20 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
+using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher
+internal sealed class SqlService : IRequestDispatcher, IExplorerHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
-        "databases.list", "server.objects.list", "tables.list", "tables.script", "tables.columns", "query.execute", "query.cancel", "query.session.close",
-        "results.read", "results.close"
+        "databases.list", "tables.script", "tables.columns", "query.execute", "query.cancel", "query.session.close",
+        "results.read", "results.close", "explorer.children"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -31,6 +32,8 @@ internal sealed class SqlService : IRequestDispatcher
     private readonly ConcurrentDictionary<string, RunningQuery> queries = new();
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
+    private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
+    private readonly ExplorerService explorer;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
@@ -59,6 +62,7 @@ internal sealed class SqlService : IRequestDispatcher
         this.hooks = hooks;
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
+        explorer = new ExplorerService(this);
         if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
     }
 
@@ -74,6 +78,8 @@ internal sealed class SqlService : IRequestDispatcher
     public IReadOnlyList<string> Methods { get; }
     /// <summary>Stored query results (the live checks read them back through it).</summary>
     public ResultStore Results => store;
+    /// <summary>Object Explorer's node provider (the checks set its test options).</summary>
+    public ExplorerService Explorer => explorer;
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
     /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads
@@ -82,6 +88,7 @@ internal sealed class SqlService : IRequestDispatcher
     {
         "query.execute" => RequestLane.Query,
         "results.read" => RequestLane.Results,
+        "explorer.children" => RequestLane.Explorer,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "results.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -110,8 +117,6 @@ internal sealed class SqlService : IRequestDispatcher
         "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
         "connections.disconnect" => Disconnect(Read<ConnectionArgs>(parameters, json)),
         "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
-        "server.objects.list" => await ServerObjectsAsync(Read<ServerObjectArgs>(parameters, json), Token(context)),
-        "tables.list" => await TablesAsync(Read<DatabaseArgs>(parameters, json), Token(context)),
         "tables.script" => await ScriptAsync(Read<TableArgs>(parameters, json), Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
@@ -119,6 +124,7 @@ internal sealed class SqlService : IRequestDispatcher
         "query.session.close" => CloseSession(Read<SessionArgs>(parameters, json)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -142,10 +148,14 @@ internal sealed class SqlService : IRequestDispatcher
         var builder = ConnectionSettings.Build(options);
         await using var connection = new SqlConnection(builder.ConnectionString);
         await connection.OpenAsync(token);
+        var profile = await ServerProfile.ProbeAsync(connection, token);
         var id = Guid.NewGuid().ToString();
+        profiles[id] = profile;
         connections[id] = builder.ConnectionString;
         pools[id] = new() { [builder.ConnectionString] = 0 };
-        return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout);
+        var probed = profile.ProductVersion is not null;
+        return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
+            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null);
     }
 
     private static async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
@@ -163,6 +173,8 @@ internal sealed class SqlService : IRequestDispatcher
     private object Disconnect(ConnectionArgs args)
     {
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
+        profiles.TryRemove(args.ConnectionId, out _);
+        explorer.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
@@ -195,6 +207,23 @@ internal sealed class SqlService : IRequestDispatcher
         return new SqlConnection(builder.ConnectionString);
     }
 
+    ServerProfile IExplorerHost.Profile(string connectionId) =>
+        connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+
+    /// <summary>Object Explorer's own pool: the connection's settings under a distinct program name (as SSMS does), so its
+    /// READ UNCOMMITTED and LOCK_TIMEOUT never reach query tabs, SMO or databases.list. It keeps the login's initial
+    /// catalog (contained-database users), and is cleared with the connection's other pools on disconnect.</summary>
+    SqlConnection IExplorerHost.Connection(string connectionId, string? database)
+    {
+        if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+        var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = true, CommandTimeout = 30 };
+        var name = builder.ApplicationName + " - Object Explorer";
+        builder.ApplicationName = name.Length > 128 ? name[..128] : name;
+        if (database is not null) builder.InitialCatalog = database;
+        if (pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
+        return new SqlConnection(builder.ConnectionString);
+    }
+
     private async Task<List<DatabaseInfo>> DatabasesAsync(ConnectionArgs args, CancellationToken token)
     {
         await using var connection = CreateConnection(args.ConnectionId);
@@ -210,43 +239,6 @@ internal sealed class SqlService : IRequestDispatcher
         await using var reader = await command.ExecuteReaderAsync(token);
         var result = new List<DatabaseInfo>();
         while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetBoolean(1), reader.GetBoolean(2)));
-        return result;
-    }
-
-    private async Task<List<ServerObjectInfo>> ServerObjectsAsync(ServerObjectArgs args, CancellationToken token)
-    {
-        // Fixed catalog queries keep renderer input out of SQL identifiers and expressions.
-        var sql = args.Kind switch
-        {
-            "logins" => "SELECT name, type_desc FROM sys.server_principals WHERE type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY name;",
-            "serverRoles" => "SELECT name, CASE WHEN is_fixed_role = 1 THEN 'Fixed server role' ELSE 'Server role' END FROM sys.server_principals WHERE type = 'R' ORDER BY name;",
-            "credentials" => "SELECT name, N'Credential' FROM sys.credentials ORDER BY name;",
-            "cryptographicProviders" => "SELECT name, CASE WHEN is_enabled = 1 THEN 'Enabled' ELSE 'Disabled' END FROM sys.cryptographic_providers ORDER BY name;",
-            "audits" => "SELECT name, CONCAT(type_desc, CASE WHEN is_state_enabled = 1 THEN ' · Enabled' ELSE ' · Disabled' END) FROM sys.server_audits ORDER BY name;",
-            "serverAuditSpecifications" => "SELECT name, CASE WHEN is_state_enabled = 1 THEN 'Enabled' ELSE 'Disabled' END FROM sys.server_audit_specifications ORDER BY name;",
-            _ => throw new RequestException("INVALID_PARAMS", "Unsupported server object category.")
-        };
-        await using var connection = CreateConnection(args.ConnectionId, "master");
-        await connection.OpenAsync(token);
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.CommandTimeout = 30;
-        await using var reader = await command.ExecuteReaderAsync(token);
-        var result = new List<ServerObjectInfo>();
-        while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetString(1)));
-        return result;
-    }
-
-    private async Task<List<TableInfo>> TablesAsync(DatabaseArgs args, CancellationToken token)
-    {
-        await using var connection = CreateConnection(args.ConnectionId, args.Database);
-        await connection.OpenAsync(token);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = 30;
-        command.CommandText = "SELECT s.name, t.name FROM sys.tables AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id WHERE t.is_ms_shipped = 0 ORDER BY s.name, t.name;";
-        await using var reader = await command.ExecuteReaderAsync(token);
-        var result = new List<TableInfo>();
-        while (await reader.ReadAsync(token)) result.Add(new(reader.GetString(0), reader.GetString(1)));
         return result;
     }
 
@@ -710,10 +702,12 @@ internal sealed class SqlService : IRequestDispatcher
     public void Dispose()
     {
         memoryTimer?.Dispose();
+        explorer.Dispose();
         CancelAll();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();
         pools.Clear();
+        profiles.Clear();
         connections.Clear();
         store.ReleaseAll();
         SqlConnection.ClearAllPools();

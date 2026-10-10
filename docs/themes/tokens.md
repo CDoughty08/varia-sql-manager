@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (190)
+## Color keys (191)
 
 ### Base
 
@@ -81,7 +81,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | --- | --- | --- | --- | --- | --- |
 | `foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Default text color of the workbench. |
 | `descriptionForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Secondary text: hints, captions, and explanations. |
-| `disabledForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Text of disabled controls, such as unavailable commands in the command palette. |
+| `disabledForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels. |
 | `errorForeground` | VS Code | `$error` | `#f39c9f` | `#ae2117` | Error text. |
 | `warningForeground` | Varia | `$warning` | `#dfbd82` | `#8a5300` | Warning text. |
 | `successForeground` | Varia | `$success` | `#8addac` | `#146c38` | Success text, such as the Execute button and confirmations. |
@@ -148,24 +148,25 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
 | `sideBar.background` | VS Code | `$sideBar` | `#151b24` | `#f3f5f8` | Object Explorer. |
-| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Object Explorer heading. |
-| `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Lines around the Object Explorer heading and footer. |
+| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Side bar section titles. Not used yet; reserved for side bar section titles. |
+| `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Lines around the Object Explorer toolbar and footer. |
 | `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row (command palette rows included). |
 | `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Selected row of a focused list. |
 | `list.activeSelectionForeground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Text of the selected row of a focused list. |
 | `list.inactiveSelectionBackground` | VS Code | `$selection` | `#24324a` | `#d6e3f3` | Selected row of an unfocused list, and the selected result set. |
 | `list.inactiveSelectionForeground` | VS Code | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the selected row of an unfocused list. |
-| `list.focusOutline` | VS Code | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the focused list row. Not used yet; reserved for the Object Explorer tree. |
+| `list.focusOutline` | VS Code | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. |
 | `list.highlightForeground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Characters that match a filter, such as in the command palette. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8fb7ff33` | `#005fb833` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
 | `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
-| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#1d2b40` | `#e3ebf5` | Row of the selected server. |
-| `objectExplorer.headingForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Folder headings. |
-| `objectExplorer.countForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Item counts next to folder headings. |
+| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#1d2b40` | `#e3ebf5` | Row of the active query's server. |
+| `objectExplorer.headingForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Folder row labels. |
+| `objectExplorer.sublabelForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Text after a row's label, such as a column's type or a database's state. |
+| `objectExplorer.countForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | The (filtered) marker and loading progress next to folder labels. |
 | `objectExplorer.chevronForeground` | Varia | `$iconMuted` | `#7e93b1` | `#637189` | Expand and collapse chevrons. |
 | `objectExplorer.folderIconForeground` | Varia | `$iconFolder` | `#d9b370` | `#9a6700` | Folder glyphs. |
 | `objectExplorer.objectIconForeground` | Varia | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Glyphs of tables and other objects. |
-| `objectExplorer.actionForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Row actions such as Disconnect. |
+| `objectExplorer.actionForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Object Explorer toolbar icons. |
 
 ### Dock and docking compass
 

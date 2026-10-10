@@ -11,7 +11,7 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the seven Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the eight Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
@@ -26,8 +26,9 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 189 checks instead of 123, and
-  `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 277 checks instead of 196
+  (330 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer scratch-database checks),
+  and `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
   session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
   (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
@@ -79,6 +80,12 @@ pages, limits, error codes, display formats, benchmarks).
 - The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
   main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
+- Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
+  gates); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
+  `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
+  text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
+  metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
+  renders and checks every variant.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 
@@ -86,7 +93,9 @@ pages, limits, error codes, display formats, benchmarks).
 
 - vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
-  first; live checks follow and create only session-local temporary objects.
+  first; live checks follow and create only session-local temporary objects. They create databases (and logins) only
+  when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
+  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age).
 - UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
 - IPC performance: `tests/bench/*.bench.ts` and `scripts/ipc-bench.mjs` only measure; a new metric needs a
   `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in docs/ipc.md. Floors must
@@ -102,7 +111,8 @@ pages, limits, error codes, display formats, benchmarks).
 - CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
   every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
   manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS
-  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating.
+  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating. `sql-matrix.yml` (manual
+  runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)

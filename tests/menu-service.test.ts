@@ -7,7 +7,7 @@ import { MenuService, themeMenuItems } from '../src/renderer/src/menus/MenuServi
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { MenuTargetService } from '../src/renderer/src/menus/targets'
 import { fakeDocument, FakeElement } from './fixtures/elements'
-import { manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -384,7 +384,7 @@ describe('context menus', () => {
     cleanups.push(() => { menus.dispose(); fixture.dispose() })
     doc.activeElement = line
     const event = (target: FakeElement, x = 10, y = 20) => ({ target: target as unknown as EventTarget, clientX: x, clientY: y, prevented: false, preventDefault() { this.prevented = true } })
-    return { fixture, menus, state, doc, order, one, two, line, editor, field, password, outside, layer, caret, event, first, second }
+    return { fixture, menus, state, doc, order, one, two, line, editor, field, password, outside, layer, caret, event, first, second, targets }
   }
   const level = (menus: MenuService) => menus.controller.view.levels[0]
   const enablement = (items: readonly ResolvedMenuItem[]) => items.map(item => item.kind === 'command' ? `${item.title} ${item.enabled ? '+' : '-'}` : '-')
@@ -426,6 +426,44 @@ describe('context menus', () => {
     expect(level(menus)).toMatchObject({ label: 'Query editor', active: 0, anchor: { kind: 'below', rect: caret } })
     expect(titles(level(menus).items)).toEqual(['Connection', '-', 'Execute', 'Cancel Executing Query', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
     expect(menus.openForElement(null, { keyboard: true })).toBe(false)
+  })
+  it('opens a tree\'s menu from the keyboard for its active row, below that row, with focus left on the tree', async () => {
+    const { menus, doc, fixture, targets } = setup()
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+    const root = fixture.explorer.rootIds[0]
+    const row = new FakeElement(doc, 'div', { attributes: { id: `oe-${root}`, 'data-row-id': String(root) } }), other = new FakeElement(doc, 'div')
+    row.rect = { left: 10, top: 100, right: 260, bottom: 122 }
+    const tree = new FakeElement(doc, 'div', { attributes: { tabindex: '0', 'aria-activedescendant': `oe-${root}` } }).append(row)
+    tree.rect = { left: 0, top: 50, right: 300, bottom: 400 }
+    const view = Object.assign(tree, { scrollTop: 0, clientTop: 0, clientHeight: 350 })
+    targets.register(row.dom, element => { const node = fixture.explorer.menuNode(Number(element.getAttribute('data-row-id'))); return node ? { kind: 'explorer', node } : null })
+    targets.register(tree.dom, () => ({ kind: 'explorer' }))
+    doc.activeElement = tree
+    expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
+    expect(level(menus)).toMatchObject({ label: 'Object Explorer', active: 0, anchor: { kind: 'below', rect: { left: 18, top: 100, right: 260, bottom: 122 } } })
+    expect(titles(level(menus).items)).toEqual(['Connect…', 'Disconnect', '-', 'New Query', '-', 'Copy Name', '-', 'Refresh'])
+    expect([row.hasAttribute('data-menu-target'), tree.hasAttribute('data-menu-target'), doc.activeElement]).toEqual([true, false, tree])
+    expect(view.scrollTop).toBe(0)
+    menus.close('escape')
+    // A row scrolled out of the tree's view: the tree scrolls it back into view, and the menu stays within the tree.
+    row.rect = { left: 10, top: 500, right: 260, bottom: 522 }
+    expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
+    expect(view.scrollTop).toBe(122)
+    expect(level(menus)).toMatchObject({ label: 'Object Explorer', anchor: { kind: 'below', rect: { left: 18, top: 400, right: 260, bottom: 400 } } })
+    menus.close('escape')
+    row.rect = { left: 10, top: -40, right: 260, bottom: -18 }
+    expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
+    expect(view.scrollTop).toBe(32)
+    expect(level(menus)).toMatchObject({ anchor: { kind: 'below', rect: { left: 18, top: 50, right: 260, bottom: 50 } } })
+    menus.close('escape')
+    row.rect = { left: 10, top: 100, right: 260, bottom: 122 }
+    // An active descendant outside the tree, or none, leaves the tree's own menu: the empty area's.
+    tree.setAttribute('aria-activedescendant', 'elsewhere')
+    doc.ids.set('elsewhere', other)
+    expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
+    expect(titles(level(menus).items)).toEqual(['Connect…', '-', 'Refresh'])
+    expect(tree.hasAttribute('data-menu-target')).toBe(true)
   })
   it('opens a results grid\'s menu from the keyboard below its active cell, with focus in the grid', () => {
     const { menus, doc, first } = setup()
@@ -480,7 +518,7 @@ describe('context menus', () => {
   it('opens nothing when everything in the menu is hidden', () => {
     const { fixture, doc, event } = setup()
     const background = new FakeElement(doc, 'div'), targets = new MenuTargetService()
-    targets.register(background.dom, () => ({ kind: 'explorer', node: { kind: 'background' } }))
+    targets.register(background.dom, () => ({ kind: 'explorer' }))
     const menus = new MenuService({ platform: 'win32', commands: fixture.commands, context: fixture.context, keybindings: fixture.keybindings, theme: fixture.theme,
       focus: { capture: () => undefined, restore: () => {} }, modalOpen: () => false, targets })
     cleanups.push(() => menus.dispose())

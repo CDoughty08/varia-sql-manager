@@ -1,4 +1,5 @@
-const paths = {
+/** The stroke icons, by name; Object Explorer's `svg:` icons name them too. */
+export const svgPaths = {
   plus: 'M8 3v10M3 8h10',
   close: 'M4 4l8 8M12 4l-8 8',
   chevron: 'M5 3l5 5-5 5',
@@ -19,6 +20,6 @@ const paths = {
   disconnect: 'M5 2v3M11 2v3M3 5h10v3a5 5 0 0 1-5 5v2M2 2l12 12'
 } as const
 
-export default function Icon({ name, className = '' }: { name: keyof typeof paths; className?: string }) {
-  return <svg className={`icon ${className}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>
+export default function Icon({ name, className = '' }: { name: keyof typeof svgPaths; className?: string }) {
+  return <svg className={`icon ${className}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={svgPaths[name]} /></svg>
 }

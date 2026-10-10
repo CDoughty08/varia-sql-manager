@@ -42,6 +42,8 @@ export const errorCodes = [
   'SESSION_LIMIT', 'AUTH_UNSUPPORTED', 'INVALID_SCRIPT',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
+  // Backend and main: an Object Explorer requestId that is already running.
+  'DUPLICATE_REQUEST',
   // GOAWAY.
   'PROTOCOL_ERROR', 'PROTOCOL_UNSUPPORTED', 'BACKEND_CRASH',
   // Main.

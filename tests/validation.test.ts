@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
-import { serverObjectKinds } from '../src/shared/contracts'
 import { portRequestSchema, queryEventSchema } from '../src/shared/ipc/port-messages'
+import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
+import { methodPolicies } from '../src/shared/ipc/methods'
 
 describe('IPC validation', () => {
   it('rejects arbitrary or inherited backend method names', () => {
@@ -23,10 +24,11 @@ describe('IPC validation', () => {
   })
   it('passes identifiers verbatim and explains oversized scripts', () => {
     const connectionId = crypto.randomUUID()
-    expect(validateRequest('tables.list', { connectionId, database: ' padded ' })).toEqual({ connectionId, database: ' padded ' })
-    expect(() => validateRequest('tables.list', { connectionId, database: '   ' })).toThrow('Invalid request')
+    const table = { connectionId, database: ' padded ', schema: 'dbo', name: 'Orders' }
+    expect(validateRequest('tables.script', table)).toEqual(table)
+    expect(() => validateRequest('tables.script', { ...table, database: '   ' })).toThrow('Invalid request')
     // IPC can deliver a cloneable non-string whose property key coerces to a real method name.
-    expect(() => validateRequest(['tables.list'] as unknown as string, { connectionId, database: 'master' })).toThrow('Unsupported backend method')
+    expect(() => validateRequest(['tables.script'] as unknown as string, table)).toThrow('Unsupported backend method')
     const query = { connectionId, sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'x'.repeat(1_000_001), maxRows: 1000, timeoutSeconds: 30 }
     expect(() => validateRequest('query.execute', query)).toThrow('too large to execute')
   })
@@ -38,14 +40,28 @@ describe('IPC validation', () => {
     }
     expect(validateRequest('tables.columns', { ...valid, name: 'x'.repeat(128) })).toMatchObject({ name: 'x'.repeat(128) })
   })
-  it('allowlists server object categories and rejects SQL or extra fields', () => {
+  it('rejects the v1 catalog methods that Object Explorer replaced', () => {
     const connectionId = crypto.randomUUID()
-    for (const kind of serverObjectKinds) expect(validateRequest('server.objects.list', { connectionId, kind })).toEqual({ connectionId, kind })
-    for (const params of [
-      { connectionId, kind: 'sys.credentials; DROP TABLE anything' },
-      { connectionId, kind: 'serverRoles', sql: 'SELECT 1' },
-      { connectionId: 'invalid', kind: 'logins' }
-    ]) expect(() => validateRequest('server.objects.list', params)).toThrow('Invalid request')
+    expect(() => validateRequest('tables.list', { connectionId, database: 'master' })).toThrow('Unsupported backend method')
+    expect(() => validateRequest('server.objects.list', { connectionId, kind: 'logins' })).toThrow('Unsupported backend method')
+    expect(Object.hasOwn(methodPolicies, 'tables.list') || Object.hasOwn(methodPolicies, 'server.objects.list')).toBe(false)
+  })
+  it('takes Object Explorer loads only in their strict catalogue shape', () => {
+    const connectionId = crypto.randomUUID(), requestId = crypto.randomUUID()
+    const valid = { connectionId, requestId, node: { type: 'folder', owner: { kind: 'database', name: ' Sales ' }, folder: 'tables' }, pageSize: 2000, filter: { name: { op: 'contains', value: '50%_' } } }
+    expect(validateRequest('explorer.children', valid)).toEqual(valid)
+    for (const patch of [
+      { node: { type: 'folder', owner: { kind: 'server' }, folder: 'tables' } }, { node: { type: 'object', object: { kind: 'table', database: 'x', name: 'y' } } },
+      { requestId: 'r1' }, { pageSize: 2001 }, { cursor: 'v1.logins.AQ' }, { filter: { owner: { op: 'equals', value: 'dbo' }, created: { op: 'between', value: '2020-01-01' } } },
+      { sql: 'SELECT 1' }, { node: { type: 'object', object: { kind: 'server' } }, subtype: 'history' }
+    ]) expect(() => validateRequest('explorer.children', { ...valid, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
+    // Loads run on the explorer lane under the backend's own gates; main keeps the default 45 s deadline.
+    expect(methodPolicies['explorer.children']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 45_000 })
+    // Cancellation is main's own channel (varia:explorer-cancel), not a backend method.
+    expect(() => validateRequest('explorer.cancel', { requestIds: [requestId] })).toThrow('Unsupported backend method')
+    expect(explorerCancelParamsSchema.parse({ requestIds: [requestId] })).toEqual({ requestIds: [requestId] })
+    for (const params of [{ requestIds: [] }, { requestIds: [requestId, requestId] }, { requestIds: Array.from({ length: 257 }, () => crypto.randomUUID()) }, { requestIds: ['x'] }, { requestIds: [requestId], extra: 1 }])
+      expect(explorerCancelParamsSchema.safeParse(params).success, JSON.stringify(params).slice(0, 80)).toBe(false)
   })
   it('validates results port requests strictly', () => {
     const read = { t: 'read', rid: 1, generation: 1, resultId: 1, firstRow: 0, maxRows: 65_536, credit: 16 * 1024 * 1024 }

@@ -10,20 +10,18 @@ internal sealed record AdvancedConnectionOptions(
     string ApplicationIntent = "ReadWrite", string CurrentLanguage = "", bool Replication = false, string IpAddressPreference = "IPv4First",
     string ServerCertificate = "", string AttachDbFilename = "", string FailoverPartner = "", string FailoverPartnerSpn = "",
     bool MultiSubnetFailover = false, string ServerSpn = "", bool UserInstance = false);
-internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0);
+/// <summary>ProductVersion, Login and EngineEdition come from the server profile probed at connect; they are absent when the probe failed.</summary>
+internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
+    string? ProductVersion = null, string? Login = null, int? EngineEdition = null);
 internal sealed record DiscoveryArgs(string Scope);
 internal sealed record DiscoveredServer(string Server, string Version, string Source);
 internal sealed record DiscoveryResult(List<DiscoveredServer> Servers, string? Warning = null);
 internal sealed record ConnectionArgs(string ConnectionId);
-internal sealed record ServerObjectArgs(string ConnectionId, string Kind);
-internal sealed record DatabaseArgs(string ConnectionId, string Database);
 internal sealed record TableArgs(string ConnectionId, string Database, string Schema, string Name);
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10);
 internal sealed record SessionArgs(string SessionId);
 internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
-internal sealed record ServerObjectInfo(string Name, string Description);
-internal sealed record TableInfo(string Schema, string Name);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
 /// (xml, json, plan), CLR UDTs and vectors.</summary>
 internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true);
@@ -44,6 +42,24 @@ internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
 /// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only).</summary>
 internal sealed record SynthesizeArgs(string Shape, int Rows);
+
+/// <summary>explorer.children: refs are flat records (no polymorphic converters), validated by ExplorerRefs against the catalogue.</summary>
+internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestId, NodeRefDto Node, string? Subtype = null, string? Cursor = null, int? PageSize = null,
+    ExplorerFilterDto? Filter = null);
+/// <summary>An object node (Type "object", Object) or a folder below its nearest object (Type "folder", Owner, Folder).</summary>
+internal sealed record NodeRefDto(string Type, ObjectRefDto? Object = null, ObjectRefDto? Owner = null, string? Folder = null);
+internal sealed record ObjectRefDto(string Kind, string? Database = null, string? Schema = null, string? Name = null, ParentRefDto? Parent = null);
+internal sealed record ParentRefDto(string Kind, string Schema, string Name);
+internal sealed record ExplorerFilterDto(TextFilterDto? Name = null, TextFilterDto? Schema = null, TextFilterDto? Owner = null, DateFilterDto? Created = null);
+internal sealed record TextFilterDto(string Op, string Value);
+internal sealed record DateFilterDto(string Op, string Value, string? Value2 = null);
+/// <summary>One tree node. Created is server local time, yyyy-MM-ddTHH:mm:ss.</summary>
+internal sealed record ExplorerNode(NodeRefDto Ref, string Label, string Icon, bool HasChildren, string? Sublabel = null, string? Detail = null, string? Subtype = null,
+    string? Status = null, string? Created = null);
+/// <summary>A catalog failure, returned as a value so its code reaches the tree row.</summary>
+internal sealed record ExplorerError(string Code, string Message, bool Retryable, string? Action = null);
+/// <summary>A page of children: static folders first (first page only), then rows. Total is on the first page only.</summary>
+internal sealed record ExplorerChildrenResult(List<ExplorerNode> Nodes, long ElapsedMs, string? Cursor = null, int? Total = null, ExplorerError? Error = null);
 
 internal sealed class RequestException(string code, string message) : Exception(message)
 {

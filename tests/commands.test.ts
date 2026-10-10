@@ -3,7 +3,9 @@ import type { CommandId } from '../src/shared/commands/catalog'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import { menuCommandIds } from '../src/shared/commands/menus'
 import { CommandService, type CommandSource } from '../src/renderer/src/core/commands'
-import { computeContextKeys, focusFacts, type FocusElement } from '../src/renderer/src/core/contextkeys'
+import { computeContextKeys, ContextKeyService, focusFacts, type FocusElement } from '../src/renderer/src/core/contextkeys'
+import { SnapshotStore } from '../src/renderer/src/core/store'
+import { noExplorerContext, type ExplorerContextState } from '../src/renderer/src/explorer/ExplorerService'
 import { computeMenuState, MenuStatePublisher, type Timers } from '../src/renderer/src/core/menu-state'
 import type { DocumentSnapshot } from '../src/renderer/src/services/documents'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -182,6 +184,21 @@ describe('context keys', () => {
     expect(focusFacts(null, editor(true))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false })
     const keys = computeContextKeys({ platform: 'darwin', focus: focusFacts(findInput, editor(false)), documents: snapshot(), queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendStatus: '' })
     expect(keys).toMatchObject({ isMac: true, editorFocus: true, inputFocus: true, textInputFocus: true })
+  })
+  it('take the Object Explorer selection\'s keys from its store, and hear its changes', () => {
+    const { documents, queries, connections, backend, editorOptions } = fixture()
+    const explorer = new (class extends SnapshotStore<ExplorerContextState> { set(value: ExplorerContextState) { this.publish(value) } })(noExplorerContext)
+    const context = new ContextKeyService({ platform: 'linux', documents, queries, connections, backend, editorOptions, explorer })
+    cleanups.push(() => context.dispose())
+    const listener = vi.fn()
+    context.subscribe(listener)
+    expect(context.getState()).toMatchObject({ explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerLoading: false })
+    explorer.set({ ...noExplorerContext, explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'tables', explorerSelectionFilterable: true, explorerLoading: true })
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(context.getState()).toMatchObject({ explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'tables', explorerSelectionFilterable: true, explorerLoading: true })
+    expect(context.get()).toMatchObject({ explorerSelectionKind: 'folder' })
+    // Without the input, the keys keep their defaults.
+    expect(computeContextKeys({ platform: 'linux', documents: snapshot(), queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendStatus: '' })).toMatchObject({ explorerHasSelection: false, explorerSelectionKind: '' })
   })
   it('cache state between snapshot changes and notify subscribers', () => {
     const { context, documents, connections, editorOptions, api } = fixture()
