@@ -10,7 +10,7 @@ afterEach(() => { vi.restoreAllMocks() })
 let separators = 0
 const command = (title: string, mnemonic = 0, enabled = true): ResolvedMenuItem => ({ kind: 'command', key: title, id: 'file.new', title, mnemonic, enabled })
 const separator = (): ResolvedMenuItem => ({ kind: 'separator', key: `sep:${separators++}` })
-const submenu = (title: string, mnemonic: number, items: ResolvedMenuItem[]): ResolvedMenuItem => ({ kind: 'submenu', key: title, title, mnemonic, items })
+const submenu = (title: string, mnemonic: number, items: ResolvedMenuItem[]): ResolvedMenuItem => ({ kind: 'submenu', key: title, title, mnemonic, items, enabled: true })
 
 const menus: Record<MenubarId, ResolvedMenuItem[]> = {
   file: [command('New Query'), command('Open…'), separator(), command('Save'), command('Save As…', 5, false)],

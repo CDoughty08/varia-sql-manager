@@ -302,6 +302,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
 .status-bar > span:first-child { display: flex; align-items: center; gap: 8px; }
 .status-divider { margin: 0 12px; color: var(--varia-statusBar-separatorForeground); }
+.status-scripting { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 12px; }
+.status-scripting-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-scripting button { color: inherit; border-color: currentColor; padding: 0 6px; font-size: 10px; line-height: 14px; }
 .global-error { display: flex; align-items: center; justify-content: space-between; background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); padding: 6px 12px; font-size: 12px; }
 .global-error.warning { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .theme-notice { gap: 12px; }

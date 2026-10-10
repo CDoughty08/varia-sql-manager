@@ -108,6 +108,24 @@ explorer.context, for the Databases folder
 explorer.context, for a database
   New &Query  -++-
   ---
+  &Script Database as >
+    &CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    &ALTER To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    &DROP To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    DROP A&nd CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+  ---
   Copy &Name  -+++
   ---
   Re&fresh  F5  -+++
@@ -130,6 +148,44 @@ explorer.context, for a table
       &New Query Editor Window  -++-
       &File…  -++-
       C&lipboard  -+++
+    &ALTER To >
+      &New Query Editor Window  ----
+      &File…  ----
+      C&lipboard  ----
+    C&REATE OR ALTER To >
+      &New Query Editor Window  ----
+      &File…  ----
+      C&lipboard  ----
+    &DROP To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    DROP A&nd CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    ---
+    &SELECT To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    &INSERT To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    &UPDATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    D&ELETE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    ---
+    E&XECUTE To >
+      &New Query Editor Window  ----
+      &File…  ----
+      C&lipboard  ----
   ---
   Copy &Name  -+++
   ---
@@ -147,6 +203,20 @@ explorer.context, for a column
 explorer.context, for a return value
   Re&fresh  F5  -+++
 explorer.context, for a login
+  &Script Login as >
+    &CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    &DROP To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    DROP A&nd CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+  ---
   Copy &Name  -+++
   ---
   Re&fresh  F5  -+++

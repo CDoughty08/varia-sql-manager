@@ -29,6 +29,7 @@ import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
 import { scriptingContribution } from '../contributions/scripting'
 import { ScriptingOptionsService } from '../scripting/ScriptingOptionsService'
+import { ScriptingService } from '../scripting/ScriptingService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -72,6 +73,8 @@ export interface Workbench extends Disposable {
   readonly resultSelection: ResultSelectionService
   /** Tools › Options › Scripting: the options every Script As request carries, and the Options dialog. */
   readonly scriptingOptions: ScriptingOptionsService
+  /** Script As requests: their status, cancellation, and destinations. */
+  readonly scripting: ScriptingService
   readonly theme: ThemeService
 }
 /**
@@ -108,9 +111,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const targets = new TargetService(documents, queries, connections, files, api)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, editor: () => documents.boundEditor })
-  const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const scriptingOptions = new ScriptingOptionsService(api, message => commands.reportError(message))
+  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => documents.boundEditor?.focus()) })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, scripting: scripting.running, editor: () => documents.boundEditor })
+  const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
     return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
@@ -125,13 +129,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, results, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, results, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, scripting, theme, dispose: () => {
     if (disposed) return
     disposed = true
     // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
     listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); scriptingOptions.dispose(); theme.dispose(); events.dispose()
+    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); scripting.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); scriptingOptions.dispose(); theme.dispose(); events.dispose()
   } }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
     menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench), scriptingContribution(workbench)]

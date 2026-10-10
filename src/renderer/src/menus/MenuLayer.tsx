@@ -40,7 +40,7 @@ function MenuItemView({ item, level, depth, index, expanded, controller }: {
   const command = item.kind === 'command' ? item : undefined, icon = gutterIcon(item)
   const keys = command?.keybinding
   return <div className="menu-item" role={command ? itemRole(command) : 'menuitem'} id={`${level.id}-${index}`} data-item-id={item.key} tabIndex={-1}
-    aria-disabled={command && !command.enabled ? true : undefined} aria-checked={command?.checked}
+    aria-disabled={!item.enabled ? true : undefined} aria-checked={command?.checked}
     aria-haspopup={item.kind === 'submenu' ? 'menu' : undefined} aria-expanded={item.kind === 'submenu' ? !!expanded : undefined} aria-controls={expanded}
     aria-keyshortcuts={keys && keys.parts.length === 1 ? keys.aria : undefined} data-active={level.active === index ? '' : undefined}
     onPointerEnter={event => controller.pointerEnterItem(depth, index, point(event))}

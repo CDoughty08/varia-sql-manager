@@ -33,6 +33,7 @@ import { themeContribution, type ThemeController } from '../../src/renderer/src/
 import { backendContribution } from '../../src/renderer/src/contributions/backend'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
 import { ScriptingOptionsService } from '../../src/renderer/src/scripting/ScriptingOptionsService'
+import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
 import { defaultScriptingOptions } from '../../src/shared/scripting/options'
 import { CommandHistory, type HistoryStorage } from '../../src/renderer/src/quickinput/history'
 import { QuickInputService, type FocusAdapter } from '../../src/renderer/src/quickinput/QuickInputService'
@@ -130,11 +131,14 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
     revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
-    scriptTable: vi.fn<VariaApi['scriptTable']>(async (_connectionId, _database, schema, name) => ({ ok: true, value: { sql: `CREATE TABLE [${schema}].[${name}] (Id int);` } })),
     tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
     explorerChildren: vi.fn<VariaApi['explorerChildren']>(async params => ({ ok: true, value: explorerAnswer(params) })),
     explorerCancel: vi.fn<VariaApi['explorerCancel']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
-    scriptObjects: vi.fn<VariaApi['scriptObjects']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
+    // A script naming the object and verb, from the object's database (master for databases and server objects).
+    scriptObjects: vi.fn<VariaApi['scriptObjects']>(async params => {
+      const [object] = params.targets
+      return { ok: true, value: { text: `-- ${params.verb} ${[object.schema, object.name].filter(Boolean).join('.')}`, database: object.database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 } }
+    }),
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     getScriptingOptions: vi.fn<VariaApi['getScriptingOptions']>(async () => ({ ok: true, value: { options: defaultScriptingOptions } })),
     setScriptingOptions: vi.fn<VariaApi['setScriptingOptions']>(async options => ({ ok: true, value: options })),
@@ -154,9 +158,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focused = { panel: '' as '' | 'explorer' | 'editor' | 'output' }
   // The focused element is a stand-in whose pane is `focused.panel`, so tests can put focus in Object Explorer.
   const activeElement = () => focused.panel ? { matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => focused.panel } : null } as unknown as Element : null
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, activeElement })
-  const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const scriptingOptions = new ScriptingOptionsService(api, message => commands.reportError(message))
+  const focusEditor = vi.fn()
+  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, scripting: scripting.running, activeElement })
+  const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
     disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
@@ -171,7 +177,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
-  const workbench = { platform, commands, context, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, databaseList, menuTargets, resultSelection, scriptingOptions }
+  const workbench = { platform, commands, context, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, databaseList, menuTargets, resultSelection, scriptingOptions, scripting }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
     menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers), backendContribution(workbench), scriptingContribution(workbench)]
@@ -186,7 +192,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
     menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose()
-    explorer.dispose(); databaseList.dispose(); scriptingOptions.dispose(); documents.dispose(); backend.dispose()
+    explorer.dispose(); databaseList.dispose(); scripting.dispose(); scriptingOptions.dispose(); documents.dispose(); backend.dispose()
   }
-  return { ...doc, api, connections, backend, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, focused, history, host, theme, startQuery, connect, dispose }
+  return { ...doc, api, connections, backend, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, scripting, focusEditor, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, focused, history, host, theme, startQuery, connect, dispose }
 }

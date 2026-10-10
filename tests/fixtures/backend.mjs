@@ -278,6 +278,7 @@ async function workbench(id, method, params, credit) {
   switch (method) {
     case 'databases.list': return respond(id, workbenchDatabases)
     case 'tables.script': return respond(id, { sql: 'CREATE TABLE dbo.Orders (Id int);' })
+    case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, explorerChildren(params))
     case 'query.execute': {

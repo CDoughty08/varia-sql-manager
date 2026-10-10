@@ -36,6 +36,14 @@ Each verb submenu holds the three destinations. Their commands are `explorer.scr
 | `file` | File… | f | `save-as` | Yes |
 | `clipboard` | Clipboard | l | `clippy` | No |
 
+New Query Editor Window opens the script in a new query on the object's server and database (`master` for databases
+and server objects), not marked unsaved. File… suggests `<schema>.<name>.sql` (`<schema>.<table>.<name>.sql` for an
+index, key, constraint, statistic or trigger, `<name>.sql` without a schema), which main makes safe for every platform.
+Modify is ALTER To › New Query Editor Window for the kinds marked Mod below.
+
+A request that takes longer than 300 ms shows in the status bar with Cancel (also Object Explorer: Cancel
+Scripting in the palette). At most 4 run at once; a cancelled request, or one whose server disconnects, opens nothing.
+
 ## Object kinds
 
 ✓ enabled, ○ shown greyed, – not offered. Columns: C = CREATE, A = ALTER, CoA = CREATE OR ALTER, D = DROP, DC = DROP And

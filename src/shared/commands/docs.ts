@@ -1,3 +1,4 @@
+import { scriptAsSubmenuId, scriptSubmenuIds } from '../scripting/catalog.ts'
 import { defaultThemePreference } from '../theme/format'
 import { themeMenuModel } from '../theme/menu'
 import { commandDescriptor, commandIds, type Category, type CommandId, type MenuPlacement } from './catalog'
@@ -13,13 +14,13 @@ const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', li
 const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(applicationMenus.map(menu => [menu.id, menu.label])) as Record<typeof applicationMenus[number]['id'], string>,
   theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
-  'explorer.scriptTableAs': 'Object Explorer context menu › Script Table as', 'explorer.scriptTableAs.create': 'Object Explorer context menu › Script Table as › CREATE To',
+  ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
 }
 /** How each context menu opens, and what its items act on. */
 const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Right-click the query editor, or press Shift+F10 or the context-menu key in it. A right-click outside the selection moves the caret there first.',
-  'explorer.context': 'Right-click an Object Explorer node (which selects it) or the empty area below the servers, or press Shift+F10 or the context-menu key in the tree for the selected node. Items act on that node.',
+  'explorer.context': 'Right-click an Object Explorer node (which selects it) or the empty area below the servers, or press Shift+F10 or the context-menu key in the tree for the selected node. Items act on that node. Script … as names the node\'s kind (Script Table as, Script View as, …) and greys the verbs it does not support; docs/scripting.md lists them.',
   'documentTab.context': 'Right-click a query tab, or press Shift+F10 or the context-menu key on a focused tab. Items act on that tab\'s query.',
   'output.context': 'Right-click the results grid, Messages, or an XML plan, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid\'s selection selects that cell first.',
   'dockTab.context': 'Right-click a panel\'s tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.',
@@ -91,7 +92,7 @@ function menuTable(menu: MenuId): string[] {
   for (const id of submenuIds) {
     for (const placement of submenus[id].placements) {
       if (placement.menu !== menu) continue
-      const shown = placement.platforms ?? platforms, title = submenus[id].title
+      const shown = placement.platforms ?? platforms, title = submenus[id].dynamicTitle === 'scriptAs' ? 'Script … as' : submenus[id].title
       items.push({ group: placement.group, order: placement.order, title, cells: [code(placement.group), withAccessKey(menu, title, placement.mnemonic, shown) + ' ›', `Submenu: ${menuNames[id]}`, shownWhen(shown, placement.when)] })
     }
   }

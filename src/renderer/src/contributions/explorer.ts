@@ -10,13 +10,13 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
 interface TableName { readonly connectionId: string; readonly database: string; readonly schema: string; readonly name: string }
 
 /**
- * Object Explorer's commands. Each acts on the node its context menu was opened for (`CommandArgs.target`; none for the
+ * Object Explorer's commands (Script As's are in contributions/scripting.ts). Each acts on the node its context menu was opened for (`CommandArgs.target`; none for the
  * empty area), otherwise on the selected node, so F5, the toolbar, and the palette act on the selection. Nodes must be
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, queries, connections, files, explorer }: Pick<Workbench, 'commands' | 'documents' | 'queries' | 'connections' | 'files' | 'explorer'>,
-  api: Pick<VariaApi, 'tableColumns' | 'scriptTable' | 'writeClipboardText'>): Disposable {
+export function explorerContribution({ commands, documents, queries, connections, explorer }: Pick<Workbench, 'commands' | 'documents' | 'queries' | 'connections' | 'explorer'>,
+  api: Pick<VariaApi, 'tableColumns' | 'writeClipboardText'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
   const table = (args?: CommandArgs): TableName | undefined => {
@@ -33,7 +33,6 @@ export function explorerContribution({ commands, documents, queries, connections
     return node.kind === 'folder' ? explorer.insertText(node.id) : insertTextFor(node.ref)
   }
   const filterNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && filterable(node) ? node : undefined }
-  const script = async (name: TableName) => unwrap(await api.scriptTable(name.connectionId, name.database, name.schema, name.name)).sql
   const registrations = [
     commands.register('explorer.refresh', { run: args => explorer.refresh(nodeOf(args)?.id) }),
     commands.register('explorer.stop', { run: () => explorer.stop() }),
@@ -67,17 +66,6 @@ export function explorerContribution({ commands, documents, queries, connections
         if (queries.canExecute()) await queries.execute()
       }
     }),
-    commands.register('explorer.scriptCreateToNewQuery', {
-      when: args => !!table(args),
-      run: async args => {
-        const name = table(args)
-        if (!name) return
-        const sql = await script(name)
-        if (connections.isLive(name.connectionId)) documents.newQuery(sql, `${name.schema}.${name.name}.sql`, name.connectionId, name.database, true)
-      }
-    }),
-    commands.register('explorer.scriptCreateToFile', { when: args => !!table(args), run: async args => { const name = table(args); if (name) await files.saveCopy(`${name.schema}.${name.name}.sql`, await script(name)) } }),
-    commands.register('explorer.scriptCreateToClipboard', { when: args => !!table(args), run: async args => { const name = table(args); if (name) unwrap(await api.writeClipboardText(await script(name))) } }),
     // A server's name as connected to, or the quoted object name.
     commands.register('explorer.copyName', {
       when: args => copyText(args) !== undefined,

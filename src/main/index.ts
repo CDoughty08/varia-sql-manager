@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
@@ -9,6 +9,7 @@ import { installTestHooks } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
 import { ScriptingRequests } from './backend/scripting-requests'
+import { sanitizeFileName } from './file-names'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
@@ -381,7 +382,7 @@ app.whenReady().then(async () => {
     const options = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxSqlFileBytes), saveAs: z.boolean() }).strict().parse(value)
     let selectedPath: string | undefined
     if (!options.fileId || options.saveAs) {
-      const safeName = basename(options.name.replace(/[\\/:*?"<>|]/g, '_'))
+      const safeName = sanitizeFileName(options.name)
       const selection = await dialog.showSaveDialog(mainWindow!, { title: 'Save SQL query', defaultPath: options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName), filters: [{ name: 'SQL files', extensions: ['sql'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] })
       if (selection.canceled || !selection.filePath) return null
       selectedPath = selection.filePath

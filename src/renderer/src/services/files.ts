@@ -54,12 +54,17 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (!this.canSave(id)) return
     await this.perform(async () => { await this.documents.save(id, saveAs) })
   }
-  /** Saves text to a file the user picks (Script … to File…), without opening it as a query; Cancel saves nothing. */
-  async saveCopy(name: string, content: string): Promise<void> {
+  /**
+   * Saves text to a file the user picks (Script … to File…), without opening it as a query. Resolves with the saved
+   * file, or undefined when the user cancelled or the save failed (reported like any file error).
+   */
+  async saveCopy(name: string, content: string): Promise<SqlFile | undefined> {
+    let saved: SqlFile | undefined
     await this.perform(async () => {
       const file = unwrap(await this.api.saveSqlFile({ name, content, saveAs: true }))
-      if (file) unwrap(await this.api.releaseSqlFile(file.id))
+      if (file) { unwrap(await this.api.releaseSqlFile(file.id)); saved = file }
     })
+    return saved
   }
   private async confirmClose(id: string): Promise<boolean> {
     const document = this.documents.get(id), model = this.documents.getModel(id)

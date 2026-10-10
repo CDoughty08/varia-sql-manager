@@ -231,7 +231,8 @@ describe('scripting catalogue', () => {
     const entries = scriptSubmenuEntries()
     expect(Object.keys(entries)).toEqual([...scriptSubmenuIds])
     expect(entries['explorer.scriptAs']).toEqual({
-      title: 'Script as', nativeId: 'explorer.scriptAs', dynamicTitle: 'scriptAs', placements: [{ menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != ''" }]
+      title: 'Script as', nativeId: 'explorer.scriptAs', dynamicTitle: 'scriptAs',
+      placements: [{ menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" }]
     })
     expect(entries['explorer.scriptAs.createOrAlter']).toEqual({
       title: 'CREATE OR ALTER To', nativeId: 'explorer.scriptAs.createOrAlter', placements: [{ menu: 'explorer.scriptAs', group: '1_ddl', order: 3, mnemonic: 'r', when: "explorerScriptCreateOrAlter != ''" }]

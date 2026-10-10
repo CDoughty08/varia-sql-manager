@@ -315,7 +315,8 @@ export function scriptSubmenuEntries(): { readonly [K in typeof scriptAsSubmenuI
   })
   const scriptAs: ScriptSubmenuEntry = {
     title: 'Script as', nativeId: scriptAsSubmenuId, dynamicTitle: 'scriptAs',
-    placements: [{ menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != ''" }]
+    // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out.
+    placements: [{ menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" }]
   }
   return Object.fromEntries([[scriptAsSubmenuId, scriptAs], ...verbs]) as { readonly [K in typeof scriptAsSubmenuId | ScriptVerbSubmenuId]: ScriptSubmenuEntry }
 }

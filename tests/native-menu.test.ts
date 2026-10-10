@@ -66,8 +66,10 @@ describe('native menu presenter', () => {
     const items: ResolvedMenuItem[] = [
       { kind: 'command', key: 'explorer.copyName', id: 'explorer.copyName', title: 'Copy Name', mnemonic: 5, enabled: true, args: { tabId: 'copy' } },
       { kind: 'separator', key: 'sep:0' },
-      { kind: 'submenu', key: 'explorer.scriptTableAs', title: 'Script Table as', mnemonic: 0, items: [
-        { kind: 'command', key: 'explorer.scriptCreateToClipboard', id: 'explorer.scriptCreateToClipboard', title: 'Clipboard', mnemonic: 1, enabled: false, args: { tabId: 'script' } }
+      { kind: 'submenu', key: 'explorer.scriptAs', title: 'Script Table as', mnemonic: 0, enabled: true, scriptAsTitle: 'table', items: [
+        { kind: 'submenu', key: 'explorer.scriptAs.create', title: 'CREATE To', mnemonic: 0, enabled: false, items: [
+          { kind: 'command', key: 'explorer.scriptCreateToClipboard', id: 'explorer.scriptCreateToClipboard', title: 'Clipboard', mnemonic: 1, enabled: false, args: { tabId: 'script' } }
+        ] }
       ] }
     ]
     return { main, presenter, commands, items, advance, pending }
@@ -77,7 +79,9 @@ describe('native menu presenter', () => {
     const { main, presenter, commands, items } = setup()
     const first = handlers()
     presenter.show('explorer.context', items, { x: 5, y: 6 }, first)
-    expect(main.requests[0].request).toEqual({ token: 1, menu: 'explorer.context', x: 5, y: 6, visible: ['explorer.copyName', 'explorer.scriptCreateToClipboard'], disabled: ['explorer.scriptCreateToClipboard'], checked: [] })
+    expect(main.requests[0].request).toEqual({
+      token: 1, menu: 'explorer.context', x: 5, y: 6, visible: ['explorer.copyName', 'explorer.scriptCreateToClipboard'], disabled: ['explorer.scriptCreateToClipboard'], checked: [], scriptAsTitle: 'table'
+    })
     // Linux reports the choice first; the command still re-checks that it can run.
     main.choose({ token: 1, id: 'explorer.scriptCreateToClipboard' })
     main.choose({ token: 1, id: 'explorer.copyName' })

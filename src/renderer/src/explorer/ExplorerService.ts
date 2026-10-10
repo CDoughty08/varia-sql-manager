@@ -2,6 +2,7 @@ import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contrac
 import { cloudEngineEditions, explorerLimits, filterProperties, folderSpecs, kindSpecs, parentKinds, type FolderId, type NodeKind } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
+import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -24,20 +25,19 @@ export interface ExplorerSnapshot {
   /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
   readonly reveal?: number
 }
-/** The Object Explorer context keys (state scope), from the selected node. */
-export interface ExplorerContextState {
+/** The Object Explorer context keys (state scope), from the selected node; the Script As keys come from `scriptMenuState`. */
+export interface ExplorerContextState extends ScriptContextValues {
   readonly explorerHasSelection: boolean
   readonly explorerSelectionKind: '' | 'folder' | NodeKind
   readonly explorerSelectionFolder: '' | FolderId
   readonly explorerSelectionFilterable: boolean
   readonly explorerSelectionFiltered: boolean
   readonly explorerSelectionInsertable: boolean
-  readonly explorerSelectionScriptable: boolean
   readonly explorerLoading: boolean
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
-  explorerSelectionInsertable: false, explorerSelectionScriptable: false, explorerLoading: false
+  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), explorerLoading: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
 export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
@@ -925,7 +925,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       explorerSelectionFilterable: !!node && !!folder?.filter?.length,
       explorerSelectionFiltered: !!node?.filtered,
       explorerSelectionInsertable: !!node && (node.kind === 'server' || this.insertable(node)),
-      explorerSelectionScriptable: !!node && node.kind !== 'folder' && kindSpecs[node.kind].scriptable,
+      ...scriptContextValues(scriptMenuState(node && { kind: node.kind, subtype: node.subtype, parentKind: node.ref.type === 'object' ? node.ref.object.parent?.kind : undefined })),
       explorerLoading: this.loader.pending > 0
     }
     const current = this.contextStore.getSnapshot()
