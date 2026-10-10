@@ -1,4 +1,4 @@
-import { _electron as electron, expect } from '@playwright/test'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
@@ -631,11 +631,18 @@ try {
   await page.keyboard.press('Control+R')
   await expect(outputTab).toHaveCount(0)
   const editorArea = () => page.locator('.monaco-editor .overflow-guard').boundingBox()
-  // Dockview and Monaco follow the new size on a later frame; on a 1024-pixel screen the window was already that wide,
-  // so the editor's height shows when the layout has caught up.
-  await expect.poll(async () => { const box = await editorArea(); return box.x + box.width <= 1024 && box.y + box.height <= 700 && box.y + box.height > 580 }).toBe(true)
-  const text = await editorArea()
-  const corner = { x: Math.round(text.x + text.width - 30), y: Math.round(text.y + text.height - 20) }
+  // Dockview and Monaco follow the new size on later frames, which come once a second in the hidden window; on a
+  // 1024-pixel screen the window was already that wide, so the editor's height shows when the layout has caught up.
+  // Equal measurements a moment apart can both predate a pending layout, so each try first waits for two frames, then
+  // measures the editor and checks that the corner it gives is on the editor; the press uses that corner.
+  let text = null, corner = null
+  await expect.poll(async () => {
+    await settle()
+    text = await editorArea()
+    if (!text || text.x + text.width > 1024 || text.y + text.height > 700 || text.y + text.height <= 580) return false
+    corner = { x: Math.round(text.x + text.width - 30), y: Math.round(text.y + text.height - 20) }
+    return page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.monaco-editor .overflow-guard'), corner)
+  }, { timeout: 20000 }).toBe(true)
   await page.mouse.click(corner.x, corner.y, { button: 'right' })
   await expect(editorMenu).toBeVisible()
   const flipped = await editorMenu.boundingBox()

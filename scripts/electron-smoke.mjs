@@ -1,4 +1,4 @@
-import { _electron as electron, expect } from '@playwright/test'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
@@ -190,6 +190,9 @@ try {
   await typeSql('SELECT 43 AS answer;')
   await menu('file.save')
   await expect.poll(() => readFile(savedPath, 'utf8')).toBe('SELECT 43 AS answer;')
+  // The file is in place before the save finishes, and Save As is disabled until it has (a slow disk widens the gap).
+  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
   const copyPath = artifact('saved-as.sql')
   await dialogs({ savePath: copyPath })
   await page.locator('.monaco-editor [role="textbox"]').focus()
@@ -477,7 +480,11 @@ try {
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})
-  console.log(await page.evaluate(() => ({ title: document.title, focused: document.activeElement?.outerHTML.slice(0, 500), hasFocus: document.hasFocus(), errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })))
+  // CI keeps screenshots only as artifacts, so the log also names the open query tabs, dialogs, and alerts.
+  console.log(await page.evaluate(() => {
+    const describe = element => ({ label: element.getAttribute('aria-label') ?? document.getElementById(element.getAttribute('aria-labelledby') ?? '')?.textContent ?? null, className: String(element.className), hidden: !element.getClientRects().length, text: element.textContent.slice(0, 200), html: element.outerHTML.slice(0, 300) })
+    return { title: document.title, focused: document.activeElement?.outerHTML.slice(0, 500), hasFocus: document.hasFocus(), tabs: [...document.querySelectorAll('.query-tabs [role="tab"]')].map(tab => tab.getAttribute('aria-label')), dialogs: [...document.querySelectorAll('[role="dialog"], dialog')].map(describe), alerts: [...document.querySelectorAll('[role="alert"]')].map(describe) }
+  }))
   throw error
 } finally {
   await dialogs({ closeResponse: 1, holdSave: false, holdConfirm: false }).catch(() => {})

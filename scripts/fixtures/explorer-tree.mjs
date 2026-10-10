@@ -1,6 +1,6 @@
 // Object Explorer helpers for the smoke suites: finding rows of the windowed tree by their path, and the static part of
 // the tree for suites that answer explorer.children in main instead of through a backend.
-import { expect } from '@playwright/test'
+import { expect } from './smoke.mjs'
 import { folderIds, folderSpecs, nodeKinds, staticChildren } from '../../src/shared/explorer/catalog.ts'
 
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
