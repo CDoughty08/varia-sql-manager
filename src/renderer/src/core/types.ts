@@ -1,9 +1,18 @@
 import type { QueryResult } from '../../../shared/contracts'
+import type { ThemePreferencePatch } from '../../../shared/theme/types'
+import type { MenuTarget } from '../menus/targets'
 
 export type { CommandId } from '../../../shared/commands/catalog'
 export interface Disposable { dispose(): void }
-export interface CommandContext { readonly tabId?: string }
-/** The only command argument: the tab a tab-strip button acts on. Keys, menus, and the palette never pass arguments. */
+/** Renderer-only command arguments; they never cross IPC. */
+export interface CommandContext {
+  /** The tab a tab-strip button acts on. */
+  readonly tabId?: string
+  /** The choice of a View › Theme item. */
+  readonly theme?: ThemePreferencePatch
+  /** What the context menu that runs the command was opened for. */
+  readonly target?: MenuTarget
+}
 export type CommandArgs = CommandContext
 export type WorkbenchEvent =
   | { type: 'documents.changed' }

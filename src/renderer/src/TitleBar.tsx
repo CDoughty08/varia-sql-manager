@@ -1,79 +1,32 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { applicationMenus as menus, menuForMnemonic, type MenubarId } from '../../shared/commands/menus'
-import { modalOpen } from './core/modal'
-import { useWorkbench } from './core/WorkbenchContext'
+import { useEffect, useLayoutEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { applicationMenus, mnemonicIndex, type MenubarId } from '../../shared/commands/menus'
+import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import Icon from './Icon'
+import { Mnemonic } from './menus/MenuLayer'
 
 interface ControlsOverlay extends EventTarget { visible: boolean }
+const point = (event: ReactPointerEvent) => ({ x: event.clientX, y: event.clientY })
 
+/**
+ * The title bar: the menubar on Windows and Linux (macOS uses its native menu bar, so there it is only the caption), the
+ * caption, and room for the native window controls. The menubar has no key handlers: `KeybindingService` routes keys
+ * to the menus while they own the keyboard, and focus follows the menus' state.
+ */
 export default function TitleBar({ title }: { title: string }) {
-  const { menuState, documents } = useWorkbench()
-  const root = useRef<HTMLElement>(null)
-  const previousFocus = useRef<HTMLElement | null>(null)
-  const pending = useRef(false)
-  const [focusedMenu, setFocusedMenu] = useState<MenubarId>('file')
-  const [openMenu, setOpenMenu] = useState<MenubarId | null>(null)
-  const [error, setError] = useState('')
+  const { menus, platform } = useWorkbench()
+  const view = useServiceSnapshot(menus.controller)
+  const { altHeld } = useServiceSnapshot(menus.access)
   const [overlayVisible, setOverlayVisible] = useState(false)
+  const { focused, open } = view.menubar
+  const dropdown = view.source === 'menubar' ? view.levels[0] : undefined
+  // Tab enters the menubar at File. A button that keeps focus after the menus let go (Tab on its way out) stays the tab
+  // stop, so the browser moves on from it, not from File.
+  const [holdsFocus, setHoldsFocus] = useState<MenubarId | null>(null)
 
-  const restoreFocus = useCallback(() => {
-    const target = previousFocus.current
-    if (target?.isConnected) target.focus({ preventScroll: true })
-    // It is gone, such as the palette's input once F10 closed the palette: return to the query editor, as the palette would.
-    else if (target && !modalOpen() && documents.getSnapshot().documents.length) documents.boundEditor?.focus()
-  }, [documents])
-  const open = useCallback(async (id: MenubarId) => {
-    if (pending.current) return
-    const button = root.current?.querySelector<HTMLButtonElement>('[data-menu="' + id + '"]')
-    if (!button) return
-    pending.current = true
-    setFocusedMenu(id)
-    setOpenMenu(id)
-    setError('')
-    const box = button.getBoundingClientRect()
-    // Native editing actions must retain the editor/input that was focused before the menu.
-    restoreFocus()
-    // Main shows the last state it received; send pending enablement first (send and invoke share one ordered pipe).
-    menuState.flush()
-    try {
-      const result = await window.varia.showMenu({ menu: id, x: Math.max(0, Math.round(box.left)), y: Math.max(0, Math.round(box.bottom)) })
-      if (!result.ok) setError(result.error)
-    } catch { setError('Could not open the application menu.') }
-    finally { pending.current = false; setOpenMenu(null) }
-  }, [restoreFocus, menuState])
-
-  useEffect(() => {
-    const rememberFocus = (event: FocusEvent) => {
-      if (event.target instanceof HTMLElement && !root.current?.contains(event.target)) previousFocus.current = event.target
-    }
-    document.addEventListener('focusin', rememberFocus)
-    return () => { document.removeEventListener('focusin', rememberFocus) }
-  }, [])
-  const activateMenu = useCallback((menu: MenubarId | null) => {
-    // Application menus act on the workbench, which is unavailable while a dialog is open.
-    if (modalOpen()) return
-    if (menu) void open(menu)
-    else {
-      setFocusedMenu('file')
-      root.current?.querySelector<HTMLButtonElement>('[data-menu="file"]')?.focus()
-    }
-  }, [open])
-  useEffect(() => window.varia.onMenuFocus(activateMenu), [activateMenu])
-  useEffect(() => {
-    // Also handle browser-dispatched keys; native Electron keys are intercepted in main.
-    const keyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.shiftKey) return
-      const key = event.key.toLowerCase()
-      const menu = event.altKey ? menuForMnemonic(key) : undefined
-      if (menu || (key === 'f10' && !event.altKey)) {
-        event.preventDefault()
-        event.stopPropagation()
-        activateMenu(menu ?? null)
-      }
-    }
-    document.addEventListener('keydown', keyDown, true)
-    return () => { document.removeEventListener('keydown', keyDown, true) }
-  }, [activateMenu])
+  // The focused menubar button holds keyboard focus while no menu is open (F10, Alt, or Escape from a menu).
+  useLayoutEffect(() => {
+    if (focused && !view.levels.length) document.getElementById('menubar-' + focused)?.focus({ preventScroll: true })
+  }, [focused, view.levels.length])
   useEffect(() => {
     const overlay = (navigator as Navigator & { windowControlsOverlay?: ControlsOverlay }).windowControlsOverlay
     if (!overlay) return
@@ -83,35 +36,27 @@ export default function TitleBar({ title }: { title: string }) {
     return () => { overlay.removeEventListener('geometrychange', update) }
   }, [])
 
-  function menuKey(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
-    const destination = event.key === 'ArrowRight' ? (index + 1) % menus.length : event.key === 'ArrowLeft' ? (index + menus.length - 1) % menus.length : event.key === 'Home' ? 0 : event.key === 'End' ? menus.length - 1 : undefined
-    if (destination !== undefined) {
-      event.preventDefault()
-      const id = menus[destination].id
-      setFocusedMenu(id)
-      root.current?.querySelector<HTMLButtonElement>('[data-menu="' + id + '"]')?.focus()
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      void open(menus[index].id)
-    } else if (event.key === 'Escape') {
-      event.preventDefault()
-      restoreFocus()
-    }
-  }
+  const button = (id: MenubarId, label: string, mnemonic: string) => <button key={id} id={'menubar-' + id} data-menu={id} role="menuitem" aria-haspopup="menu"
+    aria-expanded={open === id} aria-controls={open === id ? dropdown?.id : undefined} tabIndex={(focused ?? holdsFocus ?? 'file') === id ? 0 : -1} className={open === id ? 'active' : ''}
+    onFocus={() => setHoldsFocus(id)} onBlur={() => setHoldsFocus(current => current === id ? null : current)}
+    // Pressing a menubar button never moves focus: Cut or Undo in its menu acts on the editor or field focused before.
+    onPointerDown={event => { event.preventDefault(); if (event.button === 0) menus.controller.menubarPointerDown(id, point(event)) }}
+    onPointerEnter={() => menus.controller.menubarPointerEnter(id)}
+    // A pointer press has already opened or closed the menu; a click without one comes from assistive technology.
+    onClick={event => { if (event.detail === 0) menus.toggleMenubarMenu(id) }}>
+    <Mnemonic title={label} index={mnemonicIndex(label, mnemonic)} />
+  </button>
 
-  return <>
-    <header ref={root} className="title-bar" data-platform={window.varia.platform} data-overlay={overlayVisible}>
-      <div className="title-bar-content">
-        <div className="title-bar-left">
-          <span className="title-bar-brand" title="Varia SQL Manager"><Icon name="database" /></span>
-          <nav className="title-bar-menus" role="menubar" aria-label="Application menu">
-            {menus.map((menu, index) => <button key={menu.id} data-menu={menu.id} role="menuitem" aria-haspopup="menu" aria-expanded={openMenu === menu.id} tabIndex={focusedMenu === menu.id ? 0 : -1} className={openMenu === menu.id ? 'active' : ''} onPointerDown={event => event.preventDefault()} onFocus={() => setFocusedMenu(menu.id)} onClick={() => void open(menu.id)} onKeyDown={event => menuKey(event, index)}>{menu.label}</button>)}
-          </nav>
-        </div>
-        <span className="title-bar-caption" title={title}>{title}</span>
-        <span className="title-bar-spacer" />
+  return <header className="title-bar" data-platform={platform} data-overlay={overlayVisible}>
+    <div className="title-bar-content">
+      <div className="title-bar-left">
+        <span className="title-bar-brand" title="Varia SQL Manager"><Icon name="database" /></span>
+        {platform !== 'darwin' && <nav className="title-bar-menus" role="menubar" aria-label="Application menu" data-mnemonics={altHeld || (view.mnemonics && focused) ? 'visible' : 'hidden'}>
+          {applicationMenus.map(menu => button(menu.id, menu.label, menu.mnemonic))}
+        </nav>}
       </div>
-    </header>
-    {error && <div className="global-error" role="alert"><span>{error}</span><button aria-label="Dismiss menu error" onClick={() => setError('')}><Icon name="close" /></button></div>}
-  </>
+      <span className="title-bar-caption" title={title}>{title}</span>
+      <span className="title-bar-spacer" />
+    </div>
+  </header>
 }

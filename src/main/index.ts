@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, dialog, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -10,23 +10,29 @@ import { ConnectionStore } from './connection-store'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
+import { runRole, UserActivation } from './window-roles'
+import { ContextMenuPopups } from './context-menu'
+import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import type { ApiResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
-import { menuForMnemonic, menubarIds } from '../shared/commands/menus'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererFile = join(here, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
+const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendClient
 const files = new SqlFileStore()
 let closeApproved = false
-let openMenu: Menu | null = null
+// The title bar starts active, so a window that never gets OS focus (smoke tests) keeps the active colors.
+let windowActive = true
+// The user's last click or key press in the window: the page may run Paste only just after one.
+let userActivation = new UserActivation()
 let layouts: LayoutStore
 let appearance: AppearanceService
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
@@ -36,6 +42,13 @@ let previewSeq = 0
 let rendererLoaded = false
 let rendererReady = false
 let rendererUnresponsive = false
+// Native context menus on macOS; smoke tests may choose either style on any platform. Either condition shows one: a
+// right-click on an inactive macOS window does not focus it but is input, and VoiceOver's VO+Shift+M is no input but
+// comes from the focused window. Hidden smoke windows are never focused, so their menus need a click or key: no bypass.
+const menuStyle = menuStyleFor(process.platform, process.env)
+const contextMenus = new ContextMenuPopups<BrowserWindow>({
+  style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent(), build: template => Menu.buildFromTemplate(template)
+})
 // Tests use their own profile so layout checks never modify the user's workspace preferences.
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // A second instance would overwrite this instance's layouts and connection library.
@@ -73,8 +86,8 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
 /** A reloaded or crashed renderer can no longer address its sessions, so end them with the backend process. */
 function resetRendererState(): void {
   rendererReady = false
-  openMenu = null
   menuBridge.reset()
+  contextMenus.close()
   endPreview()
   backend?.restart()
   files.clear()
@@ -87,6 +100,8 @@ function rendererCanConfirm(window: BrowserWindow): boolean {
 const menuActions: ApplicationMenuActions = {
   command,
   isChecked: id => menuBridge.isChecked(id),
+  pageHasKeyFocus: () => !!mainWindow?.isFocused() && !mainWindow.webContents.isDevToolsFocused(),
+  sendActionToFirstResponder: action => Menu.sendActionToFirstResponder(action),
   // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
   setTheme: patch => { chooseTheme(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
   // The menu has no other way to report a failure, so it becomes the theme notice; the messages are fixed sentences.
@@ -104,7 +119,6 @@ const menuBridge = new NativeMenuBridge({
 })
 
 function buildMenu(): void {
-  openMenu?.closePopup()
   menuBridge.rebuild()
 }
 
@@ -117,7 +131,7 @@ async function openThemesFolder(): Promise<void> {
 function applyWindowChrome(): void {
   const window = mainWindow
   if (!window || window.isDestroyed()) return
-  const chrome = windowChromeFor(previewTheme ?? appearance.state.active)
+  const chrome = windowChromeFor(previewTheme ?? appearance.state.active, { active: windowActive })
   window.setBackgroundColor(chrome.backgroundColor)
   if (process.platform !== 'darwin') {
     try { window.setTitleBarOverlay(chrome.overlay) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
@@ -149,6 +163,7 @@ function applyAppearance(state: ThemeState): void {
 function createWindow(): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
+  windowActive = true
   rendererLoaded = false
   rendererReady = false
   rendererUnresponsive = false
@@ -158,28 +173,25 @@ function createWindow(): void {
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1' }
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle)] }
   })
   const window = mainWindow, contents = window.webContents
   if (process.platform !== 'darwin') {
+    // The application menu stays hidden: the renderer draws the title-bar menus and handles F10 and Alt itself.
     mainWindow.setAutoHideMenuBar(false)
     mainWindow.setMenuBarVisibility(false)
-    // Only menu access is handled here: Chromium would otherwise act on bare Alt and F10. Command keys belong to the renderer.
-    contents.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown' || input.control || input.meta || input.shift) return
-      const key = input.key.toLowerCase()
-      const menu = input.alt ? menuForMnemonic(key) : undefined
-      if (menu || (key === 'f10' && !input.alt)) {
-        event.preventDefault()
-        mainWindow?.webContents.send('varia:menu-focus', menu ?? null)
-      }
-    })
+    const activate = (active: boolean) => { windowActive = active; applyWindowChrome() }
+    window.on('focus', () => activate(true))
+    window.on('blur', () => activate(false))
   }
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   contents.on('will-navigate', event => event.preventDefault())
-  // Monaco's context-menu Paste reads the clipboard; every other permission stays denied.
+  const activation = userActivation = new UserActivation()
+  contents.on('input-event', (_event, input) => activation.note(input.type))
+  // The page may write the clipboard but has no permission to read it: it reads only through the Paste role, which runs
+  // within a second of a click or key, and its copies go through main. Every other permission stays denied.
   contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
-    callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && (permission === 'clipboard-read' || permission === 'clipboard-sanitized-write'))
+    callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
   })
   contents.session.webRequest.onHeadersReceived((details, callback) => {
     const connect = developmentUrl ? `${new URL(developmentUrl).origin} ws://127.0.0.1:* ws://localhost:*` : "'self'"
@@ -188,7 +200,7 @@ function createWindow(): void {
     ] } })
   })
   contents.on('did-finish-load', () => { rendererLoaded = true })
-  // will-navigate cancels navigation elsewhere, so only a same-URL main-frame navigation is a reload (menu, Ctrl+R, or dev HMR).
+  // will-navigate cancels navigation elsewhere, so only a same-URL main-frame navigation is a reload (View › Reload Window, the palette, or dev HMR).
   contents.on('did-start-navigation', details => {
     if (details.isMainFrame && !details.isSameDocument && rendererLoaded && details.url === contents.getURL()) resetRendererState()
   })
@@ -267,22 +279,13 @@ app.whenReady().then(async () => {
     await layouts.export(selection.filePath, layout)
     return true
   })
-  handle('varia:menu-popup', async value => {
-    const options = z.object({ menu: z.enum(menubarIds), x: z.number().int().min(0).max(32767), y: z.number().int().min(0).max(32767) }).strict().parse(value)
-    const menu = Menu.getApplicationMenu()?.getMenuItemById('menu.' + options.menu)?.submenu
-    if (!menu || !mainWindow) throw new Error('The application menu is unavailable.')
+  // Custom menus and the palette run Electron's roles on the trusted window: a fixed set of window methods, never quit.
+  // Paste needs the focused window (smoke-test windows are hidden, so never focused) and a click or key just before.
+  handle('varia:run-role', value => {
     const window = mainWindow
-    const bounds = window.getContentBounds()
-    const zoom = window.webContents.getZoomFactor()
-    openMenu?.closePopup(window)
-    await new Promise<void>(resolve => {
-      openMenu = menu
-      menu.popup({ window, x: Math.min(bounds.width - 1, Math.round(options.x * zoom)), y: Math.min(bounds.height - 1, Math.round(options.y * zoom)), callback: () => {
-        if (openMenu === menu) openMenu = null
-        resolve()
-      } })
-    })
+    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent())
   })
+  handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
   ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {
     if (!trusted(event)) {
       return { ok: false, error: 'Untrusted IPC sender.' }
@@ -316,6 +319,10 @@ app.whenReady().then(async () => {
     return files.save(options.content, options.fileId, selectedPath)
   })
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
+  handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
+  // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
+  // a full results grid copy.
+  handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
     const response = await dialog.showMessageBox(mainWindow!, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true })

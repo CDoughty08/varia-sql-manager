@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
+import { commandDescriptor } from '../src/shared/commands/catalog'
 import { defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
 
 /**
@@ -28,7 +29,9 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'f8': 'Show Object Explorer, as in SSMS; Monaco\'s next-problem has nothing to visit, because the SQL language reports no markers',
   'ctrl+e': 'Execute (Windows and Linux only, as in SSMS); Monaco binds ⌘E (find with selection) and ⌃E only on macOS',
   'ctrl+pageup': 'Previous Query (Windows and Linux only); Monaco binds ⌘PageUp only on macOS and Alt+PageUp elsewhere',
-  'ctrl+pagedown': 'Next Query (Windows and Linux only); Monaco binds ⌘PageDown only on macOS and Alt+PageDown elsewhere'
+  'ctrl+pagedown': 'Next Query (Windows and Linux only); Monaco binds ⌘PageDown only on macOS and Alt+PageDown elsewhere',
+  'shift+f10': "workbench.showContextMenu replaces Monaco's menu (contextmenu: false), so Shift+F10 opens the workbench's editor menu",
+  'contextmenu': 'the context-menu key, likewise (Windows and Linux)'
 }
 
 const keyNames: Readonly<Record<string, string>> = {
@@ -128,6 +131,19 @@ describe('Monaco keybinding drift', () => {
   })
   it.each(platforms)('labels only keys Monaco really binds as native on %s', platform => {
     const monaco = chordsByPlatform.get(platform)!
-    for (const rule of defaultRules(platform).filter(rule => rule.native)) expect(monaco.has(rule.chords.join(' ')), `${rule.command} ${rule.chords.join(' ')}`).toBe(true)
+    // Electron dispatches the keys of role-backed commands (Zoom In, Exit): their native menu items carry them.
+    for (const rule of defaultRules(platform).filter(rule => rule.native && !commandDescriptor(rule.command).role)) expect(monaco.has(rule.chords.join(' ')), `${rule.command} ${rule.chords.join(' ')}`).toBe(true)
+  })
+  it("turns Monaco's own context menu off, so Shift+F10 and right-clicks show only the workbench's", () => {
+    expect(readFileSync(join('src', 'renderer', 'src', 'QueryEditor.tsx'), 'utf8')).toMatch(/\bcontextmenu: false\b/)
+    for (const platform of platforms) expect(workbenchRules(defaultRules(platform)).get('shift+f10')?.map(rule => [rule.command, rule.modal]), platform).toEqual([['workbench.showContextMenu', true]])
+  })
+  it('leaves Ctrl+R and ⌘R to the results pane toggle: Monaco binds neither', () => {
+    for (const platform of platforms) {
+      const chord = platform === 'darwin' ? 'meta+r' : 'ctrl+r'
+      expect(chordsByPlatform.get(platform)!.has(chord), platform).toBe(false)
+      expect(workbenchRules(defaultRules(platform)).get(chord)?.map(rule => rule.command), platform).toEqual(['view.toggleResultsPane'])
+      expect(chordsByPlatform.get(platform)!.has(platform === 'darwin' ? 'shift+meta+r' : 'ctrl+shift+r'), platform).toBe(false)
+    }
   })
 })

@@ -124,11 +124,11 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 188 keys are listed in [`tokens.md`](tokens.md#color-keys-188) by area: title bar and menus, buttons and inputs,
+The 190 keys are listed in [`tokens.md`](tokens.md#color-keys-190) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
 dialogs, and connection colors. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
-are reserved for upcoming features (the command palette, themed menus, the new Object Explorer and results grid): they
-resolve now and take effect when those features ship.
+are reserved for upcoming features (notifications, the new Object Explorer and results grid): they resolve now and take
+effect when those features ship.
 
 A key that is not in the registry is ignored with a warning. Near misses get a "did you mean" suggestion, and a pasted
 block of VS Code keys gets one summary warning.

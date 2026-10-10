@@ -1,10 +1,10 @@
 :root { --varia-font-ui: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
-/* VS Code variables standalone Monaco uses but never defines: the context menu's border width, and the shadow of the find
-   and hover widgets (the context menu falls back to this same shadow). */
+/* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
+   shadow of the find and hover widgets. */
 :root { --vscode-strokeThickness: 1px; --vscode-shadow-lg: 0 0 12px var(--varia-widget-shadow); }
 * { box-sizing: border-box; }
 body { margin: 0; user-select: none; }
-input, textarea, [contenteditable="true"], .monaco-editor, .messages, .plan-xml, .results-grid td, [role="alert"] { user-select: text; }
+input, textarea, [contenteditable="true"], .monaco-editor, .messages, .plan-xml, [role="alert"] { user-select: text; }
 button, select { user-select: none; }
 button, input, select { font: inherit; }
 button { color: var(--varia-button-secondaryForeground); background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; padding: 6px 9px; font-size: 12px; line-height: 16px; white-space: nowrap; }
@@ -26,11 +26,43 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .title-bar-brand { display: grid; place-items: center; width: 26px; color: var(--varia-titleBar-iconForeground); }
 .title-bar-brand .icon { width: 15px; height: 15px; }
 .title-bar-menus { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
-.title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: 3px; font-size: 12px; }
-.title-bar-menus button.active { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); }
-.title-bar-menus button:focus-visible { outline-offset: -2px; }
+.title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: 3px; font-size: 12px; outline: 1px solid transparent; outline-offset: -1px; }
+.title-bar-menus button:hover, .title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); outline: 1px solid var(--varia-menubar-selectionBorder); outline-offset: -1px; }
+/* A resting pointer highlights its button only while no other one is open or keyboard-focused. */
+.title-bar-menus:has(button[aria-expanded="true"], button:focus-visible) button:hover:not(.active, [aria-expanded="true"], :focus-visible) { background: transparent; color: var(--varia-button-secondaryForeground); outline: none; }
 .title-bar-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 20px; font-size: 11px; color: var(--varia-titleBar-activeForeground); pointer-events: none; }
 .title-bar-spacer { width: 24px; flex-shrink: 0; }
+:root[data-window-focus="inactive"] .title-bar { background: var(--varia-titleBar-inactiveBackground); }
+:root[data-window-focus="inactive"] .title-bar-caption, :root[data-window-focus="inactive"] .title-bar-menus button:not(:hover, :focus-visible, .active) { color: var(--varia-titleBar-inactiveForeground); }
+/* Access keys are underlined only while the keyboard drives the menus, as in Windows. */
+.menu-mnemonic { text-decoration: none; }
+[data-mnemonics="visible"] .menu-mnemonic { text-decoration: underline; text-decoration-skip-ink: none; }
+/* Above the docking guides (15000), the quick input (19000), and dialogs (20000): text fields in dialogs get menus too. */
+.menu-layer { position: fixed; inset: 0; pointer-events: none; z-index: 30000; }
+/* Items share the menu's columns (subgrid), so shortcuts start at one x, as in SSMS. */
+.menu { position: fixed; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 20px; align-content: start; pointer-events: auto; min-width: 200px; max-width: min(480px, 100vw - 8px); padding: 4px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 16px var(--varia-widget-shadow); font: 12px var(--varia-font-ui); -webkit-app-region: no-drag; user-select: none; outline: none; }
+.menu-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; height: 24px; white-space: nowrap; cursor: default; outline: 1px solid transparent; outline-offset: -1px; }
+.menu-item[data-active] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline-color: var(--varia-menu-selectionBorder); }
+.menu-item[aria-disabled="true"] { color: var(--varia-disabledForeground); }
+.menu-item[aria-disabled="true"] .menu-gutter { opacity: .5; }
+.menu-gutter { display: grid; place-items: center; }
+.menu-label { overflow: hidden; text-overflow: ellipsis; }
+.menu-keybinding { padding-left: 32px; color: var(--varia-descriptionForeground); }
+.menu-item[data-active] .menu-keybinding { color: inherit; }
+.menu-chevron { display: grid; place-items: center; }
+.menu-separator { grid-column: 1 / -1; height: 1px; margin: 4px 8px 4px 28px; background: var(--varia-menu-separatorBackground); }
+/* What an open context menu is for: a query tab, a panel tab, or an Object Explorer node. */
+[data-menu-target] { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+@media (forced-colors: active) {
+  .menu { border-color: CanvasText; }
+  /* Forced colors draw the transparent outlines that leave room for a theme's selection border as CanvasText boxes. */
+  .menu-item, .title-bar-menus button { outline: none; }
+  .menu-item[data-active], .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .menu-item[aria-disabled="true"] { color: GrayText; }
+  /* A focused disabled item keeps GrayText legible on Canvas, with an outline for the focus. */
+  .menu-item[data-active][aria-disabled="true"] { background: Canvas; color: GrayText; outline: 1px solid Highlight; outline-offset: -1px; }
+  .menu-separator { background: CanvasText; forced-color-adjust: none; }
+}
 .status-dot, .dirty-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
 .status-dot { background: var(--varia-statusBar-idleIndicator); }
 .dirty-dot { background: var(--varia-documentTabs-modifiedIndicator); }
@@ -47,7 +79,7 @@ select, input { background: var(--varia-input-background); border: 1px solid var
 input::placeholder, textarea::placeholder { color: var(--varia-input-placeholderForeground); }
 .toolbar-context select { width: 100%; height: 28px; padding: 0 8px; }
 .workbench { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
-/* Dockview puts its theme class on the shell, which also hosts floating groups and the tab context menu; two classes outrank its theme rules. */
+/* Dockview puts its theme class on the shell, which also hosts floating groups; two classes outrank its theme rules. */
 .varia-dock.dockview-theme-dark, .varia-dock.dockview-theme-light {
   --dv-group-view-background-color: var(--varia-dock-background);
   --dv-tabs-and-actions-container-background-color: var(--varia-editorGroupHeader-tabsBackground);
@@ -73,11 +105,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   --dv-scrollbar-background-color: var(--varia-scrollbarSlider-background);
   --dv-floating-border: 1px solid var(--varia-widget-border);
   --dv-floating-box-shadow: 0 8px 32px var(--varia-widget-shadow);
-  --dv-context-menu-background-color: var(--varia-menu-background);
-  --dv-context-menu-color: var(--varia-menu-foreground);
 }
 /* Dockview draws the dock tab focus ring in the tab divider color, which is invisible on the tab. */
 .varia-dock .dv-tab:focus-visible::after, .varia-dock .dv-tab:has(:focus-visible)::after { outline-color: var(--varia-focusBorder) !important; }
+/* The 4 px sashes between groups paint over a tab's outer 2 px, so a tab's menu outline is drawn inside them. */
+.varia-dock .dv-tab[data-menu-target] { outline-offset: -3px; }
 .dock-workbench { --dv-paneview-header-height: 28px; --dv-tabs-and-actions-container-height: 28px; --dv-tab-font-size: 11px; --dv-floating-titlebar-height: 16px; }
 .dock-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .dock-slot { width: 100%; height: 100%; overflow: hidden; }
@@ -160,6 +192,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .result-selector button { padding: 5px 12px; border-radius: 0; font-size: 10px; }
 .result-selector button.active { background: var(--varia-list-inactiveSelectionBackground); }
 .grid-scroll { overflow: auto; flex: 1; }
+.grid-scroll:focus-visible, .messages:focus-visible, .plan-output:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .results-grid { border-collapse: collapse; font-size: 12px; white-space: nowrap; width: max-content; min-width: 100%; }
 .results-grid th { text-align: left; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); position: sticky; top: 0; padding: 8px 15px; font-weight: 500; }
 .results-grid th small { display: block; color: var(--varia-resultsGrid-headerDescriptionForeground); font-size: 9px; margin-top: 3px; }
@@ -167,6 +200,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-grid tr:nth-child(even) { background: var(--varia-resultsGrid-alternateRowBackground); }
 .results-grid .row-number { width: 40px; min-width: 40px; color: var(--varia-resultsGrid-rowNumberForeground); font-size: 10px; }
 .null-value { color: var(--varia-resultsGrid-nullForeground); font-style: italic; }
+/* SSMS cell selection: the grid selects cells, never text. */
+.results-grid td { user-select: none; }
+.results-grid td.selected { background: var(--varia-resultsGrid-selectionBackground); color: var(--varia-resultsGrid-selectionForeground); }
+.grid-scroll:not(:focus-within) .results-grid td.selected { background: var(--varia-resultsGrid-inactiveSelectionBackground); color: inherit; }
+.results-grid td.selected .null-value { color: inherit; }
+.grid-scroll:focus-within .results-grid td.active-cell { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
+@media (forced-colors: active) {
+  /* Forced colors drop the selection's backgrounds; the system's selection colors show which cells Copy takes. */
+  .results-grid td.selected, .grid-scroll:not(:focus-within) .results-grid td.selected { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .grid-scroll:focus-within .results-grid td.selected.active-cell { outline-color: HighlightText; }
+}
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .truncation { font-size: 11px; color: var(--varia-resultsGrid-truncationForeground); padding: 10px 15px; }
 .messages { overflow: auto; padding: 10px 20px; color: var(--varia-resultsMessages-foreground); }
 .messages pre { font: 12px/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }

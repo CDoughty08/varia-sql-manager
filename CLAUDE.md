@@ -9,7 +9,7 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the five Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the six Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
@@ -21,13 +21,17 @@ README.md documents user-facing behaviour, limits, and the protocol.
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 80 checks instead of 40, and
-  `connections-smoke.mjs` connects for real. Never print the password.
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 83 checks instead of 41, and
+  `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
+  session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
+  (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
   Every `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
-  `--no-sandbox`); only root, as in cloud sessions, runs without it.
+  `--no-sandbox`); only root, as in cloud sessions, runs without it. Suites import `electron` and `expect` from
+  `scripts/fixtures/smoke.mjs`: assertions wait 15 s on Windows, whose runners can take seconds to write a file, and
+  closing the app logs main's file operations that took 500 ms or more.
 
 ## Architecture invariants
 
@@ -44,12 +48,22 @@ README.md documents user-facing behaviour, limits, and the protocol.
   zod and C#.
 - Preferences are written atomically (`src/main/json-file.ts`); unreadable files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- Commands, keybindings and menu placements are declared only in `src/shared/commands/catalog.ts` (View › Theme's
-  `theme.*` items stay main-owned). Main builds native menus from it and accepts only command-id sets from the renderer
-  (`menuStateSchema`); clicks send back a bare id. `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the
-  only workbench key dispatcher; main handles only Alt mnemonics and F10, which `TitleBar.tsx` mirrors for keys that
-  skip main (`tests/keyboard-lint.test.ts`). After catalogue changes, regenerate `docs/commands.md` with
+- Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
+  (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
+  no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show the role, and custom
+  menus and the palette run it through `varia:run-role`. After catalogue changes, regenerate `docs/commands.md` with
   `npx vitest run tests/commands-docs.test.ts -u`.
+- Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
+  provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
+  natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends
+  back a bare id; it is the macOS menu bar and stays hidden elsewhere, where it still serves Electron's role keys. macOS
+  context menus (`src/main/context-menu.ts`) open only in the focused window or within 1 s of input there, and send
+  back a token and an id. Menu targets
+  (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
+  `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
+- The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
+  in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 
@@ -83,7 +97,8 @@ README.md documents user-facing behaviour, limits, and the protocol.
 - IPC v2: length-prefixed MessagePack frames (control and row pages), server push and streams with credit-based
   backpressure, MessagePort with transferable ArrayBuffers to the renderer.
 - Results stay in memory under a backend memory budget with explicit truncation. No spill to disk.
-- Menus: custom-rendered themed menus (title bar and context menus) on Windows/Linux; native global menu bar on macOS.
+- Menus: custom-rendered themed menus (title bar and context menus) on Windows/Linux; native global menu bar and native
+  context menus on macOS.
 - SQL Server 2016-2025. Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft
   Entra ID next.
 - Visuals: SSMS layout, density, and behaviours. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's

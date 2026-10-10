@@ -15,6 +15,17 @@ export interface KeyDownEvent extends KeyEventLike {
   preventDefault(): void
   stopPropagation(): void
 }
+/**
+ * The title-bar and context menus as the dispatcher sees them (`MenuService`): they see every key first while they own
+ * the keyboard, and on Windows and Linux they own F10, Alt plus a menu's letter, and a bare Alt tap.
+ */
+export interface MenuKeyRouter {
+  noteKeyDown(event: KeyDownEvent): void
+  ownsKeyboard(): boolean
+  handleKeyDown(event: KeyDownEvent): 'consumed' | 'passthrough'
+  handleAccessKey(chord: string, event: KeyDownEvent): boolean
+  handleKeyUp(event: KeyDownEvent): void
+}
 export interface KeybindingServiceOptions {
   readonly platform: Platform
   readonly commands: Pick<CommandService, 'execute'>
@@ -29,15 +40,16 @@ export interface KeybindingServiceOptions {
   readonly onConflict?: 'throw' | 'log'
   /** The clock for the chord prefix's lifetime; defaults to `Date.now`, as Monaco's. */
   readonly now?: () => number
+  readonly menus?: MenuKeyRouter
 }
 /** Monaco leaves chord mode 5 s after the prefix (`_scheduleLeaveChordMode`); from then on the next key is a plain key again. */
 export const nativeChordTimeout = 5000
 
 /**
- * The workbench's only key dispatcher: a capture listener on window, so it runs before Monaco, the title bar, and React.
- * It consumes a key only when a rule's `when` matches, even if the command is then unavailable, and leaves every other
- * key alone. Native rules (Monaco's) are never dispatched; after a native chord prefix in editor text (Ctrl/⌘+K), the
- * next key goes to Monaco if it comes within Monaco's chord timeout.
+ * The workbench's only key dispatcher: capture listeners on window, so it runs before Monaco and React. Open menus see
+ * keys first, then menu access keys; otherwise it consumes a key only when a rule's `when` matches, even if the command
+ * is then unavailable, and leaves every other key alone. Native rules (Monaco's) are never dispatched; after a native
+ * chord prefix in editor text (Ctrl/⌘+K), the next key goes to Monaco if it comes within Monaco's chord timeout.
  */
 export class KeybindingService implements Disposable {
   private readonly rules: readonly ResolvedRule[]
@@ -77,14 +89,17 @@ export class KeybindingService implements Disposable {
   attach(target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>): Disposable {
     this.detach?.()
     const keyDown = (event: Event) => this.handleKeyDown(event as KeyboardEvent)
+    const keyUp = (event: Event) => this.handleKeyUp(event as KeyboardEvent)
     const reset = () => { this.pendingNativePrefix = undefined }
     // Monaco moves focus to its IME text area while it waits for a chord's second key; that is not leaving the editor.
     const focusOut = (event: Event) => { if (!this.options.editorContains?.((event as FocusEvent).relatedTarget)) reset() }
     target.addEventListener('keydown', keyDown, true)
+    target.addEventListener('keyup', keyUp, true)
     target.addEventListener('focusout', focusOut, true)
     target.addEventListener('blur', reset)
     const detach = () => {
       target.removeEventListener('keydown', keyDown, true)
+      target.removeEventListener('keyup', keyUp, true)
       target.removeEventListener('focusout', focusOut, true)
       target.removeEventListener('blur', reset)
       if (this.detach === detach) this.detach = undefined
@@ -94,8 +109,12 @@ export class KeybindingService implements Disposable {
   }
   handleKeyDown(event: KeyDownEvent): void {
     try {
-      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-      const { platform } = this.options
+      if (event.defaultPrevented) return
+      const { platform, menus } = this.options
+      // Every press counts for a bare-Alt tap, even one the menus then consume (an Alt tap also leaves the menubar).
+      menus?.noteKeyDown(event)
+      if (menus?.ownsKeyboard() && menus.handleKeyDown(event) === 'consumed') return
+      if (event.isComposing || event.keyCode === 229) return
       const chord = chordFromEvent(event, platform)
       // Monaco ends a chord on a dead key; modifier presses leave it waiting.
       if (!chord) { if (event.key === 'Dead') this.pendingNativePrefix = undefined; return }
@@ -106,10 +125,14 @@ export class KeybindingService implements Disposable {
         if (now() - pending <= nativeChordTimeout) return
       }
       if (this.prefixes.has(chord) && this.options.editorHasTextFocus()) { this.pendingNativePrefix = now(); return }
-      const rules = this.table.get(chord)
+      if (menus?.handleAccessKey(chord, event)) return
+      let rules = this.table.get(chord)
       if (!rules) return
-      // Dialogs own their keys, so the key is not consumed.
-      if (this.options.modalOpen()) return
+      // Dialogs own their keys, so the key is not consumed, unless a rule is marked to work over them.
+      if (this.options.modalOpen()) {
+        rules = rules.filter(rule => rule.modal)
+        if (!rules.length) return
+      }
       const context = this.options.context.get()
       const rule = rules.find(candidate => !candidate.when || evaluateWhen(candidate.when, context))
       if (!rule) {
@@ -122,6 +145,9 @@ export class KeybindingService implements Disposable {
       if (event.repeat && !rule.allowRepeat) return
       void this.options.commands.execute(rule.command, undefined, 'keybinding')
     } catch (error) { onUnexpectedError(error) }
+  }
+  handleKeyUp(event: KeyDownEvent): void {
+    try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
   }
   dispose(): void { this.detach?.() }
 }

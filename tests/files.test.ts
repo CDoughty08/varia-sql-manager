@@ -19,7 +19,7 @@ function fixture() {
   }
   const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false) }
   const files = new FileService(doc.documents, queries, api), commands = new CommandService()
-  const contribution = filesContribution({ files, commands })
+  const contribution = filesContribution({ files, commands, documents: doc.documents }, { writeClipboardText: async () => ({ ok: true, value: undefined }), revealSqlFile: async () => ({ ok: true, value: undefined }) })
   doc.documents.create('SQLQuery1.sql', '', 'master', 'server-a')
   cleanups.push(() => { contribution.dispose(); commands.dispose(); files.dispose(); doc.documents.dispose() })
   return { ...doc, api, queries, files, commands, contribution }
@@ -105,6 +105,49 @@ describe('file commands', () => {
     expect(documents.active?.id).toBe(active)
     expect(model(other.id).disposed).toBe(false)
     expect(api.releaseSqlFile).toHaveBeenCalledTimes(1)
+  })
+  it('closes many queries in tab order, stops at Cancel, and releases their files', async () => {
+    const { documents, model, api, commands, files } = fixture()
+    const [first] = documents.getSnapshot().documents
+    const saved = documents.create('saved.sql', 'SELECT 1', 'master', undefined, false, { id: 'saved-file', name: 'saved.sql', path: 'C:/saved.sql' })
+    const dirty = documents.create('dirty.sql', '', 'master'), kept = documents.create('kept.sql', '', 'master'), last = documents.create('last.sql', '', 'master')
+    model(dirty.id).edit('SELECT dirty')
+    model(kept.id).edit('SELECT kept')
+    api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'discard' }).mockResolvedValueOnce({ ok: true, value: 'cancel' })
+    await commands.run('file.closeAll')
+    // Visual Studio's Close All: Cancel keeps that query and every one after it.
+    expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([kept.id, last.id])
+    expect(api.confirmClose.mock.calls).toEqual([['dirty.sql'], ['kept.sql']])
+    expect(api.releaseSqlFile.mock.calls).toEqual([['saved-file']])
+    expect(api.closeQuerySession.mock.calls.map(call => call[0])).toEqual([first.id, saved.id, dirty.id])
+    expect(files.getSnapshot().error).toBe('')
+  })
+  it('keeps running queries open when closing many, and says how many', async () => {
+    const { documents, queries, commands, files } = fixture()
+    const running = [documents.create('a.sql', '', 'master'), documents.create('b.sql', '', 'master')]
+    documents.create('c.sql', '', 'master')
+    queries.isRunning.mockImplementation(id => running.some(document => document.id === id))
+    await commands.run('file.closeAll')
+    expect(documents.getSnapshot().documents.map(document => document.name)).toEqual(['a.sql', 'b.sql'])
+    expect(files.getSnapshot().error).toBe('2 queries are still running and stayed open.')
+    queries.isRunning.mockImplementation(id => id === running[0].id)
+    await files.closeMany(running.map(document => document.id))
+    expect(files.getSnapshot().error).toBe('1 query is still running and stayed open.')
+    expect(documents.getSnapshot().documents.map(document => document.name)).toEqual(['a.sql'])
+  })
+  it('saves a copy to a file the user picks without opening it, and saves nothing on Cancel', async () => {
+    const { documents, api, files } = fixture()
+    await files.saveCopy('dbo.Orders.sql', 'CREATE TABLE dbo.Orders (Id int);')
+    expect(api.saveSqlFile.mock.calls).toEqual([[{ name: 'dbo.Orders.sql', content: 'CREATE TABLE dbo.Orders (Id int);', saveAs: true }]])
+    // Main keeps a handle for each saved file; nothing holds this one, so it is released at once.
+    expect(api.releaseSqlFile.mock.calls).toEqual([['file-id']])
+    expect(documents.getSnapshot()).toMatchObject({ busy: false, documents: [{ name: 'SQLQuery1.sql' }] })
+    api.saveSqlFile.mockResolvedValueOnce({ ok: true, value: null })
+    await files.saveCopy('dbo.Orders.sql', 'x')
+    expect(api.releaseSqlFile).toHaveBeenCalledOnce()
+    api.saveSqlFile.mockResolvedValueOnce({ ok: false, error: 'Disk full.' })
+    await files.saveCopy('dbo.Orders.sql', 'x')
+    expect(files.getSnapshot().error).toBe('Disk full.')
   })
   it('keeps a running tab open without prompting', async () => {
     const { documents, queries, api, commands } = fixture()

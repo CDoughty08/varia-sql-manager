@@ -8,7 +8,8 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'editorText', keys: { editorFocus: true, editorTextFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'editorFindInput', keys: { editorFocus: true, inputFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'explorerTree', keys: { activePanel: 'explorer' } },
-  { name: 'outputGrid', keys: { activePanel: 'output' } },
+  { name: 'outputGrid', keys: { activePanel: 'output', outputGridFocus: true } },
+  { name: 'outputMessages', keys: { activePanel: 'output' } },
   { name: 'toolbarSelect', keys: { inputFocus: true, textInputFocus: true } },
   { name: 'titleBar', keys: {} },
   { name: 'quickInput', keys: { inputFocus: true, textInputFocus: true } },
@@ -54,7 +55,8 @@ const active = (rule: ResolvedRule, context: Context) => !rule.when || evaluateW
 /**
  * Problems with workbench keybindings on `platform`: two commands that can both match one key press, reserved chords,
  * typing keys that are not limited to `!textInputFocus`, and keys on commands that also run while a modal is open
- * (a dialog's own keys must win). Native rules belong to Monaco and are not checked.
+ * unless the key is marked `modal` (a dialog's own keys must win otherwise), or a `modal` key on a command that does
+ * not. Native rules belong to Monaco and are not checked.
  */
 export function findConflicts(rules: readonly ResolvedRule[], platform: Platform): Conflict[] {
   const conflicts: Conflict[] = []
@@ -62,7 +64,9 @@ export function findConflicts(rules: readonly ResolvedRule[], platform: Platform
     for (const rule of list) {
       const reason = reservedReason(chord, platform)
       if (reason) conflicts.push({ kind: 'reserved', chord, commands: [rule.command], message: `${rule.command}: ${chord} is reserved (${reason}).` })
-      if (commandDescriptor(rule.command).allowInModal) conflicts.push({ kind: 'modal', chord, commands: [rule.command], message: `${rule.command} runs while a modal is open, so it cannot have the workbench key ${chord}.` })
+      const { allowInModal } = commandDescriptor(rule.command)
+      if (rule.modal && !allowInModal) conflicts.push({ kind: 'modal', chord, commands: [rule.command], message: `${rule.command}: ${chord} is marked modal, but the command does not run while a modal is open.` })
+      else if (allowInModal && !rule.modal) conflicts.push({ kind: 'modal', chord, commands: [rule.command], message: `${rule.command} runs while a modal is open, so its workbench key ${chord} must be marked modal or it would take the key from the dialog.` })
       if (typesText(chord)) {
         const sample = findContext([rule], platform, context => context.textInputFocus && active(rule, context))
         if (sample) conflicts.push({ kind: 'typing', chord, commands: [rule.command], message: `${rule.command}: ${chord} types text, so it must not match while text input has focus (it does in ${sample}); add !textInputFocus.` })

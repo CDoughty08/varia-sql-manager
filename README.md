@@ -15,7 +15,7 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/menu tests (after check)
 npm run test:electron   # Both of the above
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
@@ -31,13 +31,13 @@ The .NET SDK is selected through `global.json`. npm and NuGet lockfiles pin reso
 2. For a trusted local server with a self-signed certificate, explicitly enable **Trust server certificate**. Encryption stays enabled. Certificate validation is enabled by default.
 3. Connect additional servers with **Connect**. Each query retains its own server/database target; the toolbar selectors change the active query's target. Object Explorer keeps all connected servers visible.
 4. Execute SQL with the Execute button or its keys (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)). Selected text takes priority over the full document; a whitespace-only selection executes nothing.
-5. Inspect result sets and Messages. Cancel stops the running script and skips its remaining batches. Earlier output remains available.
-6. Click a table to generate its CREATE script through SMO in a new query tab.
+5. Inspect result sets and Messages. Cancel stops the running script and skips its remaining batches. Earlier output remains available. The results grid selects cells as SSMS does: click a cell, a row number, or a column header (the corner selects everything), Shift+click or drag to extend, and **Ctrl+A** selects all. **Ctrl+C** copies the selection as tab-separated text and **Ctrl+Shift+C** copies it with column headers (see [Copying](#copying)); unnamed columns show and copy as "(No column name)".
+6. Click a table to generate its CREATE script through SMO in a new query tab, or right-click it for **Select Top 1000 Rows** and **Script Table as › CREATE To**.
 7. Use **Open**, **Save**, and **File → Save As** for SQL files, and close a query with its × button. Modified queries show a dot and offer Save / Don't Save / Cancel on close or application exit. Arrow keys navigate the tab strip; Space/Enter activates a focused tab.
 
 File operations use native dialogs and opaque file IDs, with atomic saves. UTF-8 and UTF-16 LE (with BOM) SQL files are supported, with a 5 MB file limit. Existing encoding is preserved when saving. Native Undo/Redo menu actions use Monaco's document history; Ctrl+Z/Ctrl+Y continue to work in the editor.
 
-The window uses a single compact title bar with **File / Edit / View / Query / Window** menus and the current query name. Windows retains native minimize/maximize/close controls, while the empty title area can be dragged to move the window. The query action toolbar sits immediately below. Menus use native dropdowns that show command keys and grey out commands that cannot run; **F10** focuses the menu bar, arrow keys move between menus, and **Alt+F / Alt+E / Alt+V / Alt+Q / Alt+W** open them on Windows/Linux. **Escape** returns focus to the editor or input. This uses Electron's [custom title bar and native controls overlay](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar).
+The window uses a single compact title bar with **File / Edit / View / Query / Window** menus and the current query name. Windows retains native minimize/maximize/close controls, while the empty title area can be dragged to move the window. The query action toolbar sits immediately below. [Menus and context menus](#menus-and-context-menus) describes the menus, their keys, and the context menus. This uses Electron's [custom title bar and native controls overlay](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar).
 
 Passwords are kept in memory only; application exit or disconnecting releases the backend connection profile and clears its connection pool. Closing a query tab ends its SQL session; tab sessions are not pooled, so an open transaction rolls back and releases its locks immediately. The UI clears the password after connecting, selecting another saved connection, or dismissing the dialog. Saved profiles contain server/login names and connection settings, with passwords omitted.
 
@@ -58,12 +58,56 @@ The shortcuts follow SSMS where SSMS has one:
 | Close the query | Ctrl+W, Ctrl+F4 | ⌘W |
 | Next or previous query | Ctrl+Tab or Ctrl+Shift+Tab, Ctrl+PageDown or Ctrl+PageUp | ⌃⇥ or ⌃⇧⇥ |
 | Show Object Explorer and move focus to it | F8 | F8 |
-| Refresh Object Explorer (when it has focus) | F5 | F5 |
+| Hide or show the results pane (Window → Show Results Pane) | Ctrl+R | ⌘R |
+| Refresh the focused Object Explorer node | F5 | F5 |
+| Copy the selected result cells, or with column headers (in the results grid) | Ctrl+C, Ctrl+Shift+C | ⌘C, ⇧⌘C |
 | Toggle word wrap | Alt+Z | View menu |
 | Comment or uncomment the selection | Ctrl+K Ctrl+C or Ctrl+K Ctrl+U | ⌘K ⌘C or ⌘K ⌘U |
 | Toggle line comment | Ctrl+/ | ⌘/ |
 
-The [command reference](docs/commands.md) lists every command with its keys on each platform, the condition under which it can run, its menu items, and the keys Varia leaves to menus, the editor, and the operating system. It is generated from the command catalogue, so it always matches the app. On macOS, menu items show only shortcuts with ⌘: the menu bar would take any other key (F5, F8, ⌃⇥) before the focused pane saw it. Menus, the toolbar, the keyboard, and the palette run the same commands and agree on what is available. While a dialog is open, workbench shortcuts and menu commands do nothing and the dialog keeps its keys; Undo and Redo still act on its text fields. Holding a key down runs its command once, except Next and Previous Query. Custom keybindings are future work.
+The [command reference](docs/commands.md) lists every command with its keys on each platform, the condition under which it can run, its menu items, and the keys Varia leaves to menus, the editor, and the operating system. It is generated from the command catalogue, so it always matches the app. On macOS, the menu bar shows only shortcuts with ⌘: it would take any other key (F5, F8, ⌃⇥) before the focused pane saw it. An open context menu handles its own keys, so it shows every key. Menus, the toolbar, the keyboard, and the palette run the same commands and agree on what is available. While a dialog is open, workbench shortcuts and menu commands do nothing and the dialog keeps its keys; Undo, Redo, and the clipboard commands still act on its text fields, whose context menu works inside the dialog. Holding a key down runs its command once, except Next and Previous Query. Custom keybindings are future work.
+
+## Menus and context menus
+
+The title bar holds **File**, **Edit**, **View**, **Query**, and **Window**. On Windows and Linux Varia draws these menus, and every context menu, in the current theme: items show their keys, and an item that cannot run right now is dimmed (the palette says why). macOS shows the same menus in its menu bar and its context menus natively (see [macOS](#macos)). The [command reference](docs/commands.md#menus) lists every menu's items and when each appears.
+
+### Keyboard and mouse
+
+- **F10** or a tap of **Alt** moves focus to the menu bar and underlines the access keys, as does reaching it with **Tab** or **Shift+Tab**, which then move on from it as from any other control; **Alt+F**, **Alt+E**, **Alt+V**, **Alt+Q**, and **Alt+W** open a menu directly. These keys also work from the command palette, which closes. In the editor's find widget **Alt+W** still toggles Whole Word, and while a dialog is open the menu bar stays closed.
+- In the menu bar, **←** and **→** move between menus and **↓**, **Enter**, or **Space** opens one. In a menu, **↑** and **↓** move (**Home** and **End** jump to the ends), **→** opens a submenu or the next menu, **←** closes a submenu or opens the previous menu, and **Enter** or **Space** runs the item. An underlined letter runs its item; when several items share it, each press moves to the next. Other letters find an item by the start of its name.
+- **Escape** closes one menu at a time, then returns focus to where it was, so a command acts on the editor, field, or node you came from. **Tab**, **F10**, a tap of **Alt**, a click elsewhere, scrolling outside the menu, resizing the window, or switching to another window closes every open menu. A **Ctrl** shortcut closes the menu and still runs, so **Ctrl+S** saves.
+- With the mouse, click a menu and then an item, or press on a menu, drag to an item, and release. Hovering over a submenu opens it after a moment; while the pointer moves toward an open submenu, it stays open.
+
+### Context menus
+
+Right-click, or press **Shift+F10** or the context-menu key where focus is, for the commands that apply there. Focus moves to the item first, as in Windows Explorer, and the item is outlined while its menu is open. From the keyboard the menu opens below the item (in the editor, below the caret) with its first command selected.
+
+| Where | Items |
+| --- | --- |
+| Query editor | Connection › (Connect…, Disconnect, Disconnect All Queries, Change Connection…), Execute, Cancel Executing Query, Cut, Copy, Paste, and Command Palette… |
+| Query tab | Save, Save As…, Close, Close All But This, Close All, Copy Full Path, and Open Containing Folder, all for that tab's query. The last two need a saved query. |
+| Panel tab | Float or Dock, and Close |
+| Results grid | Copy, Copy with Headers, and Select All. Right-clicking a cell outside the selection selects that cell first. |
+| Messages and the XML plan | Copy and Select All, which selects only that view's text |
+| Text field, including dialogs and the editor's find widget | Undo, Redo, Cut, Copy, Paste, Delete, and Select All. A password field never cuts or copies, and a read-only field never changes. This is the only menu that opens while a dialog is open. |
+| Object Explorer | See below. |
+
+### Object Explorer menus
+
+A server offers Connect…, Disconnect (that server, without asking which), New Query, Copy Name, and Refresh, and a database offers New Query (on that database), Copy Name, and Refresh. Folders offer Refresh, and the empty area below the servers offers Connect… and Refresh. A table offers **Select Top 1000 Rows**, which opens SSMS's script with the table's columns listed (or `*` beyond 4,096 columns) on its database and runs it; **Script Table as › CREATE To** a new query, a `.sql` file, or the clipboard; and Copy Name. A login or another security object offers Copy Name. Scripting errors appear in the command banner.
+
+**F5** or **Refresh** on a node reloads only the lists below it, such as one database's tables or one security folder's objects; on a table or a login, it reloads the list that contains it. The **Refresh Object Explorer** button above the tree reloads everything.
+
+### Copying
+
+- The results grid copies its selected cells as tab-separated text, one line per row: NULL becomes `NULL`, line breaks and tabs inside a value become spaces, and lines end with CRLF on Windows and LF elsewhere. **Copy with Headers** (**Ctrl+Shift+C**) adds a line of column names, with "(No column name)" for unnamed columns. **Ctrl+C**, **Edit → Copy**, and the menu's Copy copy the same text.
+- In Messages and the XML plan, Copy copies the selected text.
+- **Copy Name** copies a server's name as you connected to it, or an object's bracket-quoted name (`[AppData]`, `[dbo].[Orders]`). **Copy Full Path** copies a saved query's file path.
+- The workbench writes to the clipboard through Electron's main process. Its only way to read it is Paste, the operating system's paste into the focused editor or field, which the main process runs for a menu only within a second of a click, tap, or key press in the focused window, so an idle or background window cannot read the clipboard. A screen reader or voice control activating a menu's Paste sends no such input, so that Paste is refused with a reminder that **Ctrl+V** (**⌘V** on macOS) pastes; the shortcut always works, as do macOS's native menus.
+
+### macOS
+
+The title-bar menus are the macOS menu bar; there is no menu bar in the window, and File has no Quit because the application menu has it. Context menus are native macOS menus built from the same items: they follow Dark and Light, open with a right-click, **Control**-click, VoiceOver's **VO+Shift+M**, or **Shift+F10**, and act on the item they were opened for. The query tab's Open Containing Folder reads **Reveal in Finder**. The menu bar shows only shortcuts with ⌘ (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)); context menus show every key. A native menu opens only in the focused window or just after a click, tap, or key press in it, so a background window cannot show one over other apps. If a native menu cannot be shown, the themed menu appears instead.
 
 ## Connection dialog
 
@@ -77,7 +121,7 @@ Choose **Optional / Mandatory / Strict** encryption and certificate hostname set
 
 **Advanced…** groups properties similarly to SSMS: command/connect timeouts, Always Encrypted and secure enclave attestation, MARS, protocol, packet size, transaction binding, type system version, connection retries, application/workstation identity, application intent/language, replication, IP preference, certificate path, attached file, failover/SPNs, Multi Subnet Failover, and user instance. OK applies the draft; Cancel/Escape discards it. Command timeout defaults to **0 (no timeout)** and controls each submitted script's existing overall deadline/cancellation handling; finite values also cover all GO batches. Connect timeout defaults to 15 seconds. Network Library maps to a `tcp:`, `np:`, or `lpc:` server prefix because the .NET provider lacks the legacy keyword. These settings are validated and carried through to query sessions and metadata/SMO connections; capabilities such as Always Encrypted also require the corresponding server/key-provider configuration. Provider support follows [SqlClient's connection options](https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlconnection.connectionstring?view=sqlclient-dotnet-7.1).
 
-Object Explorer has an expandable **Databases** folder, with **System Databases** and **Database Snapshots** grouped separately and user databases listed directly beneath it. Database nodes expand independently; clicking a database selects the query target, and clicking a table creates its SMO script. Under **Security**, expand **Logins**, **Server Roles**, **Credentials**, **Cryptographic Providers**, **Audits**, or **Server Audit Specifications** to load a read-only list of names. Lists load on expansion, retain their contents when collapsed, and reload with **Refresh Object Explorer**. Empty lists and catalog errors are shown within the affected folder. Creating, editing, and deleting these server objects is future work.
+Object Explorer has an expandable **Databases** folder, with **System Databases** and **Database Snapshots** grouped separately and user databases listed directly beneath it. Database nodes expand independently; clicking a database selects the query target, and clicking a table creates its SMO script. Under **Security**, expand **Logins**, **Server Roles**, **Credentials**, **Cryptographic Providers**, **Audits**, or **Server Audit Specifications** to load a read-only list of names. Lists load on expansion and retain their contents when collapsed. The panel's **Refresh Object Explorer** button reloads every list; **F5** or a node's **Refresh** reloads only that node's lists (see [Object Explorer menus](#object-explorer-menus)). Empty lists and catalog errors are shown within the affected folder. Creating, editing, and deleting these server objects is future work.
 
 Server catalog visibility follows the connected login's permissions; an empty list means no objects are visible to that login. Snapshot grouping uses `sys.databases.source_database_id`. See Microsoft's [server principal catalog](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-server-principals-transact-sql) and [database snapshot documentation](https://learn.microsoft.com/en-us/sql/relational-databases/databases/view-a-database-snapshot-sql-server).
 
@@ -85,7 +129,7 @@ Server catalog visibility follows the connected login's permissions; an empty li
 
 **Object Explorer**, **Query editor**, and **Query output** are independent dockable panels. Drag a panel header over another panel to display an SSMS-style docking compass. Its center creates a tab group; the four inner cells split the destination panel; the four outer cells dock against the whole workspace. A blue shaded preview shows the landing area. Releasing away from a guide floats the panel. Hold **Ctrl** while dragging to float without docking, or **Ctrl-double-click** a panel tab to toggle floating and its previous docked position. Floating panels redock by dragging their top handle onto a guide with an ordinary drag. This follows the guide/preview and Ctrl gestures described in [Visual Studio's docking documentation](https://learn.microsoft.com/en-us/visualstudio/ide/customizing-window-layouts-in-visual-studio?view=visualstudio).
 
-Drag splitters to resize; window resizing keeps existing splitter positions where space permits. Each panel's **Move…** control also provides docking, tab grouping, floating, and closing without dragging; right-clicking a panel tab offers Float/Dock and Close. Floating panels resize from their edges/corners and stay inside the workspace viewport. Individual SQL documents remain tabs within the Query editor panel.
+Drag splitters to resize; window resizing keeps existing splitter positions where space permits. Each panel's **Move…** control also provides docking, tab grouping, floating, and closing without dragging, as does a panel tab's [context menu](#context-menus) (Float or Dock, and Close). Floating panels resize from their edges/corners and stay inside the workspace viewport. Individual SQL documents remain tabs within the Query editor panel.
 
 Close panels with their **×** buttons and reopen or activate them from **Window → Object Explorer / Query Editor / Query Output** (**Alt+W** opens the menu). Closing a panel hides its content while retaining query text/undo, server explorer state, result data, and running SQL sessions. Closed panels remain closed after restart; layouts with any subset of panels, including none, are valid. Reopening within the same app session uses the last docked location when it is available. Window also offers Save, Load, and Reset Window Layout.
 
@@ -95,13 +139,13 @@ Use **Layouts** in the query toolbar or **View → Save Layout… / Load Layout�
 
 Layouts contain only open panel identities and their geometry/presentation. Query documents, result data, SQL targets, and credentials stay out of layout files. Imported files are versioned, validated, and limited to 200 KB; inconsistent references or unsupported components leave the current layout intact. Ordinary Dockview size constraints and visibility metadata are accepted. Validation errors identify the offending field rather than requiring every panel to exist. Preferences use atomic writes. Invalid preferences recover to the default layout while preserving the original file as an `.invalid-<id>.json` backup. Native detached windows and auto-hide tool strips are future work. Docking uses the MIT-licensed [Dockview React library](https://dockview.dev/docs/overview/introduction/) with application-owned guide controls.
 
-Interface labels, menus, tabs, and status text disable browser text selection. Text editors and inputs, result cells, statistics/messages, XML plans, and error details remain selectable for copying.
+Interface labels, menus, tabs, and status text disable browser text selection. Text editors and inputs, statistics/messages, XML plans, and error details remain selectable for copying; the results grid selects cells instead.
 
 ## Themes
 
 **View → Theme** switches between **Dark** (the default), **Light**, and **Follow System**, and chooses the theme used in each mode. Switching is live: queries, undo history, connections, and the layout are untouched, and the native title bar and menus follow the mode (system dialogs such as file pickers follow it on macOS only). The choice is saved in `appearance.json` in Electron's user-data directory. **Color Theme…** (in that menu, or **Preferences: Color Theme…** in the command palette) lists the modes and every theme: each row previews as you move to it, Enter chooses it, and Escape puts the current theme back without saving anything.
 
-Custom themes are JSON files in the `themes` folder there (**View → Theme → Open Themes Folder**). A theme overrides any of 61 named palette slots, 188 color keys (VS Code names where the meaning matches), and the SQL token colors, on top of Varia Dark or Varia Light; one file can provide both variants. **Create Custom Theme…** writes a starter seeded with the current accent colors; edit it, then choose **Reload Themes**. Theme files are validated strictly and never modified. Problems are listed in a banner with their JSON path, a bad entry keeps its default, and a theme that cannot be used falls back to the built-in theme of its type while keeping your choice. See the [theme guide](docs/themes/README.md), the [token reference](docs/themes/tokens.md), and the [JSON Schema](docs/themes/varia-theme.schema.json).
+Custom themes are JSON files in the `themes` folder there (**View → Theme → Open Themes Folder**). A theme overrides any of 61 named palette slots, 190 color keys (VS Code names where the meaning matches), and the SQL token colors, on top of Varia Dark or Varia Light; one file can provide both variants. **Create Custom Theme…** writes a starter seeded with the current accent colors; edit it, then choose **Reload Themes**. Theme files are validated strictly and never modified. Problems are listed in a banner with their JSON path, a bad entry keeps its default, and a theme that cannot be used falls back to the built-in theme of its type while keeping your choice. See the [theme guide](docs/themes/README.md), the [token reference](docs/themes/tokens.md), and the [JSON Schema](docs/themes/varia-theme.schema.json).
 
 ## Architecture
 
@@ -126,8 +170,9 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 - `src/preload/index.ts`: explicit public methods; no generic IPC or shell API exposed.
 - `backend/Varia.Backend`: independent C# console host and SQL services.
 - `src/renderer/src`: workbench and locally bundled Monaco editor/worker.
-- `src/shared/commands`: the command catalogue (ids, titles, keys, preconditions, and menu placements), the when-clause language, keybinding parsing and labels, the menu model main builds native menus from, and the generator for `docs/commands.md`.
+- `src/shared/commands`: the command catalogue (ids, titles, keys, preconditions, and menu placements), the when-clause language, keybinding parsing and labels, the menu model (submenus, context menus, and access keys) that every menu is built from, and the generator for `docs/commands.md`.
 - `src/renderer/src/core`: renderer command routing, context keys, the keybinding dispatcher, native menu state, typed events, stable service snapshots, and workbench lifetime outside React effects.
+- `src/renderer/src/menus`: the themed title-bar and context menus: a DOM-free controller for keys, pointer, and timers, the service that resolves menus for their targets and restores focus, the view, menu targets, and the presenter that asks main for native context menus on macOS. `src/main/context-menu.ts` builds those native menus from command ids.
 - `src/renderer/src/quickinput` / `src/renderer/src/contributions`: the DOM-free quick input controller and its view, and the commands that use it: the palette, Go to Query, and the server, database, and color theme pickers.
 - `src/renderer/src/contributions/files.ts` / `src/renderer/src/services/files.ts`: file command registration, open/save/close workflows, dirty confirmations, and file errors. Tab-close commands carry the document ID, so a pending confirmation stays attached to its original query. Application exit confirms documents, flushes the shell's layout, and rechecks document revisions before closing.
 - `src/renderer/src/services`: document-owned Monaco models/view state and query orchestration. Documents use `varia-sql://query/<tab-id>` URIs; tab changes and editor remounts retain undo history. SQL stays in models, while React subscribes to metadata and execution snapshots. Save records the revision actually written, so typing during a save remains dirty. Query commands share guards for running scripts and document transitions; the backend session ID remains the tab ID.
@@ -144,7 +189,7 @@ One UTF-8 JSON message per line. Responses may arrive out of order and are match
 {"id":"db807cb6-d4d9-42d7-8d1a-cd0b8ea6a3de","result":{"protocolVersion":1,"runtime":".NET 10.x","platform":"...","smoVersion":"...","sqlClientVersion":"..."}}
 ```
 
-Errors use `{"id":"...","error":{"code":"...","message":"..."}}`. At the preload boundary they become a typed `{ ok: false, error }` result, so the UI can display failures without losing the Electron process. A failed backend requires an application restart. Reloading the workbench (View → Reload) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
+Errors use `{"id":"...","error":{"code":"...","message":"..."}}`. At the preload boundary they become a typed `{ ok: false, error }` result, so the UI can display failures without losing the Electron process. A failed backend requires an application restart. Reloading the workbench (View → Reload Window, which has no shortcut) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
 
 `query.execute` takes the query tab's UUID as `sessionId`, a separate execution UUID as `queryId`, and an optional selected-text `startLine`. Its result contains `status` (`completed`, `failed`, `cancelled`, or `timedOut`), any SQL error, completed/total batch counts, the resulting database context, and retained output. SQL execution failures return this result so earlier rows and messages survive. Validation errors and missing, busy, or invalid sessions/connections still use the protocol error envelope. `query.session.close` releases a tab's session; server retargeting closes that session before changing the target.
 
@@ -202,11 +247,11 @@ $env:VARIA_TEST_SQL_SERVER = 'localhost'
 try { npm run backend:test } finally { Remove-Item Env:VARIA_TEST_SQL_SERVER }
 ```
 
-These checks create only session-local temporary objects. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default. With the same variables set, `npm run test:smoke` also connects the connection dialog to that server. The password is never printed.
+These checks create only session-local temporary objects, except that with `VARIA_TEST_SQL_SCRATCH=1` (set in CI and in cloud sessions) a Select Top 1000 Rows test also creates and drops a uniquely named `varia_scratch_…` database for graph and temporal tables, which cannot be temporary. The test harness explicitly trusts the development server's certificate; the application's certificate validation remains enabled by default. With the same variables set, `npm run test:smoke` also connects the connection dialog to that server. The password is never printed.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pull requests (including ones stacked on another pull request), pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests currently assume Windows/Linux window chrome, so macOS skips them until the macOS menu bar work lands. A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`.
+`.github/workflows/ci.yml` runs on pull requests (including ones stacked on another pull request), pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests assume Windows/Linux window chrome and the themed menu bar, so macOS skips them; unit tests build its native menu bar and context menus on every platform. A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`.
 
 ## Direction
 
@@ -214,7 +259,7 @@ These checks create only session-local temporary objects. The test harness expli
 - **Roadmap:** CI and test foundations; theme tokens; command registry and F1 palette; context menus; Object Explorer v2 (backend node provider, virtualized keyboard tree); scripting (Script As…); binary IPC v2; a streaming, virtualized results grid.
 - **IPC v2:** length-prefixed MessagePack frames for control messages and row pages, server push and streams with credit-based backpressure, and a MessagePort with transferable ArrayBuffers to the renderer.
 - **Results:** memory-only, with a backend memory budget and explicit truncation. Results never spill to disk.
-- **Menus:** custom-rendered, themed title-bar and context menus on Windows and Linux; the native global menu bar on macOS.
+- **Menus:** custom-rendered, themed title-bar and context menus on Windows and Linux; the native global menu bar and native context menus on macOS.
 - **Servers and authentication:** SQL Server 2016 through 2025. SQL authentication and Integrated authentication (Windows SSPI; Kerberos on Linux/macOS) first, then Microsoft Entra ID.
 - **Visuals:** SSMS layout, density, and behaviours. Icons are codicons (bundled with Monaco) plus custom SVGs, since Microsoft's SSMS icons cannot be reused. Dark and Light themes (plus following the system), customizable through a standardized palette system in the style of VS Code and opencode.
 

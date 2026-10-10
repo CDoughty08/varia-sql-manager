@@ -140,7 +140,7 @@ describe('command execution', () => {
     await commands.execute('explorer.refresh', undefined, 'keybinding')
     for (const id of ['window.explorer', 'window.output', 'layout.save', 'layout.load', 'layout.reset'] as const) await commands.execute(id, undefined, 'menu')
     await commands.execute('window.close', undefined, 'menu')
-    expect([host.showConnect, host.refreshExplorer, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1, 1])
+    expect([host.showConnect, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1])
     // Object Explorer also takes focus (SSMS's F8), so a following F5 refreshes it.
     expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['output']])
     expect(vi.mocked(host.manageLayouts).mock.calls).toEqual([['save'], ['load']])
@@ -164,18 +164,22 @@ describe('context keys', () => {
     expect(computeContextKeys({ ...base, documents: snapshot({ documents: [doc('a')], activeId: 'missing' }) })).toMatchObject({ hasActiveDocument: false })
   })
   it('derive focus keys from the focused element', () => {
-    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editable?: boolean } = {}): FocusElement & { tag: string } => ({
+    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editable?: boolean; grid?: boolean } = {}): FocusElement & { tag: string } => ({
       tag, matches: selector => selector.split(', ').includes(tag),
-      closest: selector => selector === '[data-pane]' ? options.pane === undefined ? null : { getAttribute: () => options.pane! } : options.editable ? { getAttribute: () => 'true' } : null
+      closest: selector => selector === '[data-pane]' ? options.pane === undefined ? null : { getAttribute: () => options.pane! }
+        : selector === '[data-result-grid]' ? options.grid ? { getAttribute: () => '' } : null : options.editable ? { getAttribute: () => 'true' } : null
     })
     const textArea = element('textarea', { pane: 'editor' }), findInput = element('input', { pane: 'editor' })
     const editor = (focusedText: boolean) => ({ getContainerDomNode: () => ({ contains: (node: FocusElement) => node === textArea || node === findInput }), hasTextFocus: () => focusedText })
-    expect(focusFacts(textArea, editor(true))).toEqual({ editorFocus: true, editorTextFocus: true, inputFocus: false, activePanel: 'editor' })
-    expect(focusFacts(findInput, editor(false))).toEqual({ editorFocus: true, editorTextFocus: false, inputFocus: true, activePanel: 'editor' })
-    expect(focusFacts(element('button', { pane: 'explorer' }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'explorer' })
+    expect(focusFacts(textArea, editor(true))).toEqual({ editorFocus: true, editorTextFocus: true, inputFocus: false, activePanel: 'editor', outputGridFocus: false })
+    expect(focusFacts(findInput, editor(false))).toEqual({ editorFocus: true, editorTextFocus: false, inputFocus: true, activePanel: 'editor', outputGridFocus: false })
+    expect(focusFacts(element('button', { pane: 'explorer' }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'explorer', outputGridFocus: false })
+    // Ctrl+Shift+C copies with headers only in a results grid, not in Messages.
+    expect(focusFacts(element('div', { pane: 'output', grid: true }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'output', outputGridFocus: true })
+    expect(focusFacts(element('div', { pane: 'output' }), editor(false))).toMatchObject({ activePanel: 'output', outputGridFocus: false })
     expect(focusFacts(element('div', { pane: 'output', editable: true }), undefined)).toMatchObject({ inputFocus: true, activePanel: 'output' })
     expect(focusFacts(element('input', { pane: 'floating' }), undefined)).toMatchObject({ inputFocus: true, activePanel: '' })
-    expect(focusFacts(null, editor(true))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '' })
+    expect(focusFacts(null, editor(true))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false })
     const keys = computeContextKeys({ platform: 'darwin', focus: focusFacts(findInput, editor(false)), documents: snapshot(), queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendReady: false })
     expect(keys).toMatchObject({ isMac: true, editorFocus: true, inputFocus: true, textInputFocus: true })
   })

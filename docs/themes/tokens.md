@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (188)
+## Color keys (190)
 
 ### Base
 
@@ -102,19 +102,21 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | --- | --- | --- | --- | --- | --- |
 | `titleBar.activeBackground` | VS Code | `$chrome` | `#181f2a` | `#e9edf2` | Title bar, and the native window-controls overlay on Windows and Linux. Made opaque over `editor.background`. |
 | `titleBar.activeForeground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Window caption in the title bar. |
-| `titleBar.inactiveBackground` | VS Code | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Title bar while the window is inactive. Not used yet; reserved for custom menus and the title bar. |
-| `titleBar.inactiveForeground` | VS Code | `@titleBar.activeForeground` | `#9eafc5` | `#465366` | Window caption while the window is inactive. Not used yet; reserved for custom menus and the title bar. |
+| `titleBar.inactiveBackground` | VS Code | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive. Made opaque over `editor.background`. |
+| `titleBar.inactiveForeground` | VS Code | `@titleBar.activeForeground` | `#9eafc5` | `#465366` | Window caption and menubar labels while the window is inactive. |
 | `titleBar.border` | VS Code | `$border` | `#2b3443` | `#d3d9e2` | Line below the title bar. |
 | `titleBar.iconForeground` | Varia | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Application icon in the title bar. |
 | `titleBar.controlsForeground` | Varia | `$text` | `#d9e1ec` | `#1f2733` | Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. |
 | `menubar.selectionBackground` | VS Code | `$active` | `#2e3c51` | `#ccd6e3` | Open title-bar menu. |
 | `menubar.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Label of the open title-bar menu. |
-| `menu.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Editor and dock context menus. |
-| `menu.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Context menu text. |
-| `menu.selectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Highlighted menu item. The editor context menu highlights with list.hoverBackground instead. Not used yet; reserved for custom menus and the title bar. |
-| `menu.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Text of the highlighted menu item. Not used yet; reserved for custom menus and the title bar. |
-| `menu.separatorBackground` | VS Code | `$separator` | `#354359` | `#cdd4de` | Context menu separators. |
-| `menu.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Context menu border. |
+| `menubar.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the open, hovered, or focused title-bar menu; none by default. |
+| `menu.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Title-bar and context menus. |
+| `menu.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Title-bar and context menus. |
+| `menu.selectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Highlighted item in title-bar and context menus. |
+| `menu.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Highlighted item in title-bar and context menus. |
+| `menu.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the highlighted menu item; none by default. |
+| `menu.separatorBackground` | VS Code | `$separator` | `#354359` | `#cdd4de` | Menu separators. |
+| `menu.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Menu border. |
 | `toolbar.background` | Varia | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Main toolbar. |
 | `toolbar.border` | Varia | `@titleBar.border` | `#2b3443` | `#d3d9e2` | Line below the main toolbar. |
 | `toolbar.hoverBackground` | VS Code | `$text/12` | `#d9e1ec1f` | `#1f27331f` | Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. |
@@ -148,7 +150,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `sideBar.background` | VS Code | `$sideBar` | `#151b24` | `#f3f5f8` | Object Explorer. |
 | `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Object Explorer heading. |
 | `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Lines around the Object Explorer heading and footer. |
-| `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row (command palette rows included), and the highlighted item of the editor context menu. |
+| `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row (command palette rows included). |
 | `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Selected row of a focused list. |
 | `list.activeSelectionForeground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Text of the selected row of a focused list. |
 | `list.inactiveSelectionBackground` | VS Code | `$selection` | `#24324a` | `#d6e3f3` | Selected row of an unfocused list, and the selected result set. |
@@ -255,10 +257,10 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | Dark `$warning/70`, Light `$warning` | `#dfbd82b3` | `#8a5300` | NULL values. |
 | `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#dfbd82` | `#8a5300` | Notice that results were truncated. |
-| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Selected cells. Not used yet; reserved for the results grid. |
-| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of selected cells. Not used yet; reserved for the results grid. |
-| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#24324a` | `#d6e3f3` | Selected cells while the grid is not focused. Not used yet; reserved for the results grid. |
-| `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the active cell. Not used yet; reserved for the results grid. |
+| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Selected cells. |
+| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of selected cells. |
+| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#24324a` | `#d6e3f3` | Selected cells while the grid is not focused; their text keeps its color. |
+| `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the active cell while the grid is focused. |
 | `resultsGrid.hoverBackground` | Varia | `@list.hoverBackground` | `#263041` | `#d0d8e3` | Hovered row. Not used yet; reserved for the results grid. |
 | `resultsMessages.foreground` | Varia | Dark `$accentMuted`, Light `$text` | `#a3bbdc` | `#1f2733` | Text of the Messages tab. |
 

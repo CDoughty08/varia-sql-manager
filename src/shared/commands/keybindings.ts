@@ -171,6 +171,8 @@ export interface ResolvedRule {
   readonly whenSource?: string
   readonly native: boolean
   readonly allowRepeat: boolean
+  /** The key also works while a modal dialog is open. */
+  readonly modal: boolean
 }
 
 /** The spec string that applies on `platform`, or undefined when the keybinding is unbound there. */
@@ -186,7 +188,7 @@ export function resolveKeybinding(command: CommandId, spec: KeybindingSpec, plat
   const chords = parseKeySpec(source, platform)
   if (chords.length > 1 && !spec.native) throw new KeySpecError(`${command}: "${source}" has two parts; only native keybindings may be chords.`)
   return {
-    command, chords, native: spec.native === true, allowRepeat: spec.allowRepeat === true,
+    command, chords, native: spec.native === true, allowRepeat: spec.allowRepeat === true, modal: spec.modal === true,
     ...(spec.when === undefined ? {} : { when: compileWhen(spec.when), whenSource: spec.when })
   }
 }
@@ -226,7 +228,7 @@ const mnemonics = ['alt+f', 'alt+e', 'alt+v', 'alt+q', 'alt+w']
 const reserve = (reason: string, chords: string[]) => chords.map(chord => [chord, reason] as const)
 const windowsAndLinux = [
   ...reserve('opens a menu', [...mnemonics, 'f10']),
-  ...reserve('an Electron role or system key', ['ctrl+r', 'ctrl+shift+i', 'ctrl+0', 'ctrl+=', 'ctrl+shift+=', 'ctrl+-', 'f11', 'alt+f4', 'shift+f10', 'contextmenu']),
+  ...reserve('an Electron role or system key', ['ctrl+shift+i', 'ctrl+0', 'ctrl+=', 'ctrl+shift+=', 'ctrl+-', 'f11', 'alt+f4']),
   ...reserve('clipboard or text editing', ['ctrl+c', 'ctrl+x', 'ctrl+v', 'ctrl+a', 'ctrl+insert', 'shift+insert', 'shift+delete', 'ctrl+z', 'ctrl+y', 'ctrl+shift+z',
     ...['left', 'right', 'backspace', 'delete'].flatMap(key => [`ctrl+${key}`, `ctrl+shift+${key}`])]),
   ...reserve('find or comment in the editor', ['ctrl+f', 'ctrl+h', 'f3', 'shift+f3', 'ctrl+f3', 'ctrl+shift+f3', 'alt+enter', 'ctrl+alt+enter', 'ctrl+shift+1',
@@ -246,7 +248,7 @@ const reservedByPlatform: Readonly<Record<Platform, ReadonlyMap<string, string>>
   linux: reasons([...windowsAndLinux, ...reserve('an Electron role or system key', ['ctrl+q']), ...reserve('find or comment in the editor', ['ctrl+shift+a'])]),
   darwin: reasons([
     ...reserve('a macOS system key', ['meta+q', 'meta+h', 'alt+meta+h', 'meta+m', 'meta+`']),
-    ...reserve('an Electron role', ['ctrl+meta+f', 'alt+meta+i', 'meta+r', 'meta+0', 'meta+=', 'shift+meta+=', 'meta+-']),
+    ...reserve('an Electron role', ['ctrl+meta+f', 'alt+meta+i', 'meta+0', 'meta+=', 'shift+meta+=', 'meta+-']),
     ...reserve('clipboard or undo', ['meta+c', 'meta+x', 'meta+v', 'meta+a', 'meta+z', 'shift+meta+z']),
     ...reserve('find or comment in the editor', ['meta+f', 'alt+meta+f', 'meta+g', 'shift+meta+g', 'meta+e', 'meta+/', ...[...'cwrpl'].map(key => `alt+meta+${key}`)]),
     ...reserve("the editor's chord prefix", ['meta+k']),

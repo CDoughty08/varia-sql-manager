@@ -3,16 +3,17 @@ import { contextRecord, type ContextKeys } from '../../../shared/commands/contex
 import type { Platform } from '../../../shared/commands/keybindings'
 import type { DocumentSnapshot } from '../services/documents'
 import type { EditorOptions } from '../services/editor-options'
+import type { PaneVisibility } from '../services/panes'
 import type { QuerySnapshot } from '../services/queries'
 import { onUnexpectedError } from './errors'
 import type { Disposable, ExternalStore } from './types'
 
-export interface FocusFacts { readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | '' }
+export interface FocusFacts { readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | ''; readonly outputGridFocus: boolean }
 /** The parts of a DOM element and of the editor that `focusFacts` reads, so tests can pass plain objects. */
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '' }
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor', 'output'])
 
 /** Focus keys for the focused element. The find widget is inside the editor, so its inputs give editorFocus and inputFocus. */
@@ -23,7 +24,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   const inputFocus = !editorTextFocus && (element.matches('input, textarea, select') || !!element.closest('[contenteditable]:not([contenteditable="false"])'))
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
-  return { editorFocus, editorTextFocus, inputFocus, activePanel: panels.has(pane) ? pane as FocusFacts['activePanel'] : '' }
+  return { editorFocus, editorTextFocus, inputFocus, activePanel: panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]') }
 }
 
 export interface ContextInputs {
@@ -35,6 +36,7 @@ export interface ContextInputs {
   readonly quickInputVisible: boolean
   readonly wordWrap: boolean
   readonly backendReady: boolean
+  readonly panes?: PaneVisibility
 }
 /** Every context key from service snapshots and focus facts; without focus, the focus keys are false or ''. */
 export function computeContextKeys(inputs: ContextInputs): ContextKeys {
@@ -45,7 +47,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     quickInputVisible: inputs.quickInputVisible, backendReady: inputs.backendReady, editorWordWrap: inputs.wordWrap,
     hasActiveDocument: !!active, multipleDocuments: documents.documents.length > 1, documentBusy: documents.busy, hasConnection: connections.length > 0,
     activeDocumentConnected: !!active?.connectionId && connections.some(connection => connection.id === active.connectionId),
-    queryRunning: !!active && !!inputs.queries[active.id]?.running
+    anyDocumentConnected: documents.documents.some(document => !!document.connectionId && connections.some(connection => connection.id === document.connectionId)),
+    queryRunning: !!active && !!inputs.queries[active.id]?.running, outputPaneVisible: !!inputs.panes?.output
   })
 }
 
@@ -56,6 +59,7 @@ export interface ContextKeyOptions {
   readonly connections: ExternalStore<readonly ConnectionInfo[]>
   readonly editorOptions: ExternalStore<EditorOptions>
   readonly quickInput?: ExternalStore<{ readonly visible: boolean }>
+  readonly panes?: ExternalStore<PaneVisibility>
   readonly editor?: () => FocusEditor<Element> | undefined
   readonly activeElement?: () => Element | null
 }
@@ -70,19 +74,20 @@ export class ContextKeyService implements Disposable {
   private cache?: { readonly inputs: readonly unknown[]; readonly keys: ContextKeys }
   private readonly unsubscribe: (() => void)[]
   constructor(private readonly options: ContextKeyOptions) {
-    this.unsubscribe = [options.documents, options.queries, options.connections, options.editorOptions, options.quickInput].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
+    this.unsubscribe = [options.documents, options.queries, options.connections, options.editorOptions, options.quickInput, options.panes].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
   }
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this
     return {
       platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
-      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: options.editorOptions.getSnapshot().wordWrap, backendReady: this.backendReady
+      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: options.editorOptions.getSnapshot().wordWrap, backendReady: this.backendReady,
+      panes: options.panes?.getSnapshot()
     }
   }
   /** Static and state keys, for enablement: focus keys are false or ''. Cached until a snapshot changes. */
   getState(): ContextKeys {
     const { options } = this
-    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), this.backendReady]
+    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), this.backendReady]
     if (this.cache?.inputs.every((value, index) => value === inputs[index])) return this.cache.keys
     const keys = computeContextKeys(this.inputs())
     this.cache = { inputs, keys }

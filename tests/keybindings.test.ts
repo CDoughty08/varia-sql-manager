@@ -166,10 +166,18 @@ describe('default keybindings', () => {
     expect(defaultRules('win32')).toBe(defaultRules('win32'))
     expect(Object.isFrozen(defaultRules('darwin'))).toBe(true)
     const native = ['edit.find', 'edit.replace', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines']
-    expect(defaultRules('win32').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'file.close', 'edit.undo', 'edit.redo', 'edit.redo', 'window.explorer',
-      'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', ...native])
-    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'edit.undo', 'edit.redo', 'window.explorer',
-      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.previous', ...native])
+    const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll']
+    for (const platform of ['win32', 'linux'] as const) {
+      expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
+        'window.explorer', 'view.toggleResultsPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
+        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh',
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', ...native, ...display, ...output])
+    }
+    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane',
+      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.previous', ...native, ...display, ...output])
+    expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
+    expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])
   })
   it('pick the first one-chord rule as the primary, native or not', () => {
     expect(primaryRule('edit.redo', 'win32')).toMatchObject({ chords: ['ctrl+y'], native: true })
@@ -193,11 +201,11 @@ describe('default keybindings', () => {
   })
   // Before PR2, main's before-input-event and bindFileShortcuts mapped Ctrl/⌘ letters through fileShortcut (this table),
   // and Monaco's addAction bound F5 and Ctrl/⌘+Enter in the editor; the catalogue must give the same commands. Ctrl/⌘
-  // letters it left alone stay unbound, except the keys PR2 adds: the palette and Change Database (SSMS) everywhere, and
-  // the SSMS Execute key in the editor on Windows and Linux.
+  // letters it left alone stay unbound, except the keys PR2 and PR3 add: the palette, Change Database, and the results
+  // pane toggle (SSMS) everywhere, and the SSMS Execute key in the editor on Windows and Linux.
   it('match the legacy file shortcuts and editor actions', () => {
     const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close', 'shift+s': 'file.saveAs' }
-    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase' }
+    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane' }
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute' }, linux: { e: 'query.execute' }, darwin: {} }
     for (const platform of platforms) {
       const primary = platform === 'darwin' ? 'metaKey' : 'ctrlKey'

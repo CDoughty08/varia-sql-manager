@@ -30,6 +30,7 @@ internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot)
 internal sealed record ServerObjectInfo(string Name, string Description);
 internal sealed record TableInfo(string Schema, string Name);
 internal sealed record ColumnInfo(string Name, string DataType);
+internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed class ResultSet(List<ColumnInfo> columns, int batchNumber, int iteration, bool isPlan)
 {
     public List<ColumnInfo> Columns { get; } = columns;

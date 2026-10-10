@@ -1,4 +1,4 @@
-import { _electron as electron, expect } from '@playwright/test'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -216,6 +216,30 @@ try {
   application = await electron.launch(launchOptions)
   await ready(false)
   await expect(page.getByText('All panels are closed.', { exact: true })).toBeVisible()
+  // The saved layout loads after the window shows, and opening the file can take seconds on Windows. Main's read of it
+  // is held here across a reload: the workspace shows nothing rather than "All panels are closed", and a Window choice
+  // made meanwhile applies once the layout has loaded instead of being dropped.
+  await application.evaluate(({ ipcMain }) => {
+    const fs = process.getBuiltinModule('node:fs/promises'), { syncBuiltinESMExports } = process.getBuiltinModule('node:module'), open = fs.open
+    let release
+    const gate = new Promise(resolve => { release = resolve })
+    const state = globalThis.variaLayoutRead = { held: false, commandsReady: false, release: () => { fs.open = open; syncBuiltinESMExports(); release() } }
+    ipcMain.on('varia:commands-ready', (_event, value) => { state.commandsReady = value === true })
+    fs.open = async (path, ...rest) => {
+      if (String(path).endsWith('workspace-layouts.json')) { state.held = true; await gate }
+      return open(path, ...rest)
+    }
+    // The bundled main imports fs/promises by name; this points its bindings at the wrapper.
+    syncBuiltinESMExports()
+  })
+  await page.reload()
+  await expect.poll(() => application.evaluate(() => [globalThis.variaLayoutRead.held, globalThis.variaLayoutRead.commandsReady])).toEqual([true, true])
+  await expect(page.getByText('All panels are closed.', { exact: true })).toHaveCount(0)
+  await windowPane('explorer')
+  await expect(pane('explorer')).toBeHidden()
+  await application.evaluate(() => globalThis.variaLayoutRead.release())
+  await expect(pane('explorer')).toBeVisible()
+  await expect(page.locator('.layout-error')).toHaveCount(0)
   for (const id of ['explorer', 'editor', 'output']) { await windowPane(id); await expect(pane(id)).toBeVisible() }
   await expect(page.locator('.layout-error')).toHaveCount(0)
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
