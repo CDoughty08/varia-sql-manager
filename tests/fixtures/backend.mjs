@@ -15,8 +15,8 @@
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
-import { appendFileSync, existsSync, rmSync, statSync } from 'node:fs'
-import { access, appendFile, open, rename, rm } from 'node:fs/promises'
+import { appendFileSync, existsSync, rmSync } from 'node:fs'
+import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
 import { decodeControl, encodeControl } from '../../src/shared/ipc/wire/msgpack.ts'
@@ -306,8 +306,8 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
   const result = stored.get(resultId)
   if (!result) return missing(id, resultId)
   if (!result.complete) return fail(id, 'RESULT_OPEN', 'Save the results after this result set finishes loading.')
-  if (!existsSync(dirname(path))) return fail(id, 'EXPORT_FAILED', 'NOT_FOUND')
-  if (existsSync(path) && statSync(path).isDirectory()) return fail(id, 'EXPORT_FAILED', 'IS_DIRECTORY')
+  if (!await access(dirname(path)).then(() => true, () => false)) return fail(id, 'EXPORT_FAILED', 'NOT_FOUND')
+  if (await stat(path).then(entry => entry.isDirectory(), () => false)) return fail(id, 'EXPORT_FAILED', 'IS_DIRECTORY')
   const temporary = join(dirname(path), `.varia-${temporaryId}.tmp`)
   const file = await open(temporary, 'wx')
   let last = Date.now()
@@ -315,7 +315,7 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
     const writer = await exportText({ columns: result.columns, pageAt: decodedPageAt(result), rows: result.read, format, headers, nullText }, async writer => {
       for (const chunk of writer.out.take()) await file.write(chunk)
       if (Date.now() - last >= 250) { last = Date.now(); write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: writer.rows, rowsTotal: result.read, bytes: writer.bytes }) }
-      while (control(join('hold', 'results.export')) && !cancelled.has(id)) await sleep(25)
+      while (!cancelled.has(id) && await controlled(join('hold', 'results.export'))) await sleep(25)
       if (cancelled.has(id)) throw new Error('cancelled')
     })
     writer.out.seal()
@@ -328,7 +328,7 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
     fail(id, cancelled.has(id) ? 'CANCELLED' : 'EXPORT_FAILED', cancelled.has(id) ? 'The operation was cancelled.' : 'IO')
   } finally {
     await file.close().catch(() => {})
-    rmSync(temporary, { force: true })
+    await rm(temporary, { force: true }).catch(() => {})
     cancelled.delete(id)
   }
 }
@@ -368,7 +368,7 @@ async function runDirective(id, params, directive) {
     ].slice(0, 1000)
     if (status === 'cancelled') messages.push({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
     if (messages.length) write(FrameKind.EVENT, id, 0, { type: 'messages', messages })
-    while (directive.hold && control(join('hold', 'query.execute')) && !cancelledQueries.has(queryId)) await sleep(25)
+    while (directive.hold && !cancelledQueries.has(queryId) && await controlled(join('hold', 'query.execute'))) await sleep(25)
     if (status === 'completed' && cancelledQueries.has(queryId)) status = 'cancelled'
     const failed = status === 'completed' && directive.errors > 0
     respond(id, {

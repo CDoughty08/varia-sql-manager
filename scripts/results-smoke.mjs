@@ -3,7 +3,7 @@
 // Save Results As, XML, JSON and plan values in their own tabs, Messages, lifecycle, the memory indicator, the grid's
 // menu, styling, panes and tabs. Then, with VARIA_TEST_SQL_SERVER set, part B repeats the essentials against that
 // server through the Release backend. No assertion depends on absolute pixel sizes.
-import { _electron as electron, expect } from '@playwright/test'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
