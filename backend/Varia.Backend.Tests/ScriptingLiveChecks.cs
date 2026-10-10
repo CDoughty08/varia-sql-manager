@@ -838,7 +838,8 @@ internal static partial class ScriptingLiveChecks
                 + report.Retried + " retried; " + report.Executed + " scripts run (" + report.Batches + " batches); scripting " + report.ScriptMs + " ms, running " + report.ExecuteMs
                 + " ms, " + watch.ElapsedMilliseconds + " ms in all");
             foreach (var failure in report.Failures.Take(20)) Console.Error.WriteLine("Script As injection: " + failure);
-            check(report.Failures.Count == 0 && report.Cases == 240 && report.Executed >= 220 && watch.ElapsedMilliseconds < 80_000,
+            // The time bound only catches a matrix that hangs or balloons: CI's 2-vCPU runners take about 80 s, a desktop 45.
+            check(report.Failures.Count == 0 && report.Cases == 240 && report.Executed >= 220 && watch.ElapsedMilliseconds < 240_000,
                 "names built to break out of SMO's comments, headers, banners, brackets, strings, lines and batches script with every DDL verb and header, dependent-object "
                 + "and existence option, and each script run in a rolled-back transaction does only what its verb implies, canary intact (" + report.Cases + " cases, "
                 + report.Executed + " scripts run, " + watch.ElapsedMilliseconds + " ms): " + report.Failures.Count + " failures, first " + report.Failures.FirstOrDefault());
