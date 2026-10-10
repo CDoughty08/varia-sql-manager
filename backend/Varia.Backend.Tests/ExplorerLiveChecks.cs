@@ -107,7 +107,8 @@ internal static class ExplorerLiveChecks
             if (result.Error is not null) { errors.Add(path + ": " + result.Error.Code + " " + result.Error.Message); return; }
             if (depth == 0) return;
             var objects = 0;
-            foreach (var child in result.Nodes.Where(child => child.HasChildren))
+            // Temp tables (tempdb's # names, including the engine's cached #A1B2C3D4 objects) can vanish between listing and expanding.
+            foreach (var child in result.Nodes.Where(child => child.HasChildren && child.Ref.Object?.Name?.StartsWith('#') != true))
                 if (child.Ref.Type == "folder" || objects++ < 1) await Walk(child.Ref, child.Subtype, depth - 1, path + " › " + child.Label);
         }
         var before = client.Requests;

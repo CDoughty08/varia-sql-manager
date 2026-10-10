@@ -1,4 +1,4 @@
-import { _electron as electron, expect } from '@playwright/test'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
@@ -396,6 +396,14 @@ try {
   await expect(page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true })).toBeDisabled()
   expect(failures).toEqual([])
   console.log('Backend restart checks passed: real readiness and reload, crash during execute with Reconnect, manual restart prompt, crash loop, unresponsive warning, and incompatible build.')
+} catch (error) {
+  // CI keeps screenshots only as artifacts, so the log names the step, main's backend states, and the banner.
+  let timer
+  const settled = new Promise(resolve => { timer = setTimeout(resolve, 3000, 'no answer') })
+  const report = async () => ({ step, states: await states().catch(() => 'unavailable'), banner: await banner().allTextContents().catch(() => 'unavailable') })
+  console.log(await Promise.race([report(), settled]))
+  clearTimeout(timer)
+  throw error
 } finally {
   await close()
   for (const pid of orphans) { try { process.kill(pid, 'SIGKILL') } catch { /* Already gone, as it should be. */ } }
