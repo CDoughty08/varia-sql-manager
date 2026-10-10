@@ -43,7 +43,8 @@ export default function OptionsDialog() {
     else if (event.key === 'Enter' && !(event.target instanceof HTMLSelectElement) && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); void ok() }
   }
   const described = optionDescription(focused)
-  return <div className="modal-backdrop"><form className="connection-modal options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate
+  // Focusable itself, so pressing a greyed row, a label or the description keeps focus (and Escape and Enter) in the dialog.
+  return <div className="modal-backdrop"><form className="connection-modal options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void ok() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id="options-title">Options</h2><button type="button" className="icon-button" aria-label="Close options" onClick={close}><Icon name="close" /></button></div>
     <div className="options-body">

@@ -18,6 +18,26 @@ internal static partial class ScriptingCulture
 
     public static CultureInfo Current => Override ?? FromEnvironment.Value;
 
+    private sealed record Derived(CultureInfo Source, CultureInfo Result);
+    private static Derived? formatting;
+
+    /// <summary>The culture scripting threads run in: <see cref="Current"/>'s dates, the invariant culture's numbers. SMO
+    /// formats IDENTITY seeds and sequence bounds with it, and a minus sign such as sv-SE's U+2212 or he-IL's U+200E
+    /// prefix would make the script fail to run (or SMO refuse a sequence).</summary>
+    public static CultureInfo Formatting
+    {
+        get
+        {
+            var current = Current;
+            if (formatting is { } cached && ReferenceEquals(cached.Source, current)) return cached.Result;
+            var culture = (CultureInfo)current.Clone();
+            culture.NumberFormat = (NumberFormatInfo)CultureInfo.InvariantCulture.NumberFormat.Clone();
+            var result = CultureInfo.ReadOnly(culture);
+            formatting = new Derived(current, result);
+            return result;
+        }
+    }
+
     public static CultureInfo Parse(string? tag)
     {
         if (tag is null || tag.Length > 35 || !Tag().IsMatch(tag)) return CultureInfo.InvariantCulture;

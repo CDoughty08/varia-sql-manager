@@ -11,14 +11,14 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 type Loaded = Awaited<ReturnType<VariaApi['getScriptingOptions']>>
 const stored: ScriptingOptions = { ...defaultScriptingOptions, scriptUseDatabase: false, scriptOwner: true }
 function setup(get: () => Promise<Loaded> = async () => ({ ok: true, value: { options: stored } })) {
-  const reports: string[] = []
+  const reports: string[] = [], kinds: string[] = []
   const api = {
     getScriptingOptions: vi.fn<VariaApi['getScriptingOptions']>(get),
     setScriptingOptions: vi.fn<VariaApi['setScriptingOptions']>(async options => ({ ok: true, value: options }))
   }
-  const service = new ScriptingOptionsService(api, message => reports.push(message))
+  const service = new ScriptingOptionsService(api, (message, kind) => { reports.push(message); kinds.push(kind) })
   cleanups.push(() => service.dispose())
-  return { api, service, reports }
+  return { api, service, reports, kinds }
 }
 
 describe('scripting options service', () => {
@@ -34,12 +34,13 @@ describe('scripting options service', () => {
     expect(published).toHaveLength(1)
     expect(reports).toEqual([])
   })
-  it('shows main\'s warning about a reset file once, in the command banner', async () => {
+  it('shows main\'s warning about a reset file once, in the command banner, as a warning', async () => {
     const warning = 'Scripting options were invalid (not valid JSON) and were reset; the original file was kept.'
-    const { service, reports } = setup(async () => ({ ok: true, value: { options: defaultScriptingOptions, warning } }))
+    const { service, reports, kinds } = setup(async () => ({ ok: true, value: { options: defaultScriptingOptions, warning } }))
     await service.load(); await service.load()
     expect(service.getSnapshot()).toEqual({ options: defaultScriptingOptions, loaded: true, warning })
     expect(reports).toEqual([warning])
+    expect(kinds).toEqual(['warning'])
   })
   it('keeps the defaults and says so when the options cannot be read or are not valid', async () => {
     const cases: [() => Promise<Loaded>, string][] = [
@@ -48,10 +49,11 @@ describe('scripting options service', () => {
       [async () => ({ ok: true, value: { options: { ...defaultScriptingOptions, targetServerVersion: '90' } as unknown as ScriptingOptions } }), 'Main sent options this version does not support.']
     ]
     for (const [get, reason] of cases) {
-      const { service, reports } = setup(get)
+      const { service, reports, kinds } = setup(get)
       await service.load()
       expect(service.getSnapshot()).toEqual({ options: defaultScriptingOptions, loaded: true })
       expect(reports).toEqual([`Scripting options could not be loaded, so the defaults are used: ${reason}`])
+      expect(kinds).toEqual(['error'])
     }
   })
   it('reads again after a failed read, and says whether the stored options are in', async () => {

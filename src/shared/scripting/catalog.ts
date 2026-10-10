@@ -168,8 +168,9 @@ const kindData: { readonly [K in NodeKind]?: Data | typeof later } = {
   planGuide: plain('planGuide', 'PlanGuide', 'databaseObject'),
   table: {
     title: 'table', urn: 'Table', preflight: 'table', verbs: verbRow([...ddl, ...dml], ['alter', 'createOrAlter', 'execute']),
-    // SMO writes nothing for a ledger table's history table, which SQL Server creates with the ledger table.
-    subtypeVerbs: { ledgerHistory: verbRow(dml, [...moduleVerbs, 'execute']), droppedLedger: later }
+    // SMO writes nothing for a ledger table's history table, which SQL Server creates with the ledger table, and SQL
+    // Server refuses every change to its rows (Msg 37361), so only SELECT is offered, as for a ledger view.
+    subtypeVerbs: { ledgerHistory: verbRow(['select'], [...moduleVerbs, 'insert', 'update', 'delete', 'execute']), droppedLedger: later }
   },
   view: {
     title: 'view', urn: 'View', preflight: 'module', objectTypes: ['V'], verbs: verbRow([...moduleVerbs, ...dml], ['execute']),

@@ -181,6 +181,7 @@
     "16/table-graph-edge-create.sql": "varia",
     "16/table-graph-edge-insert.sql": "varia",
     "16/table-graph-edge-select.sql": "varia",
+    "16/table-graph-edge-update.sql": "varia",
     "16/table-graph-node-create.sql": "varia",
     "16/table-graph-node-insert.sql": "varia",
     "16/table-graph-node-select.sql": "varia",

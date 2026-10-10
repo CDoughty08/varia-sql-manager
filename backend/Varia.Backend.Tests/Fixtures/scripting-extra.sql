@@ -120,3 +120,40 @@ GO
 DECLARE @sql nvarchar(max) = N'CREATE PROCEDURE dbo.usp_go AS SELECT 1' + NCHAR(13) + NCHAR(10) + N'GO' + NCHAR(13) + NCHAR(10) + N'DROP TABLE dbo.Victim';
 EXEC (@sql);
 GO
+-- Three dependents of one view, each under 8,000,000 bytes but together too large for a script: the definition check
+-- refuses the view before SMO loads any of them.
+DECLARE @part nvarchar(max) = N'/*' + REPLICATE(CONVERT(nvarchar(max), N'-'), 3900000) + N'*/' + NCHAR(10);
+DECLARE @sql nvarchar(max) = N'CREATE FUNCTION dbo.fn_Part1 () RETURNS TABLE AS RETURN SELECT 1 AS One' + NCHAR(10) + @part;
+EXEC (@sql);
+SET @sql = N'CREATE FUNCTION dbo.fn_Part2 () RETURNS TABLE AS RETURN SELECT 1 AS One' + NCHAR(10) + @part;
+EXEC (@sql);
+SET @sql = N'CREATE FUNCTION dbo.fn_Part3 () RETURNS TABLE AS RETURN SELECT 1 AS One' + NCHAR(10) + @part;
+EXEC (@sql);
+GO
+CREATE VIEW dbo.vParts AS SELECT a.One FROM dbo.fn_Part1() AS a CROSS JOIN dbo.fn_Part2() AS b CROSS JOIN dbo.fn_Part3() AS c;
+GO
+-- Definitions that keep an old SSMS header: indented in a comment, commented out at the start of a line, and leading
+-- the definition. Each is the module's own text, so its scripts keep SMO's headers.
+CREATE PROCEDURE dbo.usp_OldHeader AS
+BEGIN
+    -- Restored from an SSMS script:
+    --   /****** Object:  Table [dbo].[Victim]    Script Date: 1/1/2020 10:00:00 AM ******/
+    SELECT 1 AS one;
+END
+GO
+DECLARE @sql nvarchar(max) = N'CREATE PROCEDURE dbo.usp_OldHeaderLine AS' + NCHAR(13) + NCHAR(10)
+    + N'--/****** Object:  StoredProcedure [dbo].[old]    Script Date: 1/1/2010 ******/' + NCHAR(13) + NCHAR(10) + N'SELECT 1 AS one;';
+EXEC (@sql);
+SET @sql = N'/****** Object:  StoredProcedure [dbo].[old]    Script Date: 1/1/2010 ******/' + NCHAR(13) + NCHAR(10)
+    + N'CREATE PROCEDURE dbo.usp_LeadingHeader AS SELECT 1 AS one;';
+EXEC (@sql);
+GO
+-- An encrypted database DDL trigger (OBJECTPROPERTY cannot see one) on an event the checks never raise.
+CREATE TRIGGER trg_SecretDdl ON DATABASE WITH ENCRYPTION FOR CREATE_ASSEMBLY AS SET NOCOUNT ON;
+GO
+-- Negative numbers SMO formats in the scripting culture: an IDENTITY seed and increment, a default, and sequences
+-- that start at their minimum.
+CREATE TABLE dbo.NegativeIdentity (Id int IDENTITY(-100, -1) NOT NULL, Amount decimal(9, 2) NULL CONSTRAINT DF_NegativeIdentity_Amount DEFAULT (-1.5));
+CREATE SEQUENCE dbo.seq_Default;
+CREATE SEQUENCE dbo.seq_Int AS int START WITH 1;
+GO

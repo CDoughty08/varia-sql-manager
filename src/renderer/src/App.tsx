@@ -62,7 +62,7 @@ export default function App() {
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
   const { error: fileError } = useServiceSnapshot(files)
-  const { error: commandError } = useServiceSnapshot(commands)
+  const { error: commandError, kind: commandKind } = useServiceSnapshot(commands)
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
   const enabled = {
     connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'),
@@ -205,7 +205,9 @@ export default function App() {
     </div>
     <BackendBanner />
     {fileError && <div className="global-error" role="alert"><span>{fileError}</span><button aria-label="Dismiss file error" onClick={() => files.clearError()}><Icon name="close" /></button></div>}
-    {commandError && <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>}
+    {commandError && (commandKind === 'warning'
+      ? <div className="global-error warning" role="status"><span>{commandError}</span><button aria-label="Dismiss warning" onClick={() => commands.clearError()}><Icon name="close" /></button></div>
+      : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
         <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>

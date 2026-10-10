@@ -7,7 +7,7 @@ export interface ScriptingOptionsSnapshot {
   /** What every Script As request carries: the defaults until `load` resolves. */
   readonly options: ScriptingOptions
   readonly loaded: boolean
-  /** Main reset an invalid options file; shown once in the command banner. */
+  /** Main reset an invalid options file; shown once in the command banner, as a warning. */
   readonly warning?: string
 }
 export type ScriptingOptionsApi = Pick<VariaApi, 'getScriptingOptions' | 'setScriptingOptions'>
@@ -24,7 +24,7 @@ export class ScriptingOptionsService extends SnapshotStore<ScriptingOptionsSnaps
   private loading?: Promise<boolean>
   private saved = false
   private disposed = false
-  constructor(private readonly api: ScriptingOptionsApi, private readonly report: (message: string) => void) {
+  constructor(private readonly api: ScriptingOptionsApi, private readonly report: (message: string, kind: 'error' | 'warning') => void) {
     super({ options: defaultScriptingOptions, loaded: false })
   }
   get dialog(): ExternalStore<boolean> { return this.dialogStore }
@@ -69,8 +69,8 @@ export class ScriptingOptionsService extends SnapshotStore<ScriptingOptionsSnaps
     if (this.disposed) return false
     // Options saved while the read was in flight are newer than what it returns.
     this.publish({ options: this.saved || !options ? this.getSnapshot().options : options, loaded: true, ...(warning ? { warning } : {}) })
-    if (failure) this.report(`Scripting options could not be loaded, so the defaults are used: ${failure}`)
-    else if (warning) this.report(warning)
+    if (failure) this.report(`Scripting options could not be loaded, so the defaults are used: ${failure}`, 'error')
+    else if (warning) this.report(warning, 'warning')
     return !failure
   }
   dispose(): void {

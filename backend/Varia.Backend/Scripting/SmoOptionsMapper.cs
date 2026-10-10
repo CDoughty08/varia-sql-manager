@@ -18,8 +18,9 @@ internal static class SmoOptionsMapper
         .Select(name => (int.Parse(name[7..], CultureInfo.InvariantCulture), Enum.Parse<SqlServerVersion>(name))).OrderBy(item => item.Item1)];
     public static (int Number, SqlServerVersion Value) Newest => Known[^1];
 
-    /// <param name="databaseContext">False for a pass after the first: the script already starts with its USE.</param>
-    public static MappedOptions Map(ScriptingOptionsDto dto, ScriptVerb verb, ServerProfile profile, bool headers, bool cloud = false, bool databaseContext = true)
+    /// <param name="dependencies">The target is a kind SMO's dependency discovery takes (<see cref="DependencyTypes"/>):
+    /// for the others Generate script for dependent objects has nothing to add, and SMO would refuse the script.</param>
+    public static MappedOptions Map(ScriptingOptionsDto dto, ScriptVerb verb, ServerProfile profile, bool headers, bool cloud = false, bool dependencies = true)
     {
         var warnings = new List<string>();
         var (version, edition, type) = dto.MatchSourceSettings ? FromServer(profile, warnings) : FromOptions(dto);
@@ -35,9 +36,9 @@ internal static class SmoOptionsMapper
             ChangeTracking = dto.ScriptChangeTracking,
             FullTextCatalogs = dto.ScriptFullTextCatalogs,
             // Cloud databases cannot switch databases with USE.
-            IncludeDatabaseContext = dto.ScriptUseDatabase && !cloud && databaseContext,
+            IncludeDatabaseContext = dto.ScriptUseDatabase && !cloud,
             IncludeIfNotExists = dto.CheckExistence,
-            WithDependencies = dto.GenerateDependentObjects,
+            WithDependencies = dto.GenerateDependentObjects && dependencies,
             SchemaQualify = dto.SchemaQualify,
             ScriptDataCompression = dto.ScriptDataCompression,
             ScriptXmlCompression = dto.ScriptDataCompression,
@@ -80,8 +81,21 @@ internal static class SmoOptionsMapper
         return new(options, version, edition, type, warnings);
     }
 
+    /// <summary>The URN types SMO 181's DependencyWalker discovers dependencies for; it refuses every other type (a
+    /// database, an index, a key, a default constraint, a schema, a principal) with "… is not supported in dependency
+    /// discovery". Catalogue URN types, so a default constraint (Column/Default) is not taken for a bound default.</summary>
+    public static readonly HashSet<string> DependencyTypes = ["UserDefinedFunction", "View", "Table", "StoredProcedure", "Default", "Rule", "Trigger", "UserDefinedAggregate",
+        "Synonym", "Sequence", "SecurityPolicy", "UserDefinedDataType", "XmlSchemaCollection", "UserDefinedType", "UserDefinedTableType", "PartitionScheme", "PartitionFunction",
+        "DdlTrigger", "PlanGuide", "SqlAssembly"];
+
+    /// <summary>Whether Generate script for dependent objects applies to an object of this catalogue URN type. Discovery
+    /// works inside one database, so not for a server trigger (a DdlTrigger too), and SMO 181 also fails on a view's
+    /// trigger (it looks for a View below the View).</summary>
+    public static bool Dependencies(string urnType, string? parentUrnType, bool server) =>
+        !server && DependencyTypes.Contains(urnType) && !(urnType == "Trigger" && parentUrnType == "View");
+
     /// <summary>The SMO passes of a DDL verb. Scripter ignores ScriptForCreateDrop for a list of URNs, so DROP And CREATE
-    /// is a DROP pass followed by a CREATE pass, as SSMS writes it; the second pass writes no second USE.</summary>
+    /// is a DROP pass followed by a CREATE pass, as SSMS writes it; SmoScriptRunner drops the second pass's leading USE.</summary>
     public static IReadOnlyList<ScriptVerb> Passes(ScriptVerb verb) => verb == ScriptVerb.DropAndCreate ? [ScriptVerb.Drop, ScriptVerb.Create] : [verb];
 
     /// <summary>The server's own version, edition and engine type (spec B8).</summary>

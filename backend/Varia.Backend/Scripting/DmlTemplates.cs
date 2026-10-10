@@ -39,14 +39,14 @@ internal static class DmlTemplates
     }
 
     /// <summary>The columns a template lists: no dropped ledger columns, only the graph pseudo-columns, and a column set
-    /// in place of its sparse columns; SELECT also leaves out hidden columns, and INSERT and UPDATE every column SQL
-    /// Server fills itself.</summary>
-    public static IReadOnlyList<ColumnRow> Columns(IReadOnlyList<ColumnRow> columns, bool writable)
+    /// in place of its sparse columns; SELECT also leaves out hidden columns, INSERT and UPDATE every column SQL Server
+    /// fills itself, and UPDATE an edge's $from_id and $to_id, which an INSERT must set and nothing may change.</summary>
+    public static IReadOnlyList<ColumnRow> Columns(IReadOnlyList<ColumnRow> columns, bool writable, bool update = false)
     {
         var columnSet = columns.Any(column => column.ColumnSet);
         return [.. columns.Where(column => !column.DroppedLedger && (column.GraphType is null or 2 or 5 or 8) && !(columnSet && column.Sparse)
             && (writable
-                ? !column.Identity && !column.Computed && column.SystemTypeId != Rowversion && column.GeneratedAlways == 0 && column.GraphType != 2
+                ? !column.Identity && !column.Computed && column.SystemTypeId != Rowversion && column.GeneratedAlways == 0 && (update ? column.GraphType is null : column.GraphType != 2)
                 : !column.Hidden))];
     }
 
@@ -73,7 +73,7 @@ internal static class DmlTemplates
 
     public static string Update(string obj, IReadOnlyList<ColumnRow> columns, bool schemaQualify)
     {
-        var listed = Columns(columns, writable: true);
+        var listed = Columns(columns, writable: true, update: true);
         // Fixed text: a name with a line break would end a line comment and run as SQL.
         if (listed.Count == 0) return "-- This object has no updatable columns.";
         var text = new StringBuilder("UPDATE ").Append(obj);

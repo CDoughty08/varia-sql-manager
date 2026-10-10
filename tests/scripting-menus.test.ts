@@ -43,8 +43,9 @@ function allTargets(): ScriptTarget[] {
   })
 }
 const examples: [string, NodeKind, NodeSubtype?, ParentKind?][] = [
-  ['a table', 'table'], ['a history table', 'table', 'history'], ['a view', 'view'], ['a ledger view', 'view', 'ledger'], ['a T-SQL procedure', 'procedure', 'sql'],
-  ['a CLR procedure', 'procedure', 'clr'], ['an inline table-valued function', 'function', 'inline'], ['a scalar function', 'function', 'scalar'], ['an aggregate', 'function', 'aggregate'],
+  ['a table', 'table'], ['a history table', 'table', 'history'], ['a ledger history table', 'table', 'ledgerHistory'], ['a view', 'view'], ['a ledger view', 'view', 'ledger'],
+  ['a T-SQL procedure', 'procedure', 'sql'], ['a CLR procedure', 'procedure', 'clr'], ['an inline table-valued function', 'function', 'inline'], ['a scalar function', 'function', 'scalar'],
+  ['an aggregate', 'function', 'aggregate'],
   ['a DML trigger', 'trigger', undefined, 'table'], ['a database', 'database'], ['a database snapshot', 'database', 'snapshot'], ['an index', 'index', 'nonclustered', 'view'],
   ['a foreign key', 'key', 'foreign', 'table'], ['a user', 'user'], ['a login', 'login'], ['a linked server', 'linkedServer'], ['a certificate (deferred)', 'certificate'],
   ['an extended procedure (deferred)', 'procedure', 'extended'], ['a table type\'s index (not scriptable)', 'index', 'nonclustered', 'tableType']

@@ -243,8 +243,13 @@ internal static class ScriptingChecks
             "DROP And CREATE is a DROP pass and then a CREATE pass");
         try { SmoOptionsMapper.Map(dto, ScriptVerb.DropAndCreate, Box2022, true); check(false, "DROP And CREATE mapped to one pass"); }
         catch (InvalidOperationException) { check(true, "DROP And CREATE is never mapped as one SMO pass"); }
-        check(!SmoOptionsMapper.Map(dto, ScriptVerb.Create, Box2022, true, databaseContext: false).Options.IncludeDatabaseContext
-            && !SmoOptionsMapper.Map(dto, ScriptVerb.Create, Box2022, true, cloud: true).Options.IncludeDatabaseContext, "a later pass and a cloud database write no USE");
+        check(!SmoOptionsMapper.Map(dto, ScriptVerb.Create, Box2022, true, cloud: true).Options.IncludeDatabaseContext, "a cloud database writes no USE");
+        var dependents = dto with { GenerateDependentObjects = true };
+        check(SmoOptionsMapper.Map(dependents, ScriptVerb.Create, Box2022, true).Options.WithDependencies && !SmoOptionsMapper.Map(dependents, ScriptVerb.Create, Box2022, true, dependencies: false).Options.WithDependencies
+            && SmoOptionsMapper.Dependencies("View", null, false) && SmoOptionsMapper.Dependencies("Trigger", "Table", false) && SmoOptionsMapper.Dependencies("DdlTrigger", null, false)
+            && !SmoOptionsMapper.Dependencies("Trigger", "View", false) && !SmoOptionsMapper.Dependencies("DdlTrigger", null, true) && !SmoOptionsMapper.Dependencies("Database", null, true)
+            && !SmoOptionsMapper.Dependencies("Index", "Table", false) && !SmoOptionsMapper.Dependencies("Column/Default", "Table", false),
+            "Generate script for dependent objects reaches SMO only for the kinds its dependency discovery takes");
 
         // Versions and editions (spec B8).
         var versions = new (int Major, SqlServerVersion Expected)[]
@@ -303,6 +308,22 @@ internal static class ScriptingChecks
         var commented = Header("p") + "\r\nCREATE PROC p AS -- Script Date: kept from 2019\r\nSELECT 1 /* Script Date: */";
         check(HeaderGuard.Safe(commented) && HeaderGuard.Dated(commented) == 1 && HeaderGuard.Dated("CREATE PROC p AS -- Script Date: x") == 0
             && HeaderGuard.Dated("x\r" + Header("a") + "\u2028y") == 1, "a module's own mention of Script Date: is not a header, so it neither fails the guard nor counts");
+        // A definition that keeps an old SSMS header, indented or commented out, fails the guard; the script without
+        // headers then differs only by SMO's own header lines, so they stay.
+        var body = "CREATE PROCEDURE [dbo].[p] AS\r\n    --   " + Header("Locked") + "\r\nSELECT 1;";
+        string[] plain = ["USE [db]", "SET ANSI_NULLS ON", body];
+        check(!HeaderGuard.Safe(body) && HeaderGuard.Aligned(["USE [db]", Header("p") + "\r\nSET ANSI_NULLS ON", body], plain)
+            && HeaderGuard.Aligned(["USE [db]", Header("p") + "\nSET ANSI_NULLS ON", Header("p"), body], plain) && HeaderGuard.Aligned(plain, plain),
+            "a script whose headers are all it adds to the script without them keeps them");
+        check(!HeaderGuard.Aligned(["USE [db]", Header("p\r\nDROP TABLE t --") + "\r\nSET ANSI_NULLS ON", body], plain)
+            && !HeaderGuard.Aligned(["USE [db]", "/****** Object:  Table [dbo].[x" + "\r\nSET ANSI_NULLS ON", body], plain)
+            && !HeaderGuard.Aligned(["USE [db]", Header("a*/b") + "\r\nSET ANSI_NULLS ON", body], plain)
+            && !HeaderGuard.Aligned(["USE [db]", Header("p") + "\rSET ANSI_NULLS ON", body], plain)
+            && !HeaderGuard.Aligned(["USE [db]", Header("p") + "\r\nSET ANSI_NULLS ON", body + " "], plain) && !HeaderGuard.Aligned(["USE [db]", body], plain)
+            && !HeaderGuard.Aligned(["USE [db]", "SET ANSI_NULLS ON", body, "DROP TABLE t"], plain),
+            "one that a name splits, ends early, or changes in any other way does not");
+        check(HeaderGuard.Unheaded(body) && HeaderGuard.Unheaded(Header("old") + "\r\nCREATE PROCEDURE p AS SELECT 1;") && !HeaderGuard.Unheaded(Header("x\r\nDROP TABLE t --"))
+            && !HeaderGuard.Unheaded(Header("a*/b")), "without headers a batch may start with a definition's whole old header, not a broken one");
         check(SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\r\nGO\r\nDROP TABLE t") && SmoScriptRunner.Splits("CREATE PROC p AS SELECT 1\n:r other.sql")
             && !SmoScriptRunner.Splits("CREATE PROC p AS SELECT N'\r\nGO\r\n' /*\nGO\n*/") && !SmoScriptRunner.Splits("CREATE TABLE [a\r\nGO\r\nb] (id int)"),
             "a definition is flagged when the query window would split it at a GO or refuse a SQLCMD line, never for GO inside quotes, comments or names");
@@ -342,6 +363,8 @@ internal static class ScriptingChecks
             { Code: "SMO_ERROR", Retryable: true, Message: "Could not script dbo.Orders: Script failed for Table 'dbo.Orders'. Inner text." }
             && Classify(new InvalidOperationException("x")) is null && Classify(new InvalidOperationException("x"), broken: true)?.Code == "CONNECTION_LOST",
             "SMO's own failures join their messages; anything unknown is not a value unless the connection broke");
+        check(Classify(new ScriptRefusedException("a batch starts with a broken header.")) is { Code: "SMO_ERROR", Message: "Could not script dbo.Orders: a batch starts with a broken header." },
+            "a script Varia refuses is a value that says why");
         var messages = Catalog.ErrorCodes.Select(code => ScriptingErrors.Create(Catalog, code, subject with { Display = new string('x', 400) }, new string('d', 5000), 1)).ToList();
         check(messages.All(error => error.Message.Length <= ScriptingErrors.MaxMessage && error.Retryable == Catalog.Retryable(error.Code)) && messages.Count == 14,
             "every message stays within 2,048 characters and carries the catalogue's retryability");
@@ -363,6 +386,17 @@ internal static class ScriptingChecks
         {
             ScriptingCulture.Override = CultureInfo.GetCultureInfo("ja-JP");
             check(ScriptingCulture.Current.Name == "ja-JP", "checks can override the scripting culture");
+            var formats = new List<string>();
+            foreach (var name in new[] { "sv-SE", "he-IL", "ar-SA", "fa-IR" })
+            {
+                ScriptingCulture.Override = CultureInfo.GetCultureInfo(name);
+                var culture = ScriptingCulture.Formatting;
+                var date = new DateTime(2026, 10, 9, 19, 52, 5);
+                if ((-100).ToString(culture) != "-100" || (-1.5m).ToString(culture) != "-1.5" || culture.Name != name || date.ToString(culture) != date.ToString(CultureInfo.GetCultureInfo(name))
+                    || !ReferenceEquals(culture, ScriptingCulture.Formatting))
+                    formats.Add(name);
+            }
+            check(formats.Count == 0, "scripting threads format numbers invariantly (no U+2212 or bidi-marked minus) and dates in the user's culture: " + string.Join(", ", formats));
         }
         finally { ScriptingCulture.Override = null; }
     }

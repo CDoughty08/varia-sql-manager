@@ -163,6 +163,15 @@ describe('ScriptingService', () => {
     expect(documents.newQuery).not.toHaveBeenCalled()
     await expect(scripting.run('create', 'newQuery', orders)).rejects.toThrow(scriptingMessages.notConnected)
   })
+  it('reports a disconnect when the backend cancels a script before the server leaves the connection list', async () => {
+    const { scripting, documents, connections, requests } = setup()
+    const running = scripting.run('create', 'newQuery', orders)
+    // The backend answers its disconnect's cancellation first; App.disconnect removes the connection after.
+    requests[0].settle({ ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' })
+    await expect(running).rejects.toThrow(scriptingMessages.disconnected)
+    connections.remove('server-a')
+    expect(documents.newQuery).not.toHaveBeenCalled()
+  })
   it('turns error values and failed requests into messages, and notes warnings for 8 seconds', async () => {
     const { scripting, requests, advance } = setup()
     const failed = scripting.run('create', 'newQuery', orders)

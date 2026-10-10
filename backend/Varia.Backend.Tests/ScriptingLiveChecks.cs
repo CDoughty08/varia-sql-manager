@@ -179,12 +179,12 @@ internal static partial class ScriptingLiveChecks
             ScriptingCulture.Override = CultureInfo.GetCultureInfo("en-US");
             var english = Normalize((await client.Script(sysjobs, "create")).Text!);
             var same = true;
-            foreach (var name in new[] { "de-DE", "tr-TR", "ja-JP" })
+            foreach (var name in new[] { "de-DE", "tr-TR", "ja-JP", "sv-SE", "he-IL" })
             {
                 ScriptingCulture.Override = CultureInfo.GetCultureInfo(name);
                 same &= Normalize((await client.Script(sysjobs, "create")).Text!) == english;
             }
-            check(same, "scripts in de-DE, tr-TR and ja-JP equal en-US apart from the header date");
+            check(same, "scripts in de-DE, tr-TR, ja-JP, sv-SE and he-IL equal en-US apart from the header date");
         }
         finally { ScriptingCulture.Override = null; }
 
@@ -344,6 +344,32 @@ internal static partial class ScriptingLiveChecks
             if (!Ok(result) || !result.Text!.Contains("DROP", StringComparison.Ordinal)) failed.Add(target.Kind + " " + target.Name + ": " + (result.Error?.Message ?? "no DROP"));
         }
         check(failed.Count == 0, "Script as DROP resolves every kind of the scratch fixture: " + string.Join("; ", failed));
+        // SMO's dependency discovery refuses most kinds (databases, indexes, keys, principals); the option then adds nothing.
+        failed.Clear();
+        var dependents = client.Options with { GenerateDependentObjects = true };
+        foreach (var (target, contains) in objects.Append((new ObjectRefDto("login", Name: "sa"), "CREATE LOGIN [sa]"))
+            .Append((new ObjectRefDto("serverTrigger", Name: db + "_trg"), "CREATE TRIGGER [" + db + "_trg] ON ALL SERVER")))
+        {
+            var result = await client.Script(target, "create", dependents);
+            if (!Ok(result) || !result.Text!.Contains(contains, StringComparison.Ordinal)) failed.Add(target.Kind + " " + target.Name + ": " + (result.Error?.Message ?? Excerpt(result.Text, contains)));
+        }
+        check(failed.Count == 0, "Script as CREATE resolves every kind with Generate script for dependent objects on: " + string.Join("; ", failed));
+        // DROP And CREATE is the DROP script, then the CREATE script after its USE: the CREATE half keeps the USE batches
+        // SMO writes inside it (a database's extended properties are added in the database, then the script returns to master).
+        failed.Clear();
+        var golden = GoldenText.Load();
+        foreach (var target in new[] { new ObjectRefDto("database", Name: db), Schema("table", "Sales", "Orders"), Schema("view", "dbo", "vCustomers"), Schema("procedure", "Sales", "usp_Orders"),
+            Named("schema", "Sales"), Child("index", "table", "Sales", "Orders", "IX_Orders_Customer"), Child("trigger", "table", "Sales", "Orders", "TR_Orders_Audit"), new ObjectRefDto("login", Name: "sa") })
+        {
+            // Spec G5's normalization: a login's CREATE carries a new random password each time.
+            var create = golden.Normalize((await client.Script(target, "create")).Text ?? "");
+            var drop = golden.Normalize((await client.Script(target, "drop")).Text ?? "");
+            var both = golden.Normalize((await client.Script(target, "dropAndCreate")).Text ?? "");
+            var use = create.StartsWith("USE [", StringComparison.Ordinal) ? create.IndexOf("\nGO\n\n", StringComparison.Ordinal) + 5 : -1;
+            if (use < 0 || !drop.StartsWith(create[..use], StringComparison.Ordinal) || both != drop + create[use..])
+                failed.Add(target.Kind + " " + target.Name + (use < 0 ? ": no USE" : " differs at " + GoldenText.FirstDifference(drop + create[use..], both)));
+        }
+        check(failed.Count == 0, "DROP And CREATE is the DROP script followed by the CREATE script after its USE: " + string.Join("; ", failed));
 
         var secret = Schema("procedure", "dbo", "usp_Secret");
         var encrypted = await client.Script(secret, "create");
@@ -402,6 +428,8 @@ internal static partial class ScriptingLiveChecks
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
         await SchemaLockAsync(check, service, client, json, Schema("table", "dbo", "Victim"), db);
         await DefinitionsAsync(check, client, Schema);
+        await OldHeadersAsync(check, client, db);
+        await CultureAsync(check, client, sql, db);
         await GoldenAsync(check, service, client, scratch, sql, live, json);
     }
 
@@ -461,6 +489,12 @@ internal static partial class ScriptingLiveChecks
             + "Scripting and try again." && allocated < 48_000_000,
             "a trigger or dependent definition over 8,000,000 bytes is refused before SMO loads it (" + allocated / 1_000_000 + " MB allocated): " + largeTrigger.Error?.Message + " " + largeView.Error?.Message);
         check(Ok(await client.Script(schema("view", "dbo", "vLarge"), "create")), "the view over the large function scripts on its own");
+        allocated = GC.GetTotalAllocatedBytes(true);
+        var parts = await client.Script(schema("view", "dbo", "vParts"), "create", dependents);
+        allocated = GC.GetTotalAllocatedBytes(true) - allocated;
+        check(parts.Error is { Code: "TOO_LARGE" } && parts.Error.Message.StartsWith("The script for dbo.vParts is longer than 4,000,000 characters", StringComparison.Ordinal)
+            && allocated < 48_000_000, "dependents each under 8,000,000 bytes that together could not fit in a script are refused before SMO loads them ("
+            + allocated / 1_000_000 + " MB allocated): " + parts.Error?.Message);
 
         // A stored line the query window reads as GO would run the rest of the definition as a batch of its own.
         var split = await client.Script(schema("procedure", "dbo", "usp_go"), "create");
@@ -468,6 +502,67 @@ internal static partial class ScriptingLiveChecks
             "a definition with a GO line scripts as stored, with a warning that running it would split it: " + string.Join(" ", split.Warnings));
         var drop = await client.Script(schema("procedure", "dbo", "usp_go"), "drop");
         check(Ok(drop) && drop.Warnings.Count == 0, "its DROP carries no warning");
+    }
+
+    /// <summary>Definitions that keep an old SSMS header in their own text (spec C7): the guard cannot tell such a line from
+    /// a header, so the script is made again without headers, and SMO's headers stay because they are all it differs by.</summary>
+    private static async Task OldHeadersAsync(Action<bool, string> check, Client client, string db)
+    {
+        var failed = new List<string>();
+        foreach (var name in new[] { "usp_OldHeader", "usp_OldHeaderLine", "usp_LeadingHeader" })
+        {
+            var target = new ObjectRefDto("procedure", db, "dbo", name);
+            var header = "/****** Object:  StoredProcedure [dbo].[" + name + "]    Script Date: ";
+            foreach (var verb in new[] { "create", "alter", "createOrAlter", "dropAndCreate" })
+            {
+                var result = await client.Script(target, verb);
+                if (!Ok(result) || !result.Text!.Contains(header, StringComparison.Ordinal) || !result.Text.Contains("Script Date: 1/1/20", StringComparison.Ordinal)
+                    || result.Warnings.Count > 0 || !Framed(result.Text))
+                    failed.Add(name + " " + verb + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
+            }
+            var plain = await client.Script(target, "create", client.Options with { IncludeHeaders = false });
+            if (!Ok(plain) || plain.Text!.Contains(header, StringComparison.Ordinal) || !plain.Text.Contains("Script Date: 1/1/20", StringComparison.Ordinal) || plain.Warnings.Count > 0)
+                failed.Add(name + " without headers: " + (plain.Error?.Message ?? string.Join(" ", plain.Warnings)));
+        }
+        check(failed.Count == 0, "a definition holding an old SSMS header scripts as stored with every DDL verb, with headers on or off: " + string.Join("; ", failed));
+        var secret = new ObjectRefDto("databaseTrigger", db, Name: "trg_SecretDdl");
+        var encrypted = await client.Script(secret, "create");
+        check(encrypted.Error is { Code: "ENCRYPTED" } && encrypted.Error.Message == "trg_SecretDdl is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work."
+            && Ok(await client.Script(secret, "drop")), "an encrypted database trigger is ENCRYPTED for a login that may view definitions, and still scripts DROP: " + encrypted.Error?.Message);
+    }
+
+    /// <summary>The scripting culture formats only the header's date (spec F): a minus sign such as sv-SE's U+2212 or
+    /// he-IL's bidi-marked one would make IDENTITY fail to run and SMO refuse a sequence that starts at its minimum.</summary>
+    private static async Task CultureAsync(Action<bool, string> check, Client client, Func<string, string, Task<SqlRun>> sql, string db)
+    {
+        var targets = new[] { new ObjectRefDto("table", db, "dbo", "NegativeIdentity"), new ObjectRefDto("sequence", db, "dbo", "seq_Default"), new ObjectRefDto("sequence", db, "dbo", "seq_Int") };
+        var options = client.Options with { ScriptUseDatabase = false };
+        var english = new List<string>();
+        var hebrew = new List<string>();
+        var differs = new List<string>();
+        try
+        {
+            ScriptingCulture.Override = CultureInfo.GetCultureInfo("en-US");
+            foreach (var target in targets) english.Add(Normalize((await client.Script(target, "create", options)).Text ?? ""));
+            foreach (var name in new[] { "sv-SE", "he-IL", "ar-SA" })
+            {
+                ScriptingCulture.Override = CultureInfo.GetCultureInfo(name);
+                for (var i = 0; i < targets.Length; i++)
+                {
+                    var result = await client.Script(targets[i], "create", options);
+                    if (!Ok(result) || Normalize(result.Text!) != english[i])
+                        differs.Add(name + " " + targets[i].Name + ": " + (result.Error?.Message ?? GoldenText.FirstDifference(english[i], Normalize(result.Text!))));
+                    else if (name == "he-IL") hebrew.Add(result.Text!);
+                }
+            }
+        }
+        finally { ScriptingCulture.Override = null; }
+        // The he-IL scripts create the objects again.
+        var dropped = await sql("DROP TABLE dbo.NegativeIdentity;\nDROP SEQUENCE dbo.seq_Default;\nDROP SEQUENCE dbo.seq_Int;", db);
+        var ran = hebrew.Count == targets.Length ? await sql(string.Concat(hebrew), db) : null;
+        check(english[0].Contains("[Id] [int] IDENTITY(-100,-1) NOT NULL", StringComparison.Ordinal) && english[0].Contains("DEFAULT ((-1.5))", StringComparison.Ordinal)
+            && english[1].Contains("START WITH -9223372036854775808", StringComparison.Ordinal) && differs.Count == 0 && dropped.Status == "completed" && ran?.Status == "completed",
+            "scripts in sv-SE, he-IL and ar-SA equal en-US apart from the header date, negative numbers included, and run: " + string.Join("; ", differs) + " " + ran?.Error);
     }
 
     /// <summary>A module's stored text after its name; for a view, after its AS, since SMO writes a view's header up to it.</summary>

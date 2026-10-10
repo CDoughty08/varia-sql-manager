@@ -67,8 +67,9 @@ internal static class ScriptingErrors
     };
 
     /// <param name="detail">NOT_SUPPORTED from SMO: the target version and SMO's text; NO_DEFINITION: "server" for a
-    /// server trigger; TOO_LARGE: "definition" for the module pre-check; DATABASE_UNAVAILABLE: the state or server text;
-    /// PERMISSION_DENIED, SMO_ERROR and SQL_ERROR: the server's or SMO's text.</param>
+    /// server or database trigger whose hidden definition may be encrypted; TOO_LARGE: "definition" for the module
+    /// pre-check; DATABASE_UNAVAILABLE: the state or server text; PERMISSION_DENIED, SMO_ERROR and SQL_ERROR: the
+    /// server's or SMO's text, or why Varia refused the script.</param>
     public static ScriptError Create(ScriptingCatalog catalog, string code, ScriptSubject subject, string? detail = null, int number = 0)
     {
         var o = subject.Display;
@@ -113,12 +114,13 @@ internal static class ScriptingErrors
     /// decide; anything unrecognised is null, so the request fails as a backend error.</summary>
     /// <param name="encrypted">The preflight found the module encrypted (PropertyCannotBeRetrieved then means ENCRYPTED).</param>
     /// <param name="target">The version the script targets, for SMO's version and feature refusals.</param>
-    /// <param name="serverTrigger">A server trigger, whose missing definition has its own message.</param>
+    /// <param name="serverTrigger">A server or database trigger, whose missing definition has its own message.</param>
     public static ScriptError? Classify(ScriptingCatalog catalog, Exception error, ScriptSubject subject, bool encrypted = false, SqlServerVersion? target = null,
         bool serverTrigger = false, bool connectionBroken = false)
     {
         var chain = Chain(error).ToList();
         if (chain.OfType<DependentDefinitionException>().FirstOrDefault() is { } dependent) return Dependent(catalog, dependent, subject);
+        if (chain.OfType<ScriptRefusedException>().FirstOrDefault() is { } refused) return Create(catalog, "SMO_ERROR", subject, refused.Reason);
         if (chain.OfType<ScriptTooLargeException>().Any()) return Create(catalog, "TOO_LARGE", subject);
         if (chain.OfType<EmptyScriptException>().Any()) return Create(catalog, "EMPTY", subject);
         if (chain.OfType<SmoObjectMissingException>().Any()) return Create(catalog, "NOT_FOUND", subject);

@@ -138,6 +138,8 @@ internal static partial class ScriptingLiveChecks
         check(Ok(big) && big.Text!.Length > 1_500_000 && big.Commands < 40, "a 3,000,000-byte procedure scripts in full (" + big.Commands + " commands)");
 
         await RoundTripAsync(check, client, scratch, sql, file.Cases, golden);
+        await CrossDatabaseAsync(check, client, scratch, sql);
+        await RecreateAsync(check, client, scratch, sql);
         await LowPrivilegeAsync(check, service, scratch, sql, live, json);
         await PerformanceAsync(check, service, client, db, timings);
     }
@@ -211,6 +213,43 @@ internal static partial class ScriptingLiveChecks
         var victim = (await sql("SELECT COUNT(*) FROM sys.tables WHERE name IN (N'Victim', N'x*/ DROP TABLE dbo.Victim /*');", copy)).Scalar;
         check(problems.Count == 0 && participants.Count >= 20 && victim == "2",
             "Script As round-trips " + participants.Count + " schema objects through a second database, and a name built to drop a table drops nothing: " + string.Join("; ", problems.Take(4)));
+    }
+
+    /// <summary>Generate script for dependent objects follows a three-part name into another database, so the definition
+    /// check runs in each database a dependent lives in (spec F): the scratch database's 8,000,000-byte function is
+    /// refused before SMO loads it, here from a view in the round-trip database.</summary>
+    private static async Task CrossDatabaseAsync(Action<bool, string> check, Client client, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql)
+    {
+        var copy = scratch.RoundTrip;
+        var setup = await sql("CREATE VIEW dbo.vCrossLarge AS SELECT One FROM [" + scratch.Name + "].dbo.fn_Large();\nGO\nCREATE SYNONYM dbo.synLarge FOR [" + scratch.Name + "].dbo.fn_Large;\nGO\n"
+            + "CREATE VIEW dbo.vSynonymLarge AS SELECT One FROM dbo.synLarge();", copy);
+        var dependents = client.Options with { GenerateDependentObjects = true };
+        var allocated = GC.GetTotalAllocatedBytes(true);
+        var cross = await client.Script(new ObjectRefDto("view", copy, "dbo", "vCrossLarge"), "create", dependents);
+        var synonym = await client.Script(new ObjectRefDto("view", copy, "dbo", "vSynonymLarge"), "create", dependents);
+        allocated = GC.GetTotalAllocatedBytes(true) - allocated;
+        check(setup.Status == "completed" && cross.Error is { Code: "TOO_LARGE" } && cross.Error.Message == "The definition of dbo.fn_Large is larger than 8 MB, which Varia cannot open. "
+            + "Turn off Generate script for dependent objects in Tools › Options › Scripting and try again." && (Ok(synonym) || synonym.Error?.Code == "TOO_LARGE") && allocated < 48_000_000,
+            "a dependent in another database over 8,000,000 bytes is refused before SMO loads it, through a three-part name or a synonym (" + allocated / 1_000_000 + " MB allocated): "
+            + (setup.Error ?? cross.Error?.Message) + " " + synonym.Error?.Message);
+    }
+
+    /// <summary>Runs the round-trip database's DROP And CREATE script on master: the database comes back with its marker
+    /// (SMO adds it after USE of the database), master gains no extended property, and the script ends in master.</summary>
+    private static async Task RecreateAsync(Action<bool, string> check, Client client, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql)
+    {
+        const string marker = "SELECT COUNT(*) FROM sys.extended_properties WHERE class = 0 AND name = N'varia.scratch';";
+        var before = (await sql(marker, "master")).Scalar;
+        var script = await client.Script(new ObjectRefDto("database", Name: scratch.RoundTrip), "dropAndCreate");
+        // Pooled sessions of the round trip may still be in the database, which DROP DATABASE would wait for.
+        await sql("ALTER DATABASE [" + scratch.RoundTrip + "] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;", "master");
+        var run = Ok(script) ? await sql(script.Text!, "master") : null;
+        var master = (await sql(marker, "master")).Scalar;
+        var recreated = (await sql(marker, scratch.RoundTrip)).Scalar;
+        if (master != before && before == "0") await sql("EXEC sys.sp_dropextendedproperty @name = N'varia.scratch';", "master");
+        var uses = Ok(script) ? Regex.Matches(script.Text!, @"^USE \[(.*)\]\r?$", RegexOptions.Multiline) : null;
+        check(run?.Status == "completed" && master == before && recreated == "1" && uses is { Count: > 2 } && uses[^1].Groups[1].Value == "master",
+            "a database's DROP And CREATE script recreates it with its extended property, adds none to master, and ends in master: " + (script.Error?.Message ?? run?.Error) + " master " + before + "→" + master);
     }
 
     /// <summary>The low-privilege login of the scratch fixture (spec G4): EXECUTE on one procedure, SELECT on one table.</summary>

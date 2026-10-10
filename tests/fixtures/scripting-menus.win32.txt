@@ -98,6 +98,56 @@ explorer.context, for a history table
   Copy &Name
   ---
   Re&fresh
+explorer.context, for a ledger history table
+  Select Top 1000 Ro&ws
+  ---
+  &Script Table as >
+    &CREATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    C&REATE OR ALTER To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &DROP To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    DROP A&nd CREATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    ---
+    &SELECT To >
+      &New Query Editor Window
+      &File…
+      C&lipboard
+    &INSERT To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    &UPDATE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    D&ELETE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+    ---
+    E&XECUTE To > (disabled)
+      &New Query Editor Window (disabled)
+      &File… (disabled)
+      C&lipboard (disabled)
+  ---
+  Copy &Name
+  ---
+  Re&fresh
 explorer.context, for a view
   &Script View as >
     &CREATE To >

@@ -110,7 +110,13 @@ GO
 ALTER DATABASE [<scratch>] SET QUERY_STORE = OFF
 GO
 
-EXEC sys.sp_addextendedproperty @name=N'varia.scratch', @value=1 
+USE [<scratch>]
+GO
+
+EXEC [<scratch>].sys.sp_addextendedproperty @name=N'varia.scratch', @value=1 
+GO
+
+USE [master]
 GO
 
 ALTER DATABASE [<scratch>] SET  READ_WRITE 

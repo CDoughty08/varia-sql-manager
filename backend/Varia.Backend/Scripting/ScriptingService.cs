@@ -185,7 +185,7 @@ internal sealed class ScriptingService : IDisposable
             return Result(text, [.. preflight.Warnings, .. warnings]);
         }
         catch (Exception error) when (!token.IsCancellationRequested && ScriptingErrors.Classify(catalog, error, subject, resolved?.Encrypted == true, runner?.Target,
-            target.Kind == "serverTrigger", connection.State is ConnectionState.Broken or ConnectionState.Closed && home is not null) is { } value)
+            target.Kind is "serverTrigger" or "databaseTrigger", connection.State is ConnectionState.Broken or ConnectionState.Closed && home is not null) is { } value)
         {
             return Result(null, [], value);
         }

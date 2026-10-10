@@ -77,6 +77,8 @@ const nbsp = String.fromCharCode(160)
 const editorText = async () => (await page.locator('.monaco-editor .view-lines').innerText()).replaceAll(nbsp, ' ')
 const scriptStatus = () => page.locator('.status-scripting')
 const commandBanner = () => page.locator('.global-error[role="alert"]')
+const warningBanner = () => page.locator('.global-error.warning[role="status"]')
+const focusInDialog = () => dialog().evaluate(element => element.contains(document.activeElement))
 const quickInput = () => page.locator('.quick-input')
 // The smoke window is hidden, so animation frames come once a second; nothing in the menus animates, so presses skip
 // Playwright's stability wait, and assertions still wait for each result.
@@ -153,8 +155,17 @@ try {
   // control's label as disabled, so the press is forced).
   await dialog().locator('label', { hasText: 'Script for server version' }).click({ force: true })
   await expect(dialog().locator('.options-description strong')).toHaveText('Script for server version')
+  // The press leaves focus in the dialog, so Escape still cancels it; so does a press on the greyed list itself.
+  expect(await focusInDialog()).toBe(true)
   await option('Delimit individual statements').focus()
-  console.log('Scripting checks: Alt+T, O opens Tools › Options on the Scripting page, with the version rows greyed and their descriptions a click away.')
+  await option('Script for database engine type').click({ force: true })
+  await expect(dialog().locator('.options-description strong')).toHaveText('Script for database engine type')
+  expect(await focusInDialog()).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(dialog()).toHaveCount(0)
+  await openOptions()
+  await expect(option('Delimit individual statements')).toBeFocused()
+  console.log('Scripting checks: Alt+T, O opens Tools › Options on the Scripting page, with the version rows greyed and their descriptions a click away that keeps Escape working.')
 
   // 2. A changed value is bold and its description shows; Reset to Defaults restores the draft only, and Escape discards it.
   await option('Script USE <database>').selectOption('false')
@@ -327,8 +338,11 @@ try {
   expect(await statusLayout()).toEqual({ fits: true, overflow: false, cut: true })
   await scriptStatus().getByRole('button').focus()
   await page.keyboard.press('Enter')
-  await expect(commandBanner()).toHaveText(viewDefinitionWarning('dbo.Warned'))
-  await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
+  // A warning, not a failure: the banner's polite variant, with no alert.
+  await expect(warningBanner()).toHaveText(viewDefinitionWarning('dbo.Warned'))
+  await expect(commandBanner()).toHaveCount(0)
+  await page.getByRole('button', { name: 'Dismiss warning', exact: true }).click()
+  await expect(warningBanner()).toHaveCount(0)
   // A script's new query opens past the end of a full tab strip, which scrolls to show its tab.
   // From the editor, so New Query does not defer focus to a frame that a hidden window only renders for the screenshot.
   await textbox().focus()
@@ -381,7 +395,7 @@ try {
   await close()
   await writeFile(optionsFile, '{ "version": 1, "options": { "scriptUseDatabase": "no" } }')
   await launch()
-  const banner = page.locator('.global-error[role="alert"]').filter({ hasText: 'Scripting options' })
+  const banner = warningBanner().filter({ hasText: 'Scripting options' })
   await expect(banner).toHaveText('Scripting options were invalid (unsupported values) and were reset; the original file was kept.')
   const files = (await readdir(profile)).filter(name => name.startsWith('scripting-options.json'))
   expect(files).toHaveLength(1)

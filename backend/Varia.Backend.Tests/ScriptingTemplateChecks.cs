@@ -115,6 +115,12 @@ internal static class ScriptingTemplateChecks
             "SELECT lists every visible column, the graph pseudo-columns, and no hidden, internal graph or dropped ledger column");
         check(DmlTemplates.Columns(all, writable: true).Select(column => column.Name).SequenceEqual(["hidden", "$from_id_X", "$to_id_X", "plain"]),
             "INSERT and UPDATE also leave out identity, computed, rowversion, generated always and $node_id columns");
+        // SQL Server refuses to change an edge's ends (Msg 271), though sys.columns does not call them computed.
+        var edge = new[] { C("$edge_id_X") with { GraphType = 2 }, C("$from_id_X", T("nvarchar", 2000)) with { GraphType = 5 }, C("$to_id_X", T("nvarchar", 2000)) with { GraphType = 8 }, C("since") };
+        check(DmlTemplates.Columns(all, writable: true, update: true).Select(column => column.Name).SequenceEqual(["hidden", "plain"])
+            && DmlTemplates.Update("[dbo].[Knows]", edge, true) == Lines("UPDATE [dbo].[Knows]", "   SET [since] = <since, int,>", " WHERE <Search Conditions,,>")
+            && DmlTemplates.Insert("[dbo].[Knows]", edge, true).Contains("([$from_id_X]", StringComparison.Ordinal),
+            "UPDATE also leaves out an edge's $from_id and $to_id, which INSERT keeps");
         var sparse = new[] { C("id"), C("a") with { Sparse = true }, C("b") with { Sparse = true }, C("cs", T("xml", -1)) with { ColumnSet = true, Sparse = false } };
         check(DmlTemplates.Columns(sparse, false).Select(column => column.Name).SequenceEqual(["id", "cs"]) && DmlTemplates.Columns(sparse[..3], false).Count == 3,
             "a column set stands in for its sparse columns; without one, sparse columns are listed");

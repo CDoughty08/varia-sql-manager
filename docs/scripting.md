@@ -74,7 +74,7 @@ CREATE, S = SELECT, I = INSERT, U = UPDATE, Del = DELETE, E = EXECUTE, Mod = Mod
 | `searchPropertyList` | — | Script Search Property List as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `SearchPropertyList` | `databaseObject` |
 | `planGuide` | — | Script Plan Guide as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `PlanGuide` | `databaseObject` |
 | `table` | none, `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `graphNode`, `graphEdge`, `fileTable`, `external`, `system` | Script Table as | ✓ | ○ | ○ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | `Table` | `table` |
-| `table` | `ledgerHistory` | Script Table as | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | ✓ | ✓ | ○ | – | `Table` | `table` |
+| `table` | `ledgerHistory` | Script Table as | ○ | ○ | ○ | ○ | ○ | ✓ | ○ | ○ | ○ | ○ | – | `Table` | `table` |
 | `view` | none, `system` | Script View as | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | `View` | `module` |
 | `view` | `ledger` | Script View as | ✓ | ○ | ○ | ○ | ○ | ✓ | ○ | ○ | ○ | ○ | – | `View` | `module` |
 | `synonym` | — | Script Synonym as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Synonym` | `schemaObject` |

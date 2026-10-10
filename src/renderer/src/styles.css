@@ -190,6 +190,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Tools › Options: SSMS's page tree beside a dense property list (22 px rows), with the focused row's description below. */
 /* Two classes: .connection-modal, later in this file, would otherwise set its own width. */
 .connection-modal.options-dialog { width: min(820px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px)); max-height: none; }
+.connection-modal.options-dialog:focus { outline: none; }
 .options-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .options-pages { flex: 0 0 clamp(150px, 24%, 200px); overflow: auto; padding: 6px 0; border-right: 1px solid var(--varia-dialog-separatorBackground); }
 .options-pages ul { list-style: none; margin: 0; padding: 0; }

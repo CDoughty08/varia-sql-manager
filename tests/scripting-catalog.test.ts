@@ -29,7 +29,7 @@ const nodeName = (node: { kind: string; subtype?: string; parentKind?: string })
 const createDrop = '✓––✓✓––––––'
 const b3: readonly (readonly [NodeKind, readonly (NodeSubtype | '')[] | '*', readonly ParentKind[] | undefined, string, string])[] = [
   ['table', ['', 'system', 'systemVersioned', 'history', 'updatableLedger', 'appendOnlyLedger', 'graphNode', 'graphEdge', 'fileTable', 'external'], undefined, 'Table', '✓○○✓✓✓✓✓✓○–'],
-  ['table', ['ledgerHistory'], undefined, 'Table', '○○○○○✓✓✓✓○–'],
+  ['table', ['ledgerHistory'], undefined, 'Table', '○○○○○✓○○○○–'],
   ['view', ['', 'system'], undefined, 'View', '✓✓✓✓✓✓✓✓✓○–'],
   ['view', ['ledger'], undefined, 'View', '✓○○○○✓○○○○–'],
   ['procedure', ['sql'], undefined, 'Stored Procedure', '✓✓✓✓✓––––✓✓'],
@@ -378,7 +378,7 @@ describe('generated scripting files', () => {
     for (const code of scriptErrorCodes) expect(docs, code).toContain(`| \`${code}\` |`)
     for (const key of Object.keys(scriptLimits)) expect(docs, key).toContain(`| \`${key}\` |`)
     expect(docs).toContain('| `table` | none, `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `graphNode`, `graphEdge`, `fileTable`, `external`, `system` | Script Table as | ✓ | ○ | ○ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | `Table` | `table` |')
-    expect(docs).toContain('| `table` | `ledgerHistory` | Script Table as | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | ✓ | ✓ | ○ | – | `Table` | `table` |')
+    expect(docs).toContain('| `table` | `ledgerHistory` | Script Table as | ○ | ○ | ○ | ○ | ○ | ✓ | ○ | ○ | ○ | ○ | – | `Table` | `table` |')
     expect(docs).toContain('| `procedure` | `sql` | Script Stored Procedure as | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – | – | ✓ | ✓ | `StoredProcedure` | `module` |')
     expect(docs).toContain('| 6 | Script USE &lt;database> | `scriptUseDatabase` | True | ')
     expect(docs).toContain('| 13 | Script permissions | `scriptPermissions` | False (docs page: True) | ')

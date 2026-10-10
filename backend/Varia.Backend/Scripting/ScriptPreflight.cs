@@ -32,19 +32,20 @@ internal static partial class ScriptPreflight
 
     /// <summary>The definitions SMO reads besides the target's own when Script triggers or Generate script for dependent
     /// objects is on: the modules @objects names and, where t = 1, the triggers on them. Names arrive as hex UTF-16, so
-    /// control characters and unpaired surrogates survive the XML. The first module that is encrypted or longer than @max
-    /// bytes comes back, so SMO never loads it (spec F).</summary>
+    /// control characters and unpaired surrogates survive the XML. One row comes back: an encrypted module if there is
+    /// one, else the largest, with the bytes of all of them, so SMO never loads one over the limit or more than fits (spec F).</summary>
     public const string DefinitionCheck = "DECLARE @list xml = CONVERT(xml, @objects);\n"
-        + "SELECT TOP (1) q.schema_name, q.object_name, q.parent_name, CONVERT(bit, ISNULL(q.is_encrypted, 0)) AS is_encrypted FROM (SELECT "
+        + "SELECT TOP (1) q.schema_name, q.object_name, q.parent_name, CONVERT(bit, ISNULL(q.is_encrypted, 0)) AS is_encrypted, CONVERT(bigint, q.bytes) AS bytes, "
+        + "SUM(CONVERT(bigint, q.bytes)) OVER () AS total_bytes FROM (SELECT "
         + "CONVERT(sysname, CONVERT(varbinary(256), l.o.value('@s', 'varchar(512)'), 2)) AS s, CONVERT(sysname, CONVERT(varbinary(256), l.o.value('@n', 'varchar(512)'), 2)) AS n, "
         + "l.o.value('@t', 'bit') AS t FROM @list.nodes('/d/o') AS l(o)) AS w "
         + "JOIN sys.schemas AS sc ON sc.name = w.s JOIN sys.all_objects AS ob ON ob.schema_id = sc.schema_id AND ob.name = w.n "
         + "CROSS APPLY (SELECT sc.name, ob.name, CONVERT(sysname, NULL), OBJECTPROPERTY(ob.object_id, N'IsEncrypted'), DATALENGTH(m.definition) FROM sys.all_sql_modules AS m "
         + "WHERE m.object_id = ob.object_id UNION ALL SELECT sc.name, tr.name, ob.name, OBJECTPROPERTY(tr.object_id, N'IsEncrypted'), DATALENGTH(tm.definition) "
         + "FROM sys.triggers AS tr JOIN sys.all_sql_modules AS tm ON tm.object_id = tr.object_id WHERE w.t = 1 AND tr.parent_id = ob.object_id) "
-        + "AS q(schema_name, object_name, parent_name, is_encrypted, bytes) WHERE q.is_encrypted = 1 OR q.bytes > @max ORDER BY q.is_encrypted DESC;";
+        + "AS q(schema_name, object_name, parent_name, is_encrypted, bytes) ORDER BY CONVERT(bit, ISNULL(q.is_encrypted, 0)) DESC, q.bytes DESC;";
     public const string DefinitionCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
-        + "EXEC @module @stmt, N'@objects nvarchar(max), @max bigint', @objects = @objects, @max = @max;";
+        + "EXEC @module @stmt, N'@objects nvarchar(max)', @objects = @objects;";
 
     /// <summary>The kinds whose statement runs at server scope (the rest run in the object's database).</summary>
     private static readonly HashSet<string> ServerKinds = ["database", "login", "serverRole", "credential", "linkedServer", "backupDevice", "serverTrigger", "audit", "serverAuditSpecification"];
@@ -110,7 +111,11 @@ internal static partial class ScriptPreflight
             "user" => "SELECT dp.principal_id AS object_id FROM sys.database_principals AS dp WHERE dp.name = @name AND dp.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X');",
             "databaseRole" => "SELECT dp.principal_id AS object_id FROM sys.database_principals AS dp WHERE dp.name = @name AND dp.type = 'R';",
             "applicationRole" => "SELECT dp.principal_id AS object_id FROM sys.database_principals AS dp WHERE dp.name = @name AND dp.type = 'A';",
-            "databaseTrigger" => "SELECT tr.object_id AS object_id, tr.type AS object_type, tr.is_ms_shipped AS is_ms_shipped, " + Module("tr") + " "
+            // Database triggers are not in sys.objects, so OBJECTPROPERTY knows nothing of them: a hidden definition is
+            // encrypted when the login may view every definition in the database, and unknown otherwise.
+            "databaseTrigger" => "SELECT tr.object_id AS object_id, tr.type AS object_type, tr.is_ms_shipped AS is_ms_shipped, "
+                + "CONVERT(bit, CASE WHEN m.definition IS NOT NULL THEN 0 WHEN HAS_PERMS_BY_NAME(NULL, N'DATABASE', N'VIEW DEFINITION') = 1 THEN 1 END) AS is_encrypted, "
+                + "CONVERT(bit, CASE WHEN m.definition IS NULL THEN 0 ELSE 1 END) AS has_definition, CONVERT(bigint, DATALENGTH(m.definition)) AS definition_bytes "
                 + "FROM sys.triggers AS tr LEFT JOIN sys.all_sql_modules AS m ON m.object_id = tr.object_id WHERE tr.parent_class = 0 AND tr.name = @name;",
             "databaseAuditSpecification" => "SELECT das.database_specification_id AS object_id FROM sys.database_audit_specifications AS das WHERE das.name = @name;",
             "fullTextCatalog" => "SELECT fc.fulltext_catalog_id AS object_id FROM sys.fulltext_catalogs AS fc WHERE fc.name = @name;",
@@ -378,7 +383,7 @@ internal static partial class ScriptPreflight
         if (sqlModule && verb.Verb is ScriptVerb.Create or ScriptVerb.Alter or ScriptVerb.CreateOrAlter or ScriptVerb.DropAndCreate)
         {
             if (encrypted == true) return new(null, ScriptingErrors.Create(catalog, "ENCRYPTED", subject), []);
-            if (!visible) return new(null, ScriptingErrors.Create(catalog, "NO_DEFINITION", subject, kind == "serverTrigger" ? "server" : null), []);
+            if (!visible) return new(null, ScriptingErrors.Create(catalog, "NO_DEFINITION", subject, encrypted is null && kind is "serverTrigger" or "databaseTrigger" ? "server" : null), []);
             if (bytes > MaxDefinitionBytes) return new(null, ScriptingErrors.Create(catalog, "TOO_LARGE", subject, "definition"), []);
         }
         var warnings = new List<string>();

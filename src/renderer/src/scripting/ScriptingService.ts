@@ -111,7 +111,9 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
       throw job.disconnected ? new Error(scriptingMessages.disconnected) : error
     } finally { this.remove(job) }
     if (job.cancelled || this.disposed) return
-    if (job.disconnected || !this.isLive(connectionId)) throw new Error(scriptingMessages.disconnected)
+    // The backend cancels a script on its own only when its server disconnects (or the backend stops), and that answer
+    // can arrive before the connection list drops the server.
+    if (job.disconnected || !this.isLive(connectionId) || !result.ok && result.code === 'CANCELLED') throw new Error(scriptingMessages.disconnected)
     const value = unwrap(result)
     if (value.error) throw new Error(value.error.message)
     if (value.text === undefined) throw new Error(`SQL Server Management Objects produced no script for ${job.label}.`)
