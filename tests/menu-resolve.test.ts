@@ -35,7 +35,7 @@ describe('menu resolution', () => {
     expect(marked(resolveMenu('window', options({ platform: 'linux' })))).toEqual(windowMenu)
     // macOS's Minimize and Zoom are bare Electron roles: only its native menu shows them.
     expect(marked(resolveMenu('window', options({ platform: 'darwin' })))).toEqual(windowMenu)
-    expect(marked(resolveMenu('file', options()))).toEqual(['Conn&ect to Server…', '&Disconnect from Server…', '-', '&New Query', '&Open…', '&Save', 'Save &As…', '-', '&Close Query', '-', 'E&xit'])
+    expect(marked(resolveMenu('file', options()))).toEqual(['Conn&ect to Server…', '&Disconnect from Server…', '&Reconnect…', '-', '&New Query', '&Open…', '&Save', 'Save &As…', '-', '&Close Query', '-', 'E&xit'])
     expect(marked(resolveMenu('file', options({ platform: 'linux' }))).at(-1)).toBe('&Quit')
     expect(resolveMenu('file', options({ platform: 'linux' })).at(-1)).toMatchObject({ id: 'window.close', keybinding: { text: 'Ctrl+Q' } })
     expect(resolveMenu('file', options()).at(-1)).toMatchObject({ id: 'window.close', keybinding: { text: 'Alt+F4' } })
@@ -47,7 +47,7 @@ describe('menu resolution', () => {
     const query = resolveMenu('query', resolved)
     const shape = (items: readonly ResolvedMenuItem[]): unknown[] => items.map(item => item.kind === 'command' ? [item.id, item.enabled, item.args] : item.kind === 'submenu' ? shape(item.items) : item.kind)
     expect(shape(query)).toEqual([
-      [['connection.connect', true, args], ['query.disconnect', true, args], ['query.disconnectAll', true, args], 'separator', ['query.changeConnection', true, args]],
+      [['connection.connect', true, args], ['query.disconnect', true, args], ['query.disconnectAll', true, args], ['connection.reconnect', true, args], 'separator', ['query.changeConnection', true, args]],
       ['query.changeDatabase', true, args], 'separator', ['query.execute', false, args], ['query.cancel', true, args]
     ])
     expect(resolved.commands.isEnabled).toHaveBeenCalledWith('query.execute', args)

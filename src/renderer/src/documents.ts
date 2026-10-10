@@ -1,4 +1,4 @@
-import type { QueryResult, SqlFile } from '../../shared/contracts'
+import type { DisplayQueryResult, SqlFile } from '../../shared/contracts'
 
 export interface QueryDocument {
   readonly id: string
@@ -8,10 +8,12 @@ export interface QueryDocument {
   readonly connectionId?: string
   readonly database: string
   readonly file?: SqlFile
+  /** Reconnect moved this query to a new session; its next execution says so before its own messages. */
+  readonly sessionNotice?: boolean
 }
 
 // Presentation projection; results are owned by QueryService.
-export interface QueryTab extends QueryDocument { result?: QueryResult; error?: string }
+export interface QueryTab extends QueryDocument { result?: DisplayQueryResult; error?: string }
 
 export function afterClose<T extends { id: string }>(tabs: readonly T[], activeId: string, closingId: string): { tabs: T[]; activeId: string } {
   const index = tabs.findIndex(tab => tab.id === closingId)

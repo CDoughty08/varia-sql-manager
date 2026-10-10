@@ -1,12 +1,14 @@
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ClipboardEvent, type KeyboardEvent, type PointerEvent } from 'react'
-import type { QueryResult, ResultSet } from '../../shared/contracts'
+import type { DisplayQueryResult, DisplayResultSet } from '../../shared/contracts'
 import { chordFromEvent, type Platform } from '../../shared/commands/keybindings'
 import { useWorkbench } from './core/WorkbenchContext'
 import { columnTitle, describeRange, dragSelection, pressButton, pressSelection, rangeOf, tooLargeToCopy, toTsv, type GridHit } from './grid/selection'
 
-interface Props { tabId: string; result?: QueryResult; error?: string; running: boolean; connected: boolean }
+/** `hint` replaces the empty state's advice, for example when the query's connection was lost. `rowsRead` counts the
+ *  rows a running script has read so far. */
+interface Props { tabId: string; result?: DisplayQueryResult; error?: string; running: boolean; rowsRead?: number; connected: boolean; hint?: string }
 type View = 'results' | 'messages'
-const initialView = (result?: QueryResult, error?: string): View => error || result?.error || result?.resultSets.length === 0 ? 'messages' : 'results'
+const initialView = (result?: DisplayQueryResult, error?: string): View => error || result?.error || result?.resultSets.length === 0 ? 'messages' : 'results'
 const selectAllChord = (platform: Platform) => platform === 'darwin' ? 'meta+a' : 'ctrl+a'
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 
@@ -22,7 +24,7 @@ function hitOf(target: EventTarget | null): GridHit | undefined {
 }
 
 /** One result row; it re-renders only when its selected span or active cell changes. */
-const GridRow = memo(function GridRow({ values, row, left, right, active }: { values: ResultSet['rows'][number]; row: number; left: number; right: number; active: number }) {
+const GridRow = memo(function GridRow({ values, row, left, right, active }: { values: DisplayResultSet['rows'][number]; row: number; left: number; right: number; active: number }) {
   return <tr><td className="row-number" data-row={row}>{row + 1}</td>{values.map((value, column) => {
     const className = [column >= left && column <= right ? 'selected' : '', column === active ? 'active-cell' : ''].filter(Boolean).join(' ')
     return <td key={column} data-row={row} data-col={column} className={className || undefined} title={value === null ? 'NULL' : String(value)}>{value === null ? <span className="null-value">NULL</span> : String(value)}</td>
@@ -33,7 +35,7 @@ const GridRow = memo(function GridRow({ values, row, left, right, active }: { va
  * A result set as SSMS shows it: press a cell, a row number, a column header, or the corner to select, Shift to extend,
  * and drag to grow the rectangle; Ctrl+A selects everything and Ctrl+C copies the selection as tab-separated text.
  */
-function ResultGrid({ tabId, set, resultIndex }: { tabId: string; set: ResultSet; resultIndex: number }) {
+function ResultGrid({ tabId, set, resultIndex }: { tabId: string; set: DisplayResultSet; resultIndex: number }) {
   const { resultSelection, platform, commands } = useWorkbench()
   const selection = useSyncExternalStore(resultSelection.subscribe, () => resultSelection.get(tabId, resultIndex))
   const rows = set.rows.length, columns = set.columns.length
@@ -102,7 +104,7 @@ function ResultGrid({ tabId, set, resultIndex }: { tabId: string; set: ResultSet
   </div>
 }
 
-function QueryOutput({ tabId, result, error, running, connected }: Props) {
+function QueryOutput({ tabId, result, error, running, rowsRead, connected, hint }: Props) {
   const { platform } = useWorkbench()
   const [view, setView] = useState<View>(() => initialView(result, error))
   const [index, setIndex] = useState(0)
@@ -148,7 +150,7 @@ function QueryOutput({ tabId, result, error, running, connected }: Props) {
         {set.truncated && <div className="truncation">Output truncated by display limits. See Messages.</div>}
         {set.incomplete && <div className="truncation">This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.</div>}
       </> : <div className="output-empty">{statusText}.{result.recordsAffected >= 0 ? ' ' + result.recordsAffected + ' rows affected.' : ''}</div>}
-    </> : <div className="output-empty"><strong>{running ? 'Your query is running…' : 'Query results'}</strong><p>{connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.'}</p></div>}
+    </> : <div className="output-empty"><strong>{running ? 'Your query is running…' + (rowsRead === undefined ? '' : ' ' + rowsRead.toLocaleString('en-US') + (rowsRead === 1 ? ' row' : ' rows')) : 'Query results'}</strong><p>{hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>}
   </section>
 }
 

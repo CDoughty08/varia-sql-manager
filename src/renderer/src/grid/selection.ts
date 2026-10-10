@@ -1,5 +1,5 @@
 import type { Platform } from '../../../shared/commands/keybindings'
-import type { ResultSet } from '../../../shared/contracts'
+import type { DisplayResultSet } from '../../../shared/contracts'
 
 /** A data cell: its row and column index in the result set. */
 export interface Cell { readonly row: number; readonly column: number }
@@ -40,7 +40,7 @@ export const columnTitle = (name: string): string => name ? cellText(name) : noC
  * The selected cells as tab-separated text, one line per row with no line break after the last, optionally after a
  * line of column headers. Throws a RangeError rather than build text over `maxCopyLength`.
  */
-export function toTsv(set: Pick<ResultSet, 'columns' | 'rows'>, selection: GridSelection, options: { readonly headers: boolean; readonly eol: '\r\n' | '\n' }): string {
+export function toTsv(set: Pick<DisplayResultSet, 'columns' | 'rows'>, selection: GridSelection, options: { readonly headers: boolean; readonly eol: '\r\n' | '\n' }): string {
   const range = rangeOf(selection, set.rows.length, set.columns.length)
   if (range.right < range.left) return ''
   const columns = Array.from({ length: range.right - range.left + 1 }, (_, index) => range.left + index)

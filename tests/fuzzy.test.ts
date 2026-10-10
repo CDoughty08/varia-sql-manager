@@ -38,8 +38,10 @@ describe('fuzzy matching', () => {
     // A category match is no better than the same words in a title, so an available command wins the tie.
     expect(palette('object explorer', ['Object Explorer: Refresh'])).toEqual(['View: Show Object Explorer', 'Object Explorer: Refresh'])
     expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
-    // The word in the title outranks the same word in the category, and in another command's title.
-    expect(palette('connect').slice(0, 2)).toEqual(['Connection: Connect to Server…', 'Query: Change Connection…'])
+    // The word in the title outranks the same word in the category, and in another command's title. Reconnect is
+    // unavailable until a connection is lost, so it ranks below the commands that tie with it.
+    expect(palette('connect', ['Connection: Reconnect…']).slice(0, 2)).toEqual(['Connection: Connect to Server…', 'Query: Change Connection…'])
+    expect(palette('restart')[0]).toBe('Connection: Restart SQL Backend…')
     expect(palette('conn')[0]).toBe('Connection: Connect to Server…')
   })
   it('does not match letters scattered from the middle of words', () => {

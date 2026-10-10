@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ApiResult, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
+import type { ApiResult, BackendState, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
@@ -36,6 +36,15 @@ const api: VariaApi = {
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
   closeQuerySession: sessionId => request('query.session.close', { sessionId }),
+  getBackendState: () => ipcRenderer.invoke('varia:backend-state-get'),
+  onBackendState: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: BackendState) => callback(state)
+    ipcRenderer.on('varia:backend-state', listener)
+    return () => { ipcRenderer.removeListener('varia:backend-state', listener) }
+  },
+  restartBackend: () => ipcRenderer.invoke('varia:backend-restart'),
+  openResultsPort: () => ipcRenderer.invoke('varia:results-port-open'),
+  testMode: process.argv.includes('--varia-test-mode'),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),
@@ -70,3 +79,6 @@ const api: VariaApi = {
   }
 }
 contextBridge.exposeInMainWorld('varia', api)
+// The results port goes to the page itself (window message, then ResultClient hands it to the results worker); no port,
+// postMessage or invoke is ever exposed on window.varia.
+ipcRenderer.on('varia:results-port', event => { window.postMessage({ type: 'varia:results-port' }, '*', event.ports) })

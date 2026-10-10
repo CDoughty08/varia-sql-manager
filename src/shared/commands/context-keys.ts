@@ -26,19 +26,22 @@ export const contextKeys = {
   activePanel: { type: 'enum', scope: 'focus', values: ['explorer', 'editor', 'output', ''], description: "The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none." },
   outputGridFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in a results grid, which copies its selected cells rather than text.' },
   quickInputVisible: { type: 'boolean', scope: 'state', description: 'The command palette or a picker is open.' },
-  backendReady: { type: 'boolean', scope: 'state', description: 'The backend has answered its health check.' },
+  backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
+  backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },
   hasActiveDocument: { type: 'boolean', scope: 'state', description: 'A query is open.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
-  hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected.' },
-  activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected." },
+  hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected (lost connections do not count).' },
+  activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected and its connection was not lost." },
+  hasLostConnection: { type: 'boolean', scope: 'state', description: 'A connection was lost when the SQL backend restarted and has not been reconnected or removed.' },
+  activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's connection was lost when the SQL backend restarted." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
   explorerNode: {
-    type: 'enum', scope: 'target', menu: 'explorer.context', description: "The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object.",
-    values: ['background', 'server', 'databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'database', 'tablesFolder', 'table', 'securityFolder', 'serverObjectsFolder', 'serverObject', '']
+    type: 'enum', scope: 'target', menu: 'explorer.context', description: "The kind of Object Explorer node the menu is for: the empty area ('background'), a server, a server whose connection was lost ('lostServer'), folder, database, table, or server-level object.",
+    values: ['background', 'server', 'lostServer', 'databasesFolder', 'systemDatabasesFolder', 'snapshotsFolder', 'database', 'tablesFolder', 'table', 'securityFolder', 'serverObjectsFolder', 'serverObject', '']
   },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', 'plan', ''], description: 'The Query Output view the menu is for: a results grid, the messages, or an execution plan.' },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel whose tab the menu is for is floating.' }

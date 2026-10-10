@@ -24,7 +24,7 @@ jobs:
   linux:
     name: Linux (live SQL Server, Electron smoke)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     services:
       sql:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -72,6 +72,13 @@ jobs:
       - name: Electron smoke tests
         timeout-minutes: 20
         run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
+      - name: IPC benchmarks
+        # Floors (tests/bench/floors.json) are enforced here only; the table goes to the job summary.
+        timeout-minutes: 10
+        run: |
+          npm run bench
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
+          node scripts/check-bench.mjs --enforce
       - name: Upload smoke-test screenshots
         if: failure()
         uses: actions/upload-artifact@v7
@@ -80,6 +87,14 @@ jobs:
           path: artifacts/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload IPC benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-linux
+          path: artifacts/bench/
+          if-no-files-found: ignore
+          retention-days: 30
 
   desktop:
     name: ${{ matrix.os }}
@@ -90,7 +105,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
@@ -113,6 +128,14 @@ jobs:
         if: runner.os != 'macOS'
         timeout-minutes: 20
         run: npm run test:smoke
+      - name: IPC benchmarks (report only)
+        # Shared Windows and macOS runners vary too much for floors; the end-to-end run follows the smoke tests' platforms.
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          npm run bench
+          if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; fi
+          node scripts/check-bench.mjs
       - name: Upload smoke-test screenshots
         if: failure()
         uses: actions/upload-artifact@v7
@@ -121,3 +144,11 @@ jobs:
           path: artifacts/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload IPC benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-${{ matrix.os }}
+          path: artifacts/bench/
+          if-no-files-found: ignore
+          retention-days: 30

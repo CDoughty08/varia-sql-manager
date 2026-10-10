@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (67)
+## Commands (70)
 
 ### File
 
@@ -83,6 +83,9 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
+| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
+| Remove Lost Connection (not in the palette) | `connection.remove` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove |
+| Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
 ### Object Explorer
 
@@ -139,6 +142,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | --- | --- | --- | --- |
 | `0_connect` | Conn**e**ct to Server… | `connection.connect` | Always |
 | `0_connect` | **D**isconnect from Server… | `connection.disconnect` | Always |
+| `0_connect` | **R**econnect… | `connection.reconnect` | Always |
 | `1_file` | **N**ew Query | `file.new` | Always |
 | `1_file` | **O**pen… | `file.open` | Always |
 | `1_file` | **S**ave | `file.save` | Always |
@@ -209,6 +213,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_connect` | **C**onnect… | `connection.connect` | Always |
 | `1_connect` | **D**isconnect | `query.disconnect` | Always |
 | `1_connect` | Disconnect **A**ll Queries | `query.disconnectAll` | Always |
+| `1_connect` | **R**econnect… | `connection.reconnect` | Always |
 | `2_change` | C**h**ange Connection… | `query.changeConnection` | Always |
 
 #### Window (Alt+W)
@@ -251,12 +256,14 @@ Right-click an Object Explorer node or the empty area below the servers, or pres
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == 'server' \|\| explorerNode == 'background'` |
+| `0_connect` | **R**econnect… | `connection.reconnect` | `explorerNode == 'lostServer'` |
 | `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server'` |
+| `0_connect` | Re**m**ove | `connection.remove` | `explorerNode == 'lostServer'` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `explorerNode == 'server' \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerNode == 'table'` |
 | `2_script` | **S**cript Table as › | Submenu: Object Explorer context menu › Script Table as | `explorerNode == 'table'` |
 | `5_copy` | Copy **N**ame | `explorer.copyName` | `explorerNode == 'server' \|\| explorerNode == 'database' \|\| explorerNode == 'table' \|\| explorerNode == 'serverObject'` |
-| `8_refresh` | Re**f**resh | `explorer.refresh` | `explorerNode != 'table' && explorerNode != 'serverObject'` |
+| `8_refresh` | Re**f**resh | `explorer.refresh` | `explorerNode != 'table' && explorerNode != 'serverObject' && explorerNode != 'lostServer'` |
 
 #### Object Explorer context menu › Script Table as
 
@@ -321,7 +328,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (23)
+## Context keys (26)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -340,17 +347,20 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
-| `backendReady` | boolean | state | The backend has answered its health check. |
+| `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
+| `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
-| `hasConnection` | boolean | state | At least one server is connected. |
-| `activeDocumentConnected` | boolean | state | The active query's server is connected. |
+| `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |
+| `activeDocumentConnected` | boolean | state | The active query's server is connected and its connection was not lost. |
+| `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
+| `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
-| `explorerNode` | `'background'`, `'server'`, `'databasesFolder'`, `'systemDatabasesFolder'`, `'snapshotsFolder'`, `'database'`, `'tablesFolder'`, `'table'`, `'securityFolder'`, `'serverObjectsFolder'`, `'serverObject'`, `''` | target | The kind of Object Explorer node the menu is for: the empty area ('background'), a server, folder, database, table, or server-level object. |
+| `explorerNode` | `'background'`, `'server'`, `'lostServer'`, `'databasesFolder'`, `'systemDatabasesFolder'`, `'snapshotsFolder'`, `'database'`, `'tablesFolder'`, `'table'`, `'securityFolder'`, `'serverObjectsFolder'`, `'serverObject'`, `''` | target | The kind of Object Explorer node the menu is for: the empty area ('background'), a server, a server whose connection was lost ('lostServer'), folder, database, table, or server-level object. |
 | `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
 | `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
 

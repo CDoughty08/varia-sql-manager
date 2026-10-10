@@ -1,14 +1,15 @@
 import { vi } from 'vitest'
-import type { ConnectionInfo, QueryResult, VariaApi } from '../../src/shared/contracts'
+import type { BackendState, ConnectionInfo, ConnectionOptions, DisplayQueryResult, VariaApi } from '../../src/shared/contracts'
 import type { Platform } from '../../src/shared/commands/keybindings'
 import { CommandService } from '../../src/renderer/src/core/commands'
 import { ContextKeyService } from '../../src/renderer/src/core/contextkeys'
 import { KeybindingService } from '../../src/renderer/src/core/keybindings'
 import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
+import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
 import { FileService } from '../../src/renderer/src/services/files'
-import { QueryService } from '../../src/renderer/src/services/queries'
+import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
 import { PaneService } from '../../src/renderer/src/services/panes'
 import { ExplorerService } from '../../src/renderer/src/services/explorer'
@@ -26,14 +27,32 @@ import { paletteContribution } from '../../src/renderer/src/contributions/palett
 import { queryContribution } from '../../src/renderer/src/contributions/query'
 import { shellContribution, type ShellHost } from '../../src/renderer/src/contributions/shell'
 import { themeContribution, type ThemeController } from '../../src/renderer/src/contributions/theme'
+import { backendContribution } from '../../src/renderer/src/contributions/backend'
 import { CommandHistory, type HistoryStorage } from '../../src/renderer/src/quickinput/history'
 import { QuickInputService, type FocusAdapter } from '../../src/renderer/src/quickinput/QuickInputService'
 import { defaultThemePreference } from '../../src/shared/theme/format'
 import { resolveBuiltin } from '../../src/shared/theme/resolve'
 import { deferred, documentFixture } from './documents'
 
-export const connectionInfo = (id: string): ConnectionInfo => ({ id, server: `${id}.example`, database: 'master', serverVersion: '17.0' })
-export const queryOutput: QueryResult = { status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false }
+export const connectionInfo = (id: string, generation = 1): ConnectionInfo => ({ id, server: `${id}.example`, database: 'master', serverVersion: '17.0', generation })
+/** What the Connect dialog passes with a connection, password included: the connection service must drop it. */
+export const connectionOptions: ConnectionOptions = { server: 'server.example', database: 'master', authentication: 'sql', username: 'reader', password: 'never-keep-this', trustServerCertificate: false }
+export const readyBackend = (generation = 1): BackendState => ({ status: 'ready', generation, pid: 100 + generation, runtime: '.NET 10.0.0', platform: 'test' })
+/** The backend half of VariaApi, with `push` standing in for main's state pushes. */
+export function backendApi(initial: BackendState = { status: 'starting', generation: 1 }) {
+  const listeners = new Set<(state: BackendState) => void>()
+  // Like main, the request answers with the latest state, so a push made before it settles is not undone: the answer is
+  // read when it arrives, not when it is asked for.
+  let current = initial
+  return {
+    getBackendState: vi.fn<VariaApi['getBackendState']>(async () => { await Promise.resolve(); return { ok: true, value: current } }),
+    onBackendState: vi.fn<VariaApi['onBackendState']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
+    restartBackend: vi.fn<VariaApi['restartBackend']>(async () => ({ ok: true, value: true })),
+    push: (state: BackendState) => { current = state; listeners.forEach(listener => listener(state)) },
+    listeners
+  }
+}
+export const queryOutput: DisplayQueryResult = { status: 'completed', resultSets: [], messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false }
 
 /** Storage backed by a Map, for the command history. */
 export function memoryStorage(initial: Record<string, string> = {}): HistoryStorage & { readonly values: Map<string, string> } {
@@ -73,7 +92,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const doc = documentFixture()
   const api = {
     ...doc.api,
-    execute: vi.fn<VariaApi['execute']>(async () => ({ ok: true, value: queryOutput })),
+    execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
@@ -87,21 +106,23 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
     revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
     scriptTable: vi.fn<VariaApi['scriptTable']>(async (_connectionId, _database, schema, name) => ({ ok: true, value: { sql: `CREATE TABLE [${schema}].[${name}] (Id int);` } })),
-    tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } }))
+    tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
+    ...backendApi()
   }
   const { documents, events } = doc
   const connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerService()
+  const backend = new BackendStateService(api, connections)
   const queries = new QueryService(documents, api, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(events)
   const targets = new TargetService(documents, queries, connections, files, api)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
-  const context = new ContextKeyService({ platform, documents, queries, connections, editorOptions, panes, quickInput: quickInput.visibility, activeElement: () => null })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, activeElement: () => null })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
-    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), closePane: vi.fn(),
+    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
     paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn()
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())
@@ -113,16 +134,19 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
-  const workbench = { platform, commands, documents, queries, files, editorOptions, connections, targets, quickInput, keybindings, events, theme, panes, menus, explorer, menuTargets, resultSelection }
+  const workbench = { platform, commands, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, menuTargets, resultSelection }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history), themeContribution(workbench, api, options.timers)]
+    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history),
+    themeContribution(workbench, api, options.timers), backendContribution(workbench)]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
-    const pending = deferred<Awaited<ReturnType<VariaApi['execute']>>>()
+    const pending = deferred<Awaited<ReturnType<QueryApi['execute']>>>()
     api.execute.mockReturnValueOnce(pending.promise)
     const running = queries.execute()
     return { finish: async () => { pending.resolve({ ok: true, value: queryOutput }); await running } }
   }
-  const dispose = () => { menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose(); documents.dispose() }
-  return { ...doc, api, connections, editorOptions, panes, explorer, resultSelection, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, history, host, theme, startQuery, dispose }
+  /** Connects a server as the Connect dialog would. */
+  const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
+  const dispose = () => { menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose(); documents.dispose(); backend.dispose() }
+  return { ...doc, api, connections, backend, editorOptions, panes, explorer, resultSelection, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, history, host, theme, startQuery, connect, dispose }
 }

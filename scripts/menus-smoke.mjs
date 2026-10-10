@@ -1,13 +1,18 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'menus-profile-'))
-const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
-delete env.ELECTRON_RUN_AS_NODE
+const control = await mkdtemp(resolve('artifacts', 'menus-backend-'))
+const liveEnv = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
+delete liveEnv.ELECTRON_RUN_AS_NODE
+// The fake backend (tests/fixtures/backend.mjs, workbench mode) stands in for a server with AppData and dbo.Orders: its
+// scripts return stored results that the results worker reads as pages, as the real backend's do. The live step uses
+// the real backend.
+const env = { ...liveEnv, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
 const appearanceFile = join(profile, 'appearance.json'), savedPath = join(profile, 'menus-saved.sql')
@@ -70,44 +75,16 @@ async function rezoom(name, label) {
   await settle()
 }
 const exit = process.platform === 'win32' ? { label: 'Exit', key: 'Alt+F4' } : { label: 'Quit', key: 'Ctrl+Q' }
-/**
- * Replaces main's backend requests with a server that has AppData and dbo.Orders, recording every call (runs in main).
- * Queries return one row, and with `plan` an XML plan after it.
- */
-function explorerBackend({ ipcMain }, { realHealth, script, plan = false }) {
-  globalThis.variaCalls = []
-  globalThis.variaConnections = {}
-  ipcMain.removeHandler('varia:request')
-  ipcMain.handle('varia:request', async (_event, method, params) => {
-    globalThis.variaCalls.push({ method, params })
-    if (method === 'system.health') return { ok: true, value: realHealth }
-    if (method === 'connections.connect') {
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.test' }
-      globalThis.variaConnections[info.id] = info
-      return { ok: true, value: info }
-    }
-    if (method === 'connections.disconnect') { delete globalThis.variaConnections[params.connectionId]; return { ok: true, value: { disconnected: true } } }
-    if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
-    if (method === 'server.objects.list') return { ok: true, value: params.kind === 'logins' ? [{ name: 'sa', description: 'SQL_LOGIN' }] : [] }
-    if (method === 'tables.list') return { ok: true, value: [{ schema: 'dbo', name: 'Orders' }] }
-    if (method === 'tables.script') return { ok: true, value: { sql: script } }
-    if (method === 'tables.columns') return { ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } }
-    if (method === 'query.session.close') return { ok: true, value: { closed: true } }
-    if (method === 'query.execute') return { ok: true, value: {
-      resultSets: [{ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], rows: [[1, 'Contoso']], truncated: false },
-        ...plan ? [{ columns: [{ name: 'Microsoft SQL Server 2005 XML Showplan', dataType: 'xml' }], rows: [['<ShowPlanXML Version="1.6"><BatchSequence /></ShowPlanXML>']], truncated: false, kind: 'executionPlan' }] : []],
-      messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false
-    } }
-    return { ok: false, error: 'Unsupported test operation.' }
-  })
-}
+/** The fake backend's requests of one method since the last `forgetCalls`, oldest first (their params). */
+const calls = async method => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method).map(call => call.params)
+const forgetCalls = () => writeFile(join(control, 'calls.jsonl'), '')
 
 try {
   application = await electron.launch(launchOptions)
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await application.evaluate(({ dialog }) => {
     globalThis.variaReloadPrompts = 0
@@ -686,13 +663,10 @@ try {
   await expect(tabs().first()).toHaveAttribute('aria-selected', 'true')
   console.log('Menus checks: context menus stay inside a 1024x700 window and close on scrolling, resizing, blur, and clicks elsewhere.')
 
-  // 12. Object Explorer node menus, over a stubbed server: each kind of node shows its own items, they act on that node,
-  // Refresh reloads only that node's lists, and Shift+F10 or the context-menu key opens a focused node's menu below it.
-  const health = await page.evaluate(() => window.varia.health())
-  expect(health.ok).toBe(true)
-  const createScript = 'CREATE TABLE [dbo].[Orders] ([Id] int);'
-  await application.evaluate(explorerBackend, { realHealth: health.value, script: createScript })
-  const calls = method => application.evaluate((_electron, name) => globalThis.variaCalls.filter(call => call.method === name).map(call => call.params), method)
+  // 12. Object Explorer node menus, over the fake backend's server: each kind of node shows its own items, they act on
+  // that node, Refresh reloads only that node's lists, and Shift+F10 or the context-menu key opens a focused node's menu below it.
+  const createScript = 'CREATE TABLE dbo.Orders (Id int);'
+  await forgetCalls()
   const explorerMenu = menu('Object Explorer'), labels = () => explorerMenu.locator('.menu-item .menu-label').allTextContents()
   // The empty area offers Connect… and Refresh, which needs a server.
   await page.locator('.explorer-empty p').click({ button: 'right', force: true })
@@ -725,7 +699,7 @@ try {
   await expect(appData).toBeFocused()
   // A table: Select Top 1000 Rows opens SSMS's script on its database and runs it there.
   await appData.click(fast)
-  // master is expanded too (the new query selected it), and the stub lists the same table there.
+  // master is expanded too (the new query selected it), and the fake backend lists the same table there.
   const orders = serverA.locator('[data-database="AppData"]').getByRole('button', { name: 'dbo.Orders', exact: true })
   await expect(orders).toBeVisible()
   await orders.click({ button: 'right', force: true })
@@ -799,26 +773,12 @@ try {
 
   // 13. Query Output: the results grid selects cells as SSMS does and copies them as tab-separated text, by its menu,
   // its keys, and Edit › Copy; Messages keep text selection, with Select All and Copy in their menu.
-  await application.evaluate(({ ipcMain }, realHealth) => {
-    ipcMain.removeHandler('varia:request')
-    ipcMain.handle('varia:request', async (_event, method, params) => {
-      if (method === 'system.health') return { ok: true, value: realHealth }
-      if (method === 'connections.connect') return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: 'master', serverVersion: '17.0.test' } }
-      if (method === 'databases.list' || method === 'server.objects.list') return { ok: true, value: [] }
-      if (method === 'query.session.close') return { ok: true, value: { closed: true } }
-      if (method === 'query.execute') return { ok: true, value: {
-        resultSets: [{ columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }, { name: 'Note', dataType: 'nvarchar' }], rows: [[1, 'a', null], [2, 'b', 'n2'], [3, 'c', 'n3']], truncated: false }],
-        messages: ['(3 rows affected)'], recordsAffected: 3, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false
-      } }
-      return { ok: false, error: 'Unsupported test operation.' }
-    })
-  }, health.value)
   await choose('File', 'Connect to Server…')
   await page.getByLabel('Server Name', { exact: true }).fill('server-b')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await typeSql('SELECT Id, Name, Note FROM dbo.Notes')
+  await typeSql('SELECT Id, Name, Note FROM dbo.Notes -- MENUS_GRID_FIXTURE')
   await page.keyboard.press('F5')
   const grid = page.locator('.grid-scroll'), outputMenu = menu('Query output'), eol = process.platform === 'win32' ? '\r\n' : '\n'
   const cell = (row, column) => grid.locator(`td[data-row="${row}"][data-col="${column}"]`), selected = () => grid.locator('td.selected')
@@ -914,7 +874,6 @@ try {
 
   // 14. Every surface, twice: each menu opens by mouse or keyboard, Escape closes all of it, the outline goes, and focus
   // returns where it was. Then the table's menu, with its submenus open, is captured in Dark and Light.
-  await application.evaluate(explorerBackend, { realHealth: health.value, script: createScript, plan: true })
   await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click(fast)
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
@@ -926,10 +885,10 @@ try {
   await serverA.getByRole('button', { name: 'Logins', exact: true }).click(fast)
   const login = serverA.locator('.object-node').filter({ hasText: 'sa' })
   await expect(login).toBeVisible()
-  await typeSql('SELECT Id, CustomerName FROM dbo.Orders')
+  await typeSql('SELECT Id, CustomerName FROM dbo.Orders -- MENUS_PLAN_FIXTURE')
   await page.keyboard.press('F5')
   await page.locator('.output-toolbar').getByRole('button', { name: /^Results/ }).click(fast)
-  await expect(page.locator('.result-selector').getByRole('button', { name: 'XML plan', exact: true })).toBeVisible()
+  await expect(page.locator('.result-selector').getByRole('button', { name: 'XML plan · Batch 1', exact: true })).toBeVisible()
   const showResult = name => page.locator('.result-selector').getByRole('button', { name, exact: true }).click({ force: true })
   // These presses skip the stability check (see `fast`). An element out of view is scrolled first, and the menu opens
   // only after the scroll event, which would otherwise close it. The find widget slides in, so a press there waits for
@@ -984,12 +943,12 @@ try {
     ['a table by Shift+F10', async () => { await orders.focus(); await page.keyboard.press('Shift+F10') }, orders],
     ['the Logins folder', () => rightClick(serverA.getByRole('button', { name: 'Logins', exact: true })), serverA.getByRole('button', { name: 'Logins', exact: true })],
     ['a login', () => rightClick(login), null],
-    ['a results grid cell', async () => { await showResult('Result 1'); await rightClick(cell(0, 1)) }, grid],
+    ['a results grid cell', async () => { await showResult('Result 1 · Batch 1'); await rightClick(cell(0, 1)) }, grid],
     ['the results grid by Shift+F10', async () => { await grid.focus(); await page.keyboard.press('Shift+F10') }, grid],
     ['Messages', async () => { await tap(page.locator('.output-toolbar').getByRole('button', { name: /^Messages/ })); await rightClick(messages.locator('pre').first()) }, messages],
     ['the XML plan', async () => {
       await tap(page.locator('.output-toolbar').getByRole('button', { name: /^Results/ }))
-      await showResult('XML plan')
+      await showResult('XML plan · Batch 1')
       await rightClick(page.locator('.plan-output'))
     }, page.locator('.plan-output')],
     ['the find widget\'s field', fromEditor(async () => { await page.keyboard.press('Control+F'); await expect(findField).toBeFocused(); await rightClick(findField, { force: false }) }), findField, () => page.keyboard.press('Escape')],
@@ -1013,7 +972,7 @@ try {
   }
   expect(opened).toBeGreaterThanOrEqual(50)
   expect(failures).toEqual([])
-  await showResult('Result 1')
+  await showResult('Result 1 · Batch 1')
   for (const mode of ['dark', 'light']) {
     await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
     await expect.poll(appearance).toContain(`"mode": "${mode}"`)
@@ -1069,9 +1028,8 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
   expect(await page.evaluate(() => window.varia.menuStyle)).toBe('native')
-  await application.evaluate(explorerBackend, { realHealth: health.value, script: createScript })
   await application.evaluate(({ Menu }) => {
     globalThis.variaPopups = []
     globalThis.variaPopupMode = 'record'
@@ -1185,7 +1143,7 @@ try {
   if (process.env.VARIA_TEST_SQL_SERVER) {
     expect(failures).toEqual([])
     await application.close()
-    application = await electron.launch(launchOptions)
+    application = await electron.launch({ ...launchOptions, env: liveEnv })
     page = await application.firstWindow()
     page.setDefaultTimeout(10000)
     page.on('pageerror', error => failures.push(error.message))
@@ -1236,4 +1194,5 @@ try {
   clearTimeout(watchdog)
   await application?.close().catch(() => application?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
+  await rm(control, { recursive: true, force: true })
 }

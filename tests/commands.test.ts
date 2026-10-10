@@ -6,7 +6,7 @@ import { CommandService, type CommandSource } from '../src/renderer/src/core/com
 import { computeContextKeys, focusFacts, type FocusElement } from '../src/renderer/src/core/contextkeys'
 import { computeMenuState, MenuStatePublisher, type Timers } from '../src/renderer/src/core/menu-state'
 import type { DocumentSnapshot } from '../src/renderer/src/services/documents'
-import { connectionInfo, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { deferred } from './fixtures/documents'
 
 const cleanups: (() => void)[] = []
@@ -54,7 +54,7 @@ describe('command execution', () => {
     // No document is open, so Save is unavailable from every path, while run() still honours only the handler.
     await expect(commands.execute('file.save', undefined, 'menu')).resolves.toBe(false)
     expect(save).not.toHaveBeenCalled()
-    connections.add(connectionInfo('server-a'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
     const first = documents.create('first.sql', 'SELECT 1', 'master', 'server-a'), second = documents.create('second.sql', '', 'master')
     documents.activate(first.id)
     const running = startQuery()
@@ -131,12 +131,12 @@ describe('command execution', () => {
     expect(commands.isToggled('editor.toggleWordWrap')).toBe(true)
   })
   it('runs the shell commands through the host', async () => {
-    const { commands, host, connections, context, api } = fixture()
+    const { commands, host, connections, api } = fixture()
     expect(commands.isEnabled('connection.connect')).toBe(false)
-    context.set({ backendReady: true })
+    api.push(readyBackend())
     await commands.execute('connection.connect', undefined, 'menu')
     expect(commands.isEnabled('explorer.refresh')).toBe(false)
-    connections.add(connectionInfo('server-a'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
     await commands.execute('explorer.refresh', undefined, 'keybinding')
     for (const id of ['window.explorer', 'window.output', 'layout.save', 'layout.load', 'layout.reset'] as const) await commands.execute(id, undefined, 'menu')
     await commands.execute('window.close', undefined, 'menu')
@@ -152,11 +152,11 @@ const snapshot = (patch: Partial<DocumentSnapshot> = {}): DocumentSnapshot => ({
 const doc = (id: string, connectionId?: string) => ({ id, name: `${id}.sql`, database: 'master', connectionId, dirty: false, savedVersionId: 1 })
 describe('context keys', () => {
   it('derive state keys from service snapshots', () => {
-    const base = { platform: 'win32' as const, queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendReady: false }
+    const base = { platform: 'win32' as const, queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendStatus: 'starting' as const }
     expect(computeContextKeys({ ...base, documents: snapshot() })).toMatchObject({ isWindows: true, hasActiveDocument: false, multipleDocuments: false, documentBusy: false, hasConnection: false, activeDocumentConnected: false, queryRunning: false, editorFocus: false, activePanel: '' })
     const documents = snapshot({ documents: [doc('a', 'server-a'), doc('b', 'gone')], activeId: 'a', busy: true })
     const running = { a: { running: { queryId: 'q', connectionId: 'server-a' } } }
-    expect(computeContextKeys({ ...base, documents, queries: running, connections: [connectionInfo('server-a')], quickInputVisible: true, wordWrap: true, backendReady: true })).toMatchObject({
+    expect(computeContextKeys({ ...base, documents, queries: running, connections: [connectionInfo('server-a')], quickInputVisible: true, wordWrap: true, backendStatus: 'ready' })).toMatchObject({
       hasActiveDocument: true, multipleDocuments: true, documentBusy: true, hasConnection: true, activeDocumentConnected: true, queryRunning: true, quickInputVisible: true, editorWordWrap: true, backendReady: true
     })
     // The active query's server was disconnected; a stale running entry for another tab does not count.
@@ -180,20 +180,19 @@ describe('context keys', () => {
     expect(focusFacts(element('div', { pane: 'output', editable: true }), undefined)).toMatchObject({ inputFocus: true, activePanel: 'output' })
     expect(focusFacts(element('input', { pane: 'floating' }), undefined)).toMatchObject({ inputFocus: true, activePanel: '' })
     expect(focusFacts(null, editor(true))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false })
-    const keys = computeContextKeys({ platform: 'darwin', focus: focusFacts(findInput, editor(false)), documents: snapshot(), queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendReady: false })
+    const keys = computeContextKeys({ platform: 'darwin', focus: focusFacts(findInput, editor(false)), documents: snapshot(), queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendStatus: '' })
     expect(keys).toMatchObject({ isMac: true, editorFocus: true, inputFocus: true, textInputFocus: true })
   })
   it('cache state between snapshot changes and notify subscribers', () => {
-    const { context, documents, connections, editorOptions } = fixture()
+    const { context, documents, connections, editorOptions, api } = fixture()
     const listener = vi.fn()
     const unsubscribe = context.subscribe(listener)
     const first = context.getState()
     expect(context.getState()).toBe(first)
     documents.create('a.sql', '', 'master')
-    connections.add(connectionInfo('server-a'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
     editorOptions.toggleWordWrap()
-    context.set({ backendReady: true })
-    context.set({ backendReady: true })
+    api.push(readyBackend())
     expect(listener.mock.calls.length).toBeGreaterThanOrEqual(4)
     const second = context.getState()
     expect(second).not.toBe(first)
@@ -223,14 +222,14 @@ describe('menu state publisher', () => {
     expect(send.mock.calls[0][0].disabled).toEqual(expect.arrayContaining(['file.save', 'query.execute', 'query.cancel', 'connection.connect', 'document.next']))
     expect(send.mock.calls[0][0].disabled).not.toContain('file.new')
     documents.create('a.sql', '', 'master')
-    connections.add(connectionInfo('server-a'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
     expect(pending.size).toBe(1)
     expect(send).toHaveBeenCalledOnce()
     fire()
     expect(send).toHaveBeenCalledTimes(2)
     expect(send.mock.lastCall![0].disabled).not.toContain('file.save')
     // A change that leaves the menu as it was sends nothing.
-    connections.add(connectionInfo('server-b'))
+    connections.add(connectionInfo('server-b'), connectionOptions)
     fire()
     expect(send).toHaveBeenCalledTimes(2)
     started.dispose()
@@ -274,10 +273,10 @@ describe('enablement parity with the pre-registry toolbar', () => {
   const cases = [0, 1, 2].flatMap(count => [false, true].flatMap(busy => [false, true].flatMap(connected => [false, true].flatMap(running =>
     count === 0 && running ? [] : !connected && running ? [] : [{ count, busy, connected, running }]))))
   it.each(cases)('%o', async ({ count, busy, connected, running }) => {
-    const { commands, context, documents, connections, queries, files, startQuery } = fixture()
-    context.set({ backendReady: true })
+    const { commands, api, documents, connections, queries, files, startQuery } = fixture()
+    api.push(readyBackend())
     for (let index = 0; index < count; index++) documents.create(`q${index}.sql`, 'SELECT 1', 'master', 'server-a')
-    if (connected) connections.add(connectionInfo('server-a'))
+    if (connected) connections.add(connectionInfo('server-a'), connectionOptions)
     const query = running ? startQuery() : undefined
     const hold = deferred<void>(), task = busy ? documents.runTask(() => hold.promise) : undefined
     const { activeId } = documents.getSnapshot(), activeRunning = queries.isRunning(activeId), connection = connections.get(documents.active?.connectionId ?? '')

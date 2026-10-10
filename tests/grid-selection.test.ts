@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Platform } from '../src/shared/commands/keybindings'
-import type { ResultSet } from '../src/shared/contracts'
+import type { DisplayResultSet } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { cellText, columnTitle, describeRange, dragSelection, inRange, isEmptyRange, maxCopyLength, pressButton, pressSelection, rangeOf, selectAll, toTsv, type GridHit, type GridSelection } from '../src/renderer/src/grid/selection'
 import { ResultSelectionService } from '../src/renderer/src/services/result-selection'
@@ -8,9 +8,9 @@ import { ResultSelectionService } from '../src/renderer/src/services/result-sele
 const cells = (anchor: [number, number], focus: [number, number], resultIndex = 0): GridSelection =>
   ({ resultIndex, anchor: { row: anchor[0], column: anchor[1] }, focus: { row: focus[0], column: focus[1] }, mode: 'cells' })
 /** Three rows by three columns, the second column unnamed, with a NULL and values that need cleaning. */
-const set: Pick<ResultSet, 'columns' | 'rows'> = {
+const set: Pick<DisplayResultSet, 'columns' | 'rows'> = {
   columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }, { name: 'Note', dataType: 'nvarchar' }],
-  rows: [[1, 'a', null], [2, 'b\tx', 'line\r\nbreak'], [3, 'c', true]]
+  rows: [['1', 'a', null], ['2', 'b\tx', 'line\r\nbreak'], ['3', 'c', '1']]
 }
 
 describe('grid selection', () => {
@@ -35,10 +35,10 @@ describe('grid selection', () => {
   })
   it('writes tab-separated text with optional headers and the platform\'s line breaks, without a final one', () => {
     expect(toTsv(set, cells([0, 0], [0, 0]), { headers: false, eol: '\n' })).toBe('1')
-    expect(toTsv(set, cells([2, 2], [0, 1]), { headers: false, eol: '\n' })).toBe('a\tNULL\nb x\tline break\nc\ttrue')
+    expect(toTsv(set, cells([2, 2], [0, 1]), { headers: false, eol: '\n' })).toBe('a\tNULL\nb x\tline break\nc\t1')
     expect(toTsv(set, cells([0, 0], [1, 1]), { headers: true, eol: '\r\n' })).toBe('Id\t(No column name)\r\n1\ta\r\n2\tb x')
-    expect(toTsv(set, selectAll(0), { headers: true, eol: '\n' })).toBe('Id\t(No column name)\tNote\n1\ta\tNULL\n2\tb x\tline break\n3\tc\ttrue')
-    expect(toTsv(set, { ...cells([1, 2], [1, 2]), mode: 'columns' }, { headers: false, eol: '\n' })).toBe('NULL\nline break\ntrue')
+    expect(toTsv(set, selectAll(0), { headers: true, eol: '\n' })).toBe('Id\t(No column name)\tNote\n1\ta\tNULL\n2\tb x\tline break\n3\tc\t1')
+    expect(toTsv(set, { ...cells([1, 2], [1, 2]), mode: 'columns' }, { headers: false, eol: '\n' })).toBe('NULL\nline break\n1')
     expect(toTsv({ columns: set.columns, rows: [] }, selectAll(0), { headers: true, eol: '\n' })).toBe('Id\t(No column name)\tNote')
     expect(toTsv({ columns: [], rows: [] }, selectAll(0), { headers: true, eol: '\n' })).toBe('')
   })

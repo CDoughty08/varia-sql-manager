@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { RpcMethod } from '../shared/contracts'
 import { serverObjectKinds } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
+import { limits } from '../shared/ipc/wire/protocol'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
 const name = z.string().min(1).max(128).refine(value => value.trim().length > 0)
@@ -24,7 +25,8 @@ export const requestSchemas = {
   'query.execute': z.object({
     connectionId, sessionId: z.uuid(), database, sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
     startLine: z.number().int().min(1).max(1_000_000).optional(),
-    maxRows: z.number().int().min(1).max(5000), timeoutSeconds: z.number().int().min(0).max(86400)
+    maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
+    timeoutSeconds: z.number().int().min(0).max(86400)
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
   'query.session.close': z.object({ sessionId: z.uuid() }).strict()

@@ -16,6 +16,8 @@ export interface ShellHost {
   resetLayout(): void
   flushLayout(): Promise<void>
   showConnect(): void
+  /** Opens the Connect dialog filled in from a lost connection; connecting replaces it and retargets its queries. */
+  reconnect(connectionId: string): void
   /** Closes a panel as its × button does: its content and state are kept for when it is shown again. */
   closePane(pane: PaneId): void
   paneLocation(pane: PaneId): PaneLocation
@@ -44,6 +46,7 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo', args?
 }
 
 const paneOf = (args?: CommandArgs): PaneId | undefined => args?.target?.kind === 'dockTab' ? args.target.pane : undefined
+const lostNodeOf = (args?: CommandArgs) => { const node = explorerNodeOf(args); return node?.kind === 'lostServer' ? node : undefined }
 const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { const pane = paneOf(args); if (pane) action(pane) }
 
 /**
@@ -74,15 +77,34 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('connection.connect', { run: () => host.showConnect() }),
     // From a server node's menu, that server; otherwise the user picks one.
     commands.register('connection.disconnect', {
-      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!!connections.get(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (connections.isLive(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
       run: args => {
         const node = explorerNodeOf(args)
         if (node?.kind === 'server') return host.disconnect(node.connectionId)
         quickInput.show({
           ariaLabel: 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
-          items: serverItems(connections.getSnapshot(), id => queries.isConnectionRunning(id)), onDidAccept: item => host.disconnect(item.id)
+          items: serverItems(connections.live(), id => queries.isConnectionRunning(id)), onDidAccept: item => host.disconnect(item.id)
         })
       }
+    }),
+    // A lost server node's connection, else the active query's lost connection; otherwise the user picks among the lost ones.
+    commands.register('connection.reconnect', {
+      when: args => { const node = lostNodeOf(args); return !node || !!connections.get(node.connectionId)?.lost },
+      run: args => {
+        const node = lostNodeOf(args)
+        if (node) return host.reconnect(node.connectionId)
+        const active = documents.active?.connectionId ? connections.get(documents.active.connectionId) : undefined
+        if (active?.lost) return host.reconnect(active.id)
+        quickInput.show({
+          ariaLabel: 'Reconnect', placeholder: 'Select a lost connection to reconnect', noun: 'servers',
+          items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.reconnect(item.id)
+        })
+      }
+    }),
+    // Only from a lost server node's menu, like the node's Remove button.
+    commands.register('connection.remove', {
+      when: args => { const node = lostNodeOf(args); return !!node && !!connections.get(node.connectionId)?.lost },
+      run: args => { const node = lostNodeOf(args); if (node && connections.get(node.connectionId)?.lost) return host.disconnect(node.connectionId) }
     }),
     commands.register('pane.float', { when: args => located(args, 'grid'), run: onPane(pane => host.floatPane(pane)) }),
     commands.register('pane.dock', { when: args => located(args, 'floating'), run: onPane(pane => host.dockPane(pane)) }),

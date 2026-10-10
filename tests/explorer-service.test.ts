@@ -72,7 +72,7 @@ describe('refresh paths', () => {
   it('refresh a node\'s own lists, a leaf\'s parent list, and everything for the empty area', () => {
     const server = { connectionId: 'a' }, database = { ...server, database: 'AppData' }
     const cases: [ExplorerNode | undefined, ExplorerPath | undefined][] = [
-      [{ kind: 'background' }, undefined], [undefined, undefined], [{ kind: 'server', ...server }, ['s', 'a']],
+      [{ kind: 'background' }, undefined], [undefined, undefined], [{ kind: 'server', ...server }, ['s', 'a']], [{ kind: 'lostServer', ...server }, undefined],
       [{ kind: 'databasesFolder', ...server }, ['s', 'a', 'd']], [{ kind: 'systemDatabasesFolder', ...server }, ['s', 'a', 'd']], [{ kind: 'snapshotsFolder', ...server }, ['s', 'a', 'd']],
       [{ kind: 'database', ...database }, ['s', 'a', 'd', 'AppData']], [{ kind: 'tablesFolder', ...database }, ['s', 'a', 'd', 'AppData', 't']],
       [{ kind: 'table', ...database, schema: 'dbo', name: 'Orders' }, ['s', 'a', 'd', 'AppData', 't']], [{ kind: 'securityFolder', ...server }, ['s', 'a', 'x']],

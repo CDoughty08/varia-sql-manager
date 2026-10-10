@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { connectionInfo, queryOutput, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { deferred, TestEditor } from './fixtures/documents'
-import type { QueryResult } from '../src/shared/contracts'
+import type { DisplayQueryResult } from '../src/shared/contracts'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import type { Platform } from '../src/shared/commands/keybindings'
 import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
@@ -101,8 +101,8 @@ describe('results pane toggle', () => {
 describe('connection and document commands', () => {
   it('disconnect the active query, or every query that is not running', async () => {
     const { commands, documents, connections, api, context, startQuery, files } = setup()
-    connections.add(connectionInfo('server-a'))
-    connections.add(connectionInfo('server-b'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
+    connections.add(connectionInfo('server-b'), connectionOptions)
     const idle = documents.create('idle.sql', 'SELECT 2', 'master', 'server-b')
     const offline = documents.create('offline.sql', '', 'master')
     const active = documents.create('active.sql', 'SELECT 1', 'master', 'server-a')
@@ -129,7 +129,7 @@ describe('connection and document commands', () => {
   })
   it('end each session under the document lock, one task for all queries', async () => {
     const { targets, documents, connections, api } = setup()
-    connections.add(connectionInfo('server-a'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
     documents.create('one.sql', '', 'master', 'server-a')
     documents.create('two.sql', '', 'master', 'server-a')
     const closing = deferred<Awaited<ReturnType<typeof api.closeQuerySession>>>()
@@ -188,7 +188,7 @@ describe('context menu commands', () => {
     const one = documents.create('one.sql', '', 'master'), two = documents.create('two.sql', '', 'master')
     expect(commands.isEnabled('file.closeOthers', { tabId: one.id })).toBe(true)
     expect(commands.isEnabled('file.closeOthers', { tabId: 'gone' })).toBe(false)
-    connections.add(connectionInfo('server-a'))
+    connections.add(connectionInfo('server-a'), connectionOptions)
     const three = documents.create('three.sql', 'SELECT 3', 'master', 'server-a')
     const running = startQuery()
     expect(await commands.execute('file.closeOthers', { tabId: one.id }, 'menu')).toBe(true)
@@ -251,8 +251,8 @@ describe('Object Explorer commands', () => {
   const server = { connectionId: 'server-a' }, appData = { ...server, database: 'AppData' }, orders = on({ kind: 'table', ...appData, schema: 'dbo', name: 'Orders' })
   function connected() {
     const fixture = setup()
-    fixture.context.set({ backendReady: true })
-    fixture.connections.add(connectionInfo('server-a'))
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     return fixture
   }
   it('open a new query on a server\'s or database\'s connection and put focus in its editor', async () => {
@@ -339,19 +339,64 @@ describe('Object Explorer commands', () => {
     await running.finish()
     expect(commands.isEnabled('connection.disconnect', node)).toBe(true)
   })
+  it('leave a server lost with a backend restart alone, even when the restart comes while a command waits', async () => {
+    const { commands, documents, api, connections } = connected()
+    const columns = deferred<Awaited<ReturnType<typeof api.tableColumns>>>(), script = deferred<Awaited<ReturnType<typeof api.scriptTable>>>()
+    api.tableColumns.mockReturnValueOnce(columns.promise)
+    api.scriptTable.mockReturnValueOnce(script.promise)
+    const selecting = commands.execute('explorer.selectTopRows', orders, 'menu'), scripting = commands.execute('explorer.scriptCreateToNewQuery', orders, 'menu')
+    // The backend restarts: server-a's generation is gone, and Object Explorer shows it as lost.
+    api.push({ status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 1, queries: 0 }, retryInMs: 0 })
+    expect(connections.get('server-a')).toMatchObject({ lost: true })
+    columns.resolve({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }], truncated: false } })
+    script.resolve({ ok: true, value: { sql: 'CREATE TABLE [dbo].[Orders] (Id int);' } })
+    await Promise.all([selecting, scripting])
+    expect(documents.getSnapshot().documents).toHaveLength(0)
+    expect(api.execute).not.toHaveBeenCalled()
+    api.push(readyBackend(2))
+    const server = on({ kind: 'server', connectionId: 'server-a' })
+    for (const id of ['explorer.newQuery', 'explorer.copyName', 'connection.disconnect'] as const) expect(commands.isEnabled(id, server), id).toBe(false)
+    for (const id of ['explorer.selectTopRows', 'explorer.scriptCreateToNewQuery', 'explorer.scriptCreateToFile', 'explorer.scriptCreateToClipboard', 'explorer.copyName'] as const) expect(commands.isEnabled(id, orders), id).toBe(false)
+    expect(await commands.execute('explorer.newQuery', server, 'menu')).toBe(false)
+    expect(documents.getSnapshot().documents).toHaveLength(0)
+  })
+  it('reconnect or remove a lost server from its node\'s menu, and reconnect a lost query from Query › Connection', async () => {
+    const { commands, documents, api, connections, host, menus, quickInput } = connected()
+    const tab = documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
+    connections.add(connectionInfo('server-b'), connectionOptions)
+    api.push({ status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 2, queries: 0 }, retryInMs: 0 })
+    api.push(readyBackend(2))
+    const lost = on({ kind: 'lostServer', connectionId: 'server-b' })
+    const items = (resolved: ReturnType<typeof menus.resolve>) => resolved.map(item => item.kind === 'command' ? [item.title, item.enabled] : item.kind)
+    expect(items(menus.resolve('explorer.context', lost.target))).toEqual([['Reconnect…', true], ['Remove', true]])
+    // A lost server's node acts on that server, not on the active query's lost one.
+    expect(await commands.execute('connection.reconnect', lost, 'menu')).toBe(true)
+    expect(await commands.execute('connection.remove', lost, 'menu')).toBe(true)
+    expect([vi.mocked(host.reconnect).mock.calls, vi.mocked(host.disconnect).mock.calls]).toEqual([[['server-b']], [['server-b']]])
+    const connection = menus.resolve('query').find(item => item.key === 'query.connection')
+    if (connection?.kind !== 'submenu') throw new Error('Query › Connection is missing')
+    expect(items(connection.items)).toEqual([['Connect…', true], ['Disconnect', false], ['Disconnect All Queries', false], ['Reconnect…', true], 'separator', ['Change Connection…', true]])
+    expect(await commands.execute('connection.reconnect', { tabId: tab.id }, 'menu')).toBe(true)
+    expect(vi.mocked(host.reconnect).mock.calls.at(-1)).toEqual(['server-a'])
+    expect(quickInput.getSnapshot()).toMatchObject({ visible: false })
+    // Once the server is reconnected or removed, its node can do neither.
+    connections.remove('server-b')
+    for (const id of ['connection.reconnect', 'connection.remove'] as const) expect(commands.isEnabled(id, lost), id).toBe(false)
+    expect(commands.isEnabled('connection.remove')).toBe(false)
+  })
 })
 
 describe('Query Output commands', () => {
-  const results: QueryResult = { ...queryOutput, messages: ['hello'], resultSets: [
-    { columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }], rows: [[1, 'a'], [2, null]], truncated: false },
+  const results: DisplayQueryResult = { ...queryOutput, messages: ['hello'], resultSets: [
+    { columns: [{ name: 'Id', dataType: 'int' }, { name: '', dataType: 'nvarchar' }], rows: [['1', 'a'], ['2', null]], truncated: false },
     { columns: [{ name: 'Microsoft SQL Server 2005 XML Showplan', dataType: 'xml' }], rows: [['<ShowPlanXML/>']], truncated: false, kind: 'executionPlan' }
   ] }
   const block = (resultIndex = 0): GridSelection => ({ resultIndex, anchor: { row: 0, column: 0 }, focus: { row: 1, column: 1 }, mode: 'cells' })
   /** A query that has run and shows `value`, and targets for its views, each over an element of the fake document. */
-  async function ran(platform: Platform = 'win32', value: QueryResult = results) {
+  async function ran(platform: Platform = 'win32', value: DisplayQueryResult = results) {
     const fixture = workbenchFixture({ platform })
     cleanups.push(fixture.dispose)
-    fixture.connections.add(connectionInfo('server-a'))
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     const tab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
     fixture.api.execute.mockResolvedValueOnce({ ok: true, value })
     await fixture.queries.execute()

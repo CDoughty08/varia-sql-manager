@@ -170,7 +170,7 @@ try {
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
       if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }] }
-      if (method === 'query.execute') return { ok: true, value: { resultSets: [], messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false } }
+      if (method === 'query.execute') return { ok: true, value: { resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 } } }
       return { ok: false, error: 'Unsupported fixture method.' }
     })
   })

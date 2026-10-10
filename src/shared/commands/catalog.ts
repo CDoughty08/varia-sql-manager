@@ -3,7 +3,7 @@ import type { MenuId } from './menus'
 
 export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
-export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'refresh',
+export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'debug-restart', 'refresh',
   'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
   'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table'] as const
 export type Codicon = typeof codicons[number]
@@ -228,11 +228,26 @@ export const commandCatalog = {
     // A server node's menu disconnects that server without asking which.
     menus: [{ menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' }, { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server'" }]
   },
+  // A lost server's menu reconnects that server; elsewhere, the active query's lost connection or one the user picks.
+  'connection.reconnect': {
+    title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && backendReady',
+    unavailableHint: 'No connection was lost.',
+    menus: [
+      { menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'query.connection', group: '1_connect', order: 4, mnemonic: 'r' },
+      { menu: 'explorer.context', group: '0_connect', order: 1, mnemonic: 'r', when: "explorerNode == 'lostServer'" }
+    ]
+  },
+  'connection.remove': {
+    title: 'Remove Lost Connection', category: 'Connection', icon: 'close', palette: false, precondition: 'hasLostConnection && !documentBusy',
+    menus: [{ menu: 'explorer.context', group: '0_connect', order: 2, title: 'Remove', mnemonic: 'm', when: "explorerNode == 'lostServer'" }]
+  },
+  // Always available: it is also the way out of an unresponsive or failed backend.
+  'backend.restart': { title: 'Restart SQL Backend…', category: 'Connection', icon: 'debug-restart', keywords: ['backend', 'restart', 'sidecar'] },
   // F5 and a node's menu refresh that node's lists (a leaf's parent list); the toolbar button refreshes everything.
   'explorer.refresh': {
     title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer,
     keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }],
-    menus: [{ menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: "explorerNode != 'table' && explorerNode != 'serverObject'" }]
+    menus: [{ menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: "explorerNode != 'table' && explorerNode != 'serverObject' && explorerNode != 'lostServer'" }]
   },
   // An Object Explorer node's menu: the node comes from the menu's target, so these have no keys and are not in the palette.
   'explorer.newQuery': {

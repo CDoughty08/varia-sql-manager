@@ -1,8 +1,12 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, dialog, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { BackendClient } from './backend-client'
+import { BackendSupervisor } from './backend/supervisor'
+import { BackendError } from './backend/errors'
+import { backendSpawnSpec } from './backend/spawn-spec'
+import { installTestHooks } from './backend/test-hooks'
+import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { validateRequest } from './validation'
 import { SqlFileStore, maxSqlFileBytes } from './sql-files'
 import { LayoutStore } from './layout-store'
@@ -16,7 +20,8 @@ import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
-import type { ApiResult, RpcMethod, RpcMethods } from '../shared/contracts'
+import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
+import { memoryEventSchema } from '../shared/ipc/port-messages'
 import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
@@ -26,9 +31,15 @@ const rendererFile = join(here, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
-let backend: BackendClient
+let backend: BackendSupervisor
+let resultsPort: ResultsPortHost | undefined
+// Test seams (fake backend, liveness override, __variaTest, the renderer test-mode flag) exist only in unpackaged smoke runs.
+const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 const files = new SqlFileStore()
 let closeApproved = false
+/** The app is quitting (before-quit went ahead), so a closed window needs no new backend. */
+let quitting = false
+let backendStopped = false
 // The title bar starts active, so a window that never gets OS focus (smoke tests) keeps the active colors.
 let windowActive = true
 // The user's last click or key press in the window: the page may run Paste only just after one.
@@ -83,14 +94,28 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
   })
 }
 
-/** A reloaded or crashed renderer can no longer address its sessions, so end them with the backend process. */
-function resetRendererState(): void {
+/** A reloaded or crashed renderer can no longer address its sessions, so end them with the backend process. Without
+ *  `relaunch` (the app is quitting) no new backend starts. */
+function resetRendererState(relaunch = true): void {
   rendererReady = false
   menuBridge.reset()
   contextMenus.close()
   endPreview()
-  backend?.restart()
+  resultsPort?.reset()
+  void (relaunch ? backend?.restart('reload') : backend?.stop())
   files.clear()
+}
+
+/** Restarting closes every connection and rolls back open transactions, so main asks first when there are any. */
+async function restartBackend(): Promise<boolean> {
+  const count = backend.connectionCount()
+  const window = mainWindow
+  if (count > 0 && window && !window.isDestroyed()) {
+    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true })
+    if (response !== 0) return false
+  }
+  await backend.restart('manual')
+  return true
 }
 
 function rendererCanConfirm(window: BrowserWindow): boolean {
@@ -173,7 +198,7 @@ function createWindow(): void {
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle)] }
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : [])] }
   })
   const window = mainWindow, contents = window.webContents
   if (process.platform !== 'darwin') {
@@ -227,19 +252,37 @@ function createWindow(): void {
     if (closeApproved) return
     if (rendererCanConfirm(window)) { event.preventDefault(); command('window.close'); return }
     // A crashed, hung, or unmounted workbench cannot run the unsaved-query prompts, so never trap the user.
-    if (rendererUnresponsive && dialog.showMessageBoxSync(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: 'The workbench is not responding. Unsaved queries will be lost.', buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }) !== 0) { event.preventDefault(); return }
+    if (rendererUnresponsive && dialog.showMessageBoxSync(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: 'The workbench is not responding. Unsaved queries will be lost.', buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }) !== 0) { quitting = false; event.preventDefault(); return }
     closeApproved = true
   })
-  // A closed window can no longer address its sessions (macOS keeps the app running after the last window closes).
-  window.on('closed', () => { mainWindow = null; resetRendererState() })
+  // A closed window can no longer address its sessions. Only macOS keeps the app running after its last window closes,
+  // so only there does a later window need a new backend.
+  window.on('closed', () => { mainWindow = null; resetRendererState(process.platform === 'darwin' && !quitting) })
 }
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return
   const root = app.getAppPath()
-  backend = app.isPackaged
-    ? new BackendClient(join(process.resourcesPath, 'backend', process.platform === 'win32' ? 'Varia.Backend.exe' : 'Varia.Backend'), [], root)
-    : new BackendClient('dotnet', [join(root, 'backend/Varia.Backend/bin', process.env.VARIA_SMOKE_TEST === '1' ? 'Release' : 'Debug', 'net10.0/Varia.Backend.dll')], root)
+  // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
+  const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN
+  const liveness = Number.isInteger(livenessMs) && livenessMs >= 200 ? { unresponsiveMs: livenessMs, limits: { pingMs: Math.floor(livenessMs / 4) } } : {}
+  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env }), {
+    appVersion: app.getVersion(),
+    // Frame kinds, ids and lengths only; never bodies.
+    trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined,
+    power: powerMonitor,
+    onGlobalEvent: event => {
+      const memory = memoryEventSchema.safeParse(event)
+      if (memory.success) resultsPort?.memory(memory.data.usedBytes, memory.data.globalBytes)
+    },
+    ...liveness
+  })
+  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
+  backend.onState(state => {
+    results.backendState(state)
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
+  })
+  if (testSeams) installTestHooks(backend, results)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
@@ -248,6 +291,14 @@ app.whenReady().then(async () => {
   await appearance.initialize()
   appearance.onDidChange(applyAppearance)
   nativeTheme.on('updated', () => appearance.systemChanged())
+  handle('varia:backend-state-get', () => backend.state)
+  handle('varia:backend-restart', () => restartBackend())
+  // The port reaches only the trusted main frame; its messages are validated by ResultsPortHost.
+  ipcMain.handle('varia:results-port-open', (event): ApiResult<void> => {
+    if (!trusted(event) || !event.senderFrame) return { ok: false, error: 'Untrusted IPC sender.' }
+    try { results.open(event.senderFrame); return { ok: true, value: undefined } }
+    catch (error) { return { ok: false, error: errorMessage(error, 'The results connection could not be opened.') } }
+  })
   handle('varia:theme-state', () => appearance.state)
   handle('varia:theme-set', value => chooseTheme(value))
   // Results that arrive after a later preview, a choice, or a renderer reset are dropped.
@@ -292,15 +343,16 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      const seconds = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).timeoutSeconds : method === 'connections.connect' ? (validated as RpcMethods['connections.connect']['params']).advanced?.connectTimeout ?? 15 : undefined
-      const timeout = seconds === undefined ? 45_000 : seconds === 0 ? 0 : (seconds + 30) * 1000
-      const result = await backend.request(method as RpcMethod, validated as never, timeout)
+      // A script's events reach the results worker; its results become readable by this renderer.
+      const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
+      const result = await backend.request(method as RpcMethod, validated as never, queryId === undefined ? {} : { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) })
+      if (queryId !== undefined) results.own((result as QueryResult).resultSets)
       if (method === 'connections.connect') {
         try { await connectionStore.remember(validated as RpcMethods['connections.connect']['params']) }
         catch { (result as RpcMethods['connections.connect']['result']).historyWarning = 'Connected successfully, but recent connections could not be saved.' }
       }
       return { ok: true, value: result }
-    } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.') } }
+    } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
   handle('varia:files-open', async () => {
     const selected = await dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] })
@@ -342,7 +394,16 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
-  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); command('window.close') }
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); command('window.close'); return }
+  quitting = true
 })
-// A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is certain.
-app.on('will-quit', () => { backend?.stop() })
+// A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is
+// certain. Electron exits as soon as will-quit returns, so the exit waits for the bounded stop (stdin end, 2 s, then
+// kill): a backend that cannot act on EOF would otherwise outlive the app, holding its sessions and their locks.
+app.on('will-quit', event => {
+  if (backendStopped || !backend) return
+  event.preventDefault()
+  // Every window is closed: a relaunch during the wait must start a new instance, not be handed to this one and dropped.
+  app.releaseSingleInstanceLock()
+  void backend.stop().finally(() => { backendStopped = true; app.exit(0) })
+})

@@ -2,6 +2,7 @@
 {"id":"menu.file","label":"File"}
   {"id":"connection.connect","label":"Connect to Server…","registerAccelerator":false,"type":"normal","click":[["command","connection.connect"]]}
   {"id":"connection.disconnect","label":"Disconnect from Server…","registerAccelerator":false,"type":"normal","click":[["command","connection.disconnect"]]}
+  {"id":"connection.reconnect","label":"Reconnect…","registerAccelerator":false,"type":"normal","click":[["command","connection.reconnect"]]}
   {"type":"separator"}
   {"accelerator":"Cmd+N","id":"file.new","label":"New Query","registerAccelerator":false,"type":"normal","click":[["command","file.new"]]}
   {"accelerator":"Cmd+O","id":"file.open","label":"Open…","registerAccelerator":false,"type":"normal","click":[["command","file.open"]]}
@@ -71,6 +72,7 @@
     {"id":"connection.connect@query.connection","label":"Connect…","registerAccelerator":false,"type":"normal","click":[["command","connection.connect"]]}
     {"id":"query.disconnect","label":"Disconnect","registerAccelerator":false,"type":"normal","click":[["command","query.disconnect"]]}
     {"id":"query.disconnectAll","label":"Disconnect All Queries","registerAccelerator":false,"type":"normal","click":[["command","query.disconnectAll"]]}
+    {"id":"connection.reconnect@query.connection","label":"Reconnect…","registerAccelerator":false,"type":"normal","click":[["command","connection.reconnect"]]}
     {"type":"separator"}
     {"id":"query.changeConnection","label":"Change Connection…","registerAccelerator":false,"type":"normal","click":[["command","query.changeConnection"]]}
   {"accelerator":"Cmd+U","id":"query.changeDatabase","label":"Change Database…","registerAccelerator":false,"type":"normal","click":[["command","query.changeDatabase"]]}

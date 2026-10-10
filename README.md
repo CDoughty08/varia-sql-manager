@@ -15,8 +15,9 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/menu tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/backend-restart/menu tests (after check)
 npm run test:electron   # Both of the above
+npm run bench           # IPC benchmarks against the Release backend (after check); npm run bench:e2e measures the app
 npm run build
 npm start               # Launch the built workbench using the local .NET runtime
 ```
@@ -84,7 +85,7 @@ Right-click, or press **Shift+F10** or the context-menu key where focus is, for 
 
 | Where | Items |
 | --- | --- |
-| Query editor | Connection › (Connect…, Disconnect, Disconnect All Queries, Change Connection…), Execute, Cancel Executing Query, Cut, Copy, Paste, and Command Palette… |
+| Query editor | Connection › (Connect…, Disconnect, Disconnect All Queries, Reconnect…, Change Connection…), Execute, Cancel Executing Query, Cut, Copy, Paste, and Command Palette… |
 | Query tab | Save, Save As…, Close, Close All But This, Close All, Copy Full Path, and Open Containing Folder, all for that tab's query. The last two need a saved query. |
 | Panel tab | Float or Dock, and Close |
 | Results grid | Copy, Copy with Headers, and Select All. Right-clicking a cell outside the selection selects that cell first. |
@@ -94,7 +95,7 @@ Right-click, or press **Shift+F10** or the context-menu key where focus is, for 
 
 ### Object Explorer menus
 
-A server offers Connect…, Disconnect (that server, without asking which), New Query, Copy Name, and Refresh, and a database offers New Query (on that database), Copy Name, and Refresh. Folders offer Refresh, and the empty area below the servers offers Connect… and Refresh. A table offers **Select Top 1000 Rows**, which opens SSMS's script with the table's columns listed (or `*` beyond 4,096 columns) on its database and runs it; **Script Table as › CREATE To** a new query, a `.sql` file, or the clipboard; and Copy Name. A login or another security object offers Copy Name. Scripting errors appear in the command banner.
+A server offers Connect…, Disconnect (that server, without asking which), New Query, Copy Name, and Refresh, and a database offers New Query (on that database), Copy Name, and Refresh. Folders offer Refresh, and the empty area below the servers offers Connect… and Refresh. A server whose connection was lost offers Reconnect… and Remove, as its buttons do. A table offers **Select Top 1000 Rows**, which opens SSMS's script with the table's columns listed (or `*` beyond 4,096 columns) on its database and runs it; **Script Table as › CREATE To** a new query, a `.sql` file, or the clipboard; and Copy Name. A login or another security object offers Copy Name. Scripting errors appear in the command banner.
 
 **F5** or **Refresh** on a node reloads only the lists below it, such as one database's tables or one security folder's objects; on a table or a login, it reloads the list that contains it. The **Refresh Object Explorer** button above the tree reloads everything.
 
@@ -154,8 +155,8 @@ Monaco / React renderer
         ↓ narrow typed window.varia API
 Sandboxed Electron preload
         ↓ validated IPC from the application main frame only
-Electron main process / BackendClient
-        ↓ correlated newline-delimited JSON on stdin/stdout
+Electron main process / BackendSupervisor
+        ↓ length-prefixed MessagePack frames (protocol v2) on stdin/stdout
 .NET 10 sidecar
         ├── SqlClient: connections, metadata, queries, cancellation
         └── SMO: table CREATE scripts and future management operations
@@ -165,7 +166,8 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 
 - `src/shared/contracts.ts`: typed operations, parameters, and results.
 - `src/main/validation.ts`: allowlist and runtime validation before requests leave Electron.
-- `src/main/backend-client.ts`: child process, request correlation, timeouts, and failure handling.
+- `src/main/backend/`: the backend process: `connection.ts` (one process: handshake, framing, request correlation, deadlines, limits, and failure handling), `supervisor.ts` (generations, restarts and the crash-loop breaker, lost connections, and the silence watchdog), and `results-port.ts` (the results port to the renderer's results worker); `src/shared/ipc/` holds the wire format, the per-method policies, and the port message schemas.
+- `src/renderer/src/results/`: the results worker, which reads and decodes result pages, `ResultClient`, and the adapter that fills today's results table.
 - `src/main/layout-store.ts` / `src/shared/layouts.ts`: atomic preferences, layout files, and bounded layout validation.
 - `src/preload/index.ts`: explicit public methods; no generic IPC or shell API exposed.
 - `backend/Varia.Backend`: independent C# console host and SQL services.
@@ -176,22 +178,24 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 - `src/renderer/src/quickinput` / `src/renderer/src/contributions`: the DOM-free quick input controller and its view, and the commands that use it: the palette, Go to Query, and the server, database, and color theme pickers.
 - `src/renderer/src/contributions/files.ts` / `src/renderer/src/services/files.ts`: file command registration, open/save/close workflows, dirty confirmations, and file errors. Tab-close commands carry the document ID, so a pending confirmation stays attached to its original query. Application exit confirms documents, flushes the shell's layout, and rechecks document revisions before closing.
 - `src/renderer/src/services`: document-owned Monaco models/view state and query orchestration. Documents use `varia-sql://query/<tab-id>` URIs; tab changes and editor remounts retain undo history. SQL stays in models, while React subscribes to metadata and execution snapshots. Save records the revision actually written, so typing during a save remains dirty. Query commands share guards for running scripts and document transitions; the backend session ID remains the tab ID.
-- `tests`: real sidecar health/error integration tests, bridge failure tests, and file/layout persistence checks. Electron scripts exercise docking gestures, layout file round trips, live editor preservation, the command palette, pickers, and keyboard paths, and a full app restart with isolated test profiles.
+- `tests`: real sidecar health/error integration tests, bridge failure tests, and file/layout persistence checks; `tests/bench` holds the IPC benchmarks. Electron scripts exercise docking gestures, layout file round trips, live editor preservation, the command palette, pickers, and keyboard paths, and a full app restart with isolated test profiles.
 
 The renderer uses context isolation, sandboxing, no Node integration, a Content Security Policy, and blocked navigation/popups. Only local app assets are loaded. SQL credentials travel through the private pipe, never process arguments. Backend stdout is exclusively protocol messages; diagnostics and query text are not logged.
 
 ### Protocol
 
-One UTF-8 JSON message per line. Responses may arrive out of order and are matched by request UUID. `system.health` returns protocol version 1 and loaded assembly versions. Methods are allowlisted in both the main process and .NET dispatcher.
+[docs/ipc.md](docs/ipc.md) is the full reference: frames, the MessagePack subset, methods and deadlines, streams and credits, result pages, the result store, the results port, restarts, limits, error codes, display formats, and benchmarks.
 
-```json
-{"id":"db807cb6-d4d9-42d7-8d1a-cd0b8ea6a3de","method":"system.health","params":{}}
-{"id":"db807cb6-d4d9-42d7-8d1a-cd0b8ea6a3de","result":{"protocolVersion":1,"runtime":".NET 10.x","platform":"...","smoVersion":"...","sqlClientVersion":"..."}}
+Protocol v2: every frame is a 16-byte little-endian header (magic `56 0A`, kind, flags, body length, request id, and a kind-specific argument such as the request's deadline) followed by one MessagePack body. Main and the backend first exchange HELLO; main refuses a backend that speaks another version or lacks a method it may call (a stale build), and a protocol 1 backend is recognised from the JSON line it answers with. Responses may arrive out of order and are matched by request id; every request gets exactly one response. `system.health` returns protocol version 2 and loaded assembly versions. Methods are allowlisted in both the main process and .NET dispatcher.
+
+```text
+56 0A 02 00 1E 00 00 00 01 00 00 00 10 27 00 00 | {"method":"system.health","params":{}} as MessagePack
+REQUEST, 30-byte body, id 1, deadline 10,000 ms
 ```
 
-Errors use `{"id":"...","error":{"code":"...","message":"..."}}`. At the preload boundary they become a typed `{ ok: false, error }` result, so the UI can display failures without losing the Electron process. A failed backend requires an application restart. Reloading the workbench (View → Reload Window, which has no shortcut) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it.
+Errors are `{ error: { code, message } }` bodies. At the preload boundary they become a typed `{ ok: false, error, code }` result, so the UI can display failures without losing the Electron process. Each method has a deadline after which the backend answers `TIMEOUT`, and main gives up 5 seconds later. A backend that exits or breaks the protocol fails its pending requests and is replaced by a new process after 0, 1, then 2 seconds. Nothing is ever re-sent or re-run: its connections show as **connection lost** in Object Explorer, and only **Reconnect…** (File menu, Query › Connection, the banner, or the lost row and its menu) replaces one, moving its queries to a new session whose first execution says so. After three unexpected stops within two minutes the backend stays down until **Restart SQL Backend…** (command palette or banner; **Copy details** gives fixed-format diagnostics). A backend that is running but silent for 15 seconds is reported as not responding and is never restarted automatically, because a restart closes every connection and rolls back open transactions; **Restart now** leaves that choice to you. Reloading the workbench (View → Reload Window, which has no shortcut) first asks when queries are unsaved or servers are connected, then restarts the backend so no SQL session or transaction outlives the page that owned it. Quitting waits up to a few seconds for the backend to end its sessions, and stops it if it does not.
 
-`query.execute` takes the query tab's UUID as `sessionId`, a separate execution UUID as `queryId`, and an optional selected-text `startLine`. Its result contains `status` (`completed`, `failed`, `cancelled`, or `timedOut`), any SQL error, completed/total batch counts, the resulting database context, and retained output. SQL execution failures return this result so earlier rows and messages survive. Validation errors and missing, busy, or invalid sessions/connections still use the protocol error envelope. `query.session.close` releases a tab's session; server retargeting closes that session before changing the target.
+`query.execute` takes the query tab's UUID as `sessionId`, a separate execution UUID as `queryId`, and an optional selected-text `startLine`. Its result contains `status` (`completed`, `failed`, `cancelled`, or `timedOut`), any SQL error, completed/total batch counts, the resulting database context, messages, and a descriptor for each stored result set; the rows stay in the backend, and the results worker reads them in pages (`results.read`, through the results port). Pages arrive within credit that the worker grants as it decodes them, so a slow window only slows its own reads, never the query. SQL execution failures return this result so earlier rows and messages survive. Validation errors and missing, busy, or invalid sessions/connections still use the protocol error envelope. `query.session.close` releases a tab's session; server retargeting closes that session before changing the target.
 
 ## Batches, sessions, and statistics
 
@@ -220,8 +224,8 @@ Try [examples/statistics-and-batches.sql](examples/statistics-and-batches.sql) o
 
 - Multiple server connections and query documents, with independent persistent sessions and executions per tab. Disconnecting a server detaches only that server's queries. Review generated scripts before executing them.
 - GO batches and repetitions are supported; SQLCMD mode is unavailable. The policy stops later batches on errors, which is intentionally stricter than some SSMS execution paths.
-- Results are buffered, with a default 1,000 rows across result sets, ten retained result sets, 100,000 cells, and 4 million text characters. Ordinary cells retain up to 16,384 characters and XML plans up to 1 million. Messages retain at most 1,000 entries / 1 million characters. Truncation is explicit. Display limits do not stop SQL execution or skip later batches. Full streaming/virtualization is future work.
-- Big integers and decimals are returned as strings to preserve precision. Dates use ISO strings, binary values use bounded hex, and SQL NULL is preserved. CLR types (hierarchyid, geometry, geography) are shown as their serialized hex, as in SSMS.
+- Results stay in the SQL backend's memory, never on disk, under a budget of a quarter of the available memory (256 MiB to 2 GiB; one query may use half of it, and nothing more is stored while the computer is low on memory). The results worker reads them in pages off the UI thread. The results table shows the first 1,000 rows across the first ten result sets, up to 100,000 cells and 4 million characters, and up to 16,384 characters per cell (XML plans 2,097,152). Stored cells keep up to 65,535 characters (XML and JSON 2,097,152; binary values 32,766 bytes). The SQL client cannot stream an XML value, so each one is read whole, briefly, in memory outside the budget: about twice its length in bytes, up to about 4 GB for the largest (2 GB) values. Messages retain at most 1,000 entries / 1 million characters. Truncation is explicit, with its reason. Limits never stop SQL execution or skip later batches. A streaming, virtualized grid is future work.
+- Values are shown as SSMS shows them: bit as 1/0, exact numbers and decimals with their full precision and scale, money with two to four decimals, float and real with 15 and 7 significant digits, dates and times as `2026-10-08 12:34:56.1234567`, binary values as bounded `0x` hex, and SQL NULL as NULL. CLR types (hierarchyid, geometry, geography) are shown as their serialized hex, as in SSMS. [docs/ipc.md](docs/ipc.md#display-formats) lists every type with samples.
 - Script timeout follows the connection's Advanced Command Timeout (0 means no deadline, with a maximum of 86,400 seconds). SMO operations use a separate 30-second statement timeout. Configured connection recovery retries apply to stateless connections; query tabs disable automatic recovery so a lost SQL session cannot silently replace persistent SET/temp/transaction state.
 - Syntax highlighting and raw plan/profile output are available. Schema-aware IntelliSense, graphical plans, profiler, backup/restore, security management, and job management are future milestones.
 - Default automated checks need no database. Optional live backend checks exercise GO, persistent sessions, statistics variants, transactions, errors, cancellation, timeout, display caps, and cleanup against a development instance.
@@ -251,7 +255,7 @@ These checks create only session-local temporary objects, except that with `VARI
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pull requests (including ones stacked on another pull request), pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests assume Windows/Linux window chrome and the themed menu bar, so macOS skips them; unit tests build its native menu bar and context menus on every platform. A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`.
+`.github/workflows/ci.yml` runs on pull requests (including ones stacked on another pull request), pushes to `main`, and manual dispatch. The Linux job runs every time: it starts SQL Server 2022 as a service container, runs `npm run check` with the live checks enabled, then the Electron tests under xvfb with Chromium's sandbox enabled. Windows and macOS run `npm run check` (without a database) for pushes, manual runs, and non-draft pull requests, and Windows also runs the Electron tests; the repository is private and those runners bill at 2x and 10x, so keep pull requests in draft while iterating. The Electron tests assume Windows/Linux window chrome and the themed menu bar, so macOS skips them; unit tests build its native menu bar and context menus on every platform. After the Electron tests, the IPC benchmarks run: Linux fails when a value falls below its floor in `tests/bench/floors.json`, Windows and macOS only report, and every job summary shows the table (see [docs/ipc.md](docs/ipc.md#benchmarks)). A new push cancels a pull request's earlier run, while every push to `main` runs to completion. Failed runs upload the screenshots in `artifacts/`, and every run uploads `artifacts/bench/`.
 
 ## Direction
 

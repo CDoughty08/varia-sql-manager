@@ -1,4 +1,4 @@
-import type { ApiResult, ResultSet, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, DisplayResultSet, VariaApi } from '../../../shared/contracts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { isEmptyRange, maxCopyLength, rangeOf, tooLargeToCopy, toTsv, type GridSelection } from '../grid/selection'
@@ -22,7 +22,7 @@ export function outputContribution({ commands, queries, menuTargets, resultSelec
   const eol = platform === 'win32' ? '\r\n' : '\n'
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
   /** The grid's result set and its selection, when that result is still showing for a query that still has it. */
-  const grid = (target: OutputTarget | undefined): { set: ResultSet; selection?: GridSelection } | undefined => {
+  const grid = (target: OutputTarget | undefined): { set: DisplayResultSet; selection?: GridSelection } | undefined => {
     if (target?.view !== 'grid') return undefined
     const set = queries.getSnapshot()[target.tabId]?.result?.resultSets[target.resultIndex]
     return set && set.kind !== 'executionPlan' ? { set, selection: resultSelection.get(target.tabId, target.resultIndex) } : undefined

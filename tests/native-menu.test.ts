@@ -8,7 +8,7 @@ import { NativeMenuPresenter, nativeChoiceWindow, nativeMenuRequest, type Native
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { MenuTargetService } from '../src/renderer/src/menus/targets'
 import { fakeDocument, FakeElement } from './fixtures/elements'
-import { connectionInfo, manualTimers, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, manualTimers, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks() })
@@ -37,13 +37,13 @@ describe('native menu requests', () => {
     const fixture = workbenchFixture({ platform: 'darwin' })
     cleanups.push(fixture.dispose)
     const tab = fixture.documents.create('one.sql', 'SELECT 1', 'master', 'server-a')
-    fixture.connections.add(connectionInfo('server-a'))
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     const items = fixture.menus.resolve('editor.context', { kind: 'editor', tabId: tab.id })
     const request = nativeMenuRequest(3, 'editor.context', items, { x: 10.6, y: -4 })
     expect(request).toEqual({
       token: 3, menu: 'editor.context', x: 11, y: 0,
-      visible: ['connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'query.execute', 'query.cancel', 'edit.cut', 'edit.copy', 'edit.paste', 'workbench.showCommands'],
-      disabled: ['connection.connect', 'query.cancel'], checked: []
+      visible: ['connection.connect', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect', 'query.changeConnection', 'query.execute', 'query.cancel', 'edit.cut', 'edit.copy', 'edit.paste', 'workbench.showCommands'],
+      disabled: ['connection.connect', 'connection.reconnect', 'query.cancel'], checked: []
     })
     expect(contextMenuRequestSchema.safeParse(request).success).toBe(true)
     expect(nativeMenuRequest(1, 'editor.context', items, { x: 40000, y: Number.NaN })).toMatchObject({ x: 32767, y: 0 })

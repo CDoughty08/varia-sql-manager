@@ -2,6 +2,8 @@ import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore, t
 import type { ApiResult, ConnectionInfo, DatabaseInfo, ServerObjectInfo, ServerObjectKind, TableInfo } from '../../shared/contracts'
 import Icon from './Icon'
 import { useConnectionAccent, useWorkbench } from './core/WorkbenchContext'
+import { useCommandEnabled } from './core/useCommand'
+import type { LiveConnection } from './services/connections'
 import type { ExplorerNode, MenuTarget } from './menus/targets'
 import { useMenuTarget } from './menus/useMenuTarget'
 import { explorerPaths, type ExplorerPath } from './services/explorer'
@@ -218,5 +220,24 @@ function ServerExplorer({ connection, selectedDatabase, canDisconnect, onDatabas
     </div>
   </section>
 }
+
+/** A connection lost with its backend generation: collapsed, loading nothing, until it is reconnected or removed. */
+export const LostServer = memo(function LostServer({ connection, canRemove, onReconnect, onRemove }: { connection: LiveConnection; canRemove: boolean; onReconnect(id: string): void; onRemove(id: string): void }) {
+  const accent = useConnectionAccent(connection.color)
+  // Disabled while the backend is not ready: connecting would only wait or fail.
+  const canReconnect = useCommandEnabled('connection.reconnect')
+  // The whole section, buttons included, so Shift+F10 on either button opens the lost server's menu.
+  const target = useNodeTarget<HTMLElement>(() => ({ kind: 'lostServer', connectionId: connection.id }))
+  const name = connection.displayName || connection.server
+  return <section ref={target} className="server-section lost-server" aria-label={'Server ' + connection.server} style={{ borderLeft: accent ? `3px solid ${accent}` : undefined }}>
+    <div className="server-row">
+      <span className="lost-server-label" title={connection.server + ' — the connection was lost when the SQL backend restarted'}><span className="codicon codicon-debug-disconnect" aria-hidden="true" /><span className="node-label">{name} — connection lost</span></span>
+    </div>
+    <div className="lost-server-actions">
+      <button disabled={!canReconnect} aria-label={'Reconnect ' + connection.server} onClick={() => onReconnect(connection.id)}>Reconnect…</button>
+      <button disabled={!canRemove} aria-label={'Remove ' + connection.server} onClick={() => onRemove(connection.id)}>Remove</button>
+    </div>
+  </section>
+})
 
 export default memo(ServerExplorer)

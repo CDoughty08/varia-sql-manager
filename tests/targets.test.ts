@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult } from '../src/shared/contracts'
-import { connectionInfo, queryOutput, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, queryOutput, workbenchFixture } from './fixtures/workbench'
 import { deferred } from './fixtures/documents'
 
 const cleanups: (() => void)[] = []
@@ -8,8 +8,8 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 async function fixture() {
   const value = workbenchFixture()
   cleanups.push(value.dispose)
-  value.connections.add({ ...connectionInfo('server-a'), database: 'Sales' })
-  value.connections.add(connectionInfo('server-b'))
+  value.connections.add({ ...connectionInfo('server-a'), database: 'Sales' }, connectionOptions)
+  value.connections.add(connectionInfo('server-b'), connectionOptions)
   const tab = value.documents.create('query.sql', 'SELECT 1', 'AppData', 'server-a')
   // A finished query leaves results that a target change must clear.
   value.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, database: 'AppData' } })

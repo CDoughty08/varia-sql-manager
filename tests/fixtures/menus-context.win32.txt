@@ -4,6 +4,7 @@ editor.context, for the query editor
     &Connect…  ++++
     &Disconnect  -+--
     Disconnect &All Queries  -++-
+    &Reconnect…  ++++
     ---
     C&hange Connection…  ++--
   ---
@@ -96,6 +97,9 @@ explorer.context, for a server
   Copy &Name  -+++
   ---
   Re&fresh  F5  -+++
+explorer.context, for a lost server
+  &Reconnect…  ++++
+  Re&move  +++-
 explorer.context, for the databasesFolder node
   Re&fresh  F5  -+++
 explorer.context, for the systemDatabasesFolder node

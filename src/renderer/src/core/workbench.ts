@@ -7,6 +7,10 @@ import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
 import { EditorOptionsService } from '../services/editor-options'
 import { TargetService } from '../services/targets'
+import { BackendStateService } from '../services/backend'
+import { ResultClient } from '../results/ResultClient'
+import { legacyExecute } from '../results/legacy'
+import ResultsWorker from '../results/results.worker.ts?worker'
 import { PaneService } from '../services/panes'
 import { ExplorerService } from '../services/explorer'
 import { ResultSelectionService } from '../services/result-selection'
@@ -16,6 +20,7 @@ import { filesContribution } from '../contributions/files'
 import { editorContribution } from '../contributions/editor'
 import { paletteContribution } from '../contributions/palette'
 import { themeContribution } from '../contributions/theme'
+import { backendContribution } from '../contributions/backend'
 import { editContribution } from '../contributions/edit'
 import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
@@ -49,6 +54,9 @@ export interface Workbench extends Disposable {
   readonly documents: DocumentService
   readonly queries: QueryService
   readonly connections: ConnectionService
+  readonly backend: BackendStateService
+  /** Stored query results, read through the results worker. */
+  readonly results: ResultClient
   readonly files: FileService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
@@ -73,14 +81,16 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
 export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService): Workbench {
   const platform = toPlatform(api.platform)
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService(), explorer = new ExplorerService()
+  const backend = new BackendStateService(api, connections)
   const documents = new DocumentService((sql, uri) => monaco.editor.createModel(sql, 'sql', monaco.Uri.parse(uri)), api, events)
-  const queries = new QueryService(documents, api, id => connections.get(id), events)
+  const results = new ResultClient({ api, createWorker: () => new ResultsWorker(), window })
+  const queries = new QueryService(documents, { execute: (options, onProgress) => legacyExecute(api, results, options, onProgress), cancel: queryId => api.cancel(queryId) }, id => connections.get(id), events)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(events)
   const targets = new TargetService(documents, queries, connections, files, api)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
-  const context = new ContextKeyService({ platform, documents, queries, connections, editorOptions, panes, quickInput: quickInput.visibility, editor: () => documents.boundEditor })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, editor: () => documents.boundEditor })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
@@ -96,16 +106,16 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, files, targets, editorOptions, panes, explorer, resultSelection, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, results, files, targets, editorOptions, panes, explorer, resultSelection, theme, dispose: () => {
     if (disposed) return
     disposed = true
     // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
     listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); documents.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); explorer.dispose(); resultSelection.dispose(); theme.dispose(); events.dispose()
+    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); documents.dispose(); backend.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); explorer.dispose(); resultSelection.dispose(); theme.dispose(); events.dispose()
   } }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api)]
+    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench)]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')
