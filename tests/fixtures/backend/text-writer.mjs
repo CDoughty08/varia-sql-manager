@@ -11,8 +11,8 @@ const jsonNumber = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
 const hexDigits = bytes('0123456789ABCDEF')
 const B = { tab: 9, lf: 10, cr: 13, quote: 34, comma: 44, backslash: 92 }
 
-/** Copy: tab-separated, NULL as NULL, the platform's end of line between lines and none after the last. */
-export const copyOptions = (headers, crlf) => ({ format: 'tsv', headers, nullAsEmpty: false, crlf, trailingEol: false, bom: false })
+/** Copy: tab-separated, NULL as NULL, the platform's end of line between lines and none after the last, NUL as a space. */
+export const copyOptions = (headers, crlf) => ({ format: 'tsv', headers, nullAsEmpty: false, crlf, trailingEol: false, bom: false, clipboard: true })
 /** Save: CSV and TSV with a BOM and CRLF after every line; JSON with LF, no BOM and no header. */
 export const exportOptions = (format, headers, nullText) => ({ format, headers: headers && format !== 'json', nullAsEmpty: nullText === 'empty', crlf: format !== 'json', trailingEol: true, bom: format !== 'json' })
 
@@ -70,12 +70,12 @@ function jsonKeys(columns) {
 
 function bit(bitmap, row) { return bitmap !== undefined && (bitmap[row >>> 3] & (1 << (row & 7))) !== 0 }
 
-/** CRLF, CR, LF and TAB each become one space. */
-function tsvText(out, text) {
+/** CRLF, CR, LF and TAB (and NUL on the clipboard, which Windows ends at the first one) each become one space. */
+function tsvText(out, text, clipboard) {
   let start = 0
   for (let i = 0; i < text.length; i++) {
     const value = text[i]
-    if (value !== B.tab && value !== B.lf && value !== B.cr) continue
+    if (value !== B.tab && value !== B.lf && value !== B.cr && !(clipboard && value === 0)) continue
     out.write(text.subarray(start, i))
     out.write(bytes(' '))
     if (value === B.cr && text[i + 1] === B.lf) i++
@@ -154,7 +154,7 @@ export class TextWriter {
       if (i > 0) this.out.write(this.separator)
       const name = bytes(this.columns[column].name === '' ? NO_COLUMN_NAME : this.columns[column].name)
       if (this.options.format === 'csv') csvField(this.out, name)
-      else tsvText(this.out, name)
+      else tsvText(this.out, name, this.options.clipboard)
     })
     this.endLine()
   }
@@ -206,7 +206,7 @@ export class TextWriter {
         if (json && value.length === 1 && (value[0] === 48 || value[0] === 49)) { this.out.write(bytes(value[0] === 49 ? 'true' : 'false')); return }
         break
     }
-    if (this.options.format === 'tsv') tsvText(this.out, value)
+    if (this.options.format === 'tsv') tsvText(this.out, value, this.options.clipboard)
     else if (this.options.format === 'csv') csvField(this.out, value)
     else jsonString(this.out, value)
   }

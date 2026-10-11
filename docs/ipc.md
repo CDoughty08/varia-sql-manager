@@ -398,7 +398,7 @@ because every byte that needs attention is ASCII (and U+2028/U+2029, matched as 
 | Separator, end of line | TAB; CRLF on Windows, LF elsewhere; none after the last line | TAB; CRLF after every line | `,`; CRLF after every line | `[` LF, one compact object per line joined by `,` LF, then LF `]` LF; an empty result is `[]` LF |
 | Header | Copy with Headers only; one header line per part | on | on | object keys |
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
-| Text | CRLF, CR, LF and TAB each become one space | same | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
+| Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
 | Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number, otherwise a string; bit as `true`/`false`; everything else a string |
 | Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
@@ -423,13 +423,15 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   flushes it to disk and renames it over the target (a symlink there is replaced, not followed). A regular file it
   replaces keeps its permissions: on Linux and macOS the temporary file is created with the target's mode (never wider)
   and set to it exactly, and one replacing a symlink to a file gets that file's read and write bits, narrowed by the
-  umask; on Windows `File.Replace` keeps its ACLs and attributes, keeping the replaced file as
+  umask; on Windows `File.Replace` keeps its attributes and, where the user may set them, its ACLs (merge errors are
+  ignored, so a share granted Change rather than Full Control still saves), keeping the replaced file as
   `.varia-{temporaryId}.bak` until it succeeds, so a replace that fails partway leaves the old file, or puts the new one
   in place, never neither. Any failure or cancel deletes the temporary file; the target is never touched before the
   rename. When the backend stops before it could (a crash, a kill, a restart), the export fails with `BACKEND_LOST` and
   main removes the temporary file itself, at once and again after the stop grace period, and the backup once the target
   exists. Failures are `EXPORT_FAILED` whose message is one token, never a path or an OS message: `ACCESS`
-  (`UnauthorizedAccessException`, HRESULT 0x80070005), `IN_USE` (0x80070020, 0x80070021), `DISK_FULL` (0x80070070,
+  (`UnauthorizedAccessException`, HRESULT 0x80070005), `IN_USE` (0x80070020, 0x80070021, and
+  0x80070497 when `File.Replace` cannot remove a file another program holds), `DISK_FULL` (0x80070070,
   0x80070027, errno 28), `NOT_FOUND` (a missing folder), `IS_DIRECTORY`, otherwise `IO`.
 - **Progress.** Both send droppable `{ type: 'job.progress', rowsDone, rowsTotal, bytes }` EVENTs at most every 250 ms;
   main validates them (`jobProgressSchema`) and pushes `varia:results-job { jobId, kind, rowsDone, rowsTotal, bytes }`

@@ -724,7 +724,49 @@ try {
     await expect(queryTabs()).toHaveCount(1)
   })
   expect(await calls('query.session.close')).toBe(sessionCloses)
-  console.log('Results checks: XML, JSON and plan values open formatted in their own tabs, save as XML, and close without a session; a 2 MB value fills in without a long task.')
+  // macOS overlay scroll bars take no room: they lie over the cells, and a press on one targets the scroller itself.
+  // Hidden bars in a small scroller give Linux that geometry. The press a scroll-bar drag sends there (at the edge, and
+  // 40 px in, where a zoomed-out window's bar still is) selects nothing and opens nothing; the same press on the plan
+  // cell under it selects the cell and opens the plan.
+  const overlayStyle = await page.addStyleTag({ content: '[data-result-grid] .rg-scroll { max-width: 520px; max-height: 80px } [data-result-grid] .rg-scroll::-webkit-scrollbar { width: 0; height: 0 }' })
+  await cell(0, 0).click()
+  await page.keyboard.press('End')
+  await settled()
+  await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
+  const beforeOverlayPress = await active()
+  const overlayBar = await scroller().evaluate(element => {
+    const box = element.getBoundingClientRect(), row = element.querySelector('.rg-row[aria-rowindex="3"]').getBoundingClientRect()
+    const x = box.left + element.clientWidth - 5, y = row.top + row.height / 2, under = document.elementFromPoint(x, y)?.closest('.rg-c')
+    const inner = document.elementFromPoint(x - 35, y)?.closest('.rg-c')
+    return {
+      x, y, inner: inner === under, overlay: element.offsetWidth === element.clientWidth && element.offsetHeight === element.clientHeight,
+      overflows: element.scrollWidth > element.clientWidth && element.scrollHeight > element.clientHeight,
+      inView: y < box.top + element.clientHeight, link: !!under?.classList.contains('is-link'), column: under?.getAttribute('aria-colindex')
+    }
+  })
+  expect(overlayBar).toMatchObject({ inner: true, overlay: true, overflows: true, inView: true, link: true, column: '5' })
+  const pressAt = (on, x = overlayBar.x) => scroller().evaluate((element, { x, y, on }) => {
+    const target = on === 'scroller' ? element : document.elementFromPoint(x, y)
+    const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, detail: 1 }
+    const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true }
+    target.dispatchEvent(new PointerEvent('pointerdown', { ...init, ...pointer, buttons: 1 }))
+    target.dispatchEvent(new MouseEvent('mousedown', { ...init, buttons: 1 }))
+    target.dispatchEvent(new PointerEvent('pointerup', { ...init, ...pointer, buttons: 0 }))
+    target.dispatchEvent(new MouseEvent('mouseup', { ...init, buttons: 0 }))
+  }, { x, y: overlayBar.y, on })
+  await pressAt('scroller')
+  await pressAt('scroller', overlayBar.x - 35)
+  await page.waitForTimeout(300)
+  await expect(queryTabs()).toHaveCount(1)
+  expect(await active()).toEqual(beforeOverlayPress)
+  await pressAt('cell')
+  await expect(queryTabs()).toHaveCount(2)
+  await expect(page.locator('.query-context')).toHaveText('Execution plan')
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
+  expect(await active()).toMatchObject({ row: 1, column: 3 })
+  await overlayStyle.evaluate(node => node.remove())
+  console.log('Results checks: XML, JSON and plan values open formatted in their own tabs, save as XML, and close without a session; a 2 MB value fills in without a long task; a press on an overlay scroll bar selects and opens nothing.')
 
   // 10. Messages stream while the script runs; errors are red and in order; the completion time and the error badge.
   await writeFile(join(control, 'hold', 'query.execute'), '')

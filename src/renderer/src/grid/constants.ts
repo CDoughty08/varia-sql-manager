@@ -21,6 +21,11 @@ export const gridLimits = {
   scrollCap: 15_000_000, scrollCapPhysical: 30_000_000, rebaseRows: 4096,
   splitter: 5, stackMinRows: 4, stackBorder: 2, mountedGrids: 12, mountsPerFrame: 2,
   selectionBlocks: 64, dragThreshold: 4, resizeZoneLeft: 4, resizeZoneRight: 3,
+  /**
+   * How far in from the edge a press on the scroller itself counts as a press on an overlay scroll bar (macOS). The bar is
+   * 16 DIP whatever the page zoom, so 64 CSS px at Chromium's smallest zoom (25 %).
+   */
+  overlayScrollBar: 64,
   ariaRowCountMs: 1000, liveRegionMs: 300,
   measureInitialRows: 128, measureFitRows: 4096, measureCap: 512,
   copyStripDelayMs: 300,

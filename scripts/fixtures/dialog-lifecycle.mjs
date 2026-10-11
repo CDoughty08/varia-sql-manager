@@ -57,6 +57,11 @@ const answer = (application, title, response) => application.evaluate((_electron
   return !!reply
 }, [title, response])
 const crash = application => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+// Electron turns SIGTERM into app.quit() on Linux and macOS. On Windows Playwright starts Electron through cmd.exe, so the
+// child is that shell and kill() terminates only it: main is asked to quit instead. The child still exits with the app.
+const quit = (application, child) => process.platform === 'win32'
+  ? application.evaluate(({ app }) => { setImmediate(() => app.quit()) })
+  : child.kill('SIGTERM')
 
 async function launch(launchOptions, name) {
   const profile = await mkdtemp(resolve('artifacts', `menus-${name}-profile-`)), control = await mkdtemp(resolve('artifacts', `menus-${name}-backend-`))
@@ -171,9 +176,10 @@ export async function dialogLifecycle(launchOptions) {
     expect(errors).toEqual([])
   } finally { await run.cleanup() }
 
-  // B: a quit (SIGTERM, which Electron turns into app.quit) while the Script As save waits: the app stays until the
-  // dialogs are answered, then saves the script, asks about the unsaved query (Don't Save), and exits. A close asked for
-  // while the workbench did not respond, which has recovered by its turn, closes as usual instead of asking.
+  // B: a quit (SIGTERM, which Electron turns into app.quit; app.quit itself on Windows) while the Script As save waits:
+  // the app stays until the dialogs are answered, then saves the script, asks about the unsaved query (Don't Save), and
+  // exits. A close asked for while the workbench did not respond, which has recovered by its turn, closes as usual
+  // instead of asking.
   run = await launch(launchOptions, 'quit')
   try {
     const { application, child, page, profile, errors } = run
@@ -200,7 +206,7 @@ export async function dialogLifecycle(launchOptions) {
     await application.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.emit('unresponsive'); window.close(); window.emit('responsive') })
     let exited = false
     child.once('exit', () => { exited = true })
-    child.kill('SIGTERM')
+    await quit(application, child)
     await wait(1500)
     expect({ exited, shown: await shown(application) }).toEqual({ exited: false, shown: ['Save Grid Results'] })
     await application.evaluate(() => globalThis.variaReleaseGridSave())
@@ -210,7 +216,7 @@ export async function dialogLifecycle(launchOptions) {
     expect(errors).toEqual([])
   } finally { await run.cleanup() }
 
-  // C: a quit (SIGTERM) while the reload prompt is open with a query unsaved. Its Unsaved query prompt waits behind the
+  // C: a quit (as in B) while the reload prompt is open with a query unsaved. Its Unsaved query prompt waits behind the
   // reload prompt, which is answered Reload: that prompt belongs to the page that reloads, so main closes it then and
   // hands the quit to the new page, which has nothing unsaved, so the app exits. A person who still sees the prompt a
   // moment later answers Don't Save, which on its own would not exit: that page is gone.
@@ -225,7 +231,7 @@ export async function dialogLifecycle(launchOptions) {
     await expect.poll(() => shown(application)).toEqual(['Reload workbench'])
     let exited = false
     child.once('exit', () => { exited = true })
-    child.kill('SIGTERM')
+    await quit(application, child)
     await wait(1000)
     expect({ exited, shown: await shown(application) }).toEqual({ exited: false, shown: ['Reload workbench'] })
     expect(await answer(application, 'Reload workbench', 0)).toBe(true)

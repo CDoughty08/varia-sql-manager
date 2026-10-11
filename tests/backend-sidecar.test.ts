@@ -454,8 +454,11 @@ describe('real .NET sidecar results (test hooks)', () => {
         received += body.byteLength
         worstOverdraft = Math.max(worstOverdraft, received - granted - body.byteLength)
         chunks.push(new Uint8Array(body))
-        granted += body.byteLength
-        connection.credit(sent.id, body.byteLength)
+        const grant = () => { granted += body.byteLength; connection.credit(sent.id, body.byteLength) }
+        // Progress goes out once a copy has run 250 ms: the first chunk's credit comes back after 300, so a fast machine
+        // reports it too.
+        if (chunks.length === 1) setTimeout(grant, 300)
+        else grant()
       }
     } })
     const result = await sent.done as { rows: number; bytes: number; partial: boolean }

@@ -397,11 +397,21 @@ export class GridView {
     } catch (error) { this.o.onError(error) }
   }
 
-  /** A point relative to the scroller's client box; undefined over its scroll bars. */
-  private point(event: { clientX: number; clientY: number }): { x: number; y: number; inside: boolean } {
+  /** A point relative to the scroller's client box; not inside over its scroll bars. */
+  private point(event: MouseEvent): { x: number; y: number; inside: boolean } {
     const box = this.scroller.getBoundingClientRect()
     const x = event.clientX - box.left, y = event.clientY - box.top
-    return { x, y, inside: x >= 0 && y >= 0 && x < this.viewportWidth && y < this.viewportHeight }
+    return { x, y, inside: x >= 0 && y >= 0 && x < this.viewportWidth && y < this.viewportHeight && !this.overOverlayScrollBar(event, x, y) }
+  }
+  /**
+   * Overlay scroll bars (macOS) take no room, so they lie over the cells, and a press on one targets the scroller itself
+   * (a cell, row or header is the target anywhere else over the data). Classic bars sit outside the client box.
+   */
+  private overOverlayScrollBar(event: MouseEvent, x: number, y: number): boolean {
+    const scroller = this.scroller
+    if (event.target !== scroller) return false
+    return (scroller.offsetWidth === scroller.clientWidth && scroller.scrollHeight > scroller.clientHeight && x >= this.viewportWidth - g.overlayScrollBar)
+      || (scroller.offsetHeight === scroller.clientHeight && scroller.scrollWidth > scroller.clientWidth && y >= this.viewportHeight - g.overlayScrollBar)
   }
   private hitAt(x: number, y: number, clamp = false) {
     return hitTest(x, y, { viewport: { top: this.o.state.virtualTop, left: this.o.state.scrollLeft, width: this.viewportWidth, height: this.viewportHeight }, rows: this.rows(), layout: this.layout, rowHeader: this.rowHeader, clamp })

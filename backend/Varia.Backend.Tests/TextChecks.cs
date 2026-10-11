@@ -351,7 +351,7 @@ internal static class TextChecks
             var replaced = Path.Combine(folder.FullName, "replaced.csv");
             var fresher = Path.Combine(folder.FullName, ".varia-new.tmp");
             var backup = Path.Combine(folder.FullName, ".varia-new.bak");
-            string Outcome(Action<string, string, string?> replace)
+            string Outcome(Action<string, string, string?, bool> replace)
             {
                 File.WriteAllText(replaced, "old");
                 File.WriteAllText(fresher, "new");
@@ -364,16 +364,20 @@ internal static class TextChecks
             }
             var outcomes = new[]
             {
-                Outcome((source, path, copy) => { File.Move(path, copy!); File.Move(source, path); }),
-                // ERROR_UNABLE_TO_REPLACE: nothing moved.
-                Outcome((_, _, _) => throw new IOException("1175")),
+                Outcome((source, path, copy, _) => { File.Move(path, copy!); File.Move(source, path); }),
+                // ERROR_UNABLE_TO_REMOVE_REPLACED: nothing moved.
+                Outcome((_, _, _, _) => throw new IOException("1175")),
                 // ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: the original went to the backup name, the new file stayed put.
-                Outcome((_, path, copy) => { File.Move(path, copy!); throw new IOException("1177"); }),
+                Outcome((_, path, copy, _) => { File.Move(path, copy!); throw new IOException("1177"); }),
                 // The same, and the new file cannot be moved either: the original comes back.
-                Outcome((source, path, copy) => { File.Move(path, copy!); File.Delete(source); throw new IOException("1177"); })
+                Outcome((source, path, copy, _) => { File.Move(path, copy!); File.Delete(source); throw new IOException("1177"); })
             };
             check(outcomes.SequenceEqual(["ok:new:", "failed:old:temporary", "ok:new:", "failed:old:"]),
                 "a replace that fails keeps the old file or puts the new one in place, never neither: " + string.Join(", ", outcomes));
+            // Without the right to set permissions (a share granted Change), keeping the old file's ACLs must not fail the save.
+            bool? ignoresMetadataErrors = null;
+            Outcome((source, path, copy, ignore) => { ignoresMetadataErrors = ignore; File.Move(path, copy!); File.Move(source, path); });
+            check(ignoresMetadataErrors == true, "ReplaceFile asks File.Replace to ignore ACL merge errors");
 
             string? Code(ResultsExportArgs args, RequestContext? context = null)
             {
@@ -451,9 +455,10 @@ internal static class TextChecks
         var tokens = new[]
         {
             Token(new UnauthorizedAccessException()), Token(Io(unchecked((int)0x80070005))), Token(Io(unchecked((int)0x80070020))), Token(Io(unchecked((int)0x80070021))),
-            Token(Io(unchecked((int)0x80070070))), Token(Io(unchecked((int)0x80070027))), Token(new DirectoryNotFoundException()), Token(new IOException("x")), Token(new PathTooLongException())
+            Token(Io(unchecked((int)0x80070497))), Token(Io(unchecked((int)0x80070070))), Token(Io(unchecked((int)0x80070027))), Token(new DirectoryNotFoundException()),
+            Token(new IOException("x")), Token(new PathTooLongException())
         };
-        check(tokens.SequenceEqual(["ACCESS", "ACCESS", "IN_USE", "IN_USE", "DISK_FULL", "DISK_FULL", "NOT_FOUND", "IO", "IO"])
+        check(tokens.SequenceEqual(["ACCESS", "ACCESS", "IN_USE", "IN_USE", "IN_USE", "DISK_FULL", "DISK_FULL", "NOT_FOUND", "IO", "IO"])
             && Token(Io(28)) == (OperatingSystem.IsWindows() ? "IO" : "DISK_FULL"), "export failures map to one token each: " + string.Join(", ", tokens));
     }
 

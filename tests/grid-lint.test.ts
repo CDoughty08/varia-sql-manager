@@ -1,12 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // Result values are untrusted SQL data: the grid and the results views write text only through Text nodes and React,
 // never as markup.
 const roots = ['src/renderer/src/grid', 'src/renderer/src/results']
 const sinks = /\b(innerHTML|outerHTML|insertAdjacentHTML|dangerouslySetInnerHTML|createContextualFragment)\b|document\.write|\.textContent\s*=(?!=)/
-const files = roots.flatMap(root => readdirSync(root).filter(name => /\.(ts|tsx)$/.test(name)).map(name => join(root, name)))
+// Joined with / on every OS, so the paths match the literals below on Windows too.
+const files = roots.flatMap(root => readdirSync(root).filter(name => /\.(ts|tsx)$/.test(name)).map(name => `${root}/${name}`))
 
 describe('grid lint', () => {
   it('finds the grid and results sources', () => {

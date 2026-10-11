@@ -167,7 +167,8 @@ internal sealed class ResultJobs(ResultStore store)
                 await Drain();
                 file.Flush(flushToDisk: true);
             }
-            // On Windows, Replace keeps the replaced file's ACLs and attributes, which a move over it would drop.
+            // On Windows, Replace keeps the replaced file's ACLs (where the user may set them) and attributes, which a move
+            // over it would drop.
             if (replacing && OperatingSystem.IsWindows()) ReplaceFile(temporary, args.Path, Path.Combine(directory, ".varia-" + args.TemporaryId + ".bak"), File.Replace);
             else File.Move(temporary, args.Path, overwrite: true);
             temporary = null;
@@ -185,10 +186,12 @@ internal sealed class ResultJobs(ResultStore store)
     /// <paramref name="backup"/> until that succeeds. Without a backup name, ReplaceFile can fail after it removed the
     /// original (ERROR_UNABLE_TO_MOVE_REPLACEMENT, e.g. while antivirus holds the new file), leaving neither; with one, a
     /// failure leaves both names as they were, or the original at the backup name, and then the new file is moved into
-    /// place, or failing that the original is put back.</summary>
-    internal static void ReplaceFile(string temporary, string path, string backup, Action<string, string, string?> replace)
+    /// place, or failing that the original is put back. ACL merge errors are ignored: on a share that lets the user write
+    /// but not set permissions (Change rather than Full Control), the new file takes the folder's, as a new file would,
+    /// instead of the save failing.</summary>
+    internal static void ReplaceFile(string temporary, string path, string backup, Action<string, string, string?, bool> replace)
     {
-        try { replace(temporary, path, backup); }
+        try { replace(temporary, path, backup, true); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException && !File.Exists(path))
         {
             try { File.Move(temporary, path); }
@@ -217,13 +220,15 @@ internal sealed class ResultJobs(ResultStore store)
     public static string ExportToken(Exception error)
     {
         const int access = unchecked((int)0x80070005), sharing = unchecked((int)0x80070020), locked = unchecked((int)0x80070021);
+        // ERROR_UNABLE_TO_REMOVE_REPLACED: ReplaceFile could not remove the old file, which another program holds.
+        const int replacedHeld = unchecked((int)0x80070497);
         const int diskFull = unchecked((int)0x80070070), handleDiskFull = unchecked((int)0x80070027), noSpace = 28;
         return error switch
         {
             UnauthorizedAccessException => "ACCESS",
             DirectoryNotFoundException => "NOT_FOUND",
             IOException { HResult: access } => "ACCESS",
-            IOException { HResult: sharing or locked } => "IN_USE",
+            IOException { HResult: sharing or locked or replacedHeld } => "IN_USE",
             IOException { HResult: diskFull or handleDiskFull } => "DISK_FULL",
             // On Linux and macOS an IOException's HResult is the errno.
             IOException { HResult: noSpace } when !OperatingSystem.IsWindows() => "DISK_FULL",

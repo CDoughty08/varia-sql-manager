@@ -6,11 +6,15 @@ namespace Varia.Backend.Results;
 internal enum TextFormat { Tsv, Csv, Json }
 
 /// <summary>How text is laid out. Copy: tab-separated, NULL as "NULL", the platform's end of line between lines and none
-/// after the last. Save: a header row, a BOM for CSV and TSV, CRLF after every line (LF for JSON). docs/ipc.md has the
-/// table; tests/fixtures/results-text/cases.json pins the bytes.</summary>
+/// after the last, NUL as a space. Save: a header row, a BOM for CSV and TSV, CRLF after every line (LF for JSON).
+/// docs/ipc.md has the table; tests/fixtures/results-text/cases.json pins the bytes.</summary>
 internal sealed record TextOptions(TextFormat Format, bool Headers, bool NullAsEmpty, bool Crlf, bool TrailingEol, bool Bom)
 {
-    public static TextOptions Copy(bool headers, bool crlf) => new(TextFormat.Tsv, headers, false, crlf, false, false);
+    /// <summary>Text for the clipboard, which Windows ends at the first NUL: each becomes a space, or the rest of the copy
+    /// would be lost.</summary>
+    public bool Clipboard { get; init; }
+
+    public static TextOptions Copy(bool headers, bool crlf) => new(TextFormat.Tsv, headers, false, crlf, false, false) { Clipboard = true };
 
     /// <param name="nullText">"empty" or "NULL"; JSON always writes null.</param>
     public static TextOptions Export(TextFormat format, bool headers, string nullText) =>
@@ -25,6 +29,7 @@ internal sealed class ResultTextWriter
 {
     public const string NoColumnName = "(No column name)";
     private static readonly SearchValues<byte> TsvSpecial = SearchValues.Create("\t\n\r"u8);
+    private static readonly SearchValues<byte> ClipboardSpecial = SearchValues.Create("\t\n\r\0"u8);
     private static readonly SearchValues<byte> CsvSpecial = SearchValues.Create(",\"\n\r"u8);
     private static readonly SearchValues<byte> JsonSpecial = SearchValues.Create([.. Enumerable.Range(0, 0x20).Select(value => (byte)value), (byte)'"', (byte)'\\', 0xE2]);
     private static readonly HashSet<string> NumberTypes = ["tinyint", "smallint", "int", "bigint", "decimal", "numeric", "money", "smallmoney", "real", "float"];
@@ -177,12 +182,14 @@ internal sealed class ResultTextWriter
         }
     }
 
-    /// <summary>CRLF, CR, LF and TAB each become one space, so a value stays on its line and in its column.</summary>
+    /// <summary>CRLF, CR, LF and TAB (and NUL on the clipboard) each become one space, so a value stays on its line and in
+    /// its column.</summary>
     private void TsvText(ReadOnlySpan<byte> text)
     {
+        var special = options.Clipboard ? ClipboardSpecial : TsvSpecial;
         while (!text.IsEmpty)
         {
-            var at = text.IndexOfAny(TsvSpecial);
+            var at = text.IndexOfAny(special);
             if (at < 0) { Write(text); return; }
             Write(text[..at]);
             Write(" "u8);

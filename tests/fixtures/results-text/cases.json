@@ -81,6 +81,26 @@
         {"format": "tsv", "headers": true, "nullText": "NULL", "expected": "\ufeffa\tb, c\r\n", "rows": 0, "truncatedCells": 0},
         {"format": "json", "headers": true, "nullText": "NULL", "expected": "[]\n", "rows": 0, "truncatedCells": 0}
       ]
+    },
+    {
+      "name": "NUL in a value: a space on the clipboard, which Windows ends at the first NUL; kept in saved files",
+      "columns": [
+        {"name": "id", "dataType": "int", "wire": "text"},
+        {"name": "note", "dataType": "nvarchar(max)", "wire": "text"}
+      ],
+      "rows": [
+        ["1", "abc\u0000def"],
+        ["2", "\u0000"],
+        ["3", "after"]
+      ],
+      "copy": [
+        {"name": "every row", "headers": true, "eol": "crlf", "parts": [{"rows": [[0, 9007199254740991]], "columns": [[0, 1]]}], "expected": "id\tnote\r\n1\tabc def\r\n2\t \r\n3\tafter", "rows": 3, "truncatedCells": 0}
+      ],
+      "save": [
+        {"format": "tsv", "headers": true, "nullText": "NULL", "expected": "\ufeffid\tnote\r\n1\tabc\u0000def\r\n2\t\u0000\r\n3\tafter\r\n", "rows": 3, "truncatedCells": 0},
+        {"format": "csv", "headers": true, "nullText": "NULL", "expected": "\ufeffid,note\r\n1,abc\u0000def\r\n2,\u0000\r\n3,after\r\n", "rows": 3, "truncatedCells": 0},
+        {"format": "json", "headers": true, "nullText": "NULL", "expected": "[\n{\"id\":1,\"note\":\"abc\\u0000def\"},\n{\"id\":2,\"note\":\"\\u0000\"},\n{\"id\":3,\"note\":\"after\"}\n]\n", "rows": 3, "truncatedCells": 0}
+      ]
     }
   ]
 }
