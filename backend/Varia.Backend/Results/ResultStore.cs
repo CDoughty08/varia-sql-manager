@@ -126,18 +126,6 @@ internal sealed class ResultStore
         Interlocked.Add(ref query.used, -bytes);
     }
 
-    /// <summary>Counts garbage that a row left outside the budget once the reader has moved past it (a large xml value is
-    /// read whole), so it is collected like released results instead of piling up across rows. More than 64 MiB from one
-    /// row is collected at once, before the next row's values are read, so two such values never coexist.</summary>
-    public void Discarded(long bytes)
-    {
-        if (bytes <= 0) return;
-        Interlocked.Add(ref freedSinceCompact, bytes);
-        if (Interlocked.Add(ref freedSinceCollect, bytes) <= CollectAfterRelease) return;
-        if (bytes > CollectAfterRelease) CollectNow();
-        else Collect();
-    }
-
     public bool IsSystemMemoryLow()
     {
         var (load, threshold) = memory();
@@ -202,9 +190,9 @@ internal sealed class ResultStore
 
     /// <summary>Pages are large arrays, which only a gen2 collection frees, and nothing else in the backend allocates enough
     /// to trigger one: without it the process keeps its peak memory after results are closed and grows under store and
-    /// close churn. One runs after every 64 MiB released or discarded (large xml values read whole), counted across calls,
-    /// and when a release empties the store after 16 MiB released since the last compacting one; calls that come together
-    /// share it, off the caller's thread (a row that discarded more than 64 MiB collects at once, see <see cref="Discarded"/>).
+    /// close churn. One runs after every 64 MiB released, counted across calls, and when a release
+    /// empties the store after 16 MiB released since the last compacting one; calls that come together share it, off the
+    /// caller's thread.
     /// Only an aggressive (compacting) collection returns the freed memory to the operating system. It copies what remains,
     /// so it runs only when that is no more than what was released since the last one; otherwise a non-compacting one
     /// keeps the pause short.</summary>

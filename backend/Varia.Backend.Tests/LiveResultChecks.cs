@@ -79,11 +79,12 @@ internal static class LiveResultChecks
                 "a 50,000,000-character nvarchar(max) and a 3 MB xml value are stored as truncated prefixes");
             check(growth < 64L * 1024 * 1024, "reading the huge values grew the working set by " + growth / 1024 / 1024 + " MB, under 64 MB (" + watch.ElapsedMilliseconds + " ms)");
 
-            // xml is serialised as SqlClient's GetChars would, including fragments that start with text.
+            // xml is serialised as SqlClient's GetChars would, including fragments that start with text. SqlClient 7.1's
+            // GetXmlReader guesses UTF-8 for those: 'abc' throws, and U+3441 U+3442 (bytes 41 34 42 34) read as "A4B4".
             result = await Run("SELECT CAST(N'abc' AS xml), CAST(N'é<a b=\"1\"/>' AS xml), (SELECT ',' + name FROM (VALUES ('x'), ('y')) AS t(name) FOR XML PATH(''), TYPE),"
-                + " CAST(N'<r><!-- c --><?pi d?><x:e xmlns:x=\"urn:x\">&lt;&amp;</x:e></r>' AS xml);");
+                + " CAST(N'<r><!-- c --><?pi d?><x:e xmlns:x=\"urn:x\">&lt;&amp;</x:e></r>' AS xml), CAST(NCHAR(13377) + NCHAR(13378) + N'<a/>' AS xml);");
             var documents = RowsOf(store, result.ResultSets[0])[0];
-            check(documents.SequenceEqual(["abc", "é<a b=\"1\" />", ",x,y", "<r><!-- c --><?pi d?><x:e xmlns:x=\"urn:x\">&lt;&amp;</x:e></r>"]),
+            check(documents.SequenceEqual(["abc", "é<a b=\"1\" />", ",x,y", "<r><!-- c --><?pi d?><x:e xmlns:x=\"urn:x\">&lt;&amp;</x:e></r>", "\u3441\u3442<a />"]),
                 "xml values, including fragments that start with text, keep their serialised text: " + string.Join(" | ", documents));
             // GetChars on xml is quadratic in a large text node (about 12 s for this cell), and nothing checked the token inside it.
             const string bigXml = "DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), 8000000) + '</a>' AS xml); ";
@@ -444,23 +445,42 @@ internal static class LiveResultChecks
             && rows[1].Select(cell => cell.Text).SequenceEqual(["héllo 😀", "héllo", "7"]) && rows[2][0].Flags == PageReader.Null && rows[2][1].Flags == PageReader.Null && growth < 64L * 1024 * 1024,
             "ntext and text values are streamed up to their cap, in their encodings (" + Measured(growth, ms) + ")");
 
-        // SqlClient has no streaming reader for xml under sequential access, so each value is read whole, outside the result
-        // budget. That garbage is collected once the reader moves on: left to the runtime, eight of these values peaked at
-        // about 480 MB of managed heap, six times one of them.
-        async Task<(QueryResult Result, long Peak)> HeapPeak(string sql)
+        // varchar(max) and varbinary(max) stream like nvarchar(max): GetChars and GetBytes read a PLP value in chunks.
+        async Task<(QueryResult Result, long Allocated, long Ms)> Allocating(string sql)
         {
-            var before = GC.GetTotalMemory(true);
-            var peak = before;
-            using var sampler = new Timer(_ => Interlocked.Exchange(ref peak, Math.Max(Interlocked.Read(ref peak), GC.GetTotalMemory(false))), null, 0, 10);
+            var before = GC.GetTotalAllocatedBytes(true);
+            var watch = Stopwatch.StartNew();
             var result = await run(sql, null, 1000, 10);
-            sampler.Change(Timeout.Infinite, Timeout.Infinite);
-            return (result, Math.Max(Interlocked.Read(ref peak), GC.GetTotalMemory(false)) - before);
+            return (result, GC.GetTotalAllocatedBytes(true) - before, watch.ElapsedMilliseconds);
         }
-        const string xml = "DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), 30000000) + '</a>' AS xml); ";
-        var (one, onePeak) = await HeapPeak(xml + "SELECT @x AS doc;");
-        var (eight, eightPeak) = await HeapPeak(xml + "SELECT @x AS doc FROM (SELECT TOP (8) 1 AS n FROM sys.all_objects) AS t;");
-        check(one.Status == "completed" && eight.Status == "completed" && eight.ResultSets[0].RowsStored == 8 && 2 * eightPeak < 5 * onePeak,
-            "eight 30,000,000-character xml values, each read whole, peak at " + eightPeak / 1048576 + " MB of managed heap, against " + onePeak / 1048576 + " MB for one");
+        static string Allocated(long bytes, long ms) => "allocated " + bytes / 1048576 + " MB, " + ms + " ms";
+        var (bounded, allocated, boundedMs) = await Allocating("DECLARE @v varchar(max) = REPLICATE(CAST('x' AS varchar(max)), 100000000);"
+            + " SELECT @v AS v, CAST(@v AS varbinary(max)) AS b, 7 AS after;");
+        row = CellsOf(store, bounded.ResultSets[0])[0];
+        check(bounded.Status == "completed" && row[0].Text == new string('x', ColumnPlan.TextCap) && row[1].Text == "0x" + string.Concat(Enumerable.Repeat("78", ColumnPlan.BinaryCap))
+            && (row[0].Flags & row[1].Flags & PageReader.Truncated) != 0 && row[2].Text == "7" && allocated < 32L * 1024 * 1024,
+            "100,000,000-byte varchar(max) and varbinary(max) values are streamed to their caps (" + Allocated(allocated, boundedMs) + ")");
+
+        // xml streams too: XmlReader parses the column as it arrives and the rest past the cap is read as bytes. Read whole
+        // with GetSqlXml, this value allocated about 200 MB.
+        var (document, documentAllocated, documentMs) = await Allocating("DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), 100000000) + '</a>' AS xml);"
+            + " SELECT @x AS doc, 7 AS after;");
+        row = CellsOf(store, document.ResultSets[0])[0];
+        check(document.Status == "completed" && row[0].Text!.Length == ColumnPlan.DocumentCap && row[0].Text!.StartsWith("<a>yyy") && (row[0].Flags & PageReader.Truncated) != 0
+            && row[1].Text == "7" && document.ResultSets[0].TruncatedCells == 1 && documentAllocated < 32L * 1024 * 1024,
+            "a 200 MB xml value (100,000,000 characters) is streamed to its 2,097,152-character prefix, marked truncated (" + Allocated(documentAllocated, documentMs) + ")");
+        // XmlReader holds a whole attribute before returning its element, so a feed stops it 8 MiB past the last output.
+        (document, documentAllocated, documentMs) = await Allocating("DECLARE @x xml = CAST('<r><a b=\"' + REPLICATE(CAST('y' AS varchar(max)), 100000000) + '\"/></r>' AS xml);"
+            + " SELECT @x AS doc, 7 AS after;");
+        row = CellsOf(store, document.ResultSets[0])[0];
+        check(document.Status == "completed" && row[0].Text == "<r" && (row[0].Flags & PageReader.Truncated) != 0 && row[1].Text == "7" && documentAllocated < 64L * 1024 * 1024,
+            "an xml value with a 100,000,000-character attribute is cut before that element, marked truncated (" + Allocated(documentAllocated, documentMs) + "): " + row[0].Text);
+
+        // A query can name any nvarchar(max) column like FOR XML output; what the collector does not keep is read past too.
+        (result, growth, ms) = await Measure("SELECT " + huge + " AS [XML_F52E2B61-18A1-11d1-B105-00805F49916B];");
+        var joined = CellsOf(store, result.ResultSets[0])[0][0];
+        check(result.Status == "completed" && result.ResultSets[0].Columns[0].Role == "xml" && joined.Text!.Length == ColumnPlan.DocumentCap && (joined.Flags & PageReader.Truncated) != 0
+            && growth < 64L * 1024 * 1024 && ms < 15_000, "a 100,000,000-character value named like FOR XML output is kept to its cap and read past (" + Measured(growth, ms) + ")");
     }
 
     /// <summary>Rows that wait for a lock mid-statement are sealed after 200 ms, so they can be read before the statement

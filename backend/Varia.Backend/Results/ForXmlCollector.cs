@@ -45,12 +45,21 @@ internal sealed class ForXmlCollector : IDisposable
     internal int Capacity => buffer.Length;
 
     /// <summary>Appends one row's value (column 0 of the reader's current row), read in chunks; once the cap is passed the
-    /// rest of the output is still read row by row but not kept.</summary>
+    /// rest of the output is still read row by row but not kept. The server's rows are short, but a query can name any
+    /// nvarchar(max) column like FOR XML output: what is not kept of a row is read past in chunks too, since the next
+    /// ReadAsync would buffer all of it, in time quadratic in its size.</summary>
     public void AppendRow(SqlDataReader reader, CancellationToken token)
     {
         Rows++;
-        if (Full || reader.IsDBNull(0)) return;
+        if (reader.IsDBNull(0)) return;
         using var text = reader.GetTextReader(0);
+        Keep(text, token);
+        scratch ??= new char[Chunk];
+        while (text.Read(scratch, 0, Chunk) > 0) token.ThrowIfCancellationRequested();
+    }
+
+    private void Keep(TextReader text, CancellationToken token)
+    {
         while (!Full)
         {
             token.ThrowIfCancellationRequested();
