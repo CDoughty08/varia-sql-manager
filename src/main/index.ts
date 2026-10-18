@@ -24,6 +24,7 @@ import { runRole, UserActivation } from './window-roles'
 import { closeAction, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
+import { contentSecurityPolicy } from '../shared/csp'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
@@ -290,11 +291,10 @@ function createWindow(): void {
   contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
     callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
   })
+  // Production pages also carry this policy in a <meta> (electron.vite.config.ts).
+  const policy = contentSecurityPolicy(developmentUrl)
   contents.session.webRequest.onHeadersReceived((details, callback) => {
-    const connect = developmentUrl ? `${new URL(developmentUrl).origin} ws://127.0.0.1:* ws://localhost:*` : "'self'"
-    callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [
-      `default-src 'self'; script-src 'self'${developmentUrl ? " 'unsafe-inline'" : ''}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; worker-src 'self' blob:; connect-src ${connect}; object-src 'none'; frame-src 'none'; base-uri 'none'`
-    ] } })
+    callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [policy] } })
   })
   contents.on('did-finish-load', () => { rendererLoaded = true })
   // will-navigate cancels navigation elsewhere, so only a same-URL main-frame navigation is a reload (View › Reload Window, the palette, or dev HMR).

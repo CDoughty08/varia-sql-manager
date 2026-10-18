@@ -1,5 +1,5 @@
 import React from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
 import 'monaco-editor/languages/definitions/sql/register.js'
 // XML, JSON and plan values open from the results grid in their own tabs.
@@ -19,12 +19,15 @@ import { createWorkbench } from './core/workbench'
 import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
+import { ShellErrorBoundary, ShellFaultProbe, showStartupFailure } from './ShellFailure'
 import 'dockview-react/dist/styles/dockview.css'
 import './styles.css'
 
 // Bundle Monaco locally; the editor never downloads scripts from a CDN.
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
 registerJson(monaco)
+const container = document.getElementById('root')!
+let root: Root | undefined
 async function start() {
   // React renders only after a theme is applied, so the first frame already has its colors.
   const theme = await ThemeService.create(window.varia, domThemeTarget(monaco))
@@ -42,8 +45,8 @@ async function start() {
       }
     })
   }
-  const root = createRoot(document.getElementById('root')!)
-  root.render(<React.StrictMode><WorkbenchProvider workbench={workbench}><App /></WorkbenchProvider></React.StrictMode>)
+  const shown = root = createRoot(container)
+  shown.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)
   // Workbench lifetime is outside React effects, including StrictMode's effect replay.
   // Reloading discards unsaved queries and ends every SQL session; main asks before allowing it.
   // A confirmed exit has already handled each document, so it is never blocked here.
@@ -55,6 +58,7 @@ async function start() {
   })
   const unload = () => workbench.dispose()
   window.addEventListener('unload', unload, { once: true })
-  if (import.meta.hot) import.meta.hot.dispose(() => { window.removeEventListener('unload', unload); root.unmount(); workbench.dispose() })
+  if (import.meta.hot) import.meta.hot.dispose(() => { window.removeEventListener('unload', unload); shown.unmount(); workbench.dispose() })
 }
-void start()
+// A page that cannot start says so, with Reload, instead of staying blank.
+start().catch(error => { showStartupFailure(error, root ??= createRoot(container)) })

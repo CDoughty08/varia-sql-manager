@@ -214,6 +214,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 .explorer-fault { padding: 18px; font-size: 12px; color: var(--varia-errorForeground); }
 .explorer-fault button { margin-top: 8px; border: 1px solid var(--varia-button-border); }
+/* The failure screen keeps a draggable strip where the title bar was, under the native window controls. */
+.shell-failure { height: 100vh; overflow: auto; padding: calc(env(titlebar-area-height, 34px) + 24px) 32px 32px; background: var(--varia-editor-background); color: var(--varia-foreground); font-size: 13px; }
+.shell-failure::before { content: ''; position: fixed; inset: 0 0 auto 0; height: env(titlebar-area-height, 34px); -webkit-app-region: drag; }
+.shell-failure h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: var(--varia-errorForeground); }
+.shell-failure p { margin: 0 0 16px; max-width: 70ch; line-height: 1.5; color: var(--varia-descriptionForeground); }
+.shell-failure-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.shell-failure-actions button:not(.primary) { border-color: var(--varia-button-border); }
+.shell-failure-actions [role="status"] { color: var(--varia-descriptionForeground); font-size: 12px; }
+.shell-failure-details { margin: 0; padding: 12px; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 12px/1.5 var(--varia-font-mono); background: var(--varia-panel-background); color: var(--varia-foreground); border: 1px solid var(--varia-input-border); border-radius: 4px; }
+.shell-failure-details:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .explorer-error { flex-shrink: 0; font-size: 11px; color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
