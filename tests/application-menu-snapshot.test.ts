@@ -51,6 +51,16 @@ describe('native application menu template', () => {
     const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, menuActions, platform)
     return template.find(item => item.id === 'menu.' + menu)!.submenu as MenuItemConstructorOptions[]
   }
+  it.each(platforms)('has no developer tools item, role or key in a packaged build on %s', platform => {
+    const roles = (packaged: boolean) => {
+      const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, actions, platform, packaged)
+      const visit = (list: readonly MenuItemConstructorOptions[]): string[] => list.flatMap(item => [...item.role ? [item.role] : [], ...Array.isArray(item.submenu) ? visit(item.submenu) : []])
+      return visit(template)
+    }
+    expect(roles(false)).toContain('toggleDevTools')
+    expect(roles(true)).not.toContain('toggleDevTools')
+    expect(roles(true)).toContain('reload')
+  })
   it.each(platforms)('keeps Electron\'s own Zoom In key beside the catalogue\'s on %s', platform => {
     const zoomIn = items(platform, 'view').filter(item => item.role === 'zoomIn')
     const mod = platform === 'darwin' ? 'Cmd' : 'Ctrl'

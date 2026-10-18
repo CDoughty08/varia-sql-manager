@@ -39,10 +39,12 @@ export class UserActivation {
  * of the trusted window run; quitting is not a role here, because the renderer runs its own close flow. Paste reads the
  * system clipboard, which the page itself may not, so it runs only while `userActivated` (a click, tap, or key just
  * now). A screen reader's activation reaches main as no input at all, so the refusal names the key that still pastes.
+ * Developer tools open only where main allows them (`developerTools`, unpackaged builds).
  */
-export function runRole(value: unknown, window: RoleWindow, userActivated: () => boolean, platform: NodeJS.Platform = process.platform): void {
-  const role: RendererRole = rendererRoleSchema.parse(value)
+export function runRole(value: unknown, window: RoleWindow, userActivated: () => boolean, options: { platform?: NodeJS.Platform; developerTools?: boolean } = {}): void {
+  const role: RendererRole = rendererRoleSchema.parse(value), platform = options.platform ?? process.platform
   if (role === 'paste' && !userActivated()) throw new Error(`Paste needs a click, tap, or key press in the window. Press ${platform === 'darwin' ? '⌘V' : 'Ctrl+V'} to paste.`)
+  if (role === 'toggleDevTools' && !options.developerTools) throw new Error('Developer tools are available only in development builds.')
   const contents = window.webContents
   switch (role) {
     case 'cut': contents.cut(); break

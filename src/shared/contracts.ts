@@ -330,6 +330,8 @@ export interface VariaApi {
   onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void
   /** True only in unpackaged smoke runs (main passed --varia-test-mode). */
   readonly testMode: boolean
+  /** True only in unpackaged builds (main passed --varia-developer-tools): Toggle Developer Tools exists only there. */
+  readonly developerTools: boolean
   openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>

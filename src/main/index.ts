@@ -203,7 +203,7 @@ const menuActions: ApplicationMenuActions = {
 
 // The renderer owns enablement and checkboxes; it sends them on varia:menu-state and every rebuild re-applies them.
 const menuBridge = new NativeMenuBridge({
-  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform)),
+  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform, app.isPackaged)),
   install: menu => Menu.setApplicationMenu(menu)
 })
 
@@ -263,7 +263,9 @@ function createWindow(): void {
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : [])] }
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(app.isPackaged ? [] : ['--varia-developer-tools'])],
+      // Developer tools are for unpackaged builds: a packaged one has neither the command nor the tools.
+      devTools: !app.isPackaged }
   })
   const window = mainWindow, contents = window.webContents
   if (process.platform !== 'darwin') {
@@ -438,7 +440,7 @@ app.whenReady().then(async () => {
   // Paste needs the focused window (smoke-test windows are hidden, so never focused) and a click or key just before.
   handle('varia:run-role', value => {
     const window = mainWindow
-    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent())
+    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent(), { developerTools: !app.isPackaged })
   })
   handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
   ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {

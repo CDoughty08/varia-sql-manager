@@ -117,14 +117,16 @@ export const menuTitle = (id: CommandId, platform: Platform, placementTitle?: st
 /**
  * The entries of `menu` on `platform`: catalogue placements, submenus, and `menuExtras`, sorted by group, order, and
  * title, with exactly one separator between non-empty groups. Placement `when` clauses are compiled, not applied:
- * `pruneMenu` drops what a context hides, and with it any separator or submenu left empty.
+ * `pruneMenu` drops what a context hides, and with it any separator or submenu left empty. A `packaged` build leaves out
+ * development commands.
  */
-export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
+export function buildMenuModel(menu: MenuId, platform: Platform, packaged = false): MenuEntry[] {
   const items: { group: string; order: number; title: string; entry: MenuEntry }[] = []
   const optional = (placement: { readonly mnemonic?: string; readonly when?: string }) =>
     ({ ...(placement.mnemonic ? { mnemonic: placement.mnemonic } : {}), ...(placement.when !== undefined ? { when: compileWhen(placement.when) } : {}) })
   for (const id of commandIds) {
     const command = commandDescriptor(id)
+    if (packaged && command.development) continue
     for (const placement of command.menus ?? []) {
       if (placement.menu !== menu || !applies(placement.platforms, platform)) continue
       const title = menuTitle(id, platform, placement.title), accelerator = menuAccelerator(id, platform)
