@@ -42,7 +42,16 @@ try {
   await dialog.getByLabel('Filter connections').fill('not-a-match')
   await expect(dialog.getByText('recent-server', { exact: true })).toHaveCount(0)
   await dialog.getByLabel('Filter connections').fill('')
+  // Integrated authentication needs a Kerberos ticket off Windows, so the dialog opens, and Reset returns, to SQL Server
+  // authentication there, and labels the integrated option as Kerberos.
+  const defaultAuthentication = process.platform === 'win32' ? 'windows' : 'sql'
+  const authentication = dialog.getByLabel('Authentication', { exact: true })
+  await expect(authentication).toHaveValue(defaultAuthentication)
+  await expect(authentication.locator('option[value="windows"]')).toHaveText(process.platform === 'win32' ? 'Windows authentication' : 'Windows authentication (Kerberos)')
+  await expect(authentication.locator('option[value="sql"]')).toHaveText('SQL Server authentication')
+  await authentication.selectOption(defaultAuthentication === 'windows' ? 'sql' : 'windows')
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await expect(authentication).toHaveValue(defaultAuthentication)
   await dialog.getByLabel('Server Name', { exact: true }).fill('sql-dev')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('User Name', { exact: true }).fill('reader')
@@ -136,6 +145,8 @@ try {
   await advanced.getByRole('button', { name: 'Cancel', exact: true }).click()
   if (process.env.VARIA_TEST_SQL_SERVER) {
     await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+    // The saved profile chose SQL Server authentication; Reset returns to the platform's default.
+    await expect(dialog.getByLabel('Authentication', { exact: true })).toHaveValue(defaultAuthentication)
     await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
     // A real failed login: SQL Server's number, severity, state and server under the error, never the password.
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
