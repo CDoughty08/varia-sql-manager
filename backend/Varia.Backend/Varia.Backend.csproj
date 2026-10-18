@@ -10,6 +10,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <PackageReference Include="Microsoft.SqlServer.SqlManagementObjects" Version="181.36.0" />
+    <!-- SqlClient 7.1.1 resolves 9.0.18, which CVE-2026-84008 and CVE-2026-70162 affect; remove once SqlClient pulls a patched version. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
   <ItemGroup>
     <!-- Generated from src/shared/explorer/catalog.ts by tests/explorer-catalog.test.ts. -->

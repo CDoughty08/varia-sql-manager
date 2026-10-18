@@ -106,8 +106,15 @@ internal static class LiveResultChecks
 
             // maxRows 0 stores rows up to the budget only.
             await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close);
-            await SkipOffPool(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close,
-                () => service.DispatchAsync("system.health", JsonSerializer.SerializeToElement(new { }, json), json));
+            // SkipOffPool opens more sessions than the thread pool has threads, which exceeds the session limit on machines with many cores.
+            var sessionLimit = service.SessionLimit;
+            service.SessionLimit = int.MaxValue;
+            try
+            {
+                await SkipOffPool(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close,
+                    () => service.DispatchAsync("system.health", JsonSerializer.SerializeToElement(new { }, json), json));
+            }
+            finally { service.SessionLimit = sessionLimit; }
 
             var cancelled = await Cancelled(CancelReason.User);
             check(cancelled.Status == "cancelled" && cancelled.Error?.Code == "CANCELLED"

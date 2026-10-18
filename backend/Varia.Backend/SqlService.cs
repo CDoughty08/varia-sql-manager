@@ -62,6 +62,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
     }
 
+    /// <summary>The most query sessions open at once. Only the live checks change it.</summary>
+    internal int SessionLimit { get; set; } = 32;
+
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
     /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
@@ -773,7 +776,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 if (existing.ConnectionId != args.ConnectionId) throw new RequestException("SESSION_TARGET", "Close this query session before selecting another server.");
                 return existing;
             }
-            if (sessions.Count >= 32) throw new RequestException("SESSION_LIMIT", "Close an unused query tab before opening another SQL session (maximum 32).");
+            if (sessions.Count >= SessionLimit) throw new RequestException("SESSION_LIMIT", "Close an unused query tab before opening another SQL session (maximum " + SessionLimit + ").");
             var session = new QuerySession(args.ConnectionId, CreateConnection(args.ConnectionId, args.Database, stateful: true));
             sessions[args.SessionId] = session;
             return session;
