@@ -28,10 +28,16 @@ describe('built-in theme contrast', () => {
     expect(hoverPairs.length).toBeGreaterThan(4)
     expect(failures, failures.join('\n')).toEqual([])
   })
-  it('holds input and button outlines to 3:1 on the field and in dialogs', () => {
+  it('holds input and button outlines to 3:1 on every surface the controls sit on', () => {
     const outlines = contrastPairs.filter(pair => pair.foreground === 'input.border' || pair.foreground === 'button.border')
-    for (const foreground of ['input.border', 'button.border']) {
-      for (const surface of ['input.background', 'editorWidget.background']) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 3 })
+    // Fields and dialogs; the toolbar's server and database lists; Cancel on the Output toolbar; Object Explorer's
+    // buttons; the results grid's Retry; the empty workspace and the failure screen.
+    const surfaces = {
+      'input.border': ['input.background', 'editorWidget.background', 'toolbar.background', 'panel.background'],
+      'button.border': ['input.background', 'editorWidget.background', 'panelTitle.background', 'sideBar.background', 'panel.background', 'editor.background']
+    }
+    for (const [foreground, backgrounds] of Object.entries(surfaces)) {
+      for (const surface of backgrounds) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 3 })
     }
   })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {

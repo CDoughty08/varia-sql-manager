@@ -121,11 +121,11 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['resultsGrid.truncationForeground', 'resultsGrid.splitterBackground'], panel),
   ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
   ...graphic(['button.background'], widget),
-  // Control outlines (WCAG 1.4.11) on the field itself and in dialogs; the failure screen outlines its details and
-  // Copy details on the editor's and the panel's surfaces.
-  ...graphic(['input.border', 'button.border'], input, widget),
-  ...graphic(['input.border'], panel),
-  ...graphic(['button.border'], editor),
+  // Control outlines (WCAG 1.4.11) on every surface the controls sit on: fields and dialogs; the toolbar's server and
+  // database lists; Cancel on the Output toolbar; Object Explorer's buttons; the results grid's Retry; the empty
+  // workspace's buttons; and the failure screen's details (panel) and Copy details (editor).
+  ...graphic(['input.border'], input, widget, toolbar, panel),
+  ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
   ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground'])
 ]

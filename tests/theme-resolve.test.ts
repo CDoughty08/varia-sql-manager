@@ -26,9 +26,9 @@ menubar.selectionForeground #ffffff #0b1220|menubar.selectionBorder #8fb7ff00 #0
 menu.selectionForeground #ffffff #0b1220|menu.selectionBorder #8fb7ff00 #005fb800|menu.separatorBackground #354359 #cdd4de|menu.border #5f7089 #c3ccd8|toolbar.background #181f2a #e9edf2
 toolbar.border #2b3443 #d3d9e2|toolbar.hoverBackground #d9e1ec1f #1f27331f|toolbar.separatorBackground #354359 #cdd4de|toolbar.labelForeground #9eafc5 #465366
 keybindingLabel.foreground #8a9cb3 #525e72|keybindingLabel.border #354359 #cdd4de|button.background #8fb7ff #005fb8|button.foreground #101b2d #ffffff
-button.hoverBackground #accaff #004c94|button.border #5f7089 #8792a2|button.secondaryForeground #c3cddd #2f3a49
+button.hoverBackground #accaff #004c94|button.border #5f7089 #7a8596|button.secondaryForeground #c3cddd #2f3a49
 button.secondaryHoverBackground #263041 #d0d8e3|button.secondaryHoverForeground #ffffff #0b1220|input.background #111721 #ffffff
-input.foreground #d9e1ec #1f2733|input.border #5d6e88 #8792a2|input.placeholderForeground #8a9cb3 #525e72
+input.foreground #d9e1ec #1f2733|input.border #5d6e88 #7a8596|input.placeholderForeground #8a9cb3 #525e72
 inputValidation.errorBackground #48242d #fbe4e6|inputValidation.errorForeground #f3bac0 #8a1c25|sideBar.background #151b24 #f3f5f8
 sideBarTitle.foreground #9eafc5 #465366|sideBarSectionHeader.border #252f3d #e3e7ed|list.hoverBackground #263041 #d0d8e3
 list.activeSelectionBackground #2e4058 #c4daf4|list.activeSelectionForeground #d9e1ec #1f2733|list.inactiveSelectionBackground #24324a #d6e3f3
@@ -63,7 +63,7 @@ resultsGrid.gridlines #252f3d #e3e7ed|resultsGrid.alternateRowBackground #d9e1ec
 resultsGrid.nullForeground #dfbd82b3 #8a5300|resultsGrid.nullBackground #dfbd8214 #8a53001f|resultsGrid.truncationForeground #dfbd82 #8a5300|resultsGrid.selectionBackground #2e4058 #c4daf4
 resultsGrid.selectionForeground #d9e1ec #1f2733|resultsGrid.inactiveSelectionBackground #24324a #d6e3f3|resultsGrid.activeCellBorder #76acff #005fb8
 resultsGrid.hoverBackground #263041 #d0d8e3|resultsGrid.headerSelectionBackground #24324a #d6e3f3
-resultsGrid.headerSelectionForeground #bcd4fa #0b4f99|resultsGrid.linkForeground #8fb7ff #005fb8|resultsGrid.splitterBackground #8a9cb399 #8792a2|resultsMessages.foreground #a3bbdc #1f2733|statusBar.background #1d2b40 #e3ebf5
+resultsGrid.headerSelectionForeground #bcd4fa #0b4f99|resultsGrid.linkForeground #8fb7ff #005fb8|resultsGrid.splitterBackground #8a9cb399 #7a8596|resultsMessages.foreground #a3bbdc #1f2733|statusBar.background #1d2b40 #e3ebf5
 statusBar.foreground #a3bbdc #2a4f7f|statusBar.separatorForeground #8a9cb3 #525e72|statusBar.onlineIndicator #8addac #146c38
 statusBar.idleIndicator #8a9cb3 #525e72|statusBar.executingBackground #1d2b40 #e3ebf5|statusBar.executingForeground #a3bbdc #2a4f7f
 statusBar.disconnectedBackground #1d2b40 #e3ebf5|statusBar.disconnectedForeground #a3bbdc #2a4f7f|statusBar.errorBackground #48242d #fbe4e6

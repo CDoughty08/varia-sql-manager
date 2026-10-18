@@ -35,8 +35,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `borderSubtle` | Section headers and grid lines. | `#252f3d` | `#e3e7ed` |
 | `borderStrong` | Dock splitters. | `#303b4c` | `#c3ccd8` |
 | `separator` | Toolbar, menu, and dialog separators; the keyboard shortcut outline. | `#354359` | `#cdd4de` |
-| `controlBorder` | Outlined buttons and the Dark dialog border. | `#5f7089` | `#8792a2` |
-| `inputBorder` | Input borders. | `#5d6e88` | `#8792a2` |
+| `controlBorder` | Outlined buttons and the Dark dialog border. | `#5f7089` | `#7a8596` |
+| `inputBorder` | Input borders. | `#5d6e88` | `#7a8596` |
 | `accent` | Primary button and active indicators. | `#8fb7ff` | `#005fb8` |
 | `accentHover` | Primary button hover. | `#accaff` | `#004c94` |
 | `onAccent` | Text on the accent color. | `#101b2d` | `#ffffff` |
@@ -132,13 +132,13 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `button.background` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Primary button; also the checkbox accent. |
 | `button.foreground` | VS Code | `$onAccent` | `#101b2d` | `#ffffff` | Primary button text. |
 | `button.hoverBackground` | VS Code | `$accentHover` | `#accaff` | `#004c94` | Primary button when hovered. |
-| `button.border` | VS Code | `$controlBorder` | `#5f7089` | `#8792a2` | Outline of secondary buttons. |
+| `button.border` | VS Code | `$controlBorder` | `#5f7089` | `#7a8596` | Outline of secondary buttons. |
 | `button.secondaryForeground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Text of secondary and toolbar buttons. |
 | `button.secondaryHoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Secondary and toolbar buttons when hovered. |
 | `button.secondaryHoverForeground` | Varia | `$textStrong` | `#ffffff` | `#0b1220` | Secondary button text when hovered. |
 | `input.background` | VS Code | `$input` | `#111721` | `#ffffff` | Inputs and selects. |
 | `input.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Input and select text. |
-| `input.border` | VS Code | `$inputBorder` | `#5d6e88` | `#8792a2` | Input and select border. |
+| `input.border` | VS Code | `$inputBorder` | `#5d6e88` | `#7a8596` | Input and select border. |
 | `input.placeholderForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Placeholder text. |
 | `inputValidation.errorBackground` | VS Code | `$errorSurface` | `#48242d` | `#fbe4e6` | Connection error message. |
 | `inputValidation.errorForeground` | VS Code | `$errorSurfaceText` | `#f3bac0` | `#8a1c25` | Connection error message text. |
@@ -267,7 +267,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.headerSelectionBackground` | Varia | `$selection` | `#24324a` | `#d6e3f3` | Column and row headers of selected cells. |
 | `resultsGrid.headerSelectionForeground` | Varia | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the headers of selected cells. |
 | `resultsGrid.linkForeground` | Varia | `$accent` | `#8fb7ff` | `#005fb8` | XML, JSON and plan values that open in a new tab. |
-| `resultsGrid.splitterBackground` | Varia | Dark `$textMuted/60`, Light `$controlBorder` | `#8a9cb399` | `#8792a2` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
+| `resultsGrid.splitterBackground` | Varia | Dark `$textMuted/60`, Light `$controlBorder` | `#8a9cb399` | `#7a8596` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
 | `resultsMessages.foreground` | Varia | Dark `$accentMuted`, Light `$text` | `#a3bbdc` | `#1f2733` | Text of the Messages tab. |
 
 ### Status bar
