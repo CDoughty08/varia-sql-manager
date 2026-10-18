@@ -10,6 +10,8 @@ export interface LegacyColor { source: string; line?: number; value: string; key
 const css = (line: number, value: string, key: LegacyTarget | LegacyTarget[], extra: Partial<LegacyColor> = {}): LegacyColor =>
   ({ source: 'styles.css', line, value, keys: Array.isArray(key) ? key : [key], ...extra })
 const aa = (before: string, after: string) => `AA: ${before} -> ${after}.`
+/** Input and button outlines (and the Dark dialog border, which shares the button's) were below 2.3:1; WCAG 1.4.11 asks 3:1. */
+const outline = 'WCAG 1.4.11: control outlines reach 3:1 on fields and dialogs.'
 
 /** The 148 hex literals of src/renderer/src/styles.css before the token conversion, in file order. */
 export const legacyStyles: LegacyColor[] = [
@@ -30,12 +32,12 @@ export const legacyStyles: LegacyColor[] = [
   css(37, '#8addac', 'successForeground'),
   css(38, '#8a9cb3', 'keybindingLabel.foreground'), css(38, '#354152', 'keybindingLabel.border'),
   css(40, '#9aaac1', 'toolbar.labelForeground'),
-  css(41, '#111721', 'input.background'), css(41, '#364357', 'input.border'), css(41, '#dbe4f2', 'input.foreground'),
+  css(41, '#111721', 'input.background'), css(41, '#364357', 'input.border', { change: outline }), css(41, '#dbe4f2', 'input.foreground'),
   css(44, '#24324a', 'tab.activeBackground'), css(44, '#181f2a', 'tab.inactiveBackground'), css(44, '#202a39', 'tab.unfocusedActiveBackground'),
   css(44, '#181f2a', 'tab.unfocusedInactiveBackground'), css(44, '#181f2a', 'editorGroupHeader.tabsBackground'), css(44, '#11151c', 'dock.background'),
   css(44, '#303b4c', 'editorGroup.border'), css(44, '#303b4c', 'editorGroup.border'), css(44, '#80b0fa', 'sash.hoverBorder'),
   css(47, '#9aacc5', 'emptyState.foreground'),
-  css(49, '#40516b', 'button.border'),
+  css(49, '#40516b', 'button.border', { change: outline }),
   css(54, '#edf4fb', 'dock.guideBackground'), css(54, '#2777c7', 'dock.guideForeground'), css(54, '#aac4de', 'dock.guideBorder'), css(54, '#0008', 'dock.guideShadow'),
   css(55, '#b9d9f7', 'dock.guideActiveBackground'), css(55, '#247adb', 'dock.guideActiveBorder'), css(55, '#78b9ff', 'dock.guideActiveRing'),
   css(57, '#3288d94d', 'dock.previewBackground'), css(57, '#64b2ff', 'dock.previewBorder'), css(57, '#badfff66', 'dock.previewInnerBorder'),
@@ -43,7 +45,7 @@ export const legacyStyles: LegacyColor[] = [
   css(61, '#96a6bb', 'sideBarTitle.foreground'), css(61, '#252f3d', 'sideBarSectionHeader.border'),
   css(64, '#85a9db', 'icon.foreground'),
   css(65, '#8b9bb1', 'descriptionForeground'),
-  css(66, '#3b4e69', 'button.border'),
+  css(66, '#3b4e69', 'button.border', { change: outline }),
   css(67, '#8498b2', 'descriptionForeground'), css(67, '#263040', 'sideBarSectionHeader.border'),
   css(70, '#1d2b40', 'objectExplorer.activeConnectionBackground'),
   css(73, '#8fadd8', 'icon.foreground'),
@@ -68,7 +70,7 @@ export const legacyStyles: LegacyColor[] = [
   css(107, '#4c6381', 'breadcrumb.separatorForeground', { change: aa('2.97', '6.52') }),
   css(109, '#7e91aa', 'emptyState.foreground'),
   css(110, '#8da1bd', 'emptyState.foreground'),
-  css(111, '#3b4e69', 'button.border'),
+  css(111, '#3b4e69', 'button.border', { change: outline }),
   css(112, '#141a23', 'panel.background'),
   css(113, '#2a3444', 'panel.border'), css(113, '#19212d', 'panelTitle.background'),
   css(114, '#869ab5', 'panelTitle.inactiveForeground'),
@@ -90,17 +92,17 @@ export const legacyStyles: LegacyColor[] = [
   css(134, '#a9bbd3', 'resultsMessages.foreground'),
   css(136, '#f39c9f', 'errorForeground'),
   css(138, '#b5c9e7', 'textPreformat.foreground'),
-  css(145, '#1a2230', 'editorWidget.background'), css(145, '#40516b', 'editorWidget.border'), css(145, '#0009', 'widget.shadow'),
+  css(145, '#1a2230', 'editorWidget.background'), css(145, '#40516b', 'editorWidget.border', { change: outline }), css(145, '#0009', 'widget.shadow'),
   css(148, '#b8c8dd', 'dialog.labelForeground'),
-  css(151, '#3b4e69', 'button.border'),
+  css(151, '#3b4e69', 'button.border', { change: outline }),
   css(153, '#8addac', 'successForeground'),
   css(155, '#1d2a3f', 'statusBar.background'), css(155, '#a3bbdc', 'statusBar.foreground'),
   css(157, '#6783a8', 'statusBar.separatorForeground', { change: 'Consolidated with the muted text tier (decorative): 3.70 -> 5.09.' }),
   css(158, '#48242d', 'banner.errorBackground'), css(158, '#f3bac0', 'banner.errorForeground'),
   css(159, '#080c14bf', 'dialog.backdropBackground'),
-  css(160, '#1a2230', 'editorWidget.background'), css(160, '#40516b', 'editorWidget.border'), css(160, '#0009', 'widget.shadow'),
+  css(160, '#1a2230', 'editorWidget.background'), css(160, '#40516b', 'editorWidget.border', { change: outline }), css(160, '#0009', 'widget.shadow'),
   css(164, '#354359', 'dialog.separatorBackground'),
-  css(166, '#40516b', 'button.border'),
+  css(166, '#40516b', 'button.border', { change: outline }),
   css(169, '#c9dfff', 'panelTitle.activeForeground'), css(169, '#8fb7ff', 'panelTitle.activeBorder'),
   css(171, '#354359', 'dialog.separatorBackground'),
   css(173, '#b4cbea', 'settings.headerForeground'),
@@ -111,11 +113,11 @@ export const legacyStyles: LegacyColor[] = [
   css(186, '#93a5bc', 'dialog.descriptionForeground'),
   css(191, '#bdcce0', 'dialog.labelForeground'),
   css(196, '#8698b3', 'input.placeholderForeground'),
-  css(199, '#40516b', 'button.border'),
-  css(203, '#40516b', 'button.border'),
+  css(199, '#40516b', 'button.border', { change: outline }),
+  css(203, '#40516b', 'button.border', { change: outline }),
   css(204, '#354359', 'dialog.separatorBackground'),
   css(205, '#a9c5e8', 'settings.headerForeground'),
-  css(208, '#111923', 'input.background'), css(208, '#c5d5e9', 'input.foreground'), css(208, '#3a4a63', 'input.border'),
+  css(208, '#111923', 'input.background'), css(208, '#c5d5e9', 'input.foreground'), css(208, '#3a4a63', 'input.border', { change: outline }),
   css(214, '#91bbff', 'button.background'),
   css(215, '#91a3bc', 'descriptionForeground'),
   css(216, '#f4a8af', 'inputValidation.errorForeground'), css(216, '#472a35', 'inputValidation.errorBackground')

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
-import { advisoryPairs, contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
+import { contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
 import { colorKeys, sqlScopes, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 import type { ResolvedTheme, ThemeType } from '../src/shared/theme/types'
@@ -28,10 +28,11 @@ describe('built-in theme contrast', () => {
     expect(hoverPairs.length).toBeGreaterThan(4)
     expect(failures, failures.join('\n')).toEqual([])
   })
-  it('reports the advisory pairs without failing', () => {
-    const report = types.flatMap(type => advisoryPairs.map(pair => describePair(type, pair, ratio(resolveBuiltin(type), pair))))
-    console.info('Advisory contrast (not enforced):\n' + report.join('\n'))
-    expect(report).toHaveLength(advisoryPairs.length * 2)
+  it('holds input and button outlines to 3:1 on the field and in dialogs', () => {
+    const outlines = contrastPairs.filter(pair => pair.foreground === 'input.border' || pair.foreground === 'button.border')
+    for (const foreground of ['input.border', 'button.border']) {
+      for (const surface of ['input.background', 'editorWidget.background']) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 3 })
+    }
   })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {
     const checked = new Set<string>(contrastPairs.map(pair => pair.foreground))
@@ -43,7 +44,7 @@ describe('built-in theme contrast', () => {
       expect(checked.has(key), `${key} is both checked and exempt`).toBe(false)
       expect(reason!.length).toBeGreaterThan(10)
     }
-    for (const pair of [...contrastPairs, ...advisoryPairs, ...hoverPairs]) {
+    for (const pair of [...contrastPairs, ...hoverPairs]) {
       expect(pair.background.length).toBeGreaterThan(0)
       for (const key of pair.background) expect(colorKeys).toContain(key)
       if (!pair.foreground.startsWith('syntax:')) expect(colorKeys).toContain(pair.foreground)
