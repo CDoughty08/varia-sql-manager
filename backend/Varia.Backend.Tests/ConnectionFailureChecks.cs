@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 
@@ -22,12 +24,22 @@ internal static class ConnectionFailureChecks
         return (SqlException)create.Invoke(null, [errors, "17.00.1000"])!;
     }
 
-    public static void Run(Action<bool, string> check)
+    /// <summary>The argument that makes the check program print KerberosProbe.Inspect() and exit (see RunAsync).</summary>
+    internal const string ProbeArgument = "--kerberos-probe";
+
+    /// <summary>What SqlClient's managed SNI raises when the Negotiate token cannot be built (SspiContextProvider.SSPIError).</summary>
+    internal static SqlException TokenFailure() => Sql(0, 0, 11, "sql.contoso.com", "The target principal name is incorrect.  Cannot generate SSPI context.", "GenClientContext");
+
+    /// <summary>Opens as SqlService does for a connection made from a connected profile, failing as a Kerberos ticket that
+    /// expired during the session does.</summary>
+    internal static Task ExpiredTicket(SqlConnection connection, CancellationToken token) =>
+        ConnectionFailures.OpenAsync(connection, token, kerberos: true, () => KerberosState.Expired, (_, _) => Task.FromException(TokenFailure()));
+
+    public static async Task RunAsync(Action<bool, string> check)
     {
         var probes = 0;
         Func<KerberosState> Probe(KerberosState state) => () => { probes++; return state; };
-        // What SqlClient's managed SNI raises when the Negotiate token cannot be built (SspiContextProvider.SSPIError).
-        var token = Sql(0, 0, 11, "sql.contoso.com", "The target principal name is incorrect.  Cannot generate SSPI context.", "GenClientContext");
+        var token = TokenFailure();
 
         var failure = ConnectionFailures.Describe(token, "sql.contoso.com", kerberos: true, Probe(KerberosState.NoTicket));
         check(failure?.Code == "AUTH_KERBEROS" && failure.Message == ConnectionFailures.Messages.NoTicket && failure.Message.Contains("kinit") && failure.Message.Contains("klist"),
@@ -71,5 +83,94 @@ internal static class ConnectionFailureChecks
         check(KerberosProbe.Classify(11u << 16, 0) == KerberosState.Expired, "GSS_S_CREDENTIALS_EXPIRED means an expired ticket");
         check(KerberosProbe.Classify(1u << 16, 0) == KerberosState.Unknown && KerberosProbe.Classify(1u << 24, 0) == KerberosState.Unknown, "other GSSAPI answers are unknown");
         if (OperatingSystem.IsWindows()) check(KerberosProbe.Inspect() == KerberosState.Unknown, "Windows never probes GSSAPI");
+
+        // Opens made from a connected profile: query sessions, Object Explorer, Script As, database and column lists.
+        var stored = new SqlConnection("Data Source=sql.contoso.com;Integrated Security=true;Pooling=false");
+        async Task<Exception?> Opened(bool kerberos, Exception failure, CancellationToken cancel = default)
+        {
+            try { await ConnectionFailures.OpenAsync(stored, cancel, kerberos, Probe(KerberosState.NoTicket), (_, _) => Task.FromException(failure)); return null; }
+            catch (Exception error) { return error; }
+        }
+        probes = 0;
+        var opened = await Opened(true, token);
+        check(opened is RequestException { Code: "AUTH_KERBEROS", Details: null } && opened.Message == ConnectionFailures.Messages.NoTicket && probes == 1,
+            "a session or pool connection that cannot build the Kerberos token says to run kinit, without the Connect dialog's details");
+        check(await Opened(false, token) == token && await Opened(true, login) == login && probes == 1,
+            "with SSPI, or for a failure that is not Kerberos, a stored connection's open keeps SqlClient's exception for its caller");
+        using (var cancelled = new CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            check(await Opened(true, token, cancelled.Token) == token && probes == 1, "a cancelled open is left to the host, which answers CANCELLED or TIMEOUT");
+        }
+        opened = await Opened(true, library);
+        check(opened is RequestException { Code: "AUTH_UNSUPPORTED" } && opened.Message == ConnectionFailures.Messages.LibraryMissing, "a stored connection without the GSSAPI library says what to install");
+        check(ConnectionFailures.UsesKerberos(stored) == !OperatingSystem.IsWindows() && !ConnectionFailures.UsesKerberos(new SqlConnection("Data Source=x;User ID=reader;Password=x")),
+            "a stored connection uses Kerberos for integrated security off Windows only");
+        check(SqlService.ConnectBuilder(new ConnectOptions("sql.contoso.com", "", "windows", null, null, true)).PoolBlockingPeriod == PoolBlockingPeriod.NeverBlock,
+            "connect's settings, which its pools derive from, never block a pool after a failure");
+
+        if (!OperatingSystem.IsWindows()) await NativeProbeAsync(check);
+    }
+
+    /// <summary>Runs KerberosProbe.Inspect's native path (dlopen, then gss_acquire_cred through a delegate) in a child
+    /// process whose KRB5CCNAME names a cache that cannot exist: .NET does not pass its own environment changes to native
+    /// code, and a wrong signature or library path crashes only the child. Linux and macOS CI run it with the other offline
+    /// checks.</summary>
+    private static async Task NativeProbeAsync(Action<bool, string> check)
+    {
+        var present = KerberosProbe.Libraries.Any(name =>
+        {
+            if (!NativeLibrary.TryLoad(name, out var handle)) return false;
+            NativeLibrary.Free(handle);
+            return true;
+        });
+        var path = Environment.ProcessPath ?? throw new Exception("The check program's path is unknown");
+        var start = new ProcessStartInfo(path) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        if (Path.GetFileNameWithoutExtension(path) == "dotnet") start.ArgumentList.Add(typeof(ConnectionFailureChecks).Assembly.Location);
+        start.ArgumentList.Add(ProbeArgument);
+        start.Environment["KRB5CCNAME"] = "FILE:/nonexistent/varia-no-ticket-" + Guid.NewGuid().ToString("N");
+        using var child = Process.Start(start) ?? throw new Exception("The Kerberos probe did not start");
+        var output = child.StandardOutput.ReadToEndAsync();
+        var errors = child.StandardError.ReadToEndAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        try { await child.WaitForExitAsync(deadline.Token); }
+        catch (OperationCanceledException) { child.Kill(true); throw new Exception("The Kerberos probe did not finish in 60 seconds"); }
+        var answer = (await output).Trim();
+        var expected = present ? nameof(KerberosState.NoTicket) : nameof(KerberosState.LibraryMissing);
+        check(child.ExitCode == 0 && answer == expected,
+            "GSSAPI's own answer for a credential cache that does not exist is " + expected + " (got '" + answer + "', exit " + child.ExitCode + ", " + (await errors).Trim() + ")");
+    }
+
+    /// <summary>Live: two failed opens with connect's settings both reach the server. Under SqlClient's default pool blocking the
+    /// second is a clone of the first's exception, with its client connection id, thrown without trying (the control).</summary>
+    internal static async Task PoolBlockingAsync(Action<bool, string> check, ConnectOptions rejected)
+    {
+        static async Task<SqlException> Failed(SqlConnectionStringBuilder settings)
+        {
+            try
+            {
+                await using var connection = new SqlConnection(settings.ConnectionString);
+                await connection.OpenAsync();
+            }
+            catch (SqlException error) { return error; }
+            throw new Exception("A login that does not exist was accepted");
+        }
+        var never = SqlService.ConnectBuilder(rejected);
+        var blocking = SqlService.ConnectBuilder(rejected);
+        blocking.PoolBlockingPeriod = PoolBlockingPeriod.Auto;
+        try
+        {
+            var first = await Failed(never);
+            var second = await Failed(never);
+            check(first.ClientConnectionId != Guid.Empty && second.ClientConnectionId != first.ClientConnectionId,
+                "a second Connect after a failure tries again rather than rethrowing the pool's cached failure");
+            var cached = await Failed(blocking);
+            check((await Failed(blocking)).ClientConnectionId == cached.ClientConnectionId, "SqlClient's default pool blocking rethrows the first failure without trying (the control)");
+        }
+        finally
+        {
+            using (var connection = new SqlConnection(never.ConnectionString)) SqlConnection.ClearPool(connection);
+            using (var connection = new SqlConnection(blocking.ConnectionString)) SqlConnection.ClearPool(connection);
+        }
     }
 }

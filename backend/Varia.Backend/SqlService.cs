@@ -162,7 +162,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         if (options.Authentication is not ("windows" or "sql"))
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
-        var builder = ConnectionSettings.Build(options);
+        var builder = ConnectBuilder(options);
         await using var connection = new SqlConnection(builder.ConnectionString);
         await OpenAsync(connection, options, token);
         var profile = await ServerProfile.ProbeAsync(connection, token);
@@ -174,6 +174,21 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
             profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null);
     }
+
+    /// <summary>The connection's settings, which its other pools derive from. SqlClient's pool blocking (Auto blocks for every
+    /// server but Azure SQL) keeps a failed open's exception and rethrows it for every open during 5 to 60 seconds without
+    /// trying: a Connect after kinit, or Object Explorer's retry after a ticket expired, would show the stale failure (and,
+    /// with a ticket now there, the wrong Kerberos advice). Every open the user asks for must reach the server.</summary>
+    internal static SqlConnectionStringBuilder ConnectBuilder(ConnectOptions options)
+    {
+        var builder = ConnectionSettings.Build(options);
+        builder.PoolBlockingPeriod = PoolBlockingPeriod.NeverBlock;
+        return builder;
+    }
+
+    /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, and database and
+    /// column lists (ConnectionFailures.OpenAsync). The live checks replace it to fail as an expired Kerberos ticket does.</summary>
+    internal Func<SqlConnection, CancellationToken, Task> Open { get; set; } = ConnectionFailures.OpenAsync;
 
     private static async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
     {
@@ -252,6 +267,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// reach the other pools, and each job restores its database before the connection returns to the pool.</summary>
     SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Scripting");
 
+    Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+
     private SqlConnection PoolConnection(string connectionId, string? database, string suffix)
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
@@ -266,7 +284,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private async Task<List<DatabaseInfo>> DatabasesAsync(ConnectionArgs args, CancellationToken token)
     {
         await using var connection = CreateConnection(args.ConnectionId);
-        await connection.OpenAsync(token);
+        await Open(connection, token);
         return await ReadDatabasesAsync(connection, token);
     }
 
@@ -294,7 +312,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         await using var connection = CreateConnection(args.ConnectionId, args.Database);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
-        await connection.OpenAsync(deadline.Token);
+        await Open(connection, deadline.Token);
         await using var command = connection.CreateCommand();
         // Only the token's deadline: on a pooled connection that opens at once, a 30 s CommandTimeout would expire on the
         // same tick and could leave the connection a response behind for its next user.
@@ -410,7 +428,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             if (connection.State != System.Data.ConnectionState.Open)
             {
                 if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
-                await connection.OpenAsync(token);
+                // A Kerberos failure answers the request (AUTH_KERBEROS), as SESSION_LOST does: no batch was sent.
+                await Open(connection, token);
                 session.HasOpened = true;
             }
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.

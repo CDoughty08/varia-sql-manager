@@ -32,25 +32,49 @@ internal static class ConnectionFailures
     /// <summary>Integrated authentication goes through Kerberos (GSSAPI) everywhere but Windows, which uses SSPI.</summary>
     internal static bool UsesKerberos(ConnectOptions options) => options.Authentication == "windows" && !OperatingSystem.IsWindows();
 
+    /// <summary>A connection made from a connected profile (query sessions, Object Explorer, Script As, database and column
+    /// lists) uses Kerberos when it uses integrated security off Windows.</summary>
+    internal static bool UsesKerberos(SqlConnection connection) => !OperatingSystem.IsWindows() && new SqlConnectionStringBuilder(connection.ConnectionString).IntegratedSecurity;
+
     /// <summary>The failure to answer for a connection that did not open, or null to leave it to the host's general mapping.
     /// <paramref name="kerberos"/> says the attempt used Kerberos; only then does a token failure call <paramref name="probe"/>.</summary>
     internal static RequestException? Describe(Exception error, string server, bool kerberos, Func<KerberosState> probe)
     {
+        if (kerberos && Kerberos(error, server, probe) is { } failure) return failure;
         var sql = Find<SqlException>(error);
-        var details = sql is null ? null : Details(sql, server);
-        if (kerberos && IsTokenFailure(error, sql))
+        return sql is null ? null : new RequestException("SQL_ERROR", sql.Message, Details(sql, server));
+    }
+
+    /// <summary>What to fix when the Kerberos token could not be built, with the failure's details, or null for any other failure.</summary>
+    internal static RequestException? Kerberos(Exception error, string server, Func<KerberosState> probe)
+    {
+        var sql = Find<SqlException>(error);
+        if (!IsTokenFailure(error, sql)) return null;
+        var state = LibraryNamed(error) ? KerberosState.LibraryMissing : Probe(probe);
+        var message = state switch
         {
-            var state = LibraryNamed(error) ? KerberosState.LibraryMissing : Probe(probe);
-            var message = state switch
-            {
-                KerberosState.LibraryMissing => Messages.LibraryMissing,
-                KerberosState.NoTicket => Messages.NoTicket,
-                KerberosState.Expired => Messages.Expired,
-                _ => Messages.NoServiceTicket
-            };
-            return new RequestException(state == KerberosState.LibraryMissing ? "AUTH_UNSUPPORTED" : "AUTH_KERBEROS", message, details ?? new(null, null, null, Bounded(server)));
+            KerberosState.LibraryMissing => Messages.LibraryMissing,
+            KerberosState.NoTicket => Messages.NoTicket,
+            KerberosState.Expired => Messages.Expired,
+            _ => Messages.NoServiceTicket
+        };
+        return new RequestException(state == KerberosState.LibraryMissing ? "AUTH_UNSUPPORTED" : "AUTH_KERBEROS", message, sql is null ? new(null, null, null, Bounded(server)) : Details(sql, server));
+    }
+
+    /// <summary>Opens a connection made from a connected profile. A ticket can expire while the workbench stays connected
+    /// (MIT's default lifetime is ten hours), and every new session or pooled connection then fails to build the token, so
+    /// those opens say what to fix as connect does; without the details, which only the Connect dialog shows. Any other
+    /// failure is left to the caller's own handling.</summary>
+    internal static Task OpenAsync(SqlConnection connection, CancellationToken token) => OpenAsync(connection, token, UsesKerberos(connection), KerberosProbe.Inspect);
+
+    /// <param name="open">Replaces SqlConnection.OpenAsync (the checks fail it the way SqlClient does).</param>
+    internal static async Task OpenAsync(SqlConnection connection, CancellationToken token, bool kerberos, Func<KerberosState> probe, Func<SqlConnection, CancellationToken, Task>? open = null)
+    {
+        try { await (open is null ? connection.OpenAsync(token) : open(connection, token)); }
+        catch (Exception error) when (kerberos && !token.IsCancellationRequested && Kerberos(error, connection.DataSource, probe) is { } failure)
+        {
+            throw new RequestException(failure.Code, failure.Message);
         }
-        return sql is null ? null : new RequestException("SQL_ERROR", sql.Message, details);
     }
 
     private static ErrorDetails Details(SqlException sql, string server)
@@ -114,7 +138,7 @@ internal static class KerberosProbe
     private delegate uint ReleaseCredential(out uint minor, ref IntPtr credential);
 
     /// <summary>The library .NET's own GSSAPI shim loads: MIT Kerberos on Linux, the system GSS framework on macOS.</summary>
-    private static readonly string[] Libraries = OperatingSystem.IsMacOS() ? ["/System/Library/Frameworks/GSS.framework/GSS"] : ["libgssapi_krb5.so.2", "libgssapi_krb5.so"];
+    internal static readonly string[] Libraries = OperatingSystem.IsMacOS() ? ["/System/Library/Frameworks/GSS.framework/GSS"] : ["libgssapi_krb5.so.2", "libgssapi_krb5.so"];
 
     internal static KerberosState Inspect()
     {

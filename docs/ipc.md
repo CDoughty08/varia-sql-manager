@@ -189,7 +189,7 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | --- | --- | --- | --- | --- |
 | `system.health` | invoke | unary | control | 10 s |
 | `connections.connect` | invoke | unary | metadata | (connect timeout, default 15) + 30 s; 0 means none. Password zeroed. A failed open carries error `details`. |
-| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. A failed open carries error `details`. |
+| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. A failed open carries error `details` (the Connect dialog shows only the message for it). |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Password zeroed. |
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or a failed backend |
@@ -617,8 +617,9 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
 
-`details` comes only with a failed `connections.connect` or `connections.databases` open, for the Connect dialog's
-**Error details**: `{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
+`details` comes only with a failed `connections.connect` or `connections.databases` open. The Connect dialog shows them in
+**Error details** under a failed Connect; a failed **Load databases** shows only its message as the field's note. They are
+`{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
 server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
 Main refuses (as a contained violation) details with any other member or out of these bounds.
 
@@ -627,7 +628,13 @@ be built, SqlClient reports only error 0, class 11, "Cannot generate SSPI contex
 backend asks GSSAPI for the default initiator credential (`gss_acquire_cred`, which reads the credential cache without
 contacting the KDC) and answers `AUTH_UNSUPPORTED` when the GSSAPI library is missing (what to install), or
 `AUTH_KERBEROS` for a missing or expired ticket (run `kinit`) or for a ticket that does not reach the server (the SPN).
-On Windows, SSPI failures keep SqlClient's message as `SQL_ERROR`.
+On Windows, SSPI failures keep SqlClient's message as `SQL_ERROR`. A ticket can also expire while connected, so every later open
+from the connection maps a token failure the same way, without `details`: a query tab's session (`query.execute` answers
+`AUTH_KERBEROS`, as it answers `SESSION_LOST`, and the next execution opens a new session), `databases.list`,
+`tables.columns` and `scripting.script` (an error response), and `explorer.children` (a retryable `AUTH_KERBEROS` value on the
+node). Connect's settings, which those pools derive from, set `Pool Blocking Period=NeverBlock`: SqlClient's default blocks
+a pool after a failed open and rethrows that failure for 5 to 60 seconds without trying, so a Connect or Retry after
+`kinit` would show the stale failure.
 
 | Origin | Codes |
 | --- | --- |

@@ -2,6 +2,13 @@ using System.Text.Json;
 using Varia.Backend;
 using Varia.Backend.Tests;
 
+// The child process of ConnectionFailureChecks' native Kerberos probe check.
+if (args is [ConnectionFailureChecks.ProbeArgument])
+{
+    Console.WriteLine(KerberosProbe.Inspect());
+    return;
+}
+
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 void Check(bool condition, string name)
@@ -79,7 +86,7 @@ catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requ
 ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
-ConnectionFailureChecks.Run(Check);
+await ConnectionFailureChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
@@ -130,6 +137,32 @@ try
                 && !JsonSerializer.Serialize(error.Details).Contains("never-shown-marker"), method + " answers a failed login with its number, state, class and server, and never the password");
         }
     }
+    await ConnectionFailureChecks.PoolBlockingAsync(Check, rejected);
+
+    // A Kerberos ticket that expires while connected: every later open says to run kinit, and works again after it.
+    var signIn = Guid.NewGuid().ToString();
+    service.Open = ConnectionFailureChecks.ExpiredTicket;
+    try
+    {
+        async Task<string> Refused(Func<Task> call)
+        {
+            try { await call(); return "accepted"; }
+            catch (RequestException error) { return error.Code == "AUTH_KERBEROS" && error.Message == ConnectionFailures.Messages.Expired && error.Details is null ? "kinit" : error.Code + ": " + error.Message; }
+        }
+        var refusals = new[]
+        {
+            await Refused(() => Run("SELECT 1;", session: signIn)),
+            await Refused(() => Call<List<DatabaseInfo>>("databases.list", new ConnectionArgs(info.Id))),
+            await Refused(() => Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"))),
+            await Refused(() => Call<ScriptResult>("scripting.script", new ScriptArgs(info.Id, Guid.NewGuid().ToString(), [new ObjectRefDto("table", "master", "dbo", "VariaNoSuchTable")], "create", ScriptingLiveChecks.Defaults(json))))
+        };
+        Check(refusals.All(answer => answer == "kinit"), "a query session, database and column lists, and Script As say to run kinit when the ticket has expired: " + string.Join(", ", refusals));
+        var node = await Call<ExplorerChildrenResult>("explorer.children", new ExplorerChildrenArgs(info.Id, Guid.NewGuid().ToString(), new NodeRefDto("folder", Owner: new ObjectRefDto("server"), Folder: "logins")));
+        Check(node.Error is { Code: "AUTH_KERBEROS", Retryable: true } && node.Error.Message == ConnectionFailures.Messages.Expired && node.Nodes.Count == 0,
+            "Object Explorer shows an expired ticket's kinit advice on the node, which Retry loads again");
+    }
+    finally { service.Open = ConnectionFailures.OpenAsync; }
+    Check((await Run("SELECT 1;", session: signIn)).Status == "completed", "after kinit, the tab whose session could not sign in opens a new one");
     var columns = await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"));
     Check(columns.Columns.Count > 2 && columns.Columns[0] == new ColumnInfo("name", "sysname") && columns.Columns[1] == new ColumnInfo("object_id", "int") && !columns.Truncated, "table columns come in column order with their types");
     try { await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects]")); throw new Exception("A closing bracket matched another table"); }
