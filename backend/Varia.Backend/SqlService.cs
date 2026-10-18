@@ -252,7 +252,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private static async Task<List<DatabaseInfo>> ReadDatabasesAsync(SqlConnection connection, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
-        command.CommandTimeout = 30;
+        // The caller's token carries the deadline; a CommandTimeout expiring with it could desynchronise the connection.
+        command.CommandTimeout = 0;
         command.CommandText = "SELECT name, CONVERT(bit, CASE WHEN database_id <= 4 THEN 1 ELSE 0 END), CONVERT(bit, CASE WHEN source_database_id IS NOT NULL THEN 1 ELSE 0 END) FROM sys.databases WHERE HAS_DBACCESS(name) = 1 ORDER BY name;";
         await using var reader = await command.ExecuteReaderAsync(token);
         var result = new List<DatabaseInfo>();
@@ -274,7 +275,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         await connection.OpenAsync(deadline.Token);
         await using var command = connection.CreateCommand();
-        command.CommandTimeout = 30;
+        // Only the token's deadline: on a pooled connection that opens at once, a 30 s CommandTimeout would expire on the
+        // same tick and could leave the connection a response behind for its next user.
+        command.CommandTimeout = 0;
         command.CommandText = "DECLARE @id int = OBJECT_ID(QUOTENAME(@schema) + N'.' + QUOTENAME(@name));\n"
             + "SELECT CONVERT(bit, CASE WHEN @id IS NULL THEN 0 ELSE 1 END);\n"
             + "SELECT TOP (" + (MaxColumns + 1) + ") c.name, TYPE_NAME(c.user_type_id) FROM sys.all_columns AS c WHERE c.object_id = @id"
@@ -394,7 +397,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     // later execution in the tab would show the previous one's results. Cancel also stops the synchronous
                     // reads (ColumnPlan) that only check the token between chunks.
                     command.CommandTimeout = 0;
-                    using var stop = token.Register(command.Cancel);
+                    using var stop = token.Register(Attention, command);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add("(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
                     try
@@ -644,7 +647,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private static Task SkipRowsAsync(SqlDataReader reader, SqlCommand command, ResultSetBuffer? set, QueryEventSink events, CancellationToken token) =>
         Task.Factory.StartNew(() =>
         {
-            using var cancel = token.Register(command.Cancel);
+            using var cancel = token.Register(Attention, command);
             while (true)
             {
                 token.ThrowIfCancellationRequested();
@@ -654,6 +657,15 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 events.RowsChanged();
             }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    /// <summary>Sends an attention for a command when its token is cancelled. Cancel throws when the connection has broken, and
+    /// a callback's exception would escape on the deadline's timer thread, ending the backend, or out of the loops that
+    /// cancel every query of a connection.</summary>
+    private static void Attention(object? command)
+    {
+        try { ((SqlCommand)command!).Cancel(); }
+        catch (Exception error) when (error is InvalidOperationException or SqlException or ObjectDisposedException) { }
+    }
 
     private object Cancel(CancelArgs args)
     {
