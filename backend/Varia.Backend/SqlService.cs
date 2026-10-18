@@ -389,7 +389,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     events.Progress(completed, totalBatches, batchNumber, iteration);
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
-                    command.CommandTimeout = args.TimeoutSeconds == 0 ? 0 : Math.Max(1, (int)Math.Ceiling(args.TimeoutSeconds - watch.Elapsed.TotalSeconds));
+                    // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
+                    // it, and when both fire on the same tick SqlClient can leave the session one response behind, so each
+                    // later execution in the tab would show the previous one's results. Cancel also stops the synchronous
+                    // reads (ColumnPlan) that only check the token between chunks.
+                    command.CommandTimeout = 0;
+                    using var stop = token.Register(command.Cancel);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add("(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
                     try
