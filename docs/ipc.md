@@ -266,10 +266,12 @@ lost.
   `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself: the next batch runs, and
   Messages gets "Batch {b} raised an error; execution continued with the next batch." ("Batch {b}, repetition {k},
   raised an error; execution continued with the next repetition." or "… next batch." for `GO n`) when any batch remains.
-  Statement-level errors (severity 11–16) leave the rest of their batch to SQL Server; severity 17–19 errors, which
-  SqlClient raises as exceptions, end the batch at once. With `stopOnError: true` (for SQLCMD's `:on error exit`), the
-  first batch that raised an error ends the script instead. Nothing runs after a cancel, the script's deadline, an
-  error of severity 20 or more, or any failure that closes the session.
+  SQL Server decides how much of a batch runs after an error (most errors end only their statement). Severity 17–19
+  errors do not stop the batch on the server either, but SqlClient raises them as an exception, usually once it has read
+  the rest of the batch: result sets and messages after the error in that batch may be missing, or listed before it.
+  With `stopOnError: true` (for SQLCMD's `:on error exit`), the first batch that raised an error ends the script
+  instead. Nothing runs after a cancel, the script's deadline, an error of severity 20 or more, or any failure that
+  closes the session.
 
 | `status` | Meaning | Status line |
 | --- | --- | --- |
@@ -279,9 +281,10 @@ lost.
 | `cancelled` | `query.cancel`, a closed tab, a disconnect, or a CANCEL frame other than main's backstop | "Query was cancelled." |
 | `timedOut` | `timeoutSeconds` passed, or main's backstop cancelled the request | "Query timed out." |
 
-`completedBatches` counts the batch executions that ran to their end, including those that raised errors; with
-`stopOnError`, the batch that stopped the script is not counted. Validation errors and a missing, busy or invalid
-session or connection use the error envelope instead of a summary, and nothing runs.
+`completedBatches` counts the batch executions that finished, including those that raised errors (a batch whose output a
+severity 17–19 error cut short counts too); with `stopOnError`, the batch that stopped the script is not counted.
+Validation errors and a missing, busy or invalid session or connection use the error envelope instead of a summary, and
+nothing runs.
 
 ## Query events
 

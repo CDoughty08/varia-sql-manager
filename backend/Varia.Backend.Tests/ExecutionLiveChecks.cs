@@ -53,6 +53,20 @@ internal static class ExecutionLiveChecks
             check(recovered == Defaults, "the tab's next execution opens its session with the prologue: " + recovered);
             await Call("query.session.close", new SessionArgs(missingTab));
 
+            // A session whose prologue fails is closed, so the tab's next execution opens one and runs the prologue instead
+            // of running scripts without SSMS's settings.
+            var failingTab = Guid.NewGuid().ToString();
+            QueryResult unprepared;
+            service.Prologue = "SET ARITHABORT OFF; SET TEXTSIZE 100; RAISERROR('Varia live check: the prologue failed.', 16, 1);";
+            try { unprepared = await Run("PRINT 'SHOULD_NOT_RUN';", failingTab); }
+            finally { service.Prologue = SqlService.SessionPrologue; }
+            check(unprepared.Status == "failed" && unprepared.Error?.BatchNumber == 0 && unprepared.Error.Message.Contains("the prologue failed")
+                && !Texts(unprepared).Contains("SHOULD_NOT_RUN") && !Texts(unprepared).Contains(ClosedNote),
+                "a failed prologue fails the execution before any batch: " + string.Join(" | ", Texts(unprepared)));
+            var prepared = await Options(failingTab);
+            check(prepared == Defaults, "a session whose prologue failed is not reused; the next execution runs the prologue: " + prepared);
+            await Call("query.session.close", new SessionArgs(failingTab));
+
             // Like SSMS, the next GO batch runs after one that raised an error; each batch's errors stay in Messages in order,
             // with a line saying that execution continued, and the run reports that errors occurred.
             const string script = "PRINT 'one';\nGO\nRAISERROR('sev16', 16, 1);\nPRINT 'after';\nGO\nSELECT 3 AS three;\nGO\nSELECT 4 AS four; SELECT 1/0 AS boom;\nGO\nPRINT 'last';";
@@ -75,10 +89,26 @@ internal static class ExecutionLiveChecks
             var lastOnly = await Run("PRINT 'a';\nGO\nSELECT 1/0;");
             check(lastOnly.Status == "completedWithErrors" && lastOnly.CompletedBatches == 2 && !Texts(lastOnly).Any(text => text.StartsWith("Batch ")),
                 "an error in the last batch adds no line about continuing");
-            // Severity 17 to 19 errors reach SqlClient as exceptions; they end their batch, not the script.
+            // Severity 17 to 19 errors reach SqlClient as exceptions; the script goes on with the next batch.
             var severe = await Run("RAISERROR('sev18', 18, 1);\nGO\nPRINT 'next';");
-            check(severe.Status == "completedWithErrors" && Texts(severe).SequenceEqual(["Msg 50000, Level 18, State 1, Line 1\nsev18", "Batch 1 raised an error; execution continued with the next batch.", "next"]),
+            check(severe.Status == "completedWithErrors" && severe.CompletedBatches == 2 && Texts(severe).SequenceEqual(["Msg 50000, Level 18, State 1, Line 1\nsev18", "Batch 1 raised an error; execution continued with the next batch.", "next"]),
                 "a severity 18 error ends its batch and the next batch runs: " + string.Join(" | ", Texts(severe)));
+            // SQL Server does not stop a batch at them, and SqlClient raises them only after reading the rest of the batch, so
+            // its later statements have run (even after a wait, which an attention would have cut short) and it counts as completed.
+            var ranOn = await Run("CREATE TABLE #sev (n int);\nGO\nSELECT 1 AS a; RAISERROR('sev18', 18, 1); WAITFOR DELAY '00:00:01'; INSERT #sev VALUES (1);\nGO\nSELECT COUNT(*) AS c FROM #sev; DROP TABLE #sev;");
+            check(ranOn.Status == "completedWithErrors" && ranOn.CompletedBatches == 3 && ranOn.ResultSets.Count == 2 && LiveResultChecks.RowsOf(store, ranOn.ResultSets[1])[0][0] == "1",
+                "a batch with a severity 18 error runs to its end on the server: " + string.Join(", ", ranOn.ResultSets.Select(set => set.Columns[0].Name)));
+            // The large xml value a row read whole is counted for collection even when an exception ends its set: after a severity
+            // 17 to 19 error within a set (a resource error) the next batch runs, and must not read another such value first.
+            // No script raises one there on demand, so a deadline while the server computes the next row stands in for it; it
+            // lands while the row is read (SQL Server holds the row's last packet until then) or before the next one.
+            var discardedBefore = store.DiscardedBytes;
+            var abandoned = await Run("SELECT n, x FROM (SELECT 1 AS n, CAST(N'<a>' + REPLICATE(CAST(N'x' AS nvarchar(max)), 4000000) + N'</a>' AS xml) AS x"
+                + " UNION ALL SELECT 2, CAST(N'<b/>' AS xml) WHERE (SELECT CHECKSUM_AGG(a.object_id ^ b.object_id ^ c.object_id) FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b CROSS JOIN sys.all_objects AS c) = 12345) AS t"
+                + " OPTION (MAXDOP 1);", timeout: 2);
+            var discarded = store.DiscardedBytes - discardedBefore;
+            check(abandoned.Status == "timedOut" && abandoned.ResultSets is [{ RowsRead: 1 }] && discarded >= 4_000_000,
+                "a large xml value whose set an exception ended is counted for collection (" + discarded + " bytes, " + abandoned.Status + ", " + string.Join(", ", abandoned.ResultSets.Select(set => set.RowsRead + "/" + set.RowsStored)) + " rows)");
             var after = await Options();
             check(after == Defaults, "the session survives batches that raised errors: " + after);
 

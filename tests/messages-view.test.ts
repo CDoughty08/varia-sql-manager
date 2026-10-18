@@ -15,9 +15,8 @@ describe('Messages and the status line', () => {
     // A failure has its error entries; one main reported has no completion time.
     expect(messageTail({ status: 'failed', messages: [{ text: 'The SQL backend stopped.', kind: 'error' }], notices: 0, summary: undefined })).toEqual([])
     expect(messageTail({ status: 'cancelled', messages: [], notices: 0, summary })).toEqual(['', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
-    // Batches that raised errors did not complete successfully, even when every batch ran.
-    expect(messageTail({ status: 'completedWithErrors', messages: [{ text: 'Msg 8134, Level 16, State 1, Line 1\nDivide by zero error encountered.', kind: 'error' }], notices: 0, summary }))
-      .toEqual(['', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
+    // Batches that raised errors did not complete successfully, even when every batch ran and no message is shown.
+    expect(messageTail({ status: 'completedWithErrors', messages: [], notices: 0, summary })).toEqual(['', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
     // Varia's notice about a new session is not a message from SQL Server.
     expect(messageTail({ status: 'completed', messages: [info('The SQL backend restarted. This query runs in a new session.')], notices: 1, summary })).toEqual(['Commands completed successfully.', '', 'Completion time: 2026-10-08T21:48:01.1234567+00:00'])
   })

@@ -70,6 +70,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>The most query sessions open at once. Only the live checks change it.</summary>
     internal int SessionLimit { get; set; } = 32;
 
+    /// <summary>What a tab's session runs when it opens: <see cref="SessionPrologue"/>. Only the live checks change it, to
+    /// make it fail.</summary>
+    internal string Prologue { get; set; } = SessionPrologue;
+
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
     /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
@@ -435,7 +439,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 try
                 {
                     await using var prologue = connection.CreateCommand();
-                    prologue.CommandText = SessionPrologue;
+                    prologue.CommandText = Prologue;
                     prologue.CommandTimeout = 0;
                     await prologue.ExecuteNonQueryAsync(token);
                 }
@@ -472,6 +476,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     using var stop = token.Register(Attention, command);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
+                    // Large xml values the last row read whole; an exception can leave them uncounted (see the finally).
+                    long transient = 0;
                     try
                     {
                         // Sequential access streams each value once, in column order, so a huge value is never materialised
@@ -482,7 +488,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                             ColumnPlan? plan = null;
                             bool? hasLong = null;
                             var skipped = false;
-                            long transient = 0;
                             if (reader.FieldCount > 0)
                             {
                                 if (sets.Count >= args.MaxResultSets) overflowSets++;
@@ -555,13 +560,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                 skipped = false;
                                 int truncatedCells;
                                 try { truncatedCells = plan!.ReadRow(reader, builder, text => messages.Add(text), token); }
-                                catch { currentSet.AbortRow(); throw; }
+                                catch { currentSet.AbortRow(); transient = plan!.TransientBytes; throw; }
                                 transient = plan.TransientBytes;
                                 var sealedBefore = currentSet.SealedPages;
                                 if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
                                 if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                             }
                             store.Discarded(transient);
+                            transient = 0;
                             if (currentSet is not null)
                             {
                                 currentSet.Complete();
@@ -576,7 +582,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                         // Do not drain a failed command into later statements unnecessarily.
                         try { command.Cancel(); } catch (Exception cancel) when (cancel is InvalidOperationException or SqlException) { }
                         if (error is not SqlException sql || !Continues(sql, connection)) throw;
-                        // Severity 17 to 19 errors still end their batch, and the script goes on with the next one.
+                        // SQL Server does not stop a batch for a severity 17 to 19 error, but SqlClient raises it as an exception, which
+                        // ends what is read of the batch; the script goes on with the next one.
                         Report(sql);
                         if (currentSet is not null)
                         {
@@ -586,7 +593,13 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                             currentSet = null;
                         }
                     }
-                    finally { if (reader is not null) await reader.DisposeAsync(); }
+                    finally
+                    {
+                        if (reader is not null) await reader.DisposeAsync();
+                        // After a severity 17 to 19 error the next batch runs, and must not read another large xml value before
+                        // this row's is counted for collection.
+                        store.Discarded(transient);
+                    }
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
