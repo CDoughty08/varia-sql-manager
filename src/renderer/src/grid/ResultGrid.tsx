@@ -34,7 +34,7 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
 function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: ResultGridProps) {
-  const { results, resultClient, commands, platform, gridStats } = useWorkbench()
+  const { results, resultClient, commands, platform, gridStats, panes } = useWorkbench()
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const [status, setStatus] = useState<GridStatus>({})
@@ -58,12 +58,17 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
     })
     viewRef.current = view
     const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })
+    // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
+    // offsets: the frame this asks for writes them back. It relies on GridView's offsetsDropped: without it, this frame
+    // would take the dropped offsets for a scroll to the top.
+    const unsubscribe = panes.subscribe(() => view.invalidate())
     return () => {
+      unsubscribe()
       registration.dispose()
       view.dispose()
       if (viewRef.current === view) viewRef.current = undefined
     }
-  }, [tabId, index, entry, results, resultClient, commands, platform, gridStats])
+  }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
   useEffect(() => { viewRef.current?.update({ resultCount: count }) }, [count])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || (event.target as Element).closest('button')) return

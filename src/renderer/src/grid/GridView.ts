@@ -13,7 +13,7 @@ import { gridKeyAction, pageStep } from './keyboard'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
 import { fitWidth, initialWidth, measureCharWidth, typeHintChars } from './measure'
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
-import { applyWheel, ensureVisible, normalizeWheel, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
+import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
 import { tileKey } from './tiles'
@@ -118,6 +118,10 @@ export class GridView {
   private written: number | undefined
   private pendingTop: number | undefined
   private pendingLeft: number | undefined
+  /** Whether a scroll event came since the last frame, and the scroller's offsets that frame left (offsetsDropped). */
+  private scrolled = false
+  private lastTop = 0
+  private lastLeft = 0
   private viewportWidth = 0
   private viewportHeight = 0
   private lastTopRow = 0
@@ -343,7 +347,7 @@ export class GridView {
       target.addEventListener(type, guarded, options)
       this.cleanup.push(() => target.removeEventListener(type, guarded, options))
     }
-    on(this.scroller, 'scroll', () => this.schedule(), { passive: true })
+    on(this.scroller, 'scroll', () => { this.scrolled = true; this.schedule() }, { passive: true })
     // A press on a scroll bar focuses the scroller, which has no name and no active cell: the grid keeps the focus.
     on(this.scroller, 'focus', () => this.root.focus({ preventScroll: true }))
     on(this.root, 'pointerdown', event => this.pointerDown(event))
@@ -721,10 +725,13 @@ export class GridView {
     // Reads first: the scroller's offsets.
     const scrollTop = this.scroller.scrollTop, scrollLeft = this.scroller.scrollLeft
     const previous = this.model
+    // A scroller that lost its offsets shows the saved ones again, as a grid built afresh does.
+    const restore = !previous || offsetsDropped({ scrolled: this.scrolled, scrollTop, scrollLeft, lastTop: this.lastTop, lastLeft: this.lastLeft })
+    this.scrolled = false
     const model = scrollModel(rows, height, this.cap)
     let virtualTop: number
     if (this.pendingTop !== undefined) virtualTop = this.pendingTop
-    else if (!previous) virtualTop = state.virtualTop
+    else if (restore) virtualTop = state.virtualTop
     else virtualTop = onNativeScroll(previous, scrollTop, state.virtualTop, this.written)
     const mapped = remap(model, virtualTop)
     virtualTop = mapped.virtualTop
@@ -755,15 +762,17 @@ export class GridView {
       else this.scroller.removeEventListener('wheel', this.onWheel)
     }
     let top = scrollTop
-    if (Math.abs(mapped.scrollTop - scrollTop) >= 1 || (!previous && mapped.scrollTop !== scrollTop)) {
+    if (Math.abs(mapped.scrollTop - scrollTop) >= 1 || (restore && mapped.scrollTop !== scrollTop)) {
       this.scroller.scrollTop = mapped.scrollTop
       top = mapped.scrollTop
     }
     this.written = model.mode === 'virtual' ? top : undefined
     const maxLeft = Math.max(0, total - width)
-    const left = Math.min(maxLeft, Math.max(0, this.pendingLeft ?? (previous ? scrollLeft : state.scrollLeft)))
+    const left = Math.min(maxLeft, Math.max(0, this.pendingLeft ?? (restore ? state.scrollLeft : scrollLeft)))
     this.pendingLeft = undefined
     if (Math.abs(left - scrollLeft) >= 1) this.scroller.scrollLeft = left
+    this.lastTop = top
+    this.lastLeft = left
     this.model = model
     state.virtualTop = virtualTop
     state.topRow = topRowOf(virtualTop)

@@ -937,7 +937,9 @@ try {
     await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
     await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe(mode)
     await textbox().focus()
-    expect(await computed(nullCell)).toEqual({ color: await tokenColor('resultsGrid.nullForeground'), background: await tokenColor('resultsGrid.nullBackground') })
+    // The set's rows are painted a frame or more after the run completes.
+    const nullColors = { color: await tokenColor('resultsGrid.nullForeground'), background: await tokenColor('resultsGrid.nullBackground') }
+    await expect.poll(() => computed(nullCell)).toEqual(nullColors)
     expect((await computed(cell(1, 3), '::after')).color).toBe(await tokenColor('resultsGrid.truncationForeground'))
     expect((await computed(cell(2, 4))).color).toBe(await tokenColor('errorForeground'))
     await cell(0, 0).click()
@@ -958,12 +960,13 @@ try {
   // selection colors, as the selected cells do.
   await page.emulateMedia({ forcedColors: 'active' })
   await cell(1, 3).click()
+  // The grid paints the selection on its next frame.
+  await expect(cell(1, 3)).toHaveClass(/is-sel/)
   const selectedCell = await computed(cell(1, 3))
   await expect.poll(() => computed(cell(1, 3), '::after')).toEqual(selectedCell)
-  const selectedHeader = await computed(header('clipped'))
-  expect(selectedHeader.background).toBe(selectedCell.background)
-  expect(selectedHeader.background).not.toBe((await computed(header('id'))).background)
-  expect((await computed(rowNumber(1))).background).toBe(selectedCell.background)
+  await expect.poll(async () => (await computed(header('clipped'))).background).toBe(selectedCell.background)
+  expect(selectedCell.background).not.toBe((await computed(header('id'))).background)
+  await expect.poll(async () => (await computed(rowNumber(1))).background).toBe(selectedCell.background)
   // NULL's tint is dropped too: its dimmed text still tells it from a value.
   expect((await computed(nullCell)).color).not.toBe((await computed(cell(1, 0))).color)
   await page.emulateMedia({ forcedColors: null })
@@ -1013,6 +1016,27 @@ try {
   await expect(page.locator('[data-pane-tab="output"]')).toBeVisible()
   await expect(page.locator('.output-panel')).toBeVisible()
   await expect.poll(scrollTop).toBe(keptTop)
+  expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
+  expect(await widthOf(header('id'))).toBeCloseTo(resized, 0)
+  // Both presses within one frame: the grid stays mounted but is moved, which drops its scroller's offsets without a
+  // resize or a scroll event. Its rows stayed drawn below the view, or it took the reset for a scroll to the top.
+  await textbox().focus()
+  // Tagged to show the grid was moved, not remounted (a remount restores its offsets anyway and would not test this).
+  await scroller().evaluate(element => { element.dataset.moved = 'kept' })
+  // Ctrl+R reads which panes show, which the dock publishes in a microtask: one runs between the presses, as between
+  // two real key events, and no frame can.
+  expect(await page.evaluate(async () => {
+    const press = () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR', ctrlKey: true, bubbles: true, cancelable: true }))
+    press()
+    const closed = document.querySelector('[data-pane-tab="output"]') === null
+    await Promise.resolve()
+    press()
+    return closed
+  })).toBe(true)
+  await expect(page.locator('.output-panel')).toBeVisible()
+  await expect(scroller()).toHaveAttribute('data-moved', 'kept')
+  await expect.poll(scrollTop).toBe(keptTop)
+  await expect.poll(async () => { const [first, last] = await visibleRows(); return first <= kept.row + 1 && last >= kept.row + 1 }).toBe(true)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   expect(await widthOf(header('id'))).toBeCloseTo(resized, 0)
   // The pane's live region reads out only what happens while a tab is shown: switching tabs repeats no sentence.

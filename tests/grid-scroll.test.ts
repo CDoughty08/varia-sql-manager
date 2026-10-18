@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ColumnLayout } from '../src/renderer/src/grid/layout'
 import {
-  applyWheel, ensureVisible, normalizeWheel, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, toNative, toVirtual
+  applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, toNative, toVirtual
 } from '../src/renderer/src/grid/scroll'
 
 const viewport = 600
@@ -79,6 +79,16 @@ describe('grid scrolling', () => {
     // Shrinking (a smaller result) clamps to the new end.
     expect(remap(scrollModel(10, viewport, cap), 150_000)).toEqual({ virtualTop: 0, scrollTop: 0 })
     expect(remap(scrollModel(100, viewport, cap), 150_000).virtualTop).toBe(22 + 2000 - viewport)
+  })
+  it('tells offsets a move in the DOM dropped from a scroll to the top, which comes with a scroll event', () => {
+    // A pane closed and opened within one frame: the scroller reads 0, 0 and no scroll event came.
+    expect(offsetsDropped({ scrolled: false, scrollTop: 0, scrollLeft: 0, lastTop: 914, lastLeft: 0 })).toBe(true)
+    expect(offsetsDropped({ scrolled: false, scrollTop: 0, scrollLeft: 0, lastTop: 0, lastLeft: 300 })).toBe(true)
+    // The user's scroll to the top, a scroller already at the top, and a partial change are kept.
+    expect(offsetsDropped({ scrolled: true, scrollTop: 0, scrollLeft: 0, lastTop: 914, lastLeft: 300 })).toBe(false)
+    expect(offsetsDropped({ scrolled: false, scrollTop: 0, scrollLeft: 0, lastTop: 0, lastLeft: 0 })).toBe(false)
+    expect(offsetsDropped({ scrolled: false, scrollTop: 0, scrollLeft: 300, lastTop: 914, lastLeft: 300 })).toBe(false)
+    expect(offsetsDropped({ scrolled: false, scrollTop: 914, scrollLeft: 0, lastTop: 914, lastLeft: 300 })).toBe(false)
   })
   it('turns wheel lines and pages into pixels and moves the virtual offset 1:1, leaving the edges to the outer stack', () => {
     expect([normalizeWheel(53, 0, viewport), normalizeWheel(3, 1, viewport), normalizeWheel(-1, 2, viewport)]).toEqual([53, 60, -(viewport - 42)])

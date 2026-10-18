@@ -58,6 +58,15 @@ export function onNativeScroll(model: ScrollModel, scrollTop: number, virtualTop
   return toVirtual(model, scrollTop)
 }
 
+/**
+ * Whether the scroller lost its offsets rather than scrolled: moving it in the DOM (its pane closed and opened again
+ * within one frame, so the grid stays mounted) resets them to 0 without a scroll event. The grid then writes its saved
+ * offsets back instead of taking the reset for the user's scroll to the top.
+ */
+export function offsetsDropped(o: { readonly scrolled: boolean; readonly scrollTop: number; readonly scrollLeft: number; readonly lastTop: number; readonly lastLeft: number }): boolean {
+  return !o.scrolled && o.scrollTop === 0 && o.scrollLeft === 0 && (o.lastTop !== 0 || o.lastLeft !== 0)
+}
+
 /** The first row whose top is at or above the body's top edge. */
 export const topRowOf = (virtualTop: number): number => Math.max(0, Math.floor(virtualTop / g.rowHeight))
 /** In Mode B rows are positioned from a base row, a multiple of 4,096, so their offsets stay small. */
