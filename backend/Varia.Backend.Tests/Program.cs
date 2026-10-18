@@ -162,11 +162,34 @@ try
     Check(result.Status == "failed" && result.Error?.Message.Contains("and 30 more errors") == true, "errors repeated by a running batch are counted, not accumulated");
     result = await Run("SELECT id, 10 / (id - 5) AS v FROM (VALUES (1), (2), (3), (4), (5), (6)) AS t(id);");
     Check(result.Status == "failed" && result.ResultSets[0].Incomplete && RowsOf(result.ResultSets[0]).Count < 6, "a result set cut short by a statement error is marked incomplete");
+    // When SqlClient's CommandTimeout and the script's token expired on the same timer tick, SqlClient could leave the
+    // session one response behind: the next execution in that tab returned nothing and each later one the previous one's
+    // results. The race needs the deadline to land in NextResultAsync, and it is likeliest while the timeout paths are
+    // still cold, so this runs before any other timeout and in many tabs at once (2 to 6 of 24 fell behind without the fix).
+    var inStep = await Task.WhenAll(Enumerable.Range(0, 24).Select(async index =>
+    {
+        var tab = Guid.NewGuid().ToString();
+        try
+        {
+            // The session opens first, so the script's deadline and the command's start are as close as they can be.
+            await Run("SELECT 0;", tab);
+            var timedOut = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:00:05';", tab, timeout: 1);
+            var probes = new List<string?>();
+            for (var probe = 1; probe <= 2; probe++)
+            {
+                var answer = await Run("SELECT 'tab " + index + " probe " + probe + "';", tab);
+                probes.Add(answer.Status == "completed" && answer.ResultSets.Count == 1 ? RowsOf(answer.ResultSets[0]).SingleOrDefault()?[0] : answer.Status);
+            }
+            return timedOut.Status == "timedOut" && probes.SequenceEqual(["tab " + index + " probe 1", "tab " + index + " probe 2"]) ? null : timedOut.Status + ": " + string.Join(", ", probes);
+        }
+        finally { await Call<object>("query.session.close", new SessionArgs(tab)); }
+    }));
+    Check(inStep.All(failure => failure is null), "a script timeout leaves its tab's session in step with its requests: " + string.Join(" | ", inStep.Where(failure => failure is not null)));
     // RAISERROR WITH NOWAIT flushes the buffered error to the client before the batch waits.
     result = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:00:05';", timeout: 1);
     Check(result.Status == "timedOut" && result.Error?.Message.Contains("Msg 8134") == true, "errors raised before a timeout are still reported");
     result = await Run("SELECT 1;", database: "VariaDatabaseThatDoesNotExist");
-    Check(result.Status == "failed" && result.Error?.Message.Contains("Msg 911") == true, "a missing target database fails before any batch runs");
+    Check(result.Status == "failed" && result.Error?.Message.Contains("Msg 911") == true && result.Error.BatchNumber == 0, "a missing target database fails before any batch runs");
     result = await Run("SELECT DB_NAME();");
     Check(result.Status == "completed" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "master", "the session recovers after a failed database change");
     result = await Run("SELECT 1 AS a;\nGO\nSELECT * FROM dbo.VariaTableThatDoesNotExist;");
