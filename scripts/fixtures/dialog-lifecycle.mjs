@@ -146,6 +146,7 @@ export async function dialogLifecycle(launchOptions) {
     await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].emit('responsive') })
     // The renderer crashes while Save Grid Results is open: the crash prompt waits for it rather than opening over it,
     // and what the dead page asked for and was not shown yet (the Script As save, the close prompt) never is.
+    const beforeCrash = await spawns()
     await crash(application)
     await wait(1000)
     expect(await shown(application)).toEqual(['Save Grid Results'])
@@ -161,6 +162,9 @@ export async function dialogLifecycle(launchOptions) {
       { title: 'Save Grid Results', open: 1 }, { title: 'Workbench stopped', open: 1 }, { title: 'Open SQL query', open: 1 }
     ])
     expect(await exists(scriptFile)).toBe(false)
+    // The crash restarted the backend once; the reload after it must not restart it again. On Windows a backend spawned
+    // while Chromium launches the new renderer holds that renderer's channel, and the renderer's next crash goes unseen.
+    expect(await spawns() - beforeCrash).toBe(1)
     // A message box the page asked for is closed when the page crashes (a file chooser cannot be): the crash prompt
     // follows at once instead of waiting for an answer that page can no longer use.
     await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)

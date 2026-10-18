@@ -311,6 +311,10 @@ function createWindow(): void {
   // those it asked for that were not shown yet.
   contents.on('render-process-gone', (_event, details) => {
     if (details.reason === 'clean-exit' || window.isDestroyed()) return
+    // This reset is the crash's: the reload that follows must not reset (restart the backend) again. It would spawn the
+    // backend while Chromium launches the new renderer, and on Windows the backend then inherits that renderer's channel
+    // handle, so Chromium never sees the new renderer die and its crash leaves the window frozen.
+    rendererLoaded = false
     resetRendererState()
     void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.', buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
