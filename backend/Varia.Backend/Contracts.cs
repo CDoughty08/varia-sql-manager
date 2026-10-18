@@ -18,7 +18,10 @@ internal sealed record DiscoveredServer(string Server, string Version, string So
 internal sealed record DiscoveryResult(List<DiscoveredServer> Servers, string? Warning = null);
 internal sealed record ConnectionArgs(string ConnectionId);
 internal sealed record TableArgs(string ConnectionId, string Database, string Schema, string Name);
-internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10);
+/// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
+/// :on error exit); by default execution continues with the next batch, as SSMS does.</summary>
+internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
+    bool StopOnError = false);
 internal sealed record SessionArgs(string SessionId);
 internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
@@ -37,7 +40,9 @@ internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long Query
 /// <summary>One line of the Messages tab: kind is "info" or "error" (SQL errors, cancellation and timeout, shown in red).</summary>
 internal sealed record MessageEntry(string Text, string Kind);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt
-/// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:".</summary>
+/// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:". Status is completed, completedWithErrors
+/// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error
+/// stopped execution: before the first batch, with stopOnError, or by closing the session), cancelled, or timedOut.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt);
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows);

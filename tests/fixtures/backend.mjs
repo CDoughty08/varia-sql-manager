@@ -398,12 +398,13 @@ async function runDirective(id, params, directive) {
     if (messages.length) write(FrameKind.EVENT, id, 0, { type: 'messages', messages })
     while (directive.hold && !cancelledQueries.has(queryId) && await controlled(join('hold', 'query.execute'))) await sleep(25)
     if (status === 'completed' && cancelledQueries.has(queryId)) status = 'cancelled'
+    // Its one batch ran to its end, so errors leave the run completed with errors, as SqlService reports one.
     const failed = status === 'completed' && directive.errors > 0
     respond(id, {
-      resultSets: results.map(describe), discardedResultSets: discarded.length, messages, recordsAffected: -1, elapsedMs: 1, status: failed ? 'failed' : status,
+      resultSets: results.map(describe), discardedResultSets: discarded.length, messages, recordsAffected: -1, elapsedMs: 1, status: failed ? 'completedWithErrors' : status,
       ...failed ? { error: { code: 'SQL_ERROR', message: messages.find(message => message.kind === 'error').text, batchNumber: 1, iteration: 1 } } : {},
       ...status === 'cancelled' ? { error: { code: 'CANCELLED', message: 'The script was cancelled. Remaining batches were not executed.', batchNumber: 1, iteration: 1 } } : {},
-      completedBatches: status === 'completed' && !failed ? 1 : 0, totalBatches: 1, database: params.database, messagesTruncated: false,
+      completedBatches: status === 'completed' ? 1 : 0, totalBatches: 1, database: params.database, messagesTruncated: false,
       budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00')
     })
   } finally {
@@ -414,10 +415,11 @@ async function runDirective(id, params, directive) {
 
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
-    // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form.
+    // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form, and the third batch still runs.
     messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2."),
-      { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }], elapsedMs: 3, status: 'failed',
-    error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 1, totalBatches: 3
+      { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }, info('Batch 2 raised an error; execution continued with the next batch.'),
+      info('third batch')], elapsedMs: 3, status: 'completedWithErrors',
+    error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 3, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
   SelectTopNRows: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('CustomerName', 'nvarchar')], rows: [['1', 'Contoso']] }]),

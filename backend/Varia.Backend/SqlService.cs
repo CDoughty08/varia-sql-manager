@@ -28,6 +28,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private const long MemoryReportStep = 64L * 1024 * 1024;
     private const string CancelledSentence = "The script was cancelled. Remaining batches were not executed.";
     private const string TimedOutSentence = "The script exceeded its execution timeout. Remaining batches were not executed.";
+    /// <summary>SSMS's query-window defaults, run when a tab's session opens. SqlClient's login already sets all but two
+    /// (ARITHABORT is OFF and TEXTSIZE -1), but a server's 'user options' can change them, so each is set explicitly. With
+    /// ARITHABORT ON, plans differ from an application's that leaves it OFF, as they do between SSMS and that application.</summary>
+    internal const string SessionPrologue = "SET ARITHABORT ON; SET ANSI_NULLS ON; SET ANSI_PADDING ON; SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; "
+        + "SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON; SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;";
     // The summary must fit the 16 MiB response limit: descriptors get 8 MiB, messages (1,000,000 characters, with their
     // kinds) and the error text the rest, with room to spare.
     private const long MaxSummaryDescriptorBytes = 8L * 1024 * 1024;
@@ -343,6 +348,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         // running. Messages keep them all, in order, up to their own caps.
         var errors = new List<string>();
         var suppressedErrors = 0;
+        // Every severity 11+ error so far: a batch raised one when this grew while it ran.
+        var raised = 0;
+        (int Batch, int Iteration)? firstError = null;
         // Errors InfoMessage delivered, so the exception that may carry them again does not repeat them in Messages.
         var delivered = new Queue<(int Number, byte State, int Line, string Message)>();
         // SSMS's two-line form: the line is absolute within the script (or the selection), or the procedure's own.
@@ -362,19 +370,42 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message); continue; }
                 // An error while rows stream means the statement producing the current result set stopped early.
                 if (currentSet is not null) currentSet.Incomplete = true;
-                var text = Describe(error);
-                messages.Add(text, MessageKind.Error);
                 lock (errors)
                 {
                     delivered.Enqueue((error.Number, error.State, error.LineNumber, error.Message));
                     if (delivered.Count > 20) delivered.Dequeue();
-                    if (errors.Count < 20) errors.Add(text); else suppressedErrors++;
                 }
+                Raise(Describe(error));
             }
         };
+        void Raise(string text)
+        {
+            messages.Add(text, MessageKind.Error);
+            lock (errors)
+            {
+                raised++;
+                if (errors.Count < 20) errors.Add(text); else suppressedErrors++;
+            }
+        }
         bool Delivered(SqlError item)
         {
             lock (errors) return delivered.Contains((item.Number, item.State, item.LineNumber, item.Message));
+        }
+        int Raised()
+        {
+            lock (errors) return raised;
+        }
+        // A batch's exception ends only that batch while the session survives it: SQL Server closes the connection for
+        // severity 20 and above, and a cancel or the deadline ends the whole script.
+        bool Continues(SqlException error, SqlConnection connection) => !args.StopOnError && !token.IsCancellationRequested
+            && connection.State == System.Data.ConnectionState.Open && error.Errors.Cast<SqlError>().All(item => item.Class < 20);
+        // Messages a batch's exception carries, in order, except errors InfoMessage already reported.
+        void Report(SqlException error)
+        {
+            foreach (SqlError item in error.Errors)
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                else if (!Delivered(item)) Raise(Describe(item));
+            if (!error.Errors.Cast<SqlError>().Any(item => item.Class > 10)) Raise(error.Message);
         }
         // The error that stopped execution comes first, then those SQL Server reported while the script continued.
         string ErrorText(IEnumerable<string> terminating)
@@ -401,6 +432,20 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             {
                 if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
                 await connection.OpenAsync(token);
+                try
+                {
+                    await using var prologue = connection.CreateCommand();
+                    prologue.CommandText = SessionPrologue;
+                    prologue.CommandTimeout = 0;
+                    await prologue.ExecuteNonQueryAsync(token);
+                }
+                catch
+                {
+                    // A session without SSMS's settings must not run a script later; closing it makes the next execution open
+                    // a new one.
+                    connection.Close();
+                    throw;
+                }
                 session.HasOpened = true;
             }
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
@@ -416,6 +461,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 {
                     token.ThrowIfCancellationRequested();
                     events.Progress(completed, totalBatches, batchNumber, iteration);
+                    var raisedBefore = Raised();
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -525,19 +571,38 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                         } while (await reader.NextResultAsync(token));
                         if (reader.RecordsAffected >= 0) recordsAffected = Math.Max(0, recordsAffected) + reader.RecordsAffected;
                     }
-                    catch
+                    catch (Exception error)
                     {
                         // Do not drain a failed command into later statements unnecessarily.
-                        try { command.Cancel(); } catch (Exception error) when (error is InvalidOperationException or SqlException) { }
-                        throw;
+                        try { command.Cancel(); } catch (Exception cancel) when (cancel is InvalidOperationException or SqlException) { }
+                        if (error is not SqlException sql || !Continues(sql, connection)) throw;
+                        // Severity 17 to 19 errors still end their batch, and the script goes on with the next one.
+                        Report(sql);
+                        if (currentSet is not null)
+                        {
+                            currentSet.Incomplete = true;
+                            currentSet.Complete();
+                            events.Closed(currentSet);
+                            currentSet = null;
+                        }
                     }
                     finally { if (reader is not null) await reader.DisposeAsync(); }
                     database = connection.Database;
-                    // Like SSMS's default, a batch that raised an error stops the remaining batches.
-                    if (errors.Count > 0) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
+                    var failed = Raised() != raisedBefore;
+                    // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
+                    if (failed && args.StopOnError) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
+                    if (failed) firstError ??= (batchNumber, iteration);
                     completed++;
                     events.Progress(completed, totalBatches, batchNumber, iteration);
+                    if (failed && completed < totalBatches)
+                        messages.Add("Batch " + batchNumber + (batch.RepeatCount > 1 ? ", repetition " + iteration + "," : "") + " raised an error; execution continued with the next "
+                            + (iteration < batch.RepeatCount ? "repetition." : "batch."));
                 }
+            }
+            if (firstError is { } first)
+            {
+                status = "completedWithErrors";
+                failure = new("SQL_ERROR", ErrorText([]), first.Batch, first.Iteration);
             }
         }
         catch (SqlException error)
@@ -594,7 +659,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 {
                     ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(args.SessionId, session));
                     session.Close();
-                    messages.Add("The SQL session closed. The next execution opens a new session; previous SET options and temporary objects will be lost.");
+                    // A session that failed to open (a missing database, a refused login) had no state to lose.
+                    if (session.HasOpened)
+                        messages.Add("The SQL session closed. The next execution opens a new session; previous SET options and temporary objects will be lost.");
                 }
                 session.Exit();
             }
@@ -611,7 +678,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString("N0", CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
         if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
-        // Only when something was skipped: an error ends its batch's script, not the batch, which SQL Server may run on.
+        // Only when something stopped the script before a later batch: SQL Server may have run the failing batch to its end.
         if (failure is not null && batchNumber > 0 && completed + 1 < totalBatches)
         {
             var repeated = batches[batchNumber - 1].RepeatCount > 1;

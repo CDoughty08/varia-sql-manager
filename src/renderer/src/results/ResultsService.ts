@@ -1,5 +1,5 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
-import type { MessageEntry, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
+import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -12,7 +12,7 @@ import type { ResultClient, ResultHandle } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
 
-export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'timedOut' | 'lost' | 'closed'
+export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
 export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle }
 /**

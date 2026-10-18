@@ -314,10 +314,13 @@ try {
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect(page.locator('.messages')).toContainText('logical reads 2')
   await expect(page.locator('.messages')).toContainText('CPU time = 1 ms')
-  // A failed run shows Messages, its error inline in red in SSMS's two-line form; its partial results stay a tab away.
+  // A run with errors shows Messages, its error inline in red in SSMS's two-line form, then the line saying the next batch
+  // still ran, as in SSMS; its results stay a tab away.
   await expect(page.locator('.messages .msg.error')).toContainText('Msg 137, Level 15, State 2, Line 8')
+  await expect(page.locator('.messages .msg.error + .msg')).toHaveText('Batch 2 raised an error; execution continued with the next batch.')
+  await expect(page.locator('.messages')).toContainText('third batch')
   await expect(page.locator('.output-status')).toContainText('Query completed with errors.')
-  await expect(page.locator('.output-status')).toContainText('1/3 batches')
+  await expect(page.locator('.output-status')).toContainText('3/3 batches')
   await page.locator('.output-toolbar').getByRole('tab', { name: /^Results/ }).click()
   await expect(page.locator('.results-grid')).toContainText('42')
   // A plan's XML is a grid cell's text, never markup.

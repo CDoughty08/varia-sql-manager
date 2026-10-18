@@ -21,8 +21,9 @@ describe('IPC validation', () => {
     expect(validateRequest('query.execute', valid)).toEqual(valid)
     expect(validateRequest('query.execute', { ...valid, timeoutSeconds: 0 })).toMatchObject({ timeoutSeconds: 0 })
     // maxRows 0 stores up to the memory budget only; maxResultSets keeps 1 to 1000 result sets.
-    for (const patch of [{ maxRows: 0 }, { maxRows: 2 ** 31 - 1 }, { maxResultSets: 1 }, { maxResultSets: 1000 }]) expect(validateRequest('query.execute', { ...valid, ...patch })).toEqual({ ...valid, ...patch })
-    for (const patch of [{ maxRows: -1 }, { maxRows: 2 ** 31 }, { maxRows: 1.5 }, { maxResultSets: 0 }, { maxResultSets: 1001 }, { timeoutSeconds: -1 }, { timeoutSeconds: 86401 }, { queryId: 'invalid' }, { sessionId: 'invalid' }, { startLine: 0 }, { sql: '' }]) expect(() => validateRequest('query.execute', { ...valid, ...patch })).toThrow('Invalid request')
+    // stopOnError (SQLCMD's :on error exit) is an optional boolean; without it the next batch runs after an error.
+    for (const patch of [{ maxRows: 0 }, { maxRows: 2 ** 31 - 1 }, { maxResultSets: 1 }, { maxResultSets: 1000 }, { stopOnError: true }, { stopOnError: false }]) expect(validateRequest('query.execute', { ...valid, ...patch })).toEqual({ ...valid, ...patch })
+    for (const patch of [{ maxRows: -1 }, { maxRows: 2 ** 31 }, { maxRows: 1.5 }, { maxResultSets: 0 }, { maxResultSets: 1001 }, { timeoutSeconds: -1 }, { timeoutSeconds: 86401 }, { queryId: 'invalid' }, { sessionId: 'invalid' }, { startLine: 0 }, { sql: '' }, { stopOnError: 'true' }, { stopOnError: 1 }, { stopOnError: null }]) expect(() => validateRequest('query.execute', { ...valid, ...patch })).toThrow('Invalid request')
   })
   it('passes identifiers verbatim and explains oversized scripts', () => {
     const connectionId = crypto.randomUUID()
