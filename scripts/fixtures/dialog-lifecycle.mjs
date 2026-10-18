@@ -247,29 +247,48 @@ export async function dialogLifecycle(launchOptions) {
   } finally { await run.cleanup() }
 }
 
+const onWindows = process.platform === 'win32'
+const rendererLosses = application => application.evaluate(() => globalThis.__variaTest.rendererLosses)
+const windowIdsOf = application => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(window => window.id))
+// A renderer only the watchdog saw go never answers, so each script gets a second.
+const workbenchReady = application => application.evaluate(({ BrowserWindow }) => {
+  const contents = BrowserWindow.getAllWindows()[0]?.webContents
+  if (!contents || contents.isCrashed()) return false
+  const script = contents.executeJavaScript("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')").catch(() => false)
+  return Promise.race([script, new Promise(resolve => setTimeout(resolve, 1000, false))])
+})
+/** A crash Chromium sees, answered Reload (the crash prompt is held); the reload launches the renderer `holder` takes. */
+async function crashToHolder(application, holder) {
+  await application.evaluate((_electron, kind) => globalThis.__variaTest.holdNextRenderer(kind), holder)
+  await crash(application)
+  await expect.poll(() => answer(application, 'Workbench stopped', 0), { timeout: 15000 }).toBe(true)
+  await expect.poll(() => workbenchReady(application), { timeout: 30000 }).toBe(true)
+}
+/** Crashes the held renderer; returns who saw it go once its crash prompt (held) is open. */
+async function crashHeldRenderer(application) {
+  const losing = (await rendererLosses(application)).length
+  await crash(application)
+  await expect.poll(async () => (await rendererLosses(application))[losing], { timeout: 15000 }).toMatchObject({ handled: true })
+  await expect.poll(() => application.evaluate(() => 'Workbench stopped' in globalThis.variaAnswers), { timeout: 15000 }).toBe(true)
+  return (await rendererLosses(application))[losing].source
+}
+
 /**
- * The renderer watchdog (menus-smoke.mjs step 16), in a fresh app on the fake backend. A process spawned as the reload
+ * The renderer watchdog (menus-smoke.mjs step 16), in fresh apps on the fake backend. A process spawned as the reload
  * after a crash launches the new renderer inherits that renderer's channel on Windows, so the renderer's own crash
  * raises no render-process-gone: only main's watchdog sees it, and it shows the crash prompt once. With the backend as
  * the holder (as when a backend restart coincided with the launch), the prompt's reset ends that backend, Chromium then
  * reports the crash too (main ignores it), and Reload reloads the page. An idle process that never lets go leaves
- * Chromium blind for good, so Reload opens the workbench in a new window instead. Elsewhere Chromium sees every crash.
+ * Chromium blind for good, so Reload opens the workbench in a new window instead, which takes over a quit the lost page
+ * could not finish; and Close closes the window at once instead of waiting for an unload the dead renderer never
+ * answers. Elsewhere Chromium sees every crash, and the same answers do the same.
  */
 export async function rendererWatchdog(launchOptions) {
   const run = await launch(launchOptions, 'watchdog')
   try {
-    const { application, profile, errors } = run
+    const { application, child, profile, errors } = run
     await mockDialogs(application, join(profile, 'watchdog'))
-    const losses = () => application.evaluate(() => globalThis.__variaTest.rendererLosses)
-    const windowIds = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(window => window.id))
-    // A renderer only the watchdog saw go never answers, so each script gets a second.
-    const ready = () => application.evaluate(({ BrowserWindow }) => {
-      const contents = BrowserWindow.getAllWindows()[0]?.webContents
-      if (!contents || contents.isCrashed()) return false
-      const script = contents.executeJavaScript("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')").catch(() => false)
-      return Promise.race([script, new Promise(resolve => setTimeout(resolve, 1000, false))])
-    })
-    const onWindows = process.platform === 'win32'
+    const losses = () => rendererLosses(application), windowIds = () => windowIdsOf(application), ready = () => workbenchReady(application)
     for (const holder of ['backend', 'process']) {
       // The spawn races Chromium's launch; it has always won on Windows so far, but a lost race (Chromium sees the crash
       // itself) is tried again rather than taken for a pass. Without the watchdog a won race gets no prompt at all.
@@ -297,5 +316,64 @@ export async function rendererWatchdog(launchOptions) {
       expect(unseen, `a crash Chromium could not see, held by the ${holder}`).toBe(true)
     }
     expect(errors).toEqual([])
+    // Close in the crash prompt: the window goes within seconds and, as the last window (outside macOS), ends the app.
+    let exited = false
+    child.once('exit', () => { exited = true })
+    await mockDialogs(application, join(profile, 'watchdog'), ['Workbench stopped'])
+    let closed = false
+    for (let attempt = 1; attempt <= 3 && !closed; attempt++) {
+      await crashToHolder(application, 'process')
+      const source = await crashHeldRenderer(application)
+      if (onWindows && source !== 'watchdog') {
+        console.log(`Renderer watchdog: Chromium saw the crash before Close itself (attempt ${attempt}); trying again.`)
+        expect(await answer(application, 'Workbench stopped', 0)).toBe(true)
+        await expect.poll(ready, { timeout: 30000 }).toBe(true)
+        await application.evaluate(() => globalThis.__variaTest.releaseHolders())
+        continue
+      }
+      expect(await answer(application, 'Workbench stopped', 1)).toBe(true)
+      if (process.platform === 'darwin') await expect.poll(windowIds, { timeout: 10000 }).toEqual([])
+      else await expect.poll(() => exited, { timeout: 10000 }).toBe(true)
+      closed = true
+    }
+    expect(closed, 'Close after a crash Chromium could not see').toBe(true)
   } finally { await run.cleanup() }
+
+  // A quit the page could not finish (its Unsaved query prompt was open when its renderer went) goes to the next page,
+  // in the new window too: that page has nothing unsaved, so the app exits. The prompt the lost page asked for closes.
+  let handedOver = false
+  for (let attempt = 1; attempt <= 3 && !handedOver; attempt++) {
+    const quitRun = await launch(launchOptions, 'watchdog-quit')
+    try {
+      const { application, child, profile, errors } = quitRun
+      const dialogs = join(profile, 'watchdog-quit')
+      await mockDialogs(application, dialogs, ['Workbench stopped', 'Unsaved query'])
+      await application.evaluate(({ app }, file) => {
+        const { appendFileSync } = process.getBuiltinModule('node:fs')
+        app.on('browser-window-created', () => appendFileSync(file, 'window\n'))
+      }, dialogs + '.windows')
+      await crashToHolder(application, 'process')
+      // Playwright gives up on a page whose renderer crashed, so the query is typed through Electron.
+      await application.evaluate(async ({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents
+        await contents.executeJavaScript("document.querySelector('.monaco-editor [role=\"textbox\"]').focus()")
+        await contents.insertText('SELECT 1 -- unsaved')
+      })
+      let exited = false
+      child.once('exit', () => { exited = true })
+      await quit(application, child)
+      await expect.poll(() => shown(application)).toEqual(['Workbench stopped', 'Unsaved query'])
+      const source = await crashHeldRenderer(application)
+      if (onWindows && source !== 'watchdog') { console.log(`Renderer watchdog: Chromium saw the crash during a quit itself (attempt ${attempt}); trying again.`); continue }
+      expect(await application.evaluate(() => globalThis.variaAborted)).toEqual(['Unsaved query'])
+      expect(await answer(application, 'Workbench stopped', 0)).toBe(true)
+      await expect.poll(() => exited, { timeout: 30000 }).toBe(true)
+      expect((await readFile(dialogs + '.dialogs', 'utf8')).trim().split('\n')).toEqual(['Workbench stopped', 'Unsaved query', 'Workbench stopped'])
+      // Reload opened the workbench in a new window only where Chromium could not see the crash.
+      expect(await readFile(dialogs + '.windows', 'utf8').catch(() => '')).toBe(source === 'watchdog' ? 'window\n' : '')
+      expect(errors).toEqual([])
+      handedOver = true
+    } finally { await quitRun.cleanup() }
+  }
+  expect(handedOver, 'a quit handed to the page that replaced a lost one').toBe(true)
 }

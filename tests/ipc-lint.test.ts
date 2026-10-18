@@ -59,6 +59,16 @@ await import(${JSON.stringify(core)})`
     expect(spec).toContain('delete copy.VARIA_BACKEND_TEST_HOOKS')
     expect(spec).toContain('delete copy.VARIA_RESULT_BUDGET_BYTES')
   })
+  it('offers developer tools only in unpackaged builds', () => {
+    const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
+    // The window itself cannot open them when packaged, whatever the page or a role asks.
+    expect(main.match(/devTools:/g)).toEqual(['devTools:'])
+    expect(main).toContain('devTools: !app.isPackaged }')
+    // The page offers Toggle Developer Tools only when main passes this argument, which it does only when unpackaged.
+    expect(main.match(/--varia-developer-tools/g)).toHaveLength(1)
+    expect(main).toContain("...(app.isPackaged ? [] : ['--varia-developer-tools'])")
+    expect(readFileSync(join('src', 'preload', 'index.ts'), 'utf8')).toContain("developerTools: process.argv.includes('--varia-developer-tools'),")
+  })
   it('forwards result pages to the renderer only as exact-size ArrayBuffers', () => {
     const port = readFileSync(join('src', 'main', 'backend', 'results-port.ts'), 'utf8')
     const pages = [...port.matchAll(/t: 'page'[^}]*\}/g)].map(match => match[0])

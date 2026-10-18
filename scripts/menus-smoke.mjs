@@ -1216,13 +1216,14 @@ try {
   // but the dead page's open message box closes; the reload and not-responding prompts take their turn too; a quit
   // while a Script As save waits exits once the dialogs are answered, and one during the reload prompt survives Reload.
   // A renderer crash Chromium cannot see (a process spawned at the renderer's launch holds its channel) gets the crash
-  // prompt from main's watchdog, once, and Reload brings the workbench back.
+  // prompt from main's watchdog, once, and Reload brings the workbench back (in a new window, which takes over a quit the
+  // lost page could not finish); Close there closes the window at once.
   expect(failures).toEqual([])
   await application.close()
   application = undefined
   await dialogLifecycle(launchOptions)
   await rendererWatchdog(launchOptions)
-  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload; a renderer crash Chromium cannot see still gets one crash prompt and reloads.')
+  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload; a renderer crash Chromium cannot see still gets one crash prompt, reloads and finishes a quit the lost page could not, and Close closes at once.')
 
   // 17. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
   // master, and the server's Refresh reloads its lists without an error.

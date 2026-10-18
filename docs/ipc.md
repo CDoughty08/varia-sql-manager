@@ -583,7 +583,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   exited while Chromium still reports it running exactly as Chromium's own report, once per renderer: whichever comes
   second is ignored. The reset ends that backend generation, which lets Chromium see the stop, and **Reload** waits up
   to 5 s for it; if Chromium still has not seen it (the holder is some other process), the workbench opens in a new
-  window where the old one was.
+  window where the old one was, and a close or quit the lost page could not finish goes to that window's page. **Close**
+  closes such a window at once: its renderer would never answer the unload a close sends it.
 - **Quitting** waits for the backend to stop (stdin end, 2 s, then kill) before the app exits, and for any generation a
   restart is still closing, so a backend that cannot act on EOF never outlives the app with its sessions and locks. While
   it waits the app has no window and releases the single-instance lock, so relaunching starts a new instance at once.
