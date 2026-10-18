@@ -45,18 +45,29 @@ internal static class SequentialXml
 /// <summary>Feeds an XmlReader from an xml cell's stream while the text it produces keeps growing. XmlReader streams the
 /// value of a text node (ReadValueChunk), but holds a whole start tag, attribute, comment or processing instruction before
 /// returning it, so once <see cref="Window"/> bytes pass with no new output, this reports the end of the stream instead:
-/// such a node's text is cut, and XmlReader holds no more than that window of it.</summary>
-internal sealed class XmlFeed(Stream inner, Func<int> output) : Stream
+/// such a node's text is cut, and XmlReader holds no more than that window of it. One feed serves a column plan's cells in
+/// turn (<see cref="Reset"/>).</summary>
+internal sealed class XmlFeed(Func<int> output) : Stream
 {
     /// <summary>8 MiB: 4,194,304 UTF-16 characters, twice the document cap, so any node that would still fit in a stored
     /// value is read whole (unless character references shrink it more than twofold).</summary>
     public const long Window = 8L * 1024 * 1024;
+    private Stream inner = Null;
     private long consumed;
     private long mark;
     private int seen;
 
     /// <summary>The feed stopped, so the value is cut before the node XmlReader was reading.</summary>
     public bool Starved { get; private set; }
+
+    /// <summary>Feeds the next cell from <paramref name="stream"/> with a fresh window, counting output from what it is now.</summary>
+    public void Reset(Stream stream)
+    {
+        inner = stream;
+        consumed = mark = 0;
+        seen = output();
+        Starved = false;
+    }
 
     public override int Read(byte[] buffer, int offset, int count)
     {

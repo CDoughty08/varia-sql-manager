@@ -476,13 +476,24 @@ internal static class TextChecks
             for (int read; (read = feed.Read(buffer, 0, buffer.Length)) > 0;) total += read;
             return total;
         }
-        var silent = new XmlFeed(new MemoryStream(bytes), () => 0);
+        var silent = new XmlFeed(() => 0);
+        silent.Reset(new MemoryStream(bytes));
         var cutAt = Drain(silent);
         var output = 0;
-        var growing = new XmlFeed(new MemoryStream(bytes), () => ++output);
+        var growing = new XmlFeed(() => ++output);
+        growing.Reset(new MemoryStream(bytes));
         var whole = Drain(growing);
         check(cutAt == XmlFeed.Window && silent.Starved && whole == bytes.Length && !growing.Starved,
             "the xml feed stops after " + cutAt + " bytes without output, and never while output grows (" + whole + " bytes)");
+        // A column plan feeds every xml cell through one feed, so a cell that starved it must not cut the next one short.
+        silent.Reset(new MemoryStream(bytes, 0, 100));
+        var next = Drain(silent);
+        var stuck = 7;
+        var reused = new XmlFeed(() => stuck);
+        reused.Reset(new MemoryStream(bytes));
+        var unchanged = Drain(reused);
+        check(next == 100 && !silent.Starved && unchanged == XmlFeed.Window && reused.Starved,
+            "a reset feed starts a fresh window for the next cell (" + next + " bytes) and counts output from what it was at the reset (" + unchanged + " bytes)");
         var fallbacks = Enum.GetValues<CellCodec>().SelectMany(codec => new[] { (codec, WireKind.Text), (codec, WireKind.Binary) })
             .Select(pair => (pair.codec, pair.Item2, Fallback: ColumnPlan.FallbackOf(pair.codec, pair.Item2, true))).ToList();
         check(fallbacks.All(item => item.Fallback is CellCodec.LongText or CellCodec.Xml or CellCodec.Stream) && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml

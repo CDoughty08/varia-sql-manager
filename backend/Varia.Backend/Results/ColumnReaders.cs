@@ -36,6 +36,9 @@ internal sealed class ColumnPlan
     private readonly Column[] columns;
     private char[] chars = new char[Chunk];
     private byte[] bytes = new byte[Chunk];
+    // Reused by every xml cell: a fresh sink and feed per cell made a small cell cost about 45 KB instead of 28 KB.
+    private CharSink? sink;
+    private XmlFeed? feed;
 
     private sealed class Column(string name, string type, CellCodec codec, WireKind wire, int scale, int cap, bool isLong)
     {
@@ -348,7 +351,8 @@ internal sealed class ColumnPlan
     /// large to hold, and once the cap is reached the rest of the value is read past as bytes, without parsing it.</summary>
     private bool Xml(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
     {
-        var sink = new CharSink(cap + 1);
+        var sink = this.sink ??= new CharSink();
+        sink.Reset(cap + 1);
         if (SequentialXml.Open(reader, i) is not { } stream)
         {
             using var fallback = reader.GetXmlReader(i);
@@ -363,7 +367,8 @@ internal sealed class ColumnPlan
         }
         using (stream)
         {
-            var feed = new XmlFeed(stream, () => sink.Count);
+            var feed = this.feed ??= new XmlFeed(() => this.sink!.Count);
+            feed.Reset(stream);
             bool truncated;
             try
             {
@@ -375,6 +380,7 @@ internal sealed class ColumnPlan
                 ReadPast(stream, token);
                 throw;
             }
+            finally { feed.Reset(Stream.Null); }
             ReadPast(stream, token);
             return truncated;
         }
@@ -427,11 +433,18 @@ internal sealed class ColumnPlan
         while (stream.Read(bytes, 0, Chunk) > 0) token.ThrowIfCancellationRequested();
     }
 
-    /// <summary>A TextWriter that keeps the first <c>limit</c> characters written to it and drops the rest.</summary>
-    private sealed class CharSink(int limit) : TextWriter
+    /// <summary>A TextWriter that keeps the first <c>limit</c> characters written to it since <see cref="Reset"/> and drops the
+    /// rest. Its buffer is kept across cells, as <see cref="chars"/> is.</summary>
+    private sealed class CharSink : TextWriter
     {
-        private char[] buffer = new char[Math.Min(limit, Chunk)];
+        private char[] buffer = new char[Chunk];
         private int count;
+        private int limit;
+        public void Reset(int limit)
+        {
+            this.limit = limit;
+            count = 0;
+        }
         public bool Full => count == limit;
         public int Count => count;
         public ReadOnlySpan<char> Text => buffer.AsSpan(0, count);
