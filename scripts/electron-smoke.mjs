@@ -98,6 +98,31 @@ try {
     } finally { window.destroy() }
   }, policyProbe)
   expect(metaOnly).toMatchObject({ ...refused, meta: workbenchPolicy.meta, failure: 'Varia SQL Manager could not start.', buttons: ['Reload', 'Copy details'] })
+  // The page's own script loads the workbench as a separate chunk, so a chunk that cannot load (or a module that throws
+  // while it loads) still gets the failure screen, styled: the stylesheet does not come with that chunk.
+  const chunkLost = await application.evaluate(async ({ app, BrowserWindow, net, session }) => {
+    const { join } = process.getBuiltinModule('node:path')
+    const probe = session.fromPartition('varia-chunk-probe'), blocked = []
+    probe.protocol.handle('file', request => {
+      if (!/\/assets\/start-[^/]+\.js$/.test(new URL(request.url).pathname)) return net.fetch(request, { bypassCustomProtocolHandlers: true })
+      blocked.push(request.url)
+      return new Response('', { status: 404 })
+    })
+    const window = new BrowserWindow({ show: false, webPreferences: { session: probe, sandbox: true, contextIsolation: true } })
+    try {
+      await window.loadFile(join(app.getAppPath(), 'out/renderer/index.html'))
+      const heading = "document.querySelector('.shell-failure h1')?.textContent ?? null"
+      let failure = null
+      for (let tries = 0; tries < 100 && !failure; tries++) failure = await window.webContents.executeJavaScript(heading) ?? await new Promise(resolve => setTimeout(resolve, 100, null))
+      return { failure, blocked: blocked.length, ...await window.webContents.executeJavaScript(`({
+        buttons: [...document.querySelectorAll('.shell-failure button')].map(button => button.textContent),
+        headingSize: document.querySelector('.shell-failure h1') && getComputedStyle(document.querySelector('.shell-failure h1')).fontSize,
+        details: document.querySelector('.shell-failure-details')?.textContent ?? ''
+      })`) }
+    } finally { window.destroy(); probe.protocol.unhandle('file') }
+  })
+  expect(chunkLost).toMatchObject({ failure: 'Varia SQL Manager could not start.', blocked: 1, buttons: ['Reload', 'Copy details'], headingSize: '18px' })
+  expect(chunkLost.details).toMatch(/dynamically imported module/)
   // A rendering fault anywhere in the workbench shows the failure screen instead of a blank window, and still reaches
   // this suite as a page error. Copy details copies the error with where it happened; Reload starts a new workbench.
   await page.evaluate(() => window.__variaTestShellFault())
@@ -522,7 +547,7 @@ try {
   expect(alignment.titleBarFits).toBe(true)
   await page.screenshot({ path: artifact('workbench-compact.png') })
   expect(failures).toEqual([])
-  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
+  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})

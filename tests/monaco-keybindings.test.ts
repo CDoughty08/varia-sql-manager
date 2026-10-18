@@ -10,7 +10,7 @@ import { defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedRea
  * modules the renderer loads and fails when a workbench key collides without a reviewed reason.
  */
 const monacoRoot = join('node_modules', 'monaco-editor', 'esm', 'vs')
-// The Monaco modules main.tsx imports. Adding a contrib changes Monaco's keys, so it must be reviewed here.
+// The Monaco modules start.tsx imports. Adding a contrib changes Monaco's keys, so it must be reviewed here.
 const reviewedImports = [
   'monaco-editor/editor/editor.api.js',
   'monaco-editor/languages/definitions/sql/register.js',
@@ -94,8 +94,8 @@ const files = moduleClosure(reviewedImports.map(specifier => join(monacoRoot, sp
 const chordsByPlatform = new Map(platforms.map(platform => [platform, monacoChords(files, platform)]))
 
 describe('Monaco keybinding drift', () => {
-  it('reviews every Monaco module main.tsx imports', () => {
-    const source = readFileSync(join('src', 'renderer', 'src', 'main.tsx'), 'utf8')
+  it('reviews every Monaco module start.tsx imports', () => {
+    const source = readFileSync(join('src', 'renderer', 'src', 'start.tsx'), 'utf8')
     const imports = [...source.matchAll(/^import\s+(?:[^'"]*\sfrom\s+)?['"](monaco-editor\/[^'"?]+)['"]/gm)].map(match => match[1])
     expect(imports).toEqual(reviewedImports)
   })

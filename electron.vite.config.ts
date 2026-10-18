@@ -19,7 +19,9 @@ export default defineConfig({
     plugins: [react(), cspMeta],
     server: { host: '127.0.0.1' },
     // electron-vite leaves the renderer unminified by default (about 8 MB of JavaScript to parse at startup).
-    build: { minify: true },
+    // One stylesheet, linked by the page, in the order the modules import it (Monaco's, then Dockview's, then
+    // styles.css, which overrides both): the failure screen keeps its styles when the workbench chunk cannot load.
+    build: { minify: true, cssCodeSplit: false },
     worker: { format: 'es' }
   }
 })
