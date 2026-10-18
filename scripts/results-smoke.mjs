@@ -93,14 +93,15 @@ async function settled(index = 0) {
   await expect.poll(async () => { const now = await position(), same = now === previous; previous = now; return same }, { intervals: [100] }).toBe(true)
   return active(index)
 }
-/** The first and last row numbers drawn inside the grid's body. */
+/** The first and last row numbers drawn inside the grid's body; NaN, which fails every comparison, before a scroll's rows are drawn
+ * (Math.min of none is Infinity, which passed `toBeGreaterThan` polls before any row was there). */
 const visibleRows = (index = 0) => grid(index).evaluate(root => {
   const body = root.querySelector('.rg-scroll').getBoundingClientRect(), head = root.querySelector('.rg-head').getBoundingClientRect()
   const numbers = [...root.querySelectorAll('.rg-row')].filter(row => row.style.display !== 'none').filter(row => {
     const box = row.getBoundingClientRect()
     return box.top >= head.bottom - 1 && box.bottom <= body.bottom + 1
   }).map(row => Number(row.querySelector('.rg-rh').textContent))
-  return [Math.min(...numbers), Math.max(...numbers)]
+  return numbers.length === 0 ? [NaN, NaN] : [Math.min(...numbers), Math.max(...numbers)]
 })
 /** The shown rows' numbers in DOM order, which browse-mode screen readers follow: ascending, whatever was scrolled. */
 const rowOrder = (index = 0) => grid(index).evaluate(root => [...root.querySelectorAll('.rg-row')].filter(row => row.style.display !== 'none').map(row => Number(row.getAttribute('aria-rowindex'))))
@@ -267,6 +268,7 @@ try {
     await page.evaluate(() => window.__variaGrid.reset())
     const box = await scroller().boundingBox()
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await expect.poll(async () => Number.isFinite((await visibleRows())[0])).toBe(true)
     const [before] = await visibleRows()
     for (let step = 0; step < 30; step++) { await page.mouse.wheel(0, 100); await page.waitForTimeout(16) }
     await expect.poll(async () => (await visibleRows())[0]).toBeGreaterThan(before + 100)
