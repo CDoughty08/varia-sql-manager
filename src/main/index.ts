@@ -21,6 +21,7 @@ import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
 import { runRole, UserActivation } from './window-roles'
+import { closeAction, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { userInfo } from 'node:os'
@@ -59,6 +60,8 @@ let closeApproved = false
 // Main asked the page to close (a quit or the window's close button) and the page has not said that its close ended
 // without closing. A page that reloads or crashes first cannot finish it, so it goes to the next page.
 let closePending = false
+// Whether that close is a quit or only the window's (which on macOS leaves the app running).
+let closeIntent: CloseIntent | undefined
 /** The app is quitting (before-quit went ahead), so a closed window needs no new backend. */
 let quitting = false
 let backendStopped = false
@@ -143,8 +146,9 @@ function pageDialog<T>(show: (window: BrowserWindow, signal?: AbortSignal) => Pr
 }
 
 /** Asks the page to close, as the window's close button and a quit do; the request outlives a reload or crash. */
-function requestClose(): void {
+function requestClose(intent: CloseIntent): void {
   closePending = true
+  closeIntent = mergeCloseIntent(closeIntent, intent)
   command('window.close')
 }
 
@@ -253,6 +257,7 @@ function createWindow(): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
   closePending = false
+  closeIntent = undefined
   windowActive = true
   rendererLoaded = false
   rendererReady = false
@@ -331,7 +336,7 @@ function createWindow(): void {
   else void window.loadFile(rendererFile)
   window.on('close', event => {
     if (closeApproved) return
-    if (rendererCanConfirm(window)) { event.preventDefault(); requestClose(); return }
+    if (rendererCanConfirm(window)) { event.preventDefault(); requestClose('window'); return }
     // A crashed, hung, or unmounted workbench cannot run the unsaved-query prompts, so never trap the user. A hung one
     // is asked about first; the close (and a quit under way) waits for the answer.
     if (rendererUnresponsive) {
@@ -415,7 +420,7 @@ app.whenReady().then(async () => {
     if (rendererReady && closePending) command('window.close')
   })
   // Only the live page can end a close: a page being unloaded (not ready since the reset) may still report its own.
-  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) closePending = false })
+  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined } })
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
@@ -500,10 +505,12 @@ app.whenReady().then(async () => {
     const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)
     return (['save', 'discard', 'cancel'] as const)[response.response]
   })
+  // The page has handled every unsaved query. On macOS a window close leaves the app running, as macOS apps do.
   ipcMain.handle('varia:close-window', event => {
     if (!trusted(event)) return
     closeApproved = true
-    app.quit()
+    if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
+    else app.quit()
   })
   buildMenu()
   createWindow()
@@ -514,7 +521,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
-  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); requestClose(); return }
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); requestClose('quit'); return }
   quitting = true
 })
 // A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is
