@@ -246,3 +246,56 @@ export async function dialogLifecycle(launchOptions) {
     expect(errors).toEqual([])
   } finally { await run.cleanup() }
 }
+
+/**
+ * The renderer watchdog (menus-smoke.mjs step 16), in a fresh app on the fake backend. A process spawned as the reload
+ * after a crash launches the new renderer inherits that renderer's channel on Windows, so the renderer's own crash
+ * raises no render-process-gone: only main's watchdog sees it, and it shows the crash prompt once. With the backend as
+ * the holder (as when a backend restart coincided with the launch), the prompt's reset ends that backend, Chromium then
+ * reports the crash too (main ignores it), and Reload reloads the page. An idle process that never lets go leaves
+ * Chromium blind for good, so Reload opens the workbench in a new window instead. Elsewhere Chromium sees every crash.
+ */
+export async function rendererWatchdog(launchOptions) {
+  const run = await launch(launchOptions, 'watchdog')
+  try {
+    const { application, profile, errors } = run
+    await mockDialogs(application, join(profile, 'watchdog'))
+    const losses = () => application.evaluate(() => globalThis.__variaTest.rendererLosses)
+    const windowIds = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(window => window.id))
+    // A renderer only the watchdog saw go never answers, so each script gets a second.
+    const ready = () => application.evaluate(({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows()[0]?.webContents
+      if (!contents || contents.isCrashed()) return false
+      const script = contents.executeJavaScript("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')").catch(() => false)
+      return Promise.race([script, new Promise(resolve => setTimeout(resolve, 1000, false))])
+    })
+    const onWindows = process.platform === 'win32'
+    for (const holder of ['backend', 'process']) {
+      // The spawn races Chromium's launch; it has always won on Windows so far, but a lost race (Chromium sees the crash
+      // itself) is tried again rather than taken for a pass. Without the watchdog a won race gets no prompt at all.
+      let unseen = false
+      for (let attempt = 1; attempt <= 3 && !unseen; attempt++) {
+        // Chromium sees this crash; the reload after it launches the renderer the holder takes.
+        await application.evaluate((_electron, kind) => globalThis.__variaTest.holdNextRenderer(kind), holder)
+        await crash(application)
+        await expect.poll(ready, { timeout: 30000 }).toBe(true)
+        const [losing, prompts, [before]] = [(await losses()).length, (await shown(application)).length, await windowIds()]
+        await crash(application)
+        await expect.poll(async () => (await losses())[losing], { timeout: 15000 }).toMatchObject({ handled: true })
+        await expect.poll(() => shown(application), { timeout: 15000 }).toHaveLength(prompts + 1)
+        // Reload: in place once Chromium has seen the crash too, or in a new window when it never does.
+        await expect.poll(ready, { timeout: 30000 }).toBe(true)
+        unseen = (await losses())[losing].source === 'watchdog'
+        const released = holder === 'process' ? await application.evaluate(() => globalThis.__variaTest.releaseHolders()) : 0
+        if (onWindows && !unseen) { console.log(`Renderer watchdog: Chromium saw the ${holder} holder's crash itself (attempt ${attempt}); trying again.`); continue }
+        expect({ windows: (await windowIds()).map(id => id === before ? 'same' : 'new'), prompts: (await shown(application)).slice(prompts), released })
+          .toEqual({ windows: [unseen && holder === 'process' ? 'new' : 'same'], prompts: ['Workbench stopped'], released: holder === 'process' ? 1 : 0 })
+        expect((await losses()).slice(losing)).toEqual(!onWindows ? [{ source: 'event', handled: true }]
+          : holder === 'backend' ? [{ source: 'watchdog', handled: true }, { source: 'event', handled: false }] : [{ source: 'watchdog', handled: true }])
+        unseen = true
+      }
+      expect(unseen, `a crash Chromium could not see, held by the ${holder}`).toBe(true)
+    }
+    expect(errors).toEqual([])
+  } finally { await run.cleanup() }
+}

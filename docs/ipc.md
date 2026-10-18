@@ -574,6 +574,16 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   one), closes the generation gracefully (stdin end, 2 s, then kill), starts the next at once, and resets the breaker.
   **Reload** of the workbench restarts the backend the same way, without a notice, so no session outlives the page that
   owned it.
+- **Lost renderer.** When the workbench's renderer process stops, main resets the page's state and restarts the backend
+  once, then asks "Workbench stopped" (**Reload** or **Close**); the reload that follows restarts nothing. On Windows a
+  process spawned while Chromium launches a renderer inherits every inheritable handle, that renderer's channel
+  included: Node cannot spawn without passing them (libuv always lets the child inherit), so a backend generation that
+  starts at that moment (a crash-loop restart at 0 s) holds the channel open, and when the renderer stops Chromium never
+  hears of it. A watchdog in main therefore checks the window's renderer process every second and handles one that has
+  exited while Chromium still reports it running exactly as Chromium's own report, once per renderer: whichever comes
+  second is ignored. The reset ends that backend generation, which lets Chromium see the stop, and **Reload** waits up
+  to 5 s for it; if Chromium still has not seen it (the holder is some other process), the workbench opens in a new
+  window where the old one was.
 - **Quitting** waits for the backend to stop (stdin end, 2 s, then kill) before the app exits, and for any generation a
   restart is still closing, so a backend that cannot act on EOF never outlives the app with its sessions and locks. While
   it waits the app has no window and releases the single-instance lock, so relaunching starts a new instance at once.

@@ -47,7 +47,7 @@ await import(${JSON.stringify(core)})`
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
     expect(main).toContain("const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged")
     expect(main.match(/installTestHooks\(|VARIA_BACKEND_LIVENESS_MS|--varia-test-mode/g)).toHaveLength(3)
-    expect(main).toContain('if (testSeams) installTestHooks(backend, results)')
+    expect(main).toContain('if (testSeams) testHooks = installTestHooks(backend, results)')
     expect(main).toContain('const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN')
     expect(main).toContain("...(testSeams ? ['--varia-test-mode'] : [])")
     // The fake backend is chosen in the spawn spec, after the packaged branch and only for smoke tests.

@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { dialogLifecycle } from './fixtures/dialog-lifecycle.mjs'
+import { dialogLifecycle, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -1215,11 +1215,14 @@ try {
   // twice restarts once; a crash's prompt waits for the open Save dialog and the dead page's queued save never opens,
   // but the dead page's open message box closes; the reload and not-responding prompts take their turn too; a quit
   // while a Script As save waits exits once the dialogs are answered, and one during the reload prompt survives Reload.
+  // A renderer crash Chromium cannot see (a process spawned at the renderer's launch holds its channel) gets the crash
+  // prompt from main's watchdog, once, and Reload brings the workbench back.
   expect(failures).toEqual([])
   await application.close()
   application = undefined
   await dialogLifecycle(launchOptions)
-  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload.')
+  await rendererWatchdog(launchOptions)
+  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload; a renderer crash Chromium cannot see still gets one crash prompt and reloads.')
 
   // 17. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
   // master, and the server's Refresh reloads its lists without an error.
