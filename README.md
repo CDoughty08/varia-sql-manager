@@ -4,7 +4,7 @@ A starting point for an SSMS-style SQL Server workbench: **Electron + React + Ty
 
 ## Run
 
-Prerequisites: Node.js 24 or newer and the .NET 10 SDK. Windows, Linux, and macOS are development targets, and CI builds and tests on all three. Windows authentication is Windows-only for now; on Linux and macOS, connect with SQL authentication until Kerberos support lands. On Ubuntu 24.04 and later, AppArmor blocks the unprivileged user namespaces that Electron's Chromium sandbox needs when it is installed through npm; allow them (for example `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`) rather than disabling the sandbox.
+Prerequisites: Node.js 24 or newer and the .NET 10 SDK. Windows, Linux, and macOS are development targets, and CI builds and tests on all three. Windows authentication works on all three; on Linux and macOS it uses Kerberos (see [Authentication](#authentication)). On Ubuntu 24.04 and later, AppArmor blocks the unprivileged user namespaces that Electron's Chromium sandbox needs when it is installed through npm; allow them (for example `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`) rather than disabling the sandbox.
 
 ```powershell
 npm install
@@ -28,7 +28,7 @@ The .NET SDK is selected through `global.json`. npm and NuGet lockfiles pin reso
 
 ## First workflow
 
-1. Click **Connect**, enter a SQL Server and starting database, and choose Windows or SQL authentication.
+1. Click **Connect**, enter a SQL Server and starting database, and choose Windows or SQL authentication ([Authentication](#authentication)).
 2. For a trusted local server with a self-signed certificate, explicitly enable **Trust server certificate**. Encryption stays enabled. Certificate validation is enabled by default.
 3. Connect additional servers with **Connect**. Each query retains its own server/database target; the toolbar selectors change the active query's target. Object Explorer keeps all connected servers visible.
 4. Execute SQL with the Execute button or its keys (see [Commands and keyboard shortcuts](#commands-and-keyboard-shortcuts)). Selected text takes priority over the full document; a whitespace-only selection executes nothing.
@@ -115,6 +115,8 @@ The title-bar menus are the macOS menu bar; there is no menu bar in the window, 
 
 **History** contains searchable **Favorites** and the last 30 successful **Recent Connections**. Selecting an entry fills its properties; use its star to change favorite status or its × to remove it from the saved library. **Add favorite** and **Register server** save the current form before connecting. **Save changes** updates a selected entry. **Reset** resets the form without deleting the library. Up to 200 favorites/registered/recent entries are stored atomically in `connections.json` in Electron's user-data directory. Favorites, registered servers, custom names, colors, and advanced properties survive restart; passwords never enter that file. A failed connection does not enter history.
 
+A failed connection shows SQL Server's message, and **Error details** under it lists the error number, severity (class), state, and the server that answered, as SSMS does; it never shows the connection string or the password. The details go with the message once the form changes.
+
 **Browse → Local** reads installed SQL Server instance registrations and per-user LocalDB registrations on Windows. **Network** uses SqlClient's SQL Server discovery, with Refresh to enumerate again; results depend on SQL Server Browser/firewall responses and may be incomplete. Server names can always be typed manually. **Registered Servers** lists servers registered in Varia on this computer; SSMS file import and Central Management Servers are future work. Azure/Fabric discovery is omitted. See Microsoft's [SQL Server enumeration documentation](https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sql.sqldatasourceenumerator.getdatasources?view=sqlclient-dotnet-core-6.1).
 
 Focus **Database Name** or click its refresh button to load databases visible to the supplied login. Discovery uses a temporary connection to the login's default database, closes it without adding a connected server, and ignores stale results after credentials/settings change. Leave the field empty for **<default>**, pick a discovered database, or type a name when discovery is unavailable. Discovery has a 30-second deadline and preserves the form on failure.
@@ -122,6 +124,26 @@ Focus **Database Name** or click its refresh button to load databases visible to
 Choose **Optional / Mandatory / Strict** encryption and certificate hostname settings. Mandatory is the default; Strict disables the Trust Server Certificate override. A custom **Name** labels the connected server. The palette or custom color picker marks that server in Object Explorer, its query tabs, and the active query context/status bar. **Connection String** previews the effective string produced by the actual SqlClient builder, with the password omitted; properties are edited through the form.
 
 **Advanced…** groups properties similarly to SSMS: command/connect timeouts, Always Encrypted and secure enclave attestation, MARS, protocol, packet size, transaction binding, type system version, connection retries, application/workstation identity, application intent/language, replication, IP preference, certificate path, attached file, failover/SPNs, Multi Subnet Failover, and user instance. OK applies the draft; Cancel/Escape discards it. Command timeout defaults to **0 (no timeout)** and controls each submitted script's existing overall deadline/cancellation handling; finite values also cover all GO batches. Connect timeout defaults to 15 seconds. Network Library maps to a `tcp:`, `np:`, or `lpc:` server prefix because the .NET provider lacks the legacy keyword. These settings are validated and carried through to query sessions and metadata/SMO connections; capabilities such as Always Encrypted also require the corresponding server/key-provider configuration. Provider support follows [SqlClient's connection options](https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlconnection.connectionstring?view=sqlclient-dotnet-7.1).
+
+### Authentication
+
+The dialog opens with **Windows authentication** on Windows and **SQL Server authentication** on Linux and macOS, where integrated authentication needs a Kerberos ticket that most machines do not have. A saved connection keeps the authentication it was saved with on every platform, and **Reset** returns to the platform's default.
+
+On Linux and macOS, Windows authentication (shown as **Windows authentication (Kerberos)**) signs in with your Kerberos ticket, through SqlClient's managed network layer and the system GSSAPI library. It needs:
+
+- the Kerberos library, `libgssapi_krb5.so.2` on Linux (Debian and Ubuntu: `sudo apt install libgssapi-krb5-2 krb5-user`; Fedora and RHEL: `sudo dnf install krb5-libs krb5-workstation`; Alpine: `sudo apk add krb5`); macOS includes it;
+- a ticket for your domain's realm, from `kinit alice@CONTOSO.COM` (the realm in capitals) and checked with `klist`, with `/etc/krb5.conf` naming the realm's KDC when DNS does not;
+- a server name that leads Kerberos to SQL Server's SPN (`MSSQLSvc/host.contoso.com:1433`, registered for its service account): connect with the fully qualified name, or set **Server SPN** in Advanced properties.
+
+When SqlClient cannot build the Kerberos token it reports only "Cannot generate SSPI context.", so the backend asks GSSAPI which of these is missing (reading the credential cache, without contacting the KDC) and says what to do: install the library (`AUTH_UNSUPPORTED`), run `kinit` for a missing or expired ticket (`AUTH_KERBEROS`), or check the SPN when the ticket is there (`AUTH_KERBEROS`). Error details then show error number 0, severity 11, and the server.
+
+CI's Linux job checks the no-ticket message against its SQL Server container (`tests/kerberos-live.test.ts`). A real Kerberos sign-in needs a KDC and a domain-joined SQL Server, so it is checked by hand, on Linux and on macOS:
+
+1. Without a ticket (`kdestroy`), connecting with Windows authentication says to run `kinit`, and **Error details** shows error number 0, severity 11, and the server.
+2. After `kinit user@REALM`, connecting with the server's fully qualified name succeeds, `SELECT auth_scheme FROM sys.dm_exec_connections WHERE session_id = @@SPID;` returns `KERBEROS`, and **Load databases** lists the databases.
+3. With an expired ticket (`kinit -l 1m`, then wait two minutes), the message says the ticket has expired.
+4. Connecting by IP address or an unregistered alias gives the SPN advice; setting **Server SPN** to the registered SPN then connects.
+5. On Linux without `libgssapi-krb5-2` (a container is easiest), the message names the package to install.
 
 ## Results grid
 
