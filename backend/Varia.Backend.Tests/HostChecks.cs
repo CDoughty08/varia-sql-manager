@@ -32,6 +32,14 @@ internal static class HostChecks
             host.Request(1, "test.echo", new { a = new object[] { 1, "x" } });
             var echo = host.Next(FrameKind.Response);
             check(echo?.Header.Id == 1 && Body(echo.Value).GetProperty("result").GetProperty("a")[1].GetString() == "x", "a request is dispatched and answered with its id");
+            host.Request(90, "test.failure", new { });
+            var failed = host.Next(FrameKind.Response);
+            var failure = failed is null ? default : Body(failed.Value).GetProperty("error");
+            check(failed?.Header.Id == 90 && failure.EnumerateObject().Select(member => member.Name).SequenceEqual(["code", "message", "details"])
+                && failure.GetProperty("details").EnumerateObject().Select(member => member.Name).SequenceEqual(["number", "state", "class", "server"])
+                && failure.GetProperty("details").GetProperty("number").GetInt32() == 18456 && failure.GetProperty("details").GetProperty("class").GetInt32() == 14
+                && failure.GetProperty("details").GetProperty("server").GetString()!.Length == ConnectionFailures.MaxServerLength,
+                "an error with details carries its number, state, class and server (cut at 256 characters) after the code and message");
 
             host.Request(2, "test.wait", new { });
             Thread.Sleep(50);
@@ -388,7 +396,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int Unsent;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent"];
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure"];
     public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, _ => RequestLane.Control };
     public (long GlobalBytes, long QueryBytes) ResultBudget => (256L << 20, 128L << 20);
 
@@ -421,6 +429,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
                 context.SendEvent(new { Type = "resultSet.opened", Descriptor = new string('d', 1024 * 1024) }, false);
                 context.SendEvent(new { Type = "resultSet.opened", Descriptor = new string('d', 5 * 1024 * 1024) }, false);
                 return new { Sent = 5 };
+            case "test.failure": throw new RequestException("SQL_ERROR", "Login failed for user 'reader'.", new ErrorDetails(18456, 1, 14, new string('s', 300)));
             case "test.unsent":
                 context!.Unsent = () => Interlocked.Increment(ref Unsent);
                 return new { Text = new string('x', ProtocolLimits.ResponseBody) };

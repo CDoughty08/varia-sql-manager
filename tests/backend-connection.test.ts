@@ -95,6 +95,14 @@ describe('BackendConnection malformed input', () => {
     expect(await failure(health(connection))).toMatchObject({ code: 'STREAM_PROTOCOL' })
     expect(await loss).toMatchObject({ reason: 'protocol', detail: '8 contained violations' })
   })
+  it('passes the details of a failed connection to the error, and contains details out of bounds', async () => {
+    const connection = fake('error-details')
+    const connect = (server: string) => connection.send('connections.connect', { server, database: '', authentication: 'windows', trustServerCertificate: false }, { deadlineMs: 10_000 }).done
+    const failed = await failure(connect('sql.contoso.com'))
+    expect(failed).toMatchObject({ code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: { number: 0, state: 0, class: 11, server: 'sql.contoso.com' } })
+    expect(await failure(connect('long'))).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
+    expect(connection.lost).toBeUndefined()
+  })
   it('passes query events to their request and contains an undecodable one', async () => {
     const global: unknown[] = []
     const connection = fake('events', { onGlobalEvent: event => { global.push(event) } })

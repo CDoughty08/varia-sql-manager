@@ -79,6 +79,7 @@ catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requ
 ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
+ConnectionFailureChecks.Run(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
@@ -117,6 +118,18 @@ try
 {
     var discovered = await Call<List<DatabaseInfo>>("connections.databases", Live("DatabaseThatDoesNotExist"));
     Check(discovered.Any(database => database.Name == "master") && discovered.Any(database => database.Name == "tempdb"), "live database discovery ignores a stale selected database and closes its temporary connection");
+    var rejected = new ConnectOptions(server, "master", "sql", "varia_no_such_login_" + Guid.NewGuid().ToString("N")[..8], "never-shown-marker", true);
+    foreach (var method in new[] { "connections.connect", "connections.databases" })
+    {
+        try { await Call<object>(method, rejected); throw new Exception("A login that does not exist was accepted by " + method); }
+        catch (RequestException error)
+        {
+            // Login failed is 18456, class 14; a server that accepts only Windows authentication sometimes closes the pipe
+            // before SqlClient reads it, which SqlClient reports as 233, class 20.
+            Check(error.Code == "SQL_ERROR" && error.Details is { Number: 18456, Class: 14, State: not null, Server.Length: > 0 } or { Number: 233, Class: 20, State: not null, Server.Length: > 0 } && !error.Message.Contains("never-shown-marker")
+                && !JsonSerializer.Serialize(error.Details).Contains("never-shown-marker"), method + " answers a failed login with its number, state, class and server, and never the password");
+        }
+    }
     var columns = await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"));
     Check(columns.Columns.Count > 2 && columns.Columns[0] == new ColumnInfo("name", "sysname") && columns.Columns[1] == new ColumnInfo("object_id", "int") && !columns.Truncated, "table columns come in column order with their types");
     try { await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects]")); throw new Exception("A closing bracket matched another table"); }

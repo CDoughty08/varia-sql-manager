@@ -86,7 +86,9 @@ const helloSchema = z.object({
   methods: z.array(z.string().max(64)).max(256)
 })
 export type BackendHello = z.infer<typeof helloSchema>
-const errorSchema = z.object({ code: z.string().max(64), message: z.string().max(wire.messages.errorCharacters) }).strict()
+// A failed connection's details (docs/ipc.md): SQL Server's error number, state and class, and the server that answered.
+const errorDetailsSchema = z.object({ number: z.number().int().min(-2_147_483_648).max(2_147_483_647).optional(), state: z.number().int().min(0).max(255).optional(), class: z.number().int().min(0).max(255).optional(), server: z.string().max(256).optional() }).strict()
+const errorSchema = z.object({ code: z.string().max(64), message: z.string().max(wire.messages.errorCharacters), details: errorDetailsSchema.optional() }).strict()
 const goAwaySchema = z.object({ code: z.string().max(64), message: z.string().max(wire.messages.errorCharacters), versions: z.tuple([z.number().int(), z.number().int()]).optional() }).strict()
 const knownCodes: ReadonlySet<string> = new Set(errorCodes)
 
@@ -347,7 +349,7 @@ export class BackendConnection {
     const error = keys[0] === 'error' ? errorSchema.safeParse((value as { error: unknown }).error) : undefined
     if (!error?.success) return this.contained(pending)
     this.settle(pending)
-    pending.reject(new BackendError(knownCodes.has(error.data.code) ? error.data.code as ErrorCode : 'BACKEND_ERROR', error.data.message))
+    pending.reject(new BackendError(knownCodes.has(error.data.code) ? error.data.code as ErrorCode : 'BACKEND_ERROR', error.data.message, error.data.details))
   }
 
   private accept(body: Uint8Array): void {

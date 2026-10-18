@@ -87,7 +87,7 @@ Every frame is a 16-byte little-endian header followed immediately by its body.
 | --- | --- | --- | --- |
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
-| 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384 } }`; exactly one per REQUEST |
+| 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
 | 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory', usedBytes, globalBytes, seq }` |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
@@ -188,8 +188,8 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
 | `system.health` | invoke | unary | control | 10 s |
-| `connections.connect` | invoke | unary | metadata | (connect timeout, default 15) + 30 s; 0 means none. Password zeroed. |
-| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. |
+| `connections.connect` | invoke | unary | metadata | (connect timeout, default 15) + 30 s; 0 means none. Password zeroed. A failed open carries error `details`. |
+| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. A failed open carries error `details`. |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Password zeroed. |
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or a failed backend |
@@ -615,11 +615,23 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 
 ## Error codes and fixed sentences
 
-Failures reach the renderer as `{ ok: false, error, code }`. Messages are complete sentences shown as they are.
+Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
+
+`details` comes only with a failed `connections.connect` or `connections.databases` open, for the Connect dialog's
+**Error details**: `{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
+server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
+Main refuses (as a contained violation) details with any other member or out of these bounds.
+
+Integrated authentication on Linux and macOS uses Kerberos through SqlClient's managed SNI. When the Negotiate token cannot
+be built, SqlClient reports only error 0, class 11, "Cannot generate SSPI context." (procedure `GenClientContext`), so the
+backend asks GSSAPI for the default initiator credential (`gss_acquire_cred`, which reads the credential cache without
+contacting the KDC) and answers `AUTH_UNSUPPORTED` when the GSSAPI library is missing (what to install), or
+`AUTH_KERBEROS` for a missing or expired ticket (run `kinit`) or for a ticket that does not reach the server (the SPN).
+On Windows, SSPI failures keep SqlClient's message as `SQL_ERROR`.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

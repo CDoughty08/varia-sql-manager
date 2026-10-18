@@ -123,7 +123,12 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 /// run it: the object's, or master for databases and server objects. Commands counts the SQL commands the job sent.</summary>
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
-internal sealed class RequestException(string code, string message) : Exception(message)
+/// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
+/// the server that answered. Never the connection string or the password.</summary>
+internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server);
+
+internal sealed class RequestException(string code, string message, ErrorDetails? details = null) : Exception(message)
 {
     public string Code { get; } = code;
+    public ErrorDetails? Details { get; } = details;
 }

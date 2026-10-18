@@ -246,8 +246,11 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
+/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
+ *  server that answered (at most 256 characters). Never the connection string or the password. */
+export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode }
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails }
 
 /** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'

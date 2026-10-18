@@ -162,11 +162,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         if (options.Authentication is not ("windows" or "sql"))
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
-        if (options.Authentication == "windows" && !OperatingSystem.IsWindows())
-            throw new RequestException("AUTH_UNSUPPORTED", "Windows authentication in this bootstrap requires Windows. Use SQL authentication on other platforms.");
         var builder = ConnectionSettings.Build(options);
         await using var connection = new SqlConnection(builder.ConnectionString);
-        await connection.OpenAsync(token);
+        await OpenAsync(connection, options, token);
         var profile = await ServerProfile.ProbeAsync(connection, token);
         var id = Guid.NewGuid().ToString();
         profiles[id] = profile;
@@ -185,8 +183,20 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         await using var connection = new SqlConnection(builder.ConnectionString);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
-        await connection.OpenAsync(deadline.Token);
+        await OpenAsync(connection, options, deadline.Token);
         return await ReadDatabasesAsync(connection, deadline.Token);
+    }
+
+    /// <summary>Opens a connection the user is choosing (connect and database discovery), so a failure carries its details,
+    /// and integrated authentication on Linux and macOS (Kerberos through SqlClient's managed SNI) says what to fix.
+    /// A cancelled or timed-out attempt is left to the host, which answers it CANCELLED or TIMEOUT.</summary>
+    private static async Task OpenAsync(SqlConnection connection, ConnectOptions options, CancellationToken token)
+    {
+        try { await connection.OpenAsync(token); }
+        catch (Exception error) when (!token.IsCancellationRequested && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
+        {
+            throw failure;
+        }
     }
 
     private object Disconnect(ConnectionArgs args)
