@@ -48,6 +48,12 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
 
+    /// <summary>Whether a name is a scratch object's, this run's or another's on the same server: the .NET checks'
+    /// VariaScratch_ databases, logins and server objects, and the vitest and smoke suites' varia_scratch_ databases.
+    /// Another run's can be mid-setup, single-user, offline or gone a moment later.</summary>
+    public static bool IsScratchName(string name) =>
+        name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
+
     private static string RandomPassword()
     {
         const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";

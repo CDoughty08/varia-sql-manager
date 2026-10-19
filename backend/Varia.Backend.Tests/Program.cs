@@ -103,6 +103,16 @@ using (var offline = new SqlService())
     var closed = await offline.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(Guid.NewGuid().ToString(), "commit"), json), json);
     Check(JsonSerializer.Serialize(closed, json) == "{\"closed\":false}", "closing an unknown session with commit has nothing to commit");
 }
+// Live runs share one server with other runs: they leave each other's scratch objects alone and time cancels against the load.
+Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x" }.All(ScratchDatabase.IsScratchName)
+    && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy" }.Any(ScratchDatabase.IsScratchName),
+    "scratch names are the .NET checks' VariaScratch_ and the vitest and smoke suites' varia_scratch_ prefixes");
+Check(LiveResultChecks.CancelBound(5000, 1200) == 5000 && LiveResultChecks.CancelBound(5000, 4000) == 8000, "a cancel's time bound keeps its floor and grows with a slower reference");
+var measured = new Queue<long>([20_000, 300, 40, 20_000, 16_000, 7]);
+var retried = await LiveResultChecks.OnceMore("a stalled measurement", 15_000, ms => ms, () => Task.FromResult(measured.Dequeue()), _ => { });
+Check(retried == 300 && await LiveResultChecks.OnceMore("a measurement in time", 15_000, ms => ms, () => Task.FromResult(measured.Dequeue()), _ => { }) == 40
+    && await LiveResultChecks.OnceMore("a regression", 15_000, ms => ms, () => Task.FromResult(measured.Dequeue()), _ => { }) == 16_000 && measured.Count == 1,
+    "a timed live check that misses its bound measures once more, and only once");
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");

@@ -26,14 +26,20 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 404 offline
-  checks; how many depends on the server version and authentication (716 against a local SQL Server 2025 with Windows
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 407 offline
+  checks; how many depends on the server version and authentication (721 against a local SQL Server 2025 with Windows
   authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer and Script As
   scratch-database checks and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
   and `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
   session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
   (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
+  Run live suites one at a time where you can. Runs that share one server tolerate each other's scratch objects and
+  load: the Object Explorer walk skips every scratch database (`ScratchDatabase.IsScratchName`), the injection matrix
+  leaves scratch-named server principals out of its inventory, the huge- and xml-value cancel checks bound the cancel
+  by `LiveResultChecks.CancelBound` (twice a reference the run just measured, at least 5 s), and those value timings
+  are measured once more when they miss their bound (`LiveResultChecks.OnceMore`). A new live check that walks shared
+  server state or times work against a fixed bound needs the same care.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
