@@ -174,6 +174,19 @@ describe('command execution', () => {
     expect(editorOptions.getSnapshot().wordWrap).toBe(true)
     expect(commands.isToggled('editor.toggleWordWrap')).toBe(true)
   })
+  it('saves word wrap through settings with Alt+Z, and editorWordWrap follows the stored setting', async () => {
+    const { commands, keybindings, api, context, settings } = fixture({ platform: 'linux', settings: { 'textEditor.sql.wordWrap': true } })
+    expect(context.getState().editorWordWrap).toBe(true)
+    const prevented = vi.fn()
+    keybindings.handleKeyDown({ key: 'z', code: 'KeyZ', altKey: true, ctrlKey: false, metaKey: false, shiftKey: false, repeat: false, isComposing: false, keyCode: 90, defaultPrevented: false, preventDefault: prevented, stopPropagation: () => {} })
+    expect(prevented).toHaveBeenCalled()
+    await vi.waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ 'textEditor.sql.wordWrap': false }))
+    await vi.waitFor(() => expect(context.getState().editorWordWrap).toBe(false))
+    expect(commands.isToggled('editor.toggleWordWrap')).toBe(false)
+    // A change saved elsewhere (the Options dialog) reaches the key too.
+    api.onSettingsChanged.mock.calls[0][0]({ revision: 9, values: { ...settings.getSnapshot().values, 'textEditor.sql.wordWrap': true } })
+    expect(context.getState().editorWordWrap).toBe(true)
+  })
   it('runs the shell commands through the host', async () => {
     const { commands, host, connections, api } = fixture()
     expect(commands.isEnabled('connection.connect')).toBe(false)

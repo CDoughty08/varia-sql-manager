@@ -102,28 +102,16 @@ internal static class ExplorerLiveChecks
 
         // Every folder under the system databases expands, for every band up to the server's and with a pool per database.
         var errors = new List<string>();
-        async Task Walk(NodeRefDto node, string? subtype, int depth, string path)
-        {
-            ExplorerChildrenResult result;
-            try { result = await client.Children(node, subtype); }
-            catch (RequestException error) { errors.Add(path + ": " + error.Code); return; }
-            if (result.Error is not null) { errors.Add(path + ": " + result.Error.Code + " " + result.Error.Message); return; }
-            if (depth == 0) return;
-            var objects = 0;
-            // Temp tables (tempdb's # names, including the engine's cached #A1B2C3D4 objects) can vanish between listing and expanding.
-            foreach (var child in result.Nodes.Where(child => child.HasChildren && child.Ref.Object?.Name?.StartsWith('#') != true))
-                if (child.Ref.Type == "folder" || objects++ < 1) await Walk(child.Ref, child.Subtype, depth - 1, path + " › " + child.Label);
-        }
         var before = client.Requests;
         foreach (var band in Enumerable.Range(ExplorerCatalog.MinBand, Math.Max(0, Math.Min(major, ExplorerCatalog.MaxBand) - ExplorerCatalog.MinBand + 1)))
         {
             options.ForceBand = band;
-            foreach (var database in new[] { "master", "msdb", "tempdb" }) await Walk(Object(Database(database)), null, 5, database + " @" + band);
-            await Walk(Object(Server), null, 2, "server @" + band);
+            foreach (var database in new[] { "master", "msdb", "tempdb" }) await Walk(client, Object(Database(database)), null, 5, database + " @" + band, errors);
+            await Walk(client, Object(Server), null, 2, "server @" + band, errors);
         }
         options.ForceBand = null;
         options.ForcePerDatabaseScope = true;
-        foreach (var database in new[] { "master", "msdb" }) await Walk(Object(Database(database)), null, 5, database + " per database");
+        foreach (var database in new[] { "master", "msdb" }) await Walk(client, Object(Database(database)), null, 5, database + " per database", errors);
         options.ForcePerDatabaseScope = false;
         check(errors.Count == 0, "every folder under master, msdb and tempdb expands for bands 12-" + Math.Min(major, 17) + " and with a pool per database ("
             + (client.Requests - before) + " requests): " + string.Join(" | ", errors.Take(5)));
@@ -149,6 +137,27 @@ internal static class ExplorerLiveChecks
             return;
         }
         await ScratchAsync(check, service, client, live, json, (text, database) => Sql(text, database));
+    }
+
+    /// <summary>The children a walk expands: those that have children, except temp tables (tempdb's # names, including the
+    /// engine's cached #A1B2C3D4 objects), which can vanish between listing and expanding, and scratch databases, this
+    /// run's or another run's on the same server, which can be mid-setup, single-user with another session in them,
+    /// offline or being dropped. The scratch checks expand this run's on purpose.</summary>
+    private static bool Walked(ExplorerNode child) => child.HasChildren && child.Ref.Object?.Name?.StartsWith('#') != true
+        && !(child.Ref.Object is { Kind: "database", Name: { } name } && ScratchDatabase.IsScratchName(name));
+
+    /// <summary>Expands a node and, <paramref name="depth"/> levels down, every folder and the first object of each list
+    /// that <see cref="Walked"/> takes, recording each failure with its path.</summary>
+    private static async Task Walk(Client client, NodeRefDto node, string? subtype, int depth, string path, List<string> errors)
+    {
+        ExplorerChildrenResult result;
+        try { result = await client.Children(node, subtype); }
+        catch (RequestException error) { errors.Add(path + ": " + error.Code); return; }
+        if (result.Error is not null) { errors.Add(path + ": " + result.Error.Code + " " + result.Error.Message); return; }
+        if (depth == 0) return;
+        var objects = 0;
+        foreach (var child in result.Nodes.Where(Walked))
+            if (child.Ref.Type == "folder" || objects++ < 1) await Walk(client, child.Ref, child.Subtype, depth - 1, path + " › " + child.Label, errors);
     }
 
     private static async Task CancellationAsync(Action<bool, string> check, SqlService service, Client client, Func<string, ConnectOptions> live, JsonSerializerOptions json)
@@ -231,6 +240,15 @@ internal static class ExplorerLiveChecks
             check(listed is { Status: null, HasChildren: true } && listMs < 1500, "a single-user database another session is in is listed at once, not as inaccessible (" + listMs + " ms, one row a page)");
             check(expanded.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && expanded.Error.Message.Contains("Single User", StringComparison.Ordinal),
                 "expanding a single-user database another session is in says it is unavailable, and can be retried: " + expanded.Error?.Message);
+            // A parallel run's walk meets this run's scratch databases in just this state (and mid-setup or being dropped):
+            // the walk must leave every scratch database alone, whichever list position it has.
+            var walkErrors = new List<string>();
+            await Walk(client, Object(Server), null, 2, "server", walkErrors);
+            var scratchNodes = (await client.All(Folder(Server, "databases"))).Nodes
+                .Where(node => node.Ref.Object is { Kind: "database", Name: { } name } && ScratchDatabase.IsScratchName(name)).ToList();
+            check(walkErrors.Count == 0 && scratchNodes.Any(node => node is { HasChildren: true } && node.Label == scratch.SingleUser) && !scratchNodes.Any(Walked),
+                "the walk skips scratch databases (own and other runs'), such as a single-user one another session is in ("
+                + scratchNodes.Count(Walked) + " of " + scratchNodes.Count + " walked): " + string.Join(" | ", walkErrors.Take(5)));
         }
         if (scratch.HasSnapshot)
         {

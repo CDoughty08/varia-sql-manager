@@ -69,6 +69,9 @@ try {
   let advanced = page.getByRole('dialog', { name: 'Advanced Properties', exact: true })
   await expect(advanced).toBeVisible()
   await expect(dialog).toHaveAttribute('inert', '')
+  // A profile without a command timeout leaves it empty, showing Tools › Options' Execution time-out (0 by default).
+  await expect(advanced.getByLabel('Command timeout (seconds)', { exact: true })).toHaveValue('')
+  await expect(advanced.getByLabel('Command timeout (seconds)', { exact: true })).toHaveAttribute('placeholder', '0 (Tools › Options)')
   await advanced.getByLabel('Command timeout (seconds)', { exact: true }).fill('7')
   await advanced.getByLabel('Connect timeout (seconds)', { exact: true }).fill('20')
   await advanced.getByLabel('Enable secure enclaves', { exact: true }).isDisabled().then(value => expect(value).toBe(true))
@@ -86,7 +89,15 @@ try {
   await advanced.getByRole('button', { name: 'OK', exact: true }).click()
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
   // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
-  await expect.poll(async () => ({ commandTimeout: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced?.commandTimeout, errors: await dialog.locator('.connect-error').allTextContents() })).toEqual({ commandTimeout: 7, errors: [] })
+  // OK stores only the fields changed or touched (Always Encrypted and secure enclaves went back to False), so the
+  // defaults, and Tools › Options for the command timeout, keep applying to the rest.
+  await expect.poll(async () => ({ advanced: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced, errors: await dialog.locator('.connect-error').allTextContents() })).toEqual({
+    advanced: {
+      commandTimeout: 7, connectTimeout: 20, columnEncryption: false, secureEnclaves: false, attestationProtocol: 'HGS', enclaveAttestationUrl: 'https://attestation.example',
+      multipleActiveResultSets: true, networkProtocol: 'tcp', applicationIntent: 'ReadOnly', packetSize: 8192
+    },
+    errors: []
+  })
   await dialog.getByRole('tab', { name: 'Connection String', exact: true }).click()
   await expect(dialog.getByLabel('Connection string preview')).toContainText('tcp:sql-dev')
   await expect(dialog.getByLabel('Connection string preview')).toContainText('Application Intent=ReadOnly')

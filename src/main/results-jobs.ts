@@ -11,9 +11,9 @@ import type { BackendSupervisor } from './backend/supervisor'
 import { sanitizeFileName } from './file-names'
 import { resultsCopyRequestSchema, resultsSaveRequestSchema } from './validation'
 
-/** What Save Results As writes (owner decision 1, recommended default): a header row, CSV with NULL as an empty field (an
- *  empty string is ""), tab-delimited text with NULL as NULL; JSON always writes null. Copy keeps SSMS's NULL. */
-export const exportDefaults = { headers: true, nullText: { csv: 'empty', tsv: 'NULL', json: 'NULL' } } as const satisfies { headers: boolean; nullText: Record<ResultsFormat, ResultsExportParams['nullText']> }
+/** How Save Results As writes NULL: CSV as an empty field (an empty string is ""), tab-delimited text as NULL; JSON always
+ *  writes null. Copy keeps SSMS's NULL. The header row follows Tools › Options (`exportHeaders`). */
+export const exportDefaults = { nullText: { csv: 'empty', tsv: 'NULL', json: 'NULL' } } as const satisfies { nullText: Record<ResultsFormat, ResultsExportParams['nullText']> }
 
 const extensions: Record<ResultsFormat, string> = { csv: 'csv', tsv: 'txt', json: 'json' }
 const filters: Record<ResultsFormat, { name: string; extensions: string[] }> = {
@@ -78,6 +78,8 @@ export interface JobHostDeps {
   documentsDir(): string
   /** Pushes progress to the renderer (varia:results-job). */
   progress(progress: ResultsJobProgress): void
+  /** Include column headers when copying or saving the results (Tools › Options › Query Results › Results to Grid). */
+  exportHeaders(): Promise<boolean>
   platform: NodeJS.Platform
   now?: () => number
   /** removeExportLeftovers, replaced in tests. */
@@ -198,11 +200,11 @@ export class ResultsJobHost {
       // No extension is appended: the dialog's overwrite confirmation was for exactly this path.
       const path = selection.filePath
       fileName = basename(path)
-      const format = formatFromPath(path) ?? requested
+      const format = formatFromPath(path) ?? requested, headers = await this.deps.exportHeaders()
       this.check(request.generation, request.resultId, jobSentences.closedBeforeSave)
       const job = this.saving = new Job(request.jobId, 'save', request.generation, this.deps, fileName)
       writing = { path, temporaryId: randomUUID().replaceAll('-', '') }
-      const result = await this.deps.backend.export(request.generation, { resultId: request.resultId, path, format, headers: exportDefaults.headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId },
+      const result = await this.deps.backend.export(request.generation, { resultId: request.resultId, path, format, headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId },
         { onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       this.lastDir = dirname(path)
       this.lastFormat = format

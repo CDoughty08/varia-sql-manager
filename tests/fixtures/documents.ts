@@ -1,7 +1,7 @@
 import { vi } from 'vitest'
 import type { editor, IRange, ISelection } from 'monaco-editor'
 import type { ApiResult, SqlFile, VariaApi } from '../../src/shared/contracts'
-import { DocumentService } from '../../src/renderer/src/services/documents'
+import { DocumentService, type DocumentOptions } from '../../src/renderer/src/services/documents'
 import { EventBus } from '../../src/renderer/src/core/events'
 
 export function deferred<T>() {
@@ -72,7 +72,8 @@ export class TestEditor {
   asEditor(): editor.IStandaloneCodeEditor { return this as unknown as editor.IStandaloneCodeEditor }
 }
 
-export function documentFixture() {
+/** `options` stands for the settings DocumentService applies (indentation, bracket matching). */
+export function documentFixture(options: DocumentOptions = {}) {
   const events = new EventBus(), models = new Map<string, TestModel>()
   const api = {
     saveSqlFile: vi.fn<VariaApi['saveSqlFile']>(async () => ({ ok: true, value: { id: 'file-id', name: 'saved.sql', path: 'C:/saved.sql' } })),
@@ -81,7 +82,7 @@ export function documentFixture() {
   const frames: (() => void)[] = []
   const documents = new DocumentService((text, uri, language) => {
     const model = new TestModel(text, uri, language); models.set(uri, model); return model.asModel()
-  }, api, events, callback => { frames.push(callback) })
+  }, api, events, callback => { frames.push(callback) }, options)
   const model = (id: string) => models.get(`varia-sql://query/${id}`)!
   /** Runs the callbacks waiting for the next animation frame. */
   const frame = () => { for (const callback of frames.splice(0)) callback() }

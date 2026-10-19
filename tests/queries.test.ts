@@ -5,14 +5,19 @@ import { CommandService } from '../src/renderer/src/core/commands'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { EventBus } from '../src/renderer/src/core/events'
 import { deferred, documentFixture } from './fixtures/documents'
+import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 
 const output = (patch: Partial<QueryResult> = {}): QueryResult => ({
   status: 'completed', resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'master', messagesTruncated: false,
   budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }, completedAt: '2026-10-08T21:48:01.1234567+00:00', ...patch
 })
-function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>) {
+/** `commandTimeout` is the profile's Advanced property; `settings` are Tools › Options'. */
+function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, settings: Partial<SettingsValues> = {}) {
   const docs = documentFixture()
-  const connection: ConnectionInfo & { lost?: true } = { id: 'server-a', server: 'localhost', database: 'master', serverVersion: '17', commandTimeout, generation: 1 }
+  // The backend reports the connection string's timeout (0 unless the profile set one); queries read the profile's.
+  const connection: ConnectionInfo & { lost?: true; options: { advanced?: { commandTimeout?: number } } } = {
+    id: 'server-a', server: 'localhost', database: 'master', serverVersion: '17', commandTimeout: commandTimeout ?? 0, generation: 1, options: commandTimeout === undefined ? {} : { advanced: { commandTimeout } }
+  }
   const api = {
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: output() })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
@@ -23,7 +28,7 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>) 
   const calls: string[] = []
   const results = { begin: vi.fn((tabId: string, _queryId: string) => { calls.push('begin ' + tabId) }), finish: vi.fn() }
   api.execute.mockImplementation(async () => { calls.push('execute'); return { ok: true, value: output() } })
-  const queries = new QueryService(docs.documents, api, id => id === connection.id ? connection : undefined, docs.events, results, () => 1000, wait)
+  const queries = new QueryService(docs.documents, api, id => id === connection.id ? connection : undefined, docs.events, results, () => 1000, wait, () => ({ ...defaultSettings, ...settings }))
   const tab = docs.documents.create('query.sql', 'SELECT 1', 'master', connection.id)
   const events: WorkbenchEvent[] = []
   docs.events.subscribe(event => { events.push(event) })
@@ -35,6 +40,24 @@ describe('query orchestration', () => {
     await queries.execute()
     // Rows are bounded by the backend's memory budget only, and every result set up to 1,000 is kept.
     expect(queryApi.execute).toHaveBeenCalledWith(expect.objectContaining({ sessionId: tab.id, sql: 'SELECT 1', startLine: 1, timeoutSeconds: timeout ?? 0, maxRows: 0, maxResultSets: 1000 }))
+    expect(queryApi.execute.mock.calls[0][0]).not.toHaveProperty('stopOnError')
+  })
+  it('takes the execution time-out from Tools › Options unless the profile sets a command timeout', async () => {
+    const options = { 'queryExecution.executionTimeout': 30 }
+    const fromSettings = fixture(undefined, undefined, options)
+    await fromSettings.queries.execute()
+    expect(fromSettings.queryApi.execute.mock.calls[0][0].timeoutSeconds).toBe(30)
+    // An explicit 0 in the profile means no timeout, whatever Options says.
+    for (const timeout of [0, 7]) {
+      const fromProfile = fixture(timeout, undefined, options)
+      await fromProfile.queries.execute()
+      expect(fromProfile.queryApi.execute.mock.calls[0][0].timeoutSeconds).toBe(timeout)
+    }
+  })
+  it('sends stopOnError only when it is on, and the result-set limit Options sets', async () => {
+    const { queries, queryApi } = fixture(undefined, undefined, { 'queryExecution.stopOnError': true, 'queryResults.grid.maxResultSets': 5 })
+    await queries.execute()
+    expect(queryApi.execute.mock.calls[0][0]).toMatchObject({ stopOnError: true, maxResultSets: 5, maxRows: 0 })
   })
   it('delivers events to later listeners when an earlier one throws', () => {
     const bus = new EventBus(), received: string[] = []

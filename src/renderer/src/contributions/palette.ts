@@ -1,4 +1,5 @@
-import { commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../../../shared/commands/catalog'
+import { commandDescriptor, commandIds, isCommandId, type CommandId } from '../../../shared/commands/catalog'
+import { commandTitle } from '../../../shared/settings/catalog'
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { CommandHistory } from '../quickinput/history'
@@ -15,7 +16,7 @@ const recentLimit = 10
  */
 const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'edit.undo', 'edit.redo', 'edit.selectAll', 'edit.delete'])
 type Picker = Omit<QuickPickOptions<QuickPickItem>, 'value' | 'prefix' | 'onDidChangeValue' | 'onDidHide'>
-export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'>
+export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings'>>
 
 /**
  * The command palette (F1, mod+Shift+P) and Go to Query (mod+P): one quick input whose provider follows the prefix the
@@ -31,10 +32,11 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   const commandPicker = (): Picker => ({
     ariaLabel: 'Command Palette', placeholder: 'Type the name of a command to run', noun: 'commands', sort: 'score', recentIds: history.ids.slice(0, recentLimit),
     items: commandIds.filter(id => commandDescriptor(id).palette !== false && commands.has(id)).map(id => {
-      const command = commandDescriptor(id), label = paletteLabel(id)
+      // Titles follow settings ("Select Top 50 Rows").
+      const command = commandDescriptor(id), title = commandTitle(id, workbench.settings?.getSnapshot().values), label = command.category ? `${command.category}: ${title}` : title
       const unavailable = commands.isEnabled(id) ? {} : { disabled: true, disabledHint: command.unavailableHint ?? `“${label}” is not available right now.` }
       // The category ("Query: ") does not count as the start of the name, so a match there ranks no higher than one in the title.
-      return { id, label, titleStart: label.length - command.title.length, icon: command.icon, keywords: command.keywords, keybinding: keybindings.lookup(id), ...unavailable }
+      return { id, label, titleStart: label.length - title.length, icon: command.icon, keywords: command.keywords, keybinding: keybindings.lookup(id), ...unavailable }
     }).sort((a, b) => a.label.localeCompare(b.label, 'en')),
     onDidAccept: item => {
       if (!isCommandId(item.id)) return

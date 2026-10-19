@@ -15,7 +15,7 @@ interface TableName { readonly connectionId: string; readonly database: string; 
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, queries, connections, explorer }: Pick<Workbench, 'commands' | 'documents' | 'queries' | 'connections' | 'explorer'>,
+export function explorerContribution({ commands, documents, queries, connections, explorer, settings }: Pick<Workbench, 'commands' | 'documents' | 'queries' | 'connections' | 'explorer' | 'settings'>,
   api: Pick<VariaApi, 'tableColumns' | 'writeClipboardText'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
@@ -62,7 +62,7 @@ export function explorerContribution({ commands, documents, queries, connections
         const { columns, truncated } = unwrap(await api.tableColumns(name.connectionId, name.database, name.schema, name.name))
         if (!connections.isLive(name.connectionId)) return
         // Not dirty: the menu can always produce it again.
-        documents.newQuery(selectTopRowsScript({ ...name, columns, truncated }), undefined, name.connectionId, name.database, false)
+        documents.newQuery(selectTopRowsScript({ ...name, columns, truncated }, settings.get('objectExplorer.selectTopRows')), undefined, name.connectionId, name.database, false)
         if (queries.canExecute()) await queries.execute()
       }
     }),

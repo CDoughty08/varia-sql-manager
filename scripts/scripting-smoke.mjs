@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
@@ -15,7 +15,7 @@ const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profi
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
-const optionsFile = join(profile, 'scripting-options.json')
+const settingsFile = join(profile, 'settings.json'), legacyFile = join(profile, 'scripting-options.json')
 const mac = process.platform === 'darwin'
 let application
 let page
@@ -45,10 +45,14 @@ async function menu(id) {
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
 const dialog = () => page.getByRole('dialog', { name: 'Options', exact: true })
 const option = label => dialog().getByLabel(label, { exact: true })
-const stored = () => readFile(optionsFile, 'utf8').then(JSON.parse, () => null)
+const stored = () => readFile(settingsFile, 'utf8').then(JSON.parse, () => null)
+const scriptingKey = key => 'objectExplorer.scripting.' + key
 const weight = label => option(label).evaluate(element => getComputedStyle(element).fontWeight)
 const disabledRows = () => dialog().locator('.options-row select:disabled').evaluateAll(selects => selects.map(select => select.labels[0]?.textContent))
-/** Opens Tools › Options…: Alt+T, O on Windows and Linux (⌘, on macOS is a manual check), or the menu item. */
+/**
+ * Opens Tools › Options… on its Scripting page: Alt+T, O on Windows and Linux (⌘, on macOS is a manual check), or the
+ * menu item; the dialog opens on the page last shown, else Environment › General, so the tree goes there.
+ */
 async function openOptions({ keyboard = !mac } = {}) {
   if (keyboard) {
     await textbox().focus()
@@ -58,10 +62,17 @@ async function openOptions({ keyboard = !mac } = {}) {
     await page.keyboard.press('o')
   } else await menu('preferences.options')
   await expect(dialog()).toBeVisible()
+  const heading = dialog().locator('.options-heading')
+  if (await heading.textContent() !== 'SQL Server Object Explorer › Scripting') {
+    await dialog().getByRole('treeitem', { name: 'SQL Server Object Explorer', exact: true }).click()
+    await dialog().getByRole('treeitem', { name: 'Scripting', exact: true }).click()
+    await expect(heading).toHaveText('SQL Server Object Explorer › Scripting')
+  }
+  await option('Delimit individual statements').focus()
 }
 /** Where the dialog lies in the window, and whether the page itself overflows. */
 const layout = () => page.evaluate(() => {
-  const box = document.querySelector('[role="dialog"]').getBoundingClientRect(), list = document.querySelector('.options-list')
+  const box = document.querySelector('[role="dialog"]').getBoundingClientRect(), list = document.querySelector('.options-page')
   return { inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight,
     width: Math.round(box.width), height: Math.round(box.height), innerWidth, innerHeight, listScrolls: list.scrollHeight > list.clientHeight }
 })
@@ -140,11 +151,11 @@ async function openNestedScriptMenu() {
 
 try {
   await launch()
-  // 1. Tools › Options… from the keyboard, on the Scripting page: the first row has focus and its description shows below.
+  // 1. Tools › Options… from the keyboard, on the Scripting page: the first row's description shows below it.
   await openOptions()
   await expect(option('Delimit individual statements')).toBeFocused()
   await expect(dialog().locator('.options-description')).toContainText('Delimit individual statements')
-  await expect(dialog().getByRole('navigation', { name: 'Options pages' }).locator('[aria-current="page"]')).toHaveText('Scripting')
+  await expect(dialog().getByRole('tree', { name: 'Options pages' }).locator('[aria-selected="true"]')).toHaveText('Scripting')
   for (const name of ['General scripting options', 'Object scripting options', 'Table/View options', 'Version options']) await expect(dialog().getByRole('group', { name, exact: true })).toBeVisible()
   expect(await dialog().locator('.options-row').count()).toBe(36)
   // The version rows are greyed while Match script settings to source is True.
@@ -203,14 +214,14 @@ try {
   await expect(dialog().getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
-  await expect.poll(stored).toMatchObject({ version: 1, options: { scriptUseDatabase: false, scriptOwner: false, matchSourceSettings: true, targetServerVersion: '160' } })
-  expect(Object.keys((await stored()).options)).toHaveLength(36)
-  expect((await page.evaluate(() => window.varia.getScriptingOptions())).value.options.scriptUseDatabase).toBe(false)
-  // Main validates what the page sends: an incomplete set is refused and the file is unchanged.
-  const refused = await page.evaluate(() => window.varia.setScriptingOptions({ scriptUseDatabase: true }))
-  expect(refused.ok).toBe(false)
-  expect((await stored()).options.scriptUseDatabase).toBe(false)
-  console.log('Scripting checks: focus stays in the dialog, Enter on a list does not submit, and OK stores the options; main refuses partial sets.')
+  // Only what differs from the defaults is stored.
+  await expect.poll(stored).toEqual({ version: 1, values: { [scriptingKey('scriptUseDatabase')]: false } })
+  expect((await page.evaluate(() => window.varia.getSettings())).value.values[scriptingKey('scriptUseDatabase')]).toBe(false)
+  // Main validates what the page sends: an unknown key and a wrong-typed value are refused, and the file is unchanged.
+  const refused = await page.evaluate(key => Promise.all([window.varia.updateSettings({ [key + 'Unknown']: true }), window.varia.updateSettings({ [key]: 'no' })]), scriptingKey('scriptUseDatabase'))
+  expect(refused.map(result => result.ok)).toEqual([false, false])
+  expect(await stored()).toEqual({ version: 1, values: { [scriptingKey('scriptUseDatabase')]: false } })
+  console.log('Scripting checks: focus stays in the dialog, Enter on a list does not submit, and OK stores the changed option; main refuses unknown keys and wrong types.')
 
   // 4. Script As over a stubbed server. A table's menu: Script Table as, with the verbs a table does not support greyed
   // (they open nothing on hover or →), and Shift+F10 and the arrows reaching CREATE To › New Query Editor Window, which
@@ -394,7 +405,8 @@ try {
   await expect(openMenus()).toHaveCount(0)
   console.log('Scripting checks: at 1024×768 a new script\'s tab scrolls into view, a long warning stays on the status bar\'s one line, the dialog and the nested Script menus fit, the dialog\'s list scrolls; screenshots in Dark and Light.')
 
-  // 11. The options persist across a restart; an invalid file is set aside with a warning and the defaults are used.
+  // 11. The options persist across a restart. An earlier version's invalid scripting-options.json, with no settings.json,
+  // is set aside with a warning and the defaults are used.
   await close()
   await launch()
   await openOptions()
@@ -402,7 +414,8 @@ try {
   await expect(option('Script for server version')).toHaveValue('160')
   await page.keyboard.press('Escape')
   await close()
-  await writeFile(optionsFile, '{ "version": 1, "options": { "scriptUseDatabase": "no" } }')
+  await unlink(settingsFile)
+  await writeFile(legacyFile, '{ "version": 1, "options": { "scriptUseDatabase": "no" } }')
   await launch()
   const banner = warningBanner().filter({ hasText: 'Scripting options' })
   await expect(banner).toHaveText('Scripting options were invalid (unsupported values) and were reset; the original file was kept.')
@@ -416,7 +429,7 @@ try {
   await page.reload()
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   // The workbench asked main for its options before this call, so its answer is in once this one is; a banner would render within a frame.
-  await page.evaluate(async () => { await window.varia.getScriptingOptions(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
+  await page.evaluate(async () => { await window.varia.getSettings(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
   await expect(banner).toHaveCount(0)
   expect(failures).toEqual([])
 

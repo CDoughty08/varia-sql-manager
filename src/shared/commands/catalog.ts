@@ -1,13 +1,57 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
+import type { SettingKey } from '../settings/catalog'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 
 export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
-export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'debug-restart', 'refresh',
-  'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
-  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table', 'collapse-all', 'filter',
-  'filter-filled', 'clear-all', 'warning', 'settings-gear', 'file-code', 'edit'] as const
+export const codicons = [
+  'new-file',
+  'folder-opened',
+  'save',
+  'save-as',
+  'close',
+  'discard',
+  'redo',
+  'play',
+  'debug-stop',
+  'plug',
+  'debug-disconnect',
+  'debug-restart',
+  'refresh',
+  'database',
+  'server',
+  'search',
+  'replace',
+  'comment',
+  'word-wrap',
+  'layout',
+  'list-tree',
+  'output',
+  'window',
+  'go-to-file',
+  'symbol-color',
+  'copy',
+  'clippy',
+  'zoom-in',
+  'zoom-out',
+  'screen-full',
+  'tools',
+  'close-all',
+  'check',
+  'circle-filled',
+  'chevron-right',
+  'multiple-windows',
+  'table',
+  'collapse-all',
+  'filter',
+  'filter-filled',
+  'clear-all',
+  'warning',
+  'settings-gear',
+  'file-code',
+  'edit'
+] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
@@ -74,6 +118,8 @@ export interface CommandDescriptor {
   readonly development?: true
   /** The title on one platform when no placement title applies, such as macOS's "Reveal in Finder". */
   readonly platformTitles?: Partial<Record<Platform, string>>
+  /** The title follows an integer setting: `{n}` in `template` is its value (`commandTitle`); `title` is the default's. */
+  readonly titleSetting?: { readonly setting: SettingKey; readonly template: string }
 }
 
 const openFirst = 'Open a query first.'
@@ -283,6 +329,7 @@ export const commandCatalog = {
   },
   'explorer.selectTopRows': {
     title: 'Select Top 1000 Rows', category: 'Object Explorer', icon: 'table', precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
+    titleSetting: { setting: 'objectExplorer.selectTopRows', template: 'Select Top {n} Rows' },
     menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'w', when: "explorerNode == 'table'" }]
   },
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
@@ -367,9 +414,9 @@ export const commandCatalog = {
   'preferences.reloadThemes': { title: 'Reload Themes', category: 'Preferences', icon: 'refresh', keywords: ['color'] },
   // View › Theme's theme and mode items in custom menus: the choice travels as the item's arguments.
   'preferences.setTheme': { title: 'Set Color Theme', category: 'Preferences', palette: false },
-  // SSMS's Tools › Options, with its Scripting page; ⌘, is the macOS settings key.
+  // SSMS's Tools › Options; ⌘, is the macOS settings key.
   'preferences.options': {
-    title: 'Options…', category: 'Preferences', icon: 'settings-gear', keywords: ['settings', 'scripting', 'ssms'],
+    title: 'Options…', category: 'Preferences', icon: 'settings-gear', keywords: ['settings', 'scripting', 'ssms', 'preferences', 'timeout', 'font', 'tab', 'wrap'],
     keybindings: [{ mac: 'mod+,' }], menus: [{ menu: 'tools', group: '1_options', order: 1, mnemonic: 'o' }]
   },
   // Ctrl+Shift+= too: Electron's own Zoom In key (Ctrl++, ⌘+), which the menus used before they showed Ctrl+=.

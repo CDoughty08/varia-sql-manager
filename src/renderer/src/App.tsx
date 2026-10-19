@@ -10,7 +10,7 @@ import QueryEditor from './QueryEditor'
 import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
-import OptionsDialog from './scripting/OptionsDialog'
+import OptionsDialog from './settings/OptionsDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
 import BackendBanner from './BackendBanner'
 import OutputPane from './results/OutputPane'
@@ -56,7 +56,7 @@ export default function App() {
   const [health, setHealth] = useState<BackendHealth>()
   const databaseLists = useServiceSnapshot(workbench.databaseList)
   const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
-  const optionsOpen = useServiceSnapshot(workbench.scriptingOptions.dialog)
+  const optionsDialog = useServiceSnapshot(workbench.settings.dialog)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
@@ -249,7 +249,7 @@ export default function App() {
     <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><span className="status-place" title={[[place, sessionText, placeContext].filter(Boolean).join(' | '), health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''].filter(Boolean).join('\n')}>{place}{sessionText && <><span className="status-divider">|</span><span className="status-session">{sessionText}</span></>}<span className="status-divider">|</span>{placeContext}</span><MemoryIndicator /></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
-    {optionsOpen && <OptionsDialog />}
+    {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
     <QuickInput />
     <MenuLayer />
   </div>

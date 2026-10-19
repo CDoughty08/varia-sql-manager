@@ -1,4 +1,5 @@
 import type { CommandId } from '../../../shared/commands/catalog'
+import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
 import { menubarIds, menuForMnemonic, type ContextMenuId, type MenubarId, type MenuId } from '../../../shared/commands/menus'
@@ -45,6 +46,8 @@ export interface MenuServiceOptions {
   readonly context: { getState(): ContextKeys }
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
   readonly theme: { readonly state: Pick<ThemeState, 'preference' | 'themes'> }
+  /** The settings titles follow (Select Top <n> Rows). */
+  readonly settings?: () => SettingsValues
   readonly focus: FocusAdapter
   readonly modalOpen: () => boolean
   /** Whether focus is in the query editor's find widget, where Alt+W toggles Whole Word instead of opening Window. */
@@ -133,7 +136,7 @@ export class MenuService implements Disposable {
   resolve(menu: MenuId, target?: MenuTarget): readonly ResolvedMenuItem[] {
     const { platform, packaged, commands, keybindings, theme } = this.options
     return resolveMenu(menu, {
-      platform, packaged, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state) },
+      platform, packaged, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state) }, settings: this.options.settings?.(),
       ...(target ? { target: targetKeys(target), args: argsFor(target) } : {})
     })
   }

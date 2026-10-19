@@ -111,6 +111,24 @@ using (var offline = new SqlService())
     }
     Check(await StateError("invalid") == "INVALID_PARAMS" && await StateError(Guid.NewGuid().ToString()) == "SESSION_CLOSED", "an unknown session's state is an error value, at once");
 }
+// Live runs share one server with other runs: they leave each other's scratch objects alone and time cancels against the load.
+Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x" }.All(ScratchDatabase.IsScratchName)
+    && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy" }.Any(ScratchDatabase.IsScratchName),
+    "scratch names are the .NET checks' VariaScratch_ and the vitest and smoke suites' varia_scratch_ prefixes");
+Check(new[] { "", "_ro", "_off", "_su", "_snap", "_rt", "_inj", "_act", "_actr" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+    && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD" }.Any(ScratchDatabase.Sweepable),
+    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr included, and nothing else");
+Check(LiveResultChecks.CancelBound(5000, 1200) == 5000 && LiveResultChecks.CancelBound(5000, 4000) == 8000, "a cancel's time bound keeps its floor and grows with a slower reference");
+QueryResult Stopped(string status, params long[] rowsRead) => new([.. rowsRead.Select((read, index) => new ResultDescriptor(1, index, 1, 1, "rows", [], read, 1, 1, 0, 0, "complete", null, true))],
+    0, [], -1, 0, status, null, 0, 1, "master", false, new ResultBudget(0, 0, 0, 0), "");
+Check(LiveResultChecks.StoppedEarly(Stopped("cancelled", 3), 8) && LiveResultChecks.StoppedEarly(Stopped("cancelled", 0), 8) && !LiveResultChecks.StoppedEarly(Stopped("cancelled", 8), 8)
+    && !LiveResultChecks.StoppedEarly(Stopped("completed", 3), 8) && !LiveResultChecks.StoppedEarly(Stopped("cancelled"), 8) && !LiveResultChecks.StoppedEarly(Stopped("cancelled", 1, 1), 8),
+    "a cancel proves it stopped the script only by leaving rows unread, which a slow reference cannot excuse");
+var measured = new Queue<long>([20_000, 300, 40, 20_000, 16_000, 7]);
+var retried = await LiveResultChecks.OnceMore("a stalled measurement", 15_000, ms => ms, () => Task.FromResult(measured.Dequeue()), _ => { });
+Check(retried == 300 && await LiveResultChecks.OnceMore("a measurement in time", 15_000, ms => ms, () => Task.FromResult(measured.Dequeue()), _ => { }) == 40
+    && await LiveResultChecks.OnceMore("a regression", 15_000, ms => ms, () => Task.FromResult(measured.Dequeue()), _ => { }) == 16_000 && measured.Count == 1,
+    "a timed live check that misses its bound measures once more, and only once");
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
