@@ -120,7 +120,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const queries = new QueryService(documents, api, id => connections.get(id), events, results)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files, api)
+  const targets = new TargetService(documents, queries, connections, files)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
   const scriptingOptions = new ScriptingOptionsService(api, (message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))

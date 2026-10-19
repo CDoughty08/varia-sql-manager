@@ -177,6 +177,11 @@ describe('real .NET sidecar over protocol v2', () => {
   it('rejects malformed GO with the selected source line before connection lookup', async () => {
     await expect(call(backend(), 'query.execute', { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1;\nGO 0', startLine: 20, queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 30 })).rejects.toThrow('Line 21:')
   })
+  it('accepts stopOnError as a known member of query.execute', async () => {
+    const query = { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 30 }
+    await expect(call(backend(), 'query.execute', { ...query, stopOnError: true })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    await expect(call(backend(), 'query.execute', { ...query, stopOnError: 'yes' } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+  })
   it('rejects an invalid query before it reaches SQL Server', async () => {
     await expect(call(backend(), 'query.execute', { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', queryId: crypto.randomUUID(), maxRows: -1, timeoutSeconds: 30 })).rejects.toThrow('Query text, ID, session, timeout, or row limit is invalid.')
   })

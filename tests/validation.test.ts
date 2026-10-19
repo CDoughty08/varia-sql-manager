@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest } from '../src/main/validation'
 import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
-import { mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
+import { deadlineFor, mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 import { scriptCancelSchema } from '../src/shared/scripting/schema'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
 
@@ -21,8 +21,9 @@ describe('IPC validation', () => {
     expect(validateRequest('query.execute', valid)).toEqual(valid)
     expect(validateRequest('query.execute', { ...valid, timeoutSeconds: 0 })).toMatchObject({ timeoutSeconds: 0 })
     // maxRows 0 stores up to the memory budget only; maxResultSets keeps 1 to 1000 result sets.
-    for (const patch of [{ maxRows: 0 }, { maxRows: 2 ** 31 - 1 }, { maxResultSets: 1 }, { maxResultSets: 1000 }]) expect(validateRequest('query.execute', { ...valid, ...patch })).toEqual({ ...valid, ...patch })
-    for (const patch of [{ maxRows: -1 }, { maxRows: 2 ** 31 }, { maxRows: 1.5 }, { maxResultSets: 0 }, { maxResultSets: 1001 }, { timeoutSeconds: -1 }, { timeoutSeconds: 86401 }, { queryId: 'invalid' }, { sessionId: 'invalid' }, { startLine: 0 }, { sql: '' }]) expect(() => validateRequest('query.execute', { ...valid, ...patch })).toThrow('Invalid request')
+    // stopOnError (SQLCMD's :on error exit) is an optional boolean; without it the next batch runs after an error.
+    for (const patch of [{ maxRows: 0 }, { maxRows: 2 ** 31 - 1 }, { maxResultSets: 1 }, { maxResultSets: 1000 }, { stopOnError: true }, { stopOnError: false }]) expect(validateRequest('query.execute', { ...valid, ...patch })).toEqual({ ...valid, ...patch })
+    for (const patch of [{ maxRows: -1 }, { maxRows: 2 ** 31 }, { maxRows: 1.5 }, { maxResultSets: 0 }, { maxResultSets: 1001 }, { timeoutSeconds: -1 }, { timeoutSeconds: 86401 }, { queryId: 'invalid' }, { sessionId: 'invalid' }, { startLine: 0 }, { sql: '' }, { stopOnError: 'true' }, { stopOnError: 1 }, { stopOnError: null }]) expect(() => validateRequest('query.execute', { ...valid, ...patch })).toThrow('Invalid request')
   })
   it('passes identifiers verbatim and explains oversized scripts', () => {
     const connectionId = crypto.randomUUID()
@@ -110,10 +111,21 @@ describe('IPC validation', () => {
       database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: 1 }, completedAt: '2026-10-09T12:34:56.1234567+02:00'
     }
     expect(queryResultSchema.safeParse(summary).success).toBe(true)
+    // The session probe: @@TRANCOUNT, a smallint @@SPID, and a login name.
+    expect(queryResultSchema.safeParse({ ...summary, transactionCount: 2, spid: 32767, login: 'x'.repeat(128) }).success).toBe(true)
+    for (const patch of [{ transactionCount: -1 }, { transactionCount: 1.5 }, { spid: 32768 }, { login: 'x'.repeat(129) }, { login: 1 }])
+      expect(queryResultSchema.safeParse({ ...summary, ...patch }).success, JSON.stringify(patch)).toBe(false)
     // The budget's seq orders it with the results.memory events; main adds the generation.
     for (const patch of [{ completedAt: undefined }, { completedAt: 'x'.repeat(41) }, { messages: ['(1 row affected)'] }, { budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 } },
       { budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: 1, generation: 1 } }, { budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: -1 } }])
       expect(queryResultSchema.safeParse({ ...summary, ...patch }).success, JSON.stringify(patch).slice(0, 60)).toBe(false)
+  })
+  it('ends a query session plainly, or with its transaction committed or rolled back', () => {
+    const sessionId = crypto.randomUUID()
+    for (const transaction of [undefined, 'commit', 'rollback']) expect(validateRequest('query.session.close', { sessionId, ...transaction ? { transaction } : {} })).toEqual({ sessionId, ...transaction ? { transaction } : {} })
+    for (const params of [{ sessionId, transaction: 'save' }, { sessionId, transaction: null }, { sessionId, commit: true }]) expect(() => validateRequest('query.session.close', params)).toThrow()
+    expect(deadlineFor('query.session.close', { sessionId, transaction: 'commit' }).deadlineMs).toBe(60_000)
+    expect(deadlineFor('query.session.close', { sessionId, transaction: 'rollback' }).deadlineMs).toBe(10_000)
   })
   it('validates copy and save requests strictly', () => {
     const copy = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, headers: true, parts: [{ rows: [[0, 9], [20, Number.MAX_SAFE_INTEGER]], columns: [[0, 0], [2, 4095]] }] }

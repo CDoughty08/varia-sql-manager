@@ -443,6 +443,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .checkbox-label input { width: 16px; height: 16px; margin: 0; accent-color: var(--varia-button-background); }
 .field-note { font-size: 11px; line-height: 1.6; color: var(--varia-descriptionForeground); margin: 0; }
 .connect-error { font-size: 12px; line-height: 1.6; color: var(--varia-inputValidation-errorForeground); background: var(--varia-inputValidation-errorBackground); padding: 10px; border-radius: 5px; overflow-wrap: anywhere; }
+.connect-error-details { font-size: 11px; line-height: 1.6; color: var(--varia-descriptionForeground); margin-top: 6px; }
+.connect-error-details summary { cursor: pointer; width: max-content; }
+.connect-error-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 6px 0 0; }
+.connect-error-details dl > div { display: contents; }
+.connect-error-details dt { color: var(--varia-descriptionForeground); }
+.connect-error-details dd { margin: 0; color: var(--varia-foreground); overflow-wrap: anywhere; user-select: text; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 .dialog-actions button { padding: 8px 17px; }
 .keybinding { display: inline-flex; gap: 3px; flex-shrink: 0; }

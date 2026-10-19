@@ -10,7 +10,12 @@ export const advancedDefaults: AdvancedConnectionOptions = {
   serverCertificate: '', attachDbFilename: '', failoverPartner: '', failoverPartnerSpn: '',
   multiSubnetFailover: false, serverSpn: '', userInstance: false
 }
-export const connectionDefaults: ConnectionOptions = { server: 'localhost', database: '', authentication: 'windows', trustServerCertificate: false, encrypt: 'mandatory' }
+/** Windows authentication on Windows, as SSMS opens; elsewhere SQL Server authentication, since integrated authentication
+ *  there needs a Kerberos ticket (kinit) that most Linux and macOS machines do not have. Saved profiles keep their own choice. */
+export function defaultAuthentication(platform: string): ConnectionOptions['authentication'] { return platform === 'win32' ? 'windows' : 'sql' }
+export function connectionDefaults(platform: string): ConnectionOptions {
+  return { server: 'localhost', database: '', authentication: defaultAuthentication(platform), trustServerCertificate: false, encrypt: 'mandatory' }
+}
 const text = z.string().max(128)
 const path = z.string().max(1024)
 export const advancedConnectionSchema = z.object({

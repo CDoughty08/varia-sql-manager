@@ -29,6 +29,7 @@ The code is the reference implementation; this document describes it.
 - [Requests, deadlines, and cancellation](#requests-deadlines-and-cancellation)
 - [Methods](#methods)
 - [Streams and credits](#streams-and-credits)
+- [Query execution](#query-execution)
 - [Query events](#query-events)
 - [Result pages](#result-pages)
 - [Result store and memory budget](#result-store-and-memory-budget)
@@ -87,7 +88,7 @@ Every frame is a 16-byte little-endian header followed immediately by its body.
 | --- | --- | --- | --- |
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
-| 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384 } }`; exactly one per REQUEST |
+| 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
 | 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory', usedBytes, globalBytes, seq }` |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
@@ -188,8 +189,8 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
 | `system.health` | invoke | unary | control | 10 s |
-| `connections.connect` | invoke | unary | metadata | (connect timeout, default 15) + 30 s; 0 means none. Password zeroed. |
-| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. |
+| `connections.connect` | invoke | unary | metadata | (connect timeout, default 15) + 30 s; 0 means none. Password zeroed. A failed open carries error `details`. |
+| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. A failed open carries error `details` (the Connect dialog shows only the message for it). |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Password zeroed. |
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or a failed backend |
@@ -197,7 +198,7 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend also stops its own query after 30 s |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
-| `query.session.close` | invoke | unary | control | 10 s; answered locally `{ closed: false }` for a session of an ended generation |
+| `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -245,6 +246,104 @@ still in the open page builder are not served; the worker reads again after a pr
   pages arrive or other streams end, because the worker grants only when a page arrives and a stream left without
   credit would otherwise stall. A slow or hung renderer therefore stalls its reads, never the query or SQL Server.
 - Query events have no credit; they are bounded where they are produced.
+
+## Query execution
+
+`query.execute` takes `{ connectionId, sessionId, database, sql, queryId, maxRows, timeoutSeconds, startLine?,
+maxResultSets?, stopOnError? }`. `sessionId` is the query tab's UUID: the tab's SQL session is one unpooled connection
+with connection recovery off, opened on its first execution and kept until the tab closes, its server changes, or it is
+lost.
+
+- **SET prologue.** When a session opens (and so whenever one is reopened after it closed or was lost), the backend
+  runs SSMS's query-window defaults before the script: `SET ARITHABORT ON; SET ANSI_NULLS ON; SET ANSI_PADDING ON;
+  SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON;
+  SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;`. SqlClient's login already sets all of them but ARITHABORT
+  (OFF) and TEXTSIZE (-1); each is sent anyway because a server's `user options` can change login defaults. A script's
+  own SET statements then persist in the session as usual. ARITHABORT ON is part of a plan's cache key, so a statement
+  can get a different plan in a query tab than in an application that leaves it OFF, exactly as between SSMS and that
+  application. A session whose prologue fails is closed, and the next execution opens a new one.
+- **Batches.** `GO` and `GO n` split the script (SQLCMD commands are refused before anything runs; a line starting with
+  `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself: the next batch runs, and
+  Messages gets "Batch {b} raised an error; execution continued with the next batch." ("Batch {b}, repetition {k},
+  raised an error; execution continued with the next repetition." or "… next batch." for `GO n`) when any batch remains.
+  SQL Server decides how much of a batch runs after an error (most errors end only their statement). Severity 17–19
+  errors do not stop the batch on the server either, but SqlClient raises them as an exception, usually once it has read
+  the rest of the batch: result sets and messages after the error in that batch may be missing, or listed before it.
+  With `stopOnError: true` (for SQLCMD's `:on error exit`), the first batch that raised an error ends the script
+  instead. Nothing runs after a cancel, the script's deadline, an error of severity 20 or more, or any failure that
+  closes the session.
+
+| `status` | Meaning | Status line |
+| --- | --- | --- |
+| `completed` | Every batch ran without an error | "Query executed successfully." |
+| `completedWithErrors` | Every batch ran, and at least one raised an error; `error` (`SQL_ERROR`) holds the first 20 errors and the first batch and repetition that raised one | "Query completed with errors." |
+| `failed` | An error stopped the script: opening the session or changing its database, a batch with `stopOnError`, an error that closed the session, or an unexpected failure (`BACKEND_ERROR`) | "Query failed." |
+| `cancelled` | `query.cancel`, a closed tab, a disconnect, or a CANCEL frame other than main's backstop | "Query was cancelled." |
+| `timedOut` | `timeoutSeconds` passed, or main's backstop cancelled the request | "Query timed out." |
+
+`completedBatches` counts the batch executions that finished, including those that raised errors (a batch whose output a
+severity 17–19 error cut short counts too); with `stopOnError`, the batch that stopped the script is not counted.
+Validation errors and a missing, busy or invalid session or connection use the error envelope instead of a summary, and
+nothing runs.
+
+**Session probe.** After every script, in the same `finally` path and while it still holds the session, the backend runs
+`SELECT @@TRANCOUNT, SUSER_SNAME();` on the session (its own 5 s timeout, no token: the script's may already be
+cancelled) and returns `transactionCount` and `login` (≤ 128 characters; an `EXECUTE AS LOGIN` in force shows the
+impersonated login) with the summary, and `spid` (`SqlConnection.ServerProcessId`, no round trip) whenever the session
+is still open. All three are absent when the session was lost or never opened. A probe that reads nothing (no row under
+`SET NOEXEC`, `PARSEONLY` or `FMTONLY ON`, a plan under `SET SHOWPLAN_XML`, `_TEXT` or `_ALL ON`, or its timeout)
+leaves `spid` alone: the renderer then keeps what it knew of that session (same SPID) and marks it `unchecked`, so its
+query is asked about as one that may hold a transaction. `elapsedMs` stops before the probe. A cancel does not roll
+back, so a cancelled script's open transaction is still reported; an error that dooms a transaction (`XACT_ABORT`) ends
+it by the batch's end (3998), and the probe says 0. The renderer keeps the count per tab for the connection it ran on;
+moving the query, a lost connection, or a session that ended (or was found lost) clears it. The status bar shows
+`login (spid)`, as SSMS does.
+
+The probe is a statement in the user's session, and that is visible: the next script sees `@@ROWCOUNT` 1 and `@@ERROR` 0
+instead of what the previous script's last statement left, and the session's most recent SQL (`DBCC INPUTBUFFER`,
+`sys.dm_exec_input_buffer`, `most_recent_sql_handle`, sp_WhoIsActive) is the probe rather than the script. SqlClient
+does not expose the transaction ENVCHANGEs it receives, and `sys.dm_exec_sessions.open_transaction_count` read from
+another session needs VIEW SERVER STATE, so there is no side-effect-free way to learn `@@TRANCOUNT` for every login. The
+live checks pin both effects.
+
+**Ending a session.** `query.session.close` takes `{ sessionId, transaction? }`. Without `transaction` it cancels the tab's
+running script and closes the session (SQL Server rolls back what is open). With `'commit'` it first reads
+`SELECT @@TRANCOUNT;` in the session: no row (or a plan) means `SET SHOWPLAN_XML`, `_TEXT`, `_ALL`, `NOEXEC`,
+`PARSEONLY` or `FMTONLY` would keep the commit from executing, so it turns them off (each SHOWPLAN option in its own
+batch; the session is about to close) and reads again. With a transaction open it runs
+`WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION; SELECT @@TRANCOUNT;`, so every nesting level commits, and checks that 0 is
+left. A script still running (`SESSION_BUSY`), a commit SQL Server refuses or that leaves a transaction (`SQL_ERROR`,
+"The transaction was not committed, and the query stays open. Msg …") or the deadline leaves the session open with its
+transaction. A session found lost before the commit was sent is closed and answers `SESSION_LOST` ("The SQL session was
+lost, so SQL Server rolled back its transaction. Nothing was committed."); one lost while the commit ran answers
+`SESSION_LOST` with "The SQL session was lost while committing, so it is not known whether its transaction was
+committed. Check the data before running the work again." `'rollback'` is a plain close: SQL Server rolls back what a
+closed session left open, and the close does not wait for it (an explicit `ROLLBACK`, or an attention sent during one,
+waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
+
+**Session limit.** The backend keeps at most 128 query sessions (each one unpooled connection), which leaves room within
+main's 256 pending requests for every session to run a script and still be cancelled. The next session is refused with
+`SESSION_LIMIT`: "This query was not executed: 128 query tabs already hold SQL sessions, the most Varia SQL Manager keeps
+open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute
+again." Idle sessions are never reclaimed to make room: a session's SET options, temporary objects and open transaction
+cannot be seen from outside (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing
+it would lose them silently.
+
+**Prompts.** Before sessions end, the renderer sends main `varia:confirm-sessions` with `{ action, tabs }` (`action`:
+`close`, `closeAll`, `changeConnection`, `disconnectQuery` (Disconnect, or Change Connection to Disconnected),
+`disconnect` (the server), `disconnectAll` or `exit`; at most 1,024 tabs, each `{ name ≤ 512, transactions, running,
+unchecked? }` and only those with an open or unchecked transaction or a running script). Main composes the message box
+from these facts (`src/shared/sessions.ts`) and shows it through its dialog queue, so a page that crashes or reloads
+while it is open gets Cancel and the box closes. One query with an open transaction asks **Commit**, **Roll Back** or
+**Cancel**; several ask once, **Commit All**, **Roll Back All** or **Cancel**, listing up to 10 by name; a query still
+executing is never committed: it is cancelled (the renderer waits up to 15 s for it to stop) and its session rolls back,
+and when only executing queries are involved the box asks **Cancel Query and Close** or **Keep Running**. Cancel (Keep
+Running) is the default and the Escape answer. An unchecked session asks the same buttons, worded "may have an
+uncommitted transaction". The renderer then ends each session with `query.session.close` and the chosen `transaction`; a
+commit that fails is shown and the close, move, disconnect or quit stops there. Close All and Disconnect All Queries
+leave running queries alone; one that was running when their prompt opened and has finished since with a transaction
+stays open (or connected) and is reported, rather than have that transaction rolled back without asking. A run that
+settles after its tab closed (its cancel took longer than 15 s) still has its result sets released (`results.close`).
 
 ## Query events
 
@@ -355,7 +454,7 @@ Notes appended to the summary's messages:
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
 | column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
-| a batch's error skipped later batches or repetitions | "Batch {b} raised an error; later batches were not executed." ("Batch {b}, repetition {k}, raised …" for `GO n`); nothing when no later batch was skipped, since SQL Server may have run the batch to its end |
+| an error stopped the script before later batches or repetitions (`stopOnError`, or an error that closed the session) | "Batch {b} raised an error; later batches were not executed." ("Batch {b}, repetition {k}, raised …" for `GO n`); nothing when no later batch was skipped, since SQL Server may have run the batch to its end |
 | a cancel or timeout skipped later batches | "Stopped at batch {b}; {c} of {t} batch executions completed." (", repetition {k}" for `GO n`) |
 
 A cell whose typed read fails becomes NULL with the error flag; that column switches to its fallback reader and the
@@ -368,11 +467,13 @@ the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, si
 "Messages were truncated by the display limit; …" marks where entries stopped, and up to 20 more error entries (each cut
 at 16,384 characters) are still kept, so the error that stopped a script, or its cancellation or timeout, is in Messages
 after a flood of PRINT output or row counts. An event carries at most 1,000 entries; a summary at most 1,028 (the
-stored entries, the late errors, and up to 8 notes). Should a failed run's summary still hold no error entry, the
+stored entries, the late errors, and up to 8 notes). Should a summary with an `error` still hold no error entry, the
 renderer adds its `error` as one.
 
 - **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
-  affected)", no digit grouping), the notes above, and "The SQL session closed. …". As in SSMS, "Changed database
+  affected)", no digit grouping), the notes above, "Batch {b} raised an error; execution continued with the next batch."
+  after a batch that raised an error when another remains ([Query execution](#query-execution)), and "The SQL session
+  closed. …" when a session that had opened closed (not for one that failed to open). As in SSMS, "Changed database
   context to …" (5701) and "Changed language setting to …" (5703) are left out, whether from USE, a session's login, or
   the toolbar's database.
 - **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within
@@ -615,7 +716,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 32 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
+| Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 128 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
@@ -626,11 +728,30 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 
 ## Error codes and fixed sentences
 
-Failures reach the renderer as `{ ok: false, error, code }`. Messages are complete sentences shown as they are.
+Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
+
+`details` comes only with a failed `connections.connect` or `connections.databases` open. The Connect dialog shows them in
+**Error details** under a failed Connect; a failed **Load databases** shows only its message as the field's note. They are
+`{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
+server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
+Main refuses (as a contained violation) details with any other member or out of these bounds.
+
+Integrated authentication on Linux and macOS uses Kerberos through SqlClient's managed SNI. When the Negotiate token cannot
+be built, SqlClient reports only error 0, class 11, "Cannot generate SSPI context." (procedure `GenClientContext`), so the
+backend asks GSSAPI for the default initiator credential (`gss_acquire_cred`, which reads the credential cache without
+contacting the KDC) and answers `AUTH_UNSUPPORTED` when the GSSAPI library is missing (what to install), or
+`AUTH_KERBEROS` for a missing or expired ticket (run `kinit`) or for a ticket that does not reach the server (the SPN).
+On Windows, SSPI failures keep SqlClient's message as `SQL_ERROR`. A ticket can also expire while connected, so every later open
+from the connection maps a token failure the same way, without `details`: a query tab's session (`query.execute` answers
+`AUTH_KERBEROS`, as it answers `SESSION_LOST`, and the next execution opens a new session), `databases.list`,
+`tables.columns` and `scripting.script` (an error response), and `explorer.children` (a retryable `AUTH_KERBEROS` value on the
+node). Connect's settings, which those pools derive from, set `Pool Blocking Period=NeverBlock`: SqlClient's default blocks
+a pool after a failed open and rethrows that failure for 5 to 60 seconds without trying, so a Connect or Retry after
+`kinit` would show the stale failure.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
@@ -664,6 +785,8 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 | Banner: crash loop | "The SQL backend stopped repeatedly and was not restarted again." **Restart SQL Backend** **Copy details** |
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
+| `SESSION_LIMIT` | "This query was not executed: 128 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
+| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
 
@@ -744,7 +867,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   stripping, with modes for each misbehaviour (`silent`, `exit`, `crash-after`, `bad-magic`, `oversize`, `truncated`,
   `no-hello`, `v1`, `wrong-version`, `missing-method`, `late`, `credit-overrun`, `seq-gap`, `unknown-id`, `contained`,
   `unresponsive`, and others) and a `workbench` mode for the Electron smoke tests, controlled through
-  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `silent-<generation>`). A
+  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `fail-commit`, `silent-<generation>`). Each
+  session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK, so summaries carry the session probe. A
   script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92
   hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`; `@rate` is rows a second, `M1*n` is n one-row sets)
   with progress, message entries and a memory event, pages encoded per block on first read; `results.copy` and
@@ -787,7 +911,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   planning, and the shared window cache (full, so every insert evicts).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
-  `maxRows: 0`.
+  `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab, each with its session probe.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
   while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
@@ -822,6 +946,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
+| Live: `SELECT 1` in a warm tab, with its session probe, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.7 ms (Windows, 24 CPUs, local SQL Server; 0.6 ms without the probe) | not measured |
 | Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 56 ms | 57 ms |
 | Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 8 % | 9 % |
 | Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |

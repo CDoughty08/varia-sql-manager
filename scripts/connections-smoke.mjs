@@ -42,7 +42,16 @@ try {
   await dialog.getByLabel('Filter connections').fill('not-a-match')
   await expect(dialog.getByText('recent-server', { exact: true })).toHaveCount(0)
   await dialog.getByLabel('Filter connections').fill('')
+  // Integrated authentication needs a Kerberos ticket off Windows, so the dialog opens, and Reset returns, to SQL Server
+  // authentication there, and labels the integrated option as Kerberos.
+  const defaultAuthentication = process.platform === 'win32' ? 'windows' : 'sql'
+  const authentication = dialog.getByLabel('Authentication', { exact: true })
+  await expect(authentication).toHaveValue(defaultAuthentication)
+  await expect(authentication.locator('option[value="windows"]')).toHaveText(process.platform === 'win32' ? 'Windows authentication' : 'Windows authentication (Kerberos)')
+  await expect(authentication.locator('option[value="sql"]')).toHaveText('SQL Server authentication')
+  await authentication.selectOption(defaultAuthentication === 'windows' ? 'sql' : 'windows')
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await expect(authentication).toHaveValue(defaultAuthentication)
   await dialog.getByLabel('Server Name', { exact: true }).fill('sql-dev')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('User Name', { exact: true }).fill('reader')
@@ -136,7 +145,24 @@ try {
   await advanced.getByRole('button', { name: 'Cancel', exact: true }).click()
   if (process.env.VARIA_TEST_SQL_SERVER) {
     await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+    // The saved profile chose SQL Server authentication; Reset returns to the platform's default.
+    await expect(dialog.getByLabel('Authentication', { exact: true })).toHaveValue(defaultAuthentication)
     await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
+    // A real failed login: SQL Server's number, severity, state and server under the error, never the password.
+    await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+    await dialog.getByLabel('User Name', { exact: true }).fill('varia_no_such_login_' + crypto.randomUUID().slice(0, 8))
+    await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
+    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(dialog.getByRole('alert')).toBeVisible({ timeout: 30000 })
+    await dialog.locator('.connect-error-details summary').click()
+    await expect(dialog.locator('.connect-error-details dt')).toHaveText(['Error number', 'Severity', 'State', 'Server'])
+    // Login failed is 18456, severity 14. A server that accepts only Windows authentication sometimes closes the pipe before
+    // SqlClient reads that error, which SqlClient reports as 233, severity 20; either way the details are SqlClient's own.
+    const [number, severity, , answered] = await dialog.locator('.connect-error-details dd').allTextContents()
+    expect(['18456 14', '233 20']).toContain(number + ' ' + severity)
+    expect(answered).toBe(process.env.VARIA_TEST_SQL_SERVER)
+    expect((await dialog.locator('.connect-error, .connect-error-details').allTextContents()).join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
     if (liveUser) {
       await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
       await dialog.getByLabel('User Name', { exact: true }).fill(liveUser)
@@ -167,7 +193,8 @@ try {
         return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
       }
       if (method === 'connections.connect') {
-        if (params.server === 'connect-error') return { ok: false, error: 'Server unavailable.' }
+        if (params.server === 'connect-error') return { ok: false, error: 'Server unavailable.', code: 'SQL_ERROR', details: { number: 53, state: 0, class: 20, server: 'connect-error' } }
+        if (params.server === 'connect-error-plain') return { ok: false, error: 'Server unavailable without details.' }
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
       if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }] }
@@ -207,6 +234,20 @@ try {
   await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable')
+  // The details expander starts closed, opens to SQL Server's facts, and goes with the error once the options change.
+  const details = dialog.locator('.connect-error-details')
+  await expect(details).toHaveCount(1)
+  await expect(details).not.toHaveAttribute('open', '')
+  await details.getByText('Error details', { exact: true }).click()
+  await expect(details).toHaveAttribute('open', '')
+  expect(await details.locator('dt').allTextContents()).toEqual(['Error number', 'Severity', 'State', 'Server'])
+  expect(await details.locator('dd').allTextContents()).toEqual(['53', '20', '0', 'connect-error'])
+  await details.screenshot({ path: resolve('artifacts', 'connect-error-details.png') })
+  await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error-plain')
+  await expect(details).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Server unavailable without details')
+  await expect(details).toHaveCount(0)
   const history = await page.evaluate(() => window.varia.loadConnectionLibrary())
   expect(history.value.library.profiles.some(item => item.options.server === 'connect-error')).toBe(false)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connected-server')
@@ -230,7 +271,7 @@ try {
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect.poll(() => app.evaluate(() => globalThis.connectionCalls.find(call => call.method === 'query.execute')?.params.timeoutSeconds)).toBe(7)
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, colors in the query and Object Explorer, timeout routing, compact sizing, and keyboard focus.')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection failure details, colors in the query and Object Explorer, timeout routing, compact sizing, and keyboard focus.')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())

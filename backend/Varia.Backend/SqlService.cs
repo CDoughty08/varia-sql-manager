@@ -28,6 +28,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private const long MemoryReportStep = 64L * 1024 * 1024;
     private const string CancelledSentence = "The script was cancelled. Remaining batches were not executed.";
     private const string TimedOutSentence = "The script exceeded its execution timeout. Remaining batches were not executed.";
+    /// <summary>SSMS's query-window defaults, run when a tab's session opens. SqlClient's login already sets all but two
+    /// (ARITHABORT is OFF and TEXTSIZE -1), but a server's 'user options' can change them, so each is set explicitly. With
+    /// ARITHABORT ON, plans differ from an application's that leaves it OFF, as they do between SSMS and that application.</summary>
+    internal const string SessionPrologue = "SET ARITHABORT ON; SET ANSI_NULLS ON; SET ANSI_PADDING ON; SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; "
+        + "SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON; SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;";
     // The summary must fit the 16 MiB response limit: descriptors get 8 MiB, messages (1,000,000 characters, with their
     // kinds) and the error text the rest, with room to spare.
     private const long MaxSummaryDescriptorBytes = 8L * 1024 * 1024;
@@ -62,8 +67,32 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
     }
 
-    /// <summary>The most query sessions open at once. Only the live checks change it.</summary>
-    internal int SessionLimit { get; set; } = 32;
+    /// <summary>The most query sessions the app keeps open at once (each holds its own unpooled connection). It leaves room
+    /// within main's 256 pending requests for every session to run a script and still be cancelled. Idle sessions are never
+    /// reclaimed to make room: a session's SET options, temporary objects and open transaction are invisible from outside
+    /// (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing it would lose them
+    /// silently. Only the live checks change it.</summary>
+    internal int SessionLimit { get; set; } = 128;
+    /// <summary>The session probe that follows every script. It is a statement in the user's session, so the next script
+    /// sees @@ROWCOUNT 1 and @@ERROR 0 rather than what its own last statement left, and the session's most recent SQL
+    /// (DBCC INPUTBUFFER, sys.dm_exec_input_buffer, sp_WhoIsActive) is this probe rather than the script. SqlClient keeps
+    /// no public record of a transaction begun in T-SQL, and a DMV read from another session needs VIEW SERVER STATE, so
+    /// this is the cost of knowing about an open transaction before the session ends.</summary>
+    internal const string ProbeSql = "SELECT @@TRANCOUNT, SUSER_SNAME();";
+    /// <summary>What a query tab's session runs before it closes with commit: every nesting level of its transaction
+    /// committed, then what is left. Only the live checks change it, to break the connection while it runs.</summary>
+    internal string CommitSql { get; set; } = DefaultCommitSql;
+    internal const string DefaultCommitSql = "WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION; SELECT @@TRANCOUNT;";
+    /// <summary>Read before the commit: a session found lost here never received it, and one with nothing open needs none.
+    /// It reads no row (or a plan) when SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY would keep the commit from executing.</summary>
+    internal const string TransactionCountSql = "SELECT @@TRANCOUNT;";
+    /// <summary>The options that compile a batch without executing it, turned off before a commit. Each SHOWPLAN option must
+    /// be alone in its batch, and one that is not ON is only shown, not run, under another.</summary>
+    internal static readonly string[] ExecuteAgainSql = ["SET SHOWPLAN_XML OFF", "SET SHOWPLAN_TEXT OFF", "SET SHOWPLAN_ALL OFF", "SET NOEXEC OFF; SET PARSEONLY OFF; SET FMTONLY OFF;"];
+
+    /// <summary>What a tab's session runs when it opens: <see cref="SessionPrologue"/>. Only the live checks change it, to
+    /// make it fail.</summary>
+    internal string Prologue { get; set; } = SessionPrologue;
 
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
@@ -137,7 +166,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
-        "query.session.close" => CloseSession(Read<SessionArgs>(parameters, json)),
+        "query.session.close" => await CloseSessionAsync(Read<SessionArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
@@ -162,11 +191,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         if (options.Authentication is not ("windows" or "sql"))
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
-        if (options.Authentication == "windows" && !OperatingSystem.IsWindows())
-            throw new RequestException("AUTH_UNSUPPORTED", "Windows authentication in this bootstrap requires Windows. Use SQL authentication on other platforms.");
-        var builder = ConnectionSettings.Build(options);
+        var builder = ConnectBuilder(options);
         await using var connection = new SqlConnection(builder.ConnectionString);
-        await connection.OpenAsync(token);
+        await OpenAsync(connection, options, token);
         var profile = await ServerProfile.ProbeAsync(connection, token);
         var id = Guid.NewGuid().ToString();
         profiles[id] = profile;
@@ -177,6 +204,21 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null);
     }
 
+    /// <summary>The connection's settings, which its other pools derive from. SqlClient's pool blocking (Auto blocks for every
+    /// server but Azure SQL) keeps a failed open's exception and rethrows it for every open during 5 to 60 seconds without
+    /// trying: a Connect after kinit, or Object Explorer's retry after a ticket expired, would show the stale failure (and,
+    /// with a ticket now there, the wrong Kerberos advice). Every open the user asks for must reach the server.</summary>
+    internal static SqlConnectionStringBuilder ConnectBuilder(ConnectOptions options)
+    {
+        var builder = ConnectionSettings.Build(options);
+        builder.PoolBlockingPeriod = PoolBlockingPeriod.NeverBlock;
+        return builder;
+    }
+
+    /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, and database and
+    /// column lists (ConnectionFailures.OpenAsync). The live checks replace it to fail as an expired Kerberos ticket does.</summary>
+    internal Func<SqlConnection, CancellationToken, Task> Open { get; set; } = ConnectionFailures.OpenAsync;
+
     private static async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
     {
         // Use the login's default database to discover choices, even if the typed database is stale.
@@ -185,8 +227,20 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         await using var connection = new SqlConnection(builder.ConnectionString);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
-        await connection.OpenAsync(deadline.Token);
+        await OpenAsync(connection, options, deadline.Token);
         return await ReadDatabasesAsync(connection, deadline.Token);
+    }
+
+    /// <summary>Opens a connection the user is choosing (connect and database discovery), so a failure carries its details,
+    /// and integrated authentication on Linux and macOS (Kerberos through SqlClient's managed SNI) says what to fix.
+    /// A cancelled or timed-out attempt is left to the host, which answers it CANCELLED or TIMEOUT.</summary>
+    private static async Task OpenAsync(SqlConnection connection, ConnectOptions options, CancellationToken token)
+    {
+        try { await connection.OpenAsync(token); }
+        catch (Exception error) when (!token.IsCancellationRequested && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
+        {
+            throw failure;
+        }
     }
 
     private object Disconnect(ConnectionArgs args)
@@ -242,6 +296,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// reach the other pools, and each job restores its database before the connection returns to the pool.</summary>
     SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Scripting");
 
+    Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+
     private SqlConnection PoolConnection(string connectionId, string? database, string suffix)
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
@@ -256,7 +313,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private async Task<List<DatabaseInfo>> DatabasesAsync(ConnectionArgs args, CancellationToken token)
     {
         await using var connection = CreateConnection(args.ConnectionId);
-        await connection.OpenAsync(token);
+        await Open(connection, token);
         return await ReadDatabasesAsync(connection, token);
     }
 
@@ -284,7 +341,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         await using var connection = CreateConnection(args.ConnectionId, args.Database);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
-        await connection.OpenAsync(deadline.Token);
+        await Open(connection, deadline.Token);
         await using var command = connection.CreateCommand();
         // Only the token's deadline: on a pooled connection that opens at once, a 30 s CommandTimeout would expire on the
         // same tick and could leave the connection a response behind for its next user.
@@ -326,6 +383,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ResultSetBuffer? currentSet = null;
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
+        SessionProbe? probe = null;
+        int? spid = null;
         var completed = 0;
         var batchNumber = 0;
         var iteration = 0;
@@ -343,6 +402,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         // running. Messages keep them all, in order, up to their own caps.
         var errors = new List<string>();
         var suppressedErrors = 0;
+        // Every severity 11+ error so far: a batch raised one when this grew while it ran.
+        var raised = 0;
+        (int Batch, int Iteration)? firstError = null;
         // Errors InfoMessage delivered, so the exception that may carry them again does not repeat them in Messages.
         var delivered = new Queue<(int Number, byte State, int Line, string Message)>();
         // SSMS's two-line form: the line is absolute within the script (or the selection), or the procedure's own.
@@ -362,19 +424,42 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message); continue; }
                 // An error while rows stream means the statement producing the current result set stopped early.
                 if (currentSet is not null) currentSet.Incomplete = true;
-                var text = Describe(error);
-                messages.Add(text, MessageKind.Error);
                 lock (errors)
                 {
                     delivered.Enqueue((error.Number, error.State, error.LineNumber, error.Message));
                     if (delivered.Count > 20) delivered.Dequeue();
-                    if (errors.Count < 20) errors.Add(text); else suppressedErrors++;
                 }
+                Raise(Describe(error));
             }
         };
+        void Raise(string text)
+        {
+            messages.Add(text, MessageKind.Error);
+            lock (errors)
+            {
+                raised++;
+                if (errors.Count < 20) errors.Add(text); else suppressedErrors++;
+            }
+        }
         bool Delivered(SqlError item)
         {
             lock (errors) return delivered.Contains((item.Number, item.State, item.LineNumber, item.Message));
+        }
+        int Raised()
+        {
+            lock (errors) return raised;
+        }
+        // A batch's exception ends only that batch while the session survives it: SQL Server closes the connection for
+        // severity 20 and above, and a cancel or the deadline ends the whole script.
+        bool Continues(SqlException error, SqlConnection connection) => !args.StopOnError && !token.IsCancellationRequested
+            && connection.State == System.Data.ConnectionState.Open && error.Errors.Cast<SqlError>().All(item => item.Class < 20);
+        // Messages a batch's exception carries, in order, except errors InfoMessage already reported.
+        void Report(SqlException error)
+        {
+            foreach (SqlError item in error.Errors)
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                else if (!Delivered(item)) Raise(Describe(item));
+            if (!error.Errors.Cast<SqlError>().Any(item => item.Class > 10)) Raise(error.Message);
         }
         // The error that stopped execution comes first, then those SQL Server reported while the script continued.
         string ErrorText(IEnumerable<string> terminating)
@@ -400,7 +485,22 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             if (connection.State != System.Data.ConnectionState.Open)
             {
                 if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
-                await connection.OpenAsync(token);
+                // A Kerberos failure answers the request (AUTH_KERBEROS), as SESSION_LOST does: no batch was sent.
+                await Open(connection, token);
+                try
+                {
+                    await using var prologue = connection.CreateCommand();
+                    prologue.CommandText = Prologue;
+                    prologue.CommandTimeout = 0;
+                    await prologue.ExecuteNonQueryAsync(token);
+                }
+                catch
+                {
+                    // A session without SSMS's settings must not run a script later; closing it makes the next execution open
+                    // a new one.
+                    connection.Close();
+                    throw;
+                }
                 session.HasOpened = true;
             }
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
@@ -416,6 +516,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 {
                     token.ThrowIfCancellationRequested();
                     events.Progress(completed, totalBatches, batchNumber, iteration);
+                    var raisedBefore = Raised();
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -426,6 +527,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     using var stop = token.Register(Attention, command);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
+                    // Large xml values the last row read whole; an exception can leave them uncounted (see the finally).
+                    long transient = 0;
                     try
                     {
                         // Sequential access streams each value once, in column order, so a huge value is never materialised
@@ -436,7 +539,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                             ColumnPlan? plan = null;
                             bool? hasLong = null;
                             var skipped = false;
-                            long transient = 0;
                             if (reader.FieldCount > 0)
                             {
                                 if (sets.Count >= args.MaxResultSets) overflowSets++;
@@ -509,13 +611,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                 skipped = false;
                                 int truncatedCells;
                                 try { truncatedCells = plan!.ReadRow(reader, builder, text => messages.Add(text), token); }
-                                catch { currentSet.AbortRow(); throw; }
+                                catch { currentSet.AbortRow(); transient = plan!.TransientBytes; throw; }
                                 transient = plan.TransientBytes;
                                 var sealedBefore = currentSet.SealedPages;
                                 if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
                                 if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                             }
                             store.Discarded(transient);
+                            transient = 0;
                             if (currentSet is not null)
                             {
                                 currentSet.Complete();
@@ -525,19 +628,45 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                         } while (await reader.NextResultAsync(token));
                         if (reader.RecordsAffected >= 0) recordsAffected = Math.Max(0, recordsAffected) + reader.RecordsAffected;
                     }
-                    catch
+                    catch (Exception error)
                     {
                         // Do not drain a failed command into later statements unnecessarily.
-                        try { command.Cancel(); } catch (Exception error) when (error is InvalidOperationException or SqlException) { }
-                        throw;
+                        try { command.Cancel(); } catch (Exception cancel) when (cancel is InvalidOperationException or SqlException) { }
+                        if (error is not SqlException sql || !Continues(sql, connection)) throw;
+                        // SQL Server does not stop a batch for a severity 17 to 19 error, but SqlClient raises it as an exception, which
+                        // ends what is read of the batch; the script goes on with the next one.
+                        Report(sql);
+                        if (currentSet is not null)
+                        {
+                            currentSet.Incomplete = true;
+                            currentSet.Complete();
+                            events.Closed(currentSet);
+                            currentSet = null;
+                        }
                     }
-                    finally { if (reader is not null) await reader.DisposeAsync(); }
+                    finally
+                    {
+                        if (reader is not null) await reader.DisposeAsync();
+                        // After a severity 17 to 19 error the next batch runs, and must not read another large xml value before
+                        // this row's is counted for collection.
+                        store.Discarded(transient);
+                    }
                     database = connection.Database;
-                    // Like SSMS's default, a batch that raised an error stops the remaining batches.
-                    if (errors.Count > 0) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
+                    var failed = Raised() != raisedBefore;
+                    // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
+                    if (failed && args.StopOnError) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
+                    if (failed) firstError ??= (batchNumber, iteration);
                     completed++;
                     events.Progress(completed, totalBatches, batchNumber, iteration);
+                    if (failed && completed < totalBatches)
+                        messages.Add("Batch " + batchNumber + (batch.RepeatCount > 1 ? ", repetition " + iteration + "," : "") + " raised an error; execution continued with the next "
+                            + (iteration < batch.RepeatCount ? "repetition." : "batch."));
                 }
+            }
+            if (firstError is { } first)
+            {
+                status = "completedWithErrors";
+                failure = new("SQL_ERROR", ErrorText([]), first.Batch, first.Iteration);
             }
         }
         catch (SqlException error)
@@ -578,6 +707,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         finally
         {
+            // The elapsed time is the script's; the probe below is not part of it.
+            watch.Stop();
             queries.TryRemove(args.QueryId, out _);
             // A set cut short keeps the rows it stored.
             foreach (var set in sets.Where(set => set.IsOpen))
@@ -589,12 +720,21 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             {
                 session.Connection.FireInfoMessageEventOnUserErrors = false;
                 session.Connection.InfoMessage -= onInfo;
-                if (session.Connection.State == System.Data.ConnectionState.Open) database = session.Connection.Database;
+                if (session.Connection.State == System.Data.ConnectionState.Open)
+                {
+                    database = session.Connection.Database;
+                    // Still holding the session, so nothing else runs between the script and the probe.
+                    probe = await ProbeAsync(session.Connection);
+                    // The session id needs no round trip, so a session the probe could not read is still known to be open.
+                    if (session.Connection.State == System.Data.ConnectionState.Open) spid = session.Connection.ServerProcessId;
+                }
                 if (session.Connection.State is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken)
                 {
                     ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(args.SessionId, session));
                     session.Close();
-                    messages.Add("The SQL session closed. The next execution opens a new session; previous SET options and temporary objects will be lost.");
+                    // A session that failed to open (a missing database, a refused login) had no state to lose.
+                    if (session.HasOpened)
+                        messages.Add("The SQL session closed. The next execution opens a new session; previous SET options and temporary objects will be lost.");
                 }
                 session.Exit();
             }
@@ -611,7 +751,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString("N0", CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
         if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
-        // Only when something was skipped: an error ends its batch's script, not the batch, which SQL Server may run on.
+        // Only when something stopped the script before a later batch: SQL Server may have run the failing batch to its end.
         if (failure is not null && batchNumber > 0 && completed + 1 < totalBatches)
         {
             var repeated = batches[batchNumber - 1].RepeatCount > 1;
@@ -622,7 +762,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, probe?.TransactionCount, spid, probe?.Login);
     }
 
     /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows
@@ -771,11 +911,110 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         try { source.Cancel(); } catch (ObjectDisposedException) { /* Query completed concurrently. */ }
     }
 
-    private object CloseSession(SessionArgs args)
+    /// <summary>The open transaction (@@TRANCOUNT) and the login, read on the session after its script. It has its own short
+    /// timeout and no token: the script's token may already be cancelled, and a timeout ends only the probe. It reads no
+    /// row under SET NOEXEC, PARSEONLY or FMTONLY ON, a plan under SET SHOWPLAN_* ON, and nothing on a timeout; the summary
+    /// then has the session's SPID without them, which the workbench takes as a transaction it could not check.</summary>
+    private static async Task<SessionProbe?> ProbeAsync(SqlConnection connection)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = ProbeSql;
+            command.CommandTimeout = 5;
+            await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SingleRow);
+            if (!await reader.ReadAsync()) return null;
+            return new SessionProbe(reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1));
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or InvalidCastException) { return null; }
+    }
+
+    private async Task<object> CloseSessionAsync(SessionArgs args, CancellationToken token)
     {
         if (!Guid.TryParse(args.SessionId, out _)) throw new RequestException("INVALID_PARAMS", "A valid session ID is required.");
-        foreach (var query in queries.Values.Where(query => query.SessionId == args.SessionId)) query.Cancel();
-        var removed = sessions.TryRemove(args.SessionId, out var session);
+        if (args.Transaction is not (null or "commit" or "rollback")) throw new RequestException("INVALID_PARAMS", "A transaction ends by commit or rollback.");
+        // A rollback is the close itself: SQL Server rolls back what a closed session left open, on its own time. An explicit
+        // ROLLBACK would hold this request until the rollback finished, since an attention waits for it too.
+        if (args.Transaction == "commit" && sessions.TryGetValue(args.SessionId, out var open)) await CommitAsync(args.SessionId, open, token);
+        return CloseSession(args.SessionId);
+    }
+
+    /// <summary>Commits the session's transaction before it closes. A commit that fails (an uncommittable error, a script
+    /// still running, SET options that keep it from executing even after they are turned off) throws and leaves the session
+    /// open, so its tab stays open with its transaction for the user to decide again. A session found lost before the
+    /// commit was sent had its transaction rolled back by SQL Server; for one lost while the commit ran, the outcome is
+    /// unknown, and the error says so. Either way the lost session is closed.</summary>
+    private async Task CommitAsync(string sessionId, QuerySession session, CancellationToken token)
+    {
+        if (!session.TryEnter()) throw new RequestException("SESSION_BUSY", "A query is running in this tab. Cancel it before committing its transaction.");
+        try
+        {
+            var connection = session.Connection;
+            var committing = false;
+            RequestException Lost()
+            {
+                ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(sessionId, session));
+                session.Close();
+                return new RequestException("SESSION_LOST", committing
+                    ? "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again."
+                    : "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.");
+            }
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                if (!session.HasOpened) return;
+                throw Lost();
+            }
+            // The token alone carries the deadline (see ExecuteAsync).
+            async Task Run(string sql)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = sql;
+                command.CommandTimeout = 0;
+                using var stop = token.Register(Attention, command);
+                await command.ExecuteNonQueryAsync(token);
+            }
+            // @@TRANCOUNT after the batch, or null when the batch compiled without executing.
+            async Task<int?> Count(string sql)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = sql;
+                command.CommandTimeout = 0;
+                using var stop = token.Register(Attention, command);
+                await using var reader = await command.ExecuteReaderAsync(token);
+                return await reader.ReadAsync(token) && reader.FieldCount == 1 && reader.GetFieldType(0) == typeof(int) ? reader.GetInt32(0) : null;
+            }
+            try
+            {
+                var open = await Count(TransactionCountSql);
+                if (open is null)
+                {
+                    // The session is about to close, so the options it would lose anyway are turned off now.
+                    foreach (var sql in ExecuteAgainSql) await Run(sql);
+                    open = await Count(TransactionCountSql);
+                }
+                if (open is null) throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. The session's SET options keep a COMMIT from executing.");
+                if (open == 0) return;
+                committing = true;
+                var remaining = await Count(CommitSql);
+                committing = false;
+                if (remaining is not 0) throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. @@TRANCOUNT is " + (remaining?.ToString(CultureInfo.InvariantCulture) ?? "unknown") + " after COMMIT.");
+            }
+            catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested)
+            {
+                if (connection.State != System.Data.ConnectionState.Open) throw Lost();
+                if (error is not SqlException failed) throw;
+                var details = string.Join(Environment.NewLine, failed.Errors.Cast<SqlError>().Where(item => item.Class > 10)
+                    .Select(item => "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + "\n" + item.Message));
+                throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. " + (details.Length == 0 ? failed.Message : details));
+            }
+        }
+        finally { session.Exit(); }
+    }
+
+    private object CloseSession(string sessionId)
+    {
+        foreach (var query in queries.Values.Where(query => query.SessionId == sessionId)) query.Cancel();
+        var removed = sessions.TryRemove(sessionId, out var session);
         session?.Close();
         // The session's results stay until the renderer closes them (results.close) or its next query replaces them.
         return new { Closed = removed };
@@ -793,7 +1032,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 if (existing.ConnectionId != args.ConnectionId) throw new RequestException("SESSION_TARGET", "Close this query session before selecting another server.");
                 return existing;
             }
-            if (sessions.Count >= SessionLimit) throw new RequestException("SESSION_LIMIT", "Close an unused query tab before opening another SQL session (maximum " + SessionLimit + ").");
+            if (sessions.Count >= SessionLimit)
+                throw new RequestException("SESSION_LIMIT", "This query was not executed: " + SessionLimit + " query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. "
+                    + "Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again.");
             var session = new QuerySession(args.ConnectionId, CreateConnection(args.ConnectionId, args.Database, stateful: true));
             sessions[args.SessionId] = session;
             return session;

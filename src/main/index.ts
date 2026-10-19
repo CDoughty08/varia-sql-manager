@@ -29,6 +29,7 @@ import { contentSecurityPolicy } from '../shared/csp'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
+import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -116,11 +117,17 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
+/** A backend failure keeps its code and, for a failed connection, its details (never the connection string or password). */
+function failure(error: unknown, fallback: string): ApiResult<never> {
+  if (!(error instanceof BackendError)) return { ok: false, error: errorMessage(error, fallback) }
+  return { ok: false, error: errorMessage(error, fallback), code: error.code, ...(error.details ? { details: error.details } : {}) }
+}
+
 function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T): void {
   ipcMain.handle(channel, async (event, value: unknown): Promise<ApiResult<T>> => {
     if (!trusted(event)) return { ok: false, error: 'Untrusted IPC sender.' }
     try { return { ok: true, value: await action(value) } }
-    catch (error) { return { ok: false, error: errorMessage(error, 'The operation failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
+    catch (error) { return failure(error, 'The operation failed.') }
   })
 }
 
@@ -524,7 +531,7 @@ app.whenReady().then(async () => {
         catch { (result as RpcMethods['connections.connect']['result']).historyWarning = 'Connected successfully, but recent connections could not be saved.' }
       }
       return { ok: true, value: result }
-    } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
+    } catch (error) { return failure(error, 'Backend request failed.') }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
   // Copy and Save Results As: the renderer names a result it owns; the backend formats the text, main writes the
@@ -559,6 +566,14 @@ app.whenReady().then(async () => {
     const name = z.string().min(1).max(512).parse(value)
     const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)
     return (['save', 'discard', 'cancel'] as const)[response.response]
+  })
+  // Open transactions and running queries in sessions about to end. Main writes the prompt from validated facts, and a page
+  // that reloads or crashes while it is open gets Cancel (its sessions ended with it), so a dead page cannot hold it open.
+  handle('varia:confirm-sessions', async value => {
+    const prompt = sessionPrompt(sessionPromptRequestSchema.parse(value))
+    if (!prompt) return 'proceed'
+    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal }), { response: prompt.cancelId, checkboxChecked: false }, true)
+    return prompt.buttons[response]?.answer ?? 'cancel'
   })
   // The page has handled every unsaved query. On macOS a window close leaves the app running, as macOS apps do.
   ipcMain.handle('varia:close-window', event => {

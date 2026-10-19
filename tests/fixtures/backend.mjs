@@ -11,10 +11,13 @@
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
+//   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
+// A tab's session counts BEGIN TRAN, COMMIT and ROLLBACK in its scripts, so every summary carries the probe the real
+// backend adds (transactionCount, spid, login); query.session.close commits or rolls back what is open.
 import { appendFileSync, existsSync, rmSync } from 'node:fs'
 import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -105,6 +108,10 @@ function request(id, deadline, { method, params, credit }) {
     case 'late':
       if (answered === 1) { setTimeout(() => respond(id, { late: true }), Number(argument ?? 300)); return }
       break
+    // connections.connect fails with details (docs/ipc.md); server 'long' sends a server name over the 256-character bound.
+    case 'error-details':
+      if (method === 'connections.connect') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: params.server === 'long' ? { number: 0, server: 'x'.repeat(257) } : { number: 0, state: 0, class: 11, server: params.server } } })
+      break
     case 'events':
       // Global events (id 0) are advisory: an undecodable one is dropped, not a violation.
       write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: 1, globalBytes: 2 })
@@ -175,6 +182,20 @@ let logged = Promise.resolve()
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const workbenchConnections = new Map()
 const waitingScripts = new Map()
+// Each tab's session: its SPID and open transaction count, until query.session.close or its connection's disconnect.
+const sessions = new Map()
+let nextSpid = 51
+/** Applies a script's BEGIN TRAN, COMMIT and ROLLBACK to its session, as SQL Server would count them in @@TRANCOUNT. */
+function runInSession({ sessionId, connectionId, sql }) {
+  const session = sessions.get(sessionId) ?? { spid: nextSpid++, connectionId, transactions: 0 }
+  sessions.set(sessionId, session)
+  for (const [statement] of sql.matchAll(/\b(BEGIN\s+TRAN(?:SACTION)?|COMMIT(?:\s+TRAN(?:SACTION)?)?|ROLLBACK(?:\s+TRAN(?:SACTION)?)?)\b/gi)) {
+    const verb = statement.slice(0, 1).toUpperCase()
+    session.transactions = verb === 'B' ? session.transactions + 1 : verb === 'C' ? Math.max(0, session.transactions - 1) : 0
+  }
+}
+/** The session probe SqlService adds to every summary. */
+const probe = sessionId => { const session = sessions.get(sessionId); return session ? { transactionCount: session.transactions, spid: session.spid, login: 'fake' } : {} }
 const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
@@ -398,13 +419,14 @@ async function runDirective(id, params, directive) {
     if (messages.length) write(FrameKind.EVENT, id, 0, { type: 'messages', messages })
     while (directive.hold && !cancelledQueries.has(queryId) && await controlled(join('hold', 'query.execute'))) await sleep(25)
     if (status === 'completed' && cancelledQueries.has(queryId)) status = 'cancelled'
+    // Its one batch ran to its end, so errors leave the run completed with errors, as SqlService reports one.
     const failed = status === 'completed' && directive.errors > 0
     respond(id, {
-      resultSets: results.map(describe), discardedResultSets: discarded.length, messages, recordsAffected: -1, elapsedMs: 1, status: failed ? 'failed' : status,
+      resultSets: results.map(describe), discardedResultSets: discarded.length, messages, recordsAffected: -1, elapsedMs: 1, status: failed ? 'completedWithErrors' : status,
       ...failed ? { error: { code: 'SQL_ERROR', message: messages.find(message => message.kind === 'error').text, batchNumber: 1, iteration: 1 } } : {},
       ...status === 'cancelled' ? { error: { code: 'CANCELLED', message: 'The script was cancelled. Remaining batches were not executed.', batchNumber: 1, iteration: 1 } } : {},
-      completedBatches: status === 'completed' && !failed ? 1 : 0, totalBatches: 1, database: params.database, messagesTruncated: false,
-      budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00')
+      completedBatches: status === 'completed' ? 1 : 0, totalBatches: 1, database: params.database, messagesTruncated: false,
+      budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...probe(params.sessionId)
     })
   } finally {
     runningDirectives.delete(queryId)
@@ -414,10 +436,11 @@ async function runDirective(id, params, directive) {
 
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
-    // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form.
+    // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form, and the third batch still runs.
     messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2."),
-      { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }], elapsedMs: 3, status: 'failed',
-    error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 1, totalBatches: 3
+      { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }, info('Batch 2 raised an error; execution continued with the next batch.'),
+      info('third batch')], elapsedMs: 3, status: 'completedWithErrors',
+    error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 3, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
   SelectTopNRows: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('CustomerName', 'nvarchar')], rows: [['1', 'Contoso']] }]),
@@ -459,12 +482,19 @@ async function workbench(id, method, params, credit) {
     case 'connections.databases': return respond(id, workbenchDatabases)
     case 'connections.discover': return respond(id, { servers: [] })
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })
-    case 'connections.disconnect': return respond(id, { disconnected: workbenchConnections.delete(params.connectionId) })
-    case 'query.session.close': return respond(id, { closed: true })
+    case 'connections.disconnect':
+      for (const [sessionId, session] of sessions) if (session.connectionId === params.connectionId) sessions.delete(sessionId)
+      return respond(id, { disconnected: workbenchConnections.delete(params.connectionId) })
+    case 'query.session.close': {
+      if (params.transaction === 'commit' && sessions.get(params.sessionId)?.transactions && await controlled('fail-commit')) {
+        return fail(id, 'SQL_ERROR', 'The transaction was not committed, and the query stays open. Msg 3930, Level 16, State 1\nThe current transaction cannot be committed.')
+      }
+      return respond(id, { closed: sessions.delete(params.sessionId) })
+    }
     case 'query.cancel': {
       const script = waitingScripts.get(params.queryId)
       waitingScripts.delete(params.queryId)
-      if (script) respond(script.id, summary(script.id, script.database, [], { status: 'cancelled' }))
+      if (script) respond(script.id, summary(script.id, script.database, [], { status: 'cancelled', ...probe(script.sessionId) }))
       if (runningDirectives.has(params.queryId)) cancelledQueries.add(params.queryId)
       return respond(id, { cancelled: !!script || runningDirectives.has(params.queryId) })
     }
@@ -491,11 +521,12 @@ async function workbench(id, method, params, credit) {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)
       beginQuery(params.sessionId)
+      runInSession(params)
       if (directive) return runDirective(id, params, directive)
-      if (params.sql.includes('WAIT_FOR_CANCEL')) { waitingScripts.set(params.queryId, { id, database: params.database }); return }
+      if (params.sql.includes('WAIT_FOR_CANCEL')) { waitingScripts.set(params.queryId, { id, database: params.database, sessionId: params.sessionId }); return }
       const fixture = Object.keys(fixtures).find(name => params.sql.includes(name))
-      if (fixture) return respond(id, fixtures[fixture](id, params))
-      return respond(id, summary(id, params.database, [{ columns: [column('server', 'nvarchar'), column('generation', 'int'), column('database', 'nvarchar')], rows: [[connection.server, String(generation), params.database]] }]))
+      if (fixture) return respond(id, { ...fixtures[fixture](id, params), ...probe(params.sessionId) })
+      return respond(id, summary(id, params.database, [{ columns: [column('server', 'nvarchar'), column('generation', 'int'), column('database', 'nvarchar')], rows: [[connection.server, String(generation), params.database]] }], probe(params.sessionId)))
     }
   }
   return fail(id, 'METHOD_NOT_FOUND', 'The fake backend does not know ' + method + '.')

@@ -457,7 +457,7 @@ describe('command palette', () => {
     expect(row('File: New Query')?.item).toMatchObject({ id: 'file.new', icon: 'new-file', keybinding: { text: 'Ctrl+N', aria: 'Control+N' } })
     expect(row('File: New Query')?.item.disabled).toBeUndefined()
     expect(row('Edit: Comment Selection')?.item.keybinding?.parts).toEqual(['Ctrl+K', 'Ctrl+C'])
-    expect(row('Query: Execute')?.item).toMatchObject({ disabled: true, disabledHint: 'Connect this query to a server and wait for its running query to finish.' })
+    expect(row('Query: Execute')?.item).toMatchObject({ disabled: true, disabledHint: 'Open a query, wait for its running query to finish, and reconnect a lost connection.' })
     expect(row('Query: Change Connection…')?.item).toMatchObject({ disabled: true, disabledHint: '“Query: Change Connection…” is not available right now.' })
     expect(row('Go to Query…')?.item).toMatchObject({ disabled: true, disabledHint: 'No queries are open.', keybinding: { text: 'Ctrl+P' } })
   })

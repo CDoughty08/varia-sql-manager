@@ -1,4 +1,5 @@
 // The output pane's sentences: the status line, the live region at completion, and byte and row counts.
+import type { QueryStatus } from '../../../shared/contracts'
 
 /** Counts in en-US grouping, as SSMS shows them. */
 export const formatCount = (value: number): string => Math.max(0, Math.floor(value)).toLocaleString('en-US')
@@ -19,10 +20,11 @@ export function formatBytes(bytes: number): string {
   return (bytes / 1073741824).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' GB'
 }
 
-export type StatusKind = 'running' | 'completed' | 'failed' | 'cancelled' | 'timedOut' | 'lost' | 'closed'
+export type StatusKind = 'running' | QueryStatus | 'lost' | 'closed'
+// SSMS's sentence for a run whose batches all ran though some raised errors; 'failed' means an error stopped the run.
 const lead: Record<Exclude<StatusKind, 'lost'>, string> = {
-  running: 'Executing query…', completed: 'Query executed successfully.', failed: 'Query completed with errors.', cancelled: 'Query was cancelled.', timedOut: 'Query timed out.',
-  closed: 'Query executed successfully.'
+  running: 'Executing query…', completed: 'Query executed successfully.', completedWithErrors: 'Query completed with errors.', failed: 'Query failed.',
+  cancelled: 'Query was cancelled.', timedOut: 'Query timed out.', closed: 'Query executed successfully.'
 }
 /** The status line: "Executing query… · 00:00:03 · 1,234 rows", with " · 2/3 batches" when the script has several. */
 export function statusSentence(o: { status: StatusKind; elapsedMs: number; rows: number; completedBatches: number; totalBatches: number }): string {
@@ -33,7 +35,7 @@ export function statusSentence(o: { status: StatusKind; elapsedMs: number; rows:
 
 /** What the live region says when a run ends. */
 export function completionSentence(status: StatusKind, sets: number, rows: number): string {
-  if (status === 'completed') return `Query executed successfully. ${formatCount(sets)} result ${plural(sets, 'set')}, ${formatCount(rows)} ${plural(rows, 'row')}.`
+  if (status === 'completed' || status === 'completedWithErrors') return `${lead[status]} ${formatCount(sets)} result ${plural(sets, 'set')}, ${formatCount(rows)} ${plural(rows, 'row')}.`
   if (status === 'lost') return 'The SQL backend stopped while this query was running.'
   return lead[status === 'running' ? 'failed' : status]
 }

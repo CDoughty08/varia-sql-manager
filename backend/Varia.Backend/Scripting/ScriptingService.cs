@@ -16,6 +16,8 @@ internal interface IScriptingHost
     /// <summary>An unopened connection from the connection's scripting pool; with a database, a pool in that database
     /// (cloud editions, which cannot switch databases).</summary>
     SqlConnection Connection(string connectionId, string? database);
+    /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS, which answers the request.</summary>
+    Task OpenAsync(SqlConnection connection, CancellationToken token);
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -167,7 +169,7 @@ internal sealed class ScriptingService : IDisposable
         SmoScriptRunner? runner = null;
         try
         {
-            await connection.OpenAsync(token);
+            await host.OpenAsync(connection, token);
             home = connection.Database;
             await using (var prologue = connection.CreateCommand())
             {

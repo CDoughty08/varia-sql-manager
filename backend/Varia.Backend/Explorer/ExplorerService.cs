@@ -15,6 +15,8 @@ internal interface IExplorerHost
     /// <summary>An unopened connection from the connection's Object Explorer pool; with a database, a pool in that database
     /// (cloud editions, which cannot EXEC across databases).</summary>
     SqlConnection Connection(string connectionId, string? database);
+    /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), which the node shows.</summary>
+    Task OpenAsync(SqlConnection connection, CancellationToken token);
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -249,7 +251,7 @@ internal sealed class ExplorerService : IDisposable
             try
             {
                 await using var connection = host.Connection(request.ConnectionId, perDatabase ? request.Database : null);
-                await connection.OpenAsync(token);
+                await host.OpenAsync(connection, token);
                 await using var command = connection.CreateCommand();
                 command.CommandTimeout = 30;
                 var prologue = CatalogSql.Prologue + (Options.TestDelay is { } delay ? "WAITFOR DELAY '" + delay.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + "';\n" : "");
@@ -281,6 +283,10 @@ internal sealed class ExplorerService : IDisposable
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
             return new(partial, 0, Error: ExplorerErrors.From(error, phase, Subject(request), request.Database));
+        }
+        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED")
+        {
+            return new(partial, 0, Error: ExplorerErrors.SignIn(error));
         }
         finally { gate.Release(); }
     }
