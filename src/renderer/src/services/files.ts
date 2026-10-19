@@ -7,6 +7,11 @@ import type { QueryService } from './queries'
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
 export interface FileSnapshot { readonly error: string }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
+/** Queries that were running when the prompt opened, and finished since with a transaction: they were not asked about,
+ *  so they stay (`open` or `connected`) rather than have it rolled back without asking. */
+export const unfinished = (count: number, stayed: 'open' | 'connected'): string => !count ? ''
+  : count === 1 ? `1 query finished with an open transaction while this ran and stayed ${stayed}; run it again to be asked about it.`
+    : `${count} queries finished with open transactions while this ran and stayed ${stayed}; run it again to be asked about them.`
 
 export class FileService extends SnapshotStore<FileSnapshot> implements Disposable {
   private disposed = false
@@ -14,10 +19,11 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private closing: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning'>, private api: FileApi) { super({ error: '' }) }
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>, private api: FileApi) { super({ error: '' }) }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
   canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
-  canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canSave(id) && !this.queries.isRunning(id) }
+  /** A query still executing can close too: main asks to cancel it first. */
+  canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canSave(id) }
   reportError(error: string): void {
     if (!this.disposed && error !== this.getSnapshot().error) this.publish({ error })
   }
@@ -93,36 +99,50 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (this.documents.getModel(id) !== model || model.getVersionId() !== version) throw new Error('The query changed while confirming close. Review the latest changes before closing it.')
     return true
   }
+  /**
+   * Asks about unsaved changes, then about an open transaction (Commit, Roll Back, Cancel) or a query still executing
+   * (cancel it, or keep it running), and closes the query. Saving first means a later Cancel leaves nothing undone but a
+   * saved file. A commit that fails is reported and the query stays open, with its transaction.
+   */
   async close(id = this.documents.getSnapshot().activeId): Promise<void> {
     if (!this.canClose(id)) return
     await this.perform(async () => {
       if (!await this.confirmClose(id) || this.disposed) return
+      const plan = await this.queries.confirmSessions('close', [id])
+      if (!plan || this.disposed || !this.documents.get(id)) return
       const file = this.documents.get(id)?.file
-      await this.documents.close(id)
+      await this.documents.close(id, plan.get(id))
       if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
     })
   }
   /**
    * Closes the queries in tab order as one task, asking about each unsaved one; Cancel stops the rest, as in Visual
-   * Studio. Running queries stay open and are reported once the others are closed.
+   * Studio. Open transactions are asked about once, first, and each is committed or rolled back as its query closes.
+   * Running queries stay open and are reported once the others are closed, and so does one that was running when the
+   * prompt opened and has finished since with a transaction nobody was asked about.
    */
   async closeMany(ids: readonly string[]): Promise<void> {
     const wanted = new Set(ids)
     await this.perform(async () => {
-      let running = 0
+      const asked = new Set(ids.filter(id => !this.queries.isRunning(id)))
+      const plan = await this.queries.confirmSessions('closeAll', [...asked])
+      if (!plan || this.disposed) return
+      let running = 0, unasked = 0
       for (const { id } of this.documents.getSnapshot().documents.filter(document => wanted.has(document.id))) {
         if (!this.documents.get(id)) continue
         if (this.queries.isRunning(id)) { running++; continue }
+        if (!asked.has(id) && this.queries.mayHaveTransaction(id)) { unasked++; continue }
         if (!await this.confirmClose(id) || this.disposed) return
         const file = this.documents.get(id)?.file
-        await this.documents.close(id)
+        await this.documents.close(id, plan.get(id))
         if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
       }
-      if (running) throw new Error(running === 1 ? '1 query is still running and stayed open.' : `${running} queries are still running and stayed open.`)
+      const kept = [running ? (running === 1 ? '1 query is still running and stayed open.' : `${running} queries are still running and stayed open.`) : '', unfinished(unasked, 'open')]
+      if (running || unasked) throw new Error(kept.filter(Boolean).join(' '))
     })
   }
   /**
-   * Asks about each unsaved query, then closes the window. A close or quit that arrives while a file task runs (a Script
+   * Asks about each unsaved query, then once about every open transaction and running query, then closes the window. A close or quit that arrives while a file task runs (a Script
    * As File… waiting behind another dialog) waits for it rather than being dropped, so the app exits once the dialogs
    * are answered; requests made meanwhile are the same close. A close that ends without closing tells main, which
    * otherwise hands a close it asked for to the next page if this one reloads or crashes first.
@@ -147,6 +167,8 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         const model = this.documents.getModel(document.id)
         if (model) approved.set(document.id, { model, version: model.getVersionId() })
       }
+      const plan = await this.queries.confirmSessions('exit', [...approved.keys()])
+      if (!plan || this.disposed) return
       await beforeClose()
       if (this.disposed) return
       const current = this.documents.getSnapshot().documents
@@ -154,6 +176,8 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         const approval = approved.get(document.id), model = this.documents.getModel(document.id)
         return !approval || model !== approval.model || model.getVersionId() !== approval.version
       })) throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
+      // Each transaction ends in its own session as the user chose; a commit that fails is reported and the window stays.
+      for (const [id, transaction] of plan) if (this.documents.get(id)) await this.documents.endSession(id, transaction)
       // The user has confirmed every document, so unloading must no longer be blocked.
       this.exiting = true
       try { await this.api.closeWindow() } catch (error) { this.exiting = false; throw error }

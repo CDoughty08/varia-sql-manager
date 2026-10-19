@@ -22,7 +22,9 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// :on error exit); by default execution continues with the next batch, as SSMS does.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false);
-internal sealed record SessionArgs(string SessionId);
+/// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
+/// since SQL Server rolls back what a closed session left open.</summary>
+internal sealed record SessionArgs(string SessionId, string? Transaction = null);
 internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
@@ -42,9 +44,14 @@ internal sealed record MessageEntry(string Text, string Kind);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt
 /// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:". Status is completed, completedWithErrors
 /// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error
-/// stopped execution: before the first batch, with stopOnError, or by closing the session), cancelled, or timedOut.</summary>
+/// stopped execution: before the first batch, with stopOnError, or by closing the session), cancelled, or timedOut.
+/// Spid is the session's, present while it is still open after the script; TransactionCount and Login are the session probed
+/// after the script (@@TRANCOUNT, SUSER_SNAME()), absent when the session was lost or never opened, or the probe read nothing.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
-    string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt);
+    string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
+    int? TransactionCount = null, int? Spid = null, string? Login = null);
+/// <summary>A query session as probed after a script.</summary>
+internal sealed record SessionProbe(int TransactionCount, string? Login);
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);

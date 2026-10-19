@@ -1,5 +1,6 @@
 import type { editor } from 'monaco-editor'
 import type { DocumentKind, VariaApi } from '../../../shared/contracts'
+import type { SessionEnd } from '../../../shared/sessions'
 import { afterClose, isQueryDocument, kindInfo, type QueryDocument } from '../documents'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -159,16 +160,23 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.replace(id, { file: result.value, name: result.value.name, savedVersionId, dirty: model.getAlternativeVersionId() !== savedVersionId })
     return true
   }
-  // The caller holds runTask and has confirmed dirty state and checked running queries.
-  async close(id: string): Promise<void> {
+  /**
+   * Ends a query's SQL session, committing or rolling back its open transaction first (`transaction`). A commit that fails
+   * throws and leaves the session open with its transaction. A session found lost has ended all the same: SQL Server
+   * rolled its transaction back.
+   */
+  async endSession(id: string, transaction?: SessionEnd): Promise<void> {
+    const result = transaction ? await this.api.closeQuerySession(id, transaction) : await this.api.closeQuerySession(id)
+    if (result.ok || result.code === 'SESSION_LOST') this.events.emit({ type: 'session.ended', tabId: id })
+    if (!result.ok) throw new Error(result.error)
+  }
+  // The caller holds runTask and has confirmed dirty state, open transactions (`transaction`) and running queries.
+  async close(id: string, transaction?: SessionEnd): Promise<void> {
     const entry = this.entries.get(id)
     if (!entry) return
     const version = entry.model.getVersionId()
     // Only a query has a SQL session to end.
-    if (isQueryDocument(this.get(id))) {
-      const result = await this.api.closeQuerySession(id)
-      if (!result.ok) throw new Error(result.error)
-    }
+    if (isQueryDocument(this.get(id))) await this.endSession(id, transaction)
     if (this.disposed || this.entries.get(id) !== entry) return
     if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
     const current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)

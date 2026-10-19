@@ -8,7 +8,7 @@ editor.context, for the query editor
     ---
     C&hange Connection…  ++--
   ---
-  E&xecute  F5  -+--
+  E&xecute  F5  ++--
   Ca&ncel Executing Query  Alt+Pause  --+-
   ---
   Cu&t  Ctrl+X  ++++
@@ -20,7 +20,7 @@ documentTab.context, for a saved query's tab
   &Save  Ctrl+S  +++-
   Save &As…  Ctrl+Shift+S  +++-
   ---
-  &Close  Ctrl+W  ++--
+  &Close  Ctrl+W  +++-
   Close All &But This  +++-
   C&lose All  +++-
   ---

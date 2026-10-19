@@ -9,6 +9,7 @@ import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ScriptingOptions } from './scripting/options.ts'
+import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -144,6 +145,13 @@ export interface QueryResult {
   messagesTruncated: boolean
   budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
   completedAt: string
+  /** `spid` is the session's while it is still open after the script. `transactionCount` and `login` are the session as
+   *  probed after the script (@@TRANCOUNT, SUSER_SNAME() ≤ 128 characters): absent when the session was lost or never
+   *  opened, or the probe read nothing (SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON, or a timeout). A `spid` without
+   *  a `transactionCount` is an open session whose transaction could not be checked. */
+  transactionCount?: number
+  spid?: number
+  login?: string
 }
 /** Orders what the backend reports about result memory (results.memory events and summaries): `seq` counts within the
  *  backend process that main numbered `generation`, so a figure overtaken by a newer one is never shown after it. */
@@ -227,7 +235,8 @@ export interface RpcMethods {
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
-  'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
+  /** `transaction` ends the session's open transaction first; a failed commit leaves the session open. */
+  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd }; result: { closed: boolean } }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
 }
@@ -317,7 +326,9 @@ export interface VariaApi {
   setScriptingOptions(options: ScriptingOptions): Promise<ApiResult<ScriptingOptions>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
-  closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>
+  /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
+   *  the session open, with its transaction. */
+  closeQuerySession(sessionId: string, transaction?: SessionEnd): Promise<ApiResult<{ closed: boolean }>>
   getBackendState(): Promise<ApiResult<BackendState>>
   onBackendState(callback: (state: BackendState) => void): () => void
   /** Ends the current backend generation and starts the next one; main asks first when servers are connected.
@@ -343,6 +354,9 @@ export interface VariaApi {
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
+  /** Asks, in main's message box, what to do with the open transactions and running queries of sessions that are about
+   *  to end (src/shared/sessions.ts composes the prompt). */
+  confirmSessions(request: SessionPromptRequest): Promise<ApiResult<SessionAnswer>>
   closeWindow(): Promise<void>
   /** The page's close ended without closing (a prompt was cancelled, or a save failed). Main hands a close it asked for
    *  to the next page when this one reloads or crashes first, but not one that ended. */

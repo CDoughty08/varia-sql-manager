@@ -460,7 +460,8 @@ try {
   await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idA)
   await page.locator('.query-tabs').getByRole('tab', { name: tabB, exact: true }).click()
   await expect(page.getByLabel('Query server', { exact: true })).toHaveValue('')
-  await expect(page.getByRole('button', { name: /Execute/ })).toBeDisabled()
+  // A disconnected query's Execute connects it first.
+  await expect(page.getByRole('button', { name: /Execute/ })).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const alignment = await page.evaluate(() => {

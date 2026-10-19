@@ -132,6 +132,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
+    // Nothing to ask unless a test says otherwise; answers Cancel when asked.
+    confirmSessions: vi.fn<VariaApi['confirmSessions']>(async () => ({ ok: true, value: 'cancel' })),
     databases: vi.fn<VariaApi['databases']>(async () => ({ ok: true, value: [] })),
     previewTheme: vi.fn<VariaApi['previewTheme']>(async () => ({ ok: true, value: null })),
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
@@ -162,7 +164,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const queries = new QueryService(documents, api, id => connections.get(id), events, results)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files, api)
+  const targets = new TargetService(documents, queries, connections, files)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
   const focused = { panel: '' as '' | 'explorer' | 'editor' | 'output' }
