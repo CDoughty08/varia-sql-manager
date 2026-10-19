@@ -726,8 +726,8 @@ try {
   await explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click(fast)
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [Id]', '      ,[CustomerName]', '  FROM [AppData].[dbo].[Orders]'].join('\n')
   // New queries take the platform's line ending, as SSMS's do, so the SQL sent is CRLF on Windows; the editor's lines are not.
-  const eol = process.platform === 'win32' ? '\r\n' : '\n'
-  await expect.poll(async () => (await calls('query.execute')).at(-1)?.sql).toBe(selectTop.replaceAll('\n', eol))
+  const sqlEol = process.platform === 'win32' ? '\r\n' : '\n'
+  await expect.poll(async () => (await calls('query.execute')).at(-1)?.sql).toBe(selectTop.replaceAll('\n', sqlEol))
   expect((await calls('query.execute')).at(-1).database).toBe('AppData')
   expect(await calls('tables.columns')).toEqual([expect.objectContaining({ database: 'AppData', schema: 'dbo', name: 'Orders' })])
   await expect.poll(async () => (await editorText()).replaceAll(' ', ' ')).toBe(selectTop)
