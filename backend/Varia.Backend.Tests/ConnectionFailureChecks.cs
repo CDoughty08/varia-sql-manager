@@ -123,6 +123,9 @@ internal static class ConnectionFailureChecks
             "a principal is shown trimmed, and an empty one is none");
         check(KerberosProbe.Bounded("alice\n@CONTOSO.COM") is null && KerberosProbe.Bounded("‮alice@CONTOSO.COM") is null && KerberosProbe.Bounded("al​ice@X") is null,
             "a principal with control or formatting characters (line breaks, bidi overrides, zero-width spaces) is not shown");
+        // Categories are a code point's, as main's /u rule reads them: a supplementary-plane tag character (Cf) is two surrogates.
+        check(KerberosProbe.Bounded("alice\U000E0041@X") is null && KerberosProbe.Bounded("\U000E0001alice@X") is null && KerberosProbe.Bounded("\U0001D49Clice@X") == "\U0001D49Clice@X",
+            "a principal with a supplementary-plane formatting character is not shown, and one with a supplementary-plane letter is");
         var cut = KerberosProbe.Bounded(new string('a', 300) + "@CONTOSO.COM");
         check(cut?.Length == KerberosProbe.MaxPrincipalLength && cut.EndsWith('…') && cut.StartsWith(new string('a', 255)), "a principal over 256 characters is cut to 256, with an ellipsis");
         var pair = KerberosProbe.Bounded(new string('a', 254) + "\U0001F600" + new string('b', 10));

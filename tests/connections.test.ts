@@ -38,7 +38,9 @@ describe('integrated identity', () => {
     expect(validateResult('connections.identity', { principal: 'alice@CONTOSO.COM' })).toEqual({ principal: 'alice@CONTOSO.COM' })
     expect(validateResult('connections.identity', { principal: 'é'.repeat(256) })).toEqual({ principal: 'é'.repeat(256) })
     expect(validateResult('connections.identity', {})).toEqual({})
-    for (const answer of [{ principal: 'a'.repeat(257) }, { principal: '' }, { principal: 'alice\n@CONTOSO.COM' }, { principal: '‮alice@CONTOSO.COM' }, { principal: 'al​ice' },
+    // Code points, not UTF-16 units, as the backend's Bounded reads them: a tag character (Cf) is refused, a script letter is not.
+    expect(validateResult('connections.identity', { principal: '\u{1D49C}lice@X' })).toEqual({ principal: '\u{1D49C}lice@X' })
+    for (const answer of [{ principal: 'a'.repeat(257) }, { principal: '' }, { principal: 'alice\n@CONTOSO.COM' }, { principal: '‮alice@CONTOSO.COM' }, { principal: 'al​ice' }, { principal: 'alice\u{E0041}@X' },
       { principal: 7 }, { principal: 'alice@CONTOSO.COM', password: 'x' }, null]) expect(() => validateResult('connections.identity', answer), JSON.stringify(answer)).toThrow('The backend sent an invalid answer.')
     // Other answers are passed on as they are.
     expect(validateResult('databases.list', [{ name: 'master' }])).toEqual([{ name: 'master' }])

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Data.SqlClient;
 
 namespace Varia.Backend;
@@ -218,8 +219,9 @@ internal static class KerberosProbe
     {
         var value = principal?.Trim();
         if (string.IsNullOrEmpty(value)) return null;
-        foreach (var c in value)
-            if (CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.Format) return null;
+        // By code point, as main's /u rule reads it: a supplementary-plane format character (a tag) is two surrogates as chars.
+        foreach (var rune in value.EnumerateRunes())
+            if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format) return null;
         if (value.Length <= MaxPrincipalLength) return value;
         var cut = MaxPrincipalLength - 1;
         if (char.IsHighSurrogate(value[cut - 1])) cut--;
