@@ -177,13 +177,13 @@
         },
         "controlBorder": {
           "$ref": "#/definitions/value",
-          "description": "Outlined buttons and the Dark dialog border. Varia Dark #40516b · Varia Light #8792a2",
-          "markdownDescription": "Outlined buttons and the Dark dialog border. Varia Dark `#40516b` · Varia Light `#8792a2`"
+          "description": "Outlined buttons and the Dark dialog border. Varia Dark #5f7089 · Varia Light #7a8596",
+          "markdownDescription": "Outlined buttons and the Dark dialog border. Varia Dark `#5f7089` · Varia Light `#7a8596`"
         },
         "inputBorder": {
           "$ref": "#/definitions/value",
-          "description": "Input borders. Varia Dark #364357 · Varia Light #8792a2",
-          "markdownDescription": "Input borders. Varia Dark `#364357` · Varia Light `#8792a2`"
+          "description": "Input borders. Varia Dark #5d6e88 · Varia Light #7a8596",
+          "markdownDescription": "Input borders. Varia Dark `#5d6e88` · Varia Light `#7a8596`"
         },
         "accent": {
           "$ref": "#/definitions/value",
@@ -423,8 +423,8 @@
         },
         "widget.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Border of floating dock groups and widgets. Default @editorWidget.border (Dark #40516b, Light #c3ccd8).",
-          "markdownDescription": "(VS Code) Border of floating dock groups and widgets. Default `@editorWidget.border` (Dark `#40516b`, Light `#c3ccd8`)."
+          "description": "(VS Code) Border of floating dock groups and widgets. Default @editorWidget.border (Dark #5f7089, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Border of floating dock groups and widgets. Default `@editorWidget.border` (Dark `#5f7089`, Light `#c3ccd8`)."
         },
         "textPreformat.foreground": {
           "$ref": "#/definitions/value",
@@ -533,8 +533,8 @@
         },
         "menu.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Menu border. Default @editorWidget.border (Dark #40516b, Light #c3ccd8).",
-          "markdownDescription": "(VS Code) Menu border. Default `@editorWidget.border` (Dark `#40516b`, Light `#c3ccd8`)."
+          "description": "(VS Code) Menu border. Default @editorWidget.border (Dark #5f7089, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Menu border. Default `@editorWidget.border` (Dark `#5f7089`, Light `#c3ccd8`)."
         },
         "toolbar.background": {
           "$ref": "#/definitions/value",
@@ -588,8 +588,8 @@
         },
         "button.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Outline of secondary buttons. Default $controlBorder (Dark #40516b, Light #8792a2).",
-          "markdownDescription": "(VS Code) Outline of secondary buttons. Default `$controlBorder` (Dark `#40516b`, Light `#8792a2`)."
+          "description": "(VS Code) Outline of secondary buttons. Default $controlBorder (Dark #5f7089, Light #7a8596).",
+          "markdownDescription": "(VS Code) Outline of secondary buttons. Default `$controlBorder` (Dark `#5f7089`, Light `#7a8596`)."
         },
         "button.secondaryForeground": {
           "$ref": "#/definitions/value",
@@ -618,8 +618,8 @@
         },
         "input.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Input and select border. Default $inputBorder (Dark #364357, Light #8792a2).",
-          "markdownDescription": "(VS Code) Input and select border. Default `$inputBorder` (Dark `#364357`, Light `#8792a2`)."
+          "description": "(VS Code) Input and select border. Default $inputBorder (Dark #5d6e88, Light #7a8596).",
+          "markdownDescription": "(VS Code) Input and select border. Default `$inputBorder` (Dark `#5d6e88`, Light `#7a8596`)."
         },
         "input.placeholderForeground": {
           "$ref": "#/definitions/value",
@@ -983,8 +983,8 @@
         },
         "editorWidget.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Border of dialogs and editor widgets. Default Dark $controlBorder, Light $borderStrong (Dark #40516b, Light #c3ccd8).",
-          "markdownDescription": "(VS Code) Border of dialogs and editor widgets. Default Dark `$controlBorder`, Light `$borderStrong` (Dark `#40516b`, Light `#c3ccd8`)."
+          "description": "(VS Code) Border of dialogs and editor widgets. Default Dark $controlBorder, Light $borderStrong (Dark #5f7089, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Border of dialogs and editor widgets. Default Dark `$controlBorder`, Light `$borderStrong` (Dark `#5f7089`, Light `#c3ccd8`)."
         },
         "emptyState.foreground": {
           "$ref": "#/definitions/value",
@@ -1138,8 +1138,8 @@
         },
         "resultsGrid.splitterBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default Dark $textMuted/60, Light $controlBorder (Dark #8a9cb399, Light #8792a2).",
-          "markdownDescription": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default Dark `$textMuted/60`, Light `$controlBorder` (Dark `#8a9cb399`, Light `#8792a2`)."
+          "description": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default Dark $textMuted/60, Light $controlBorder (Dark #8a9cb399, Light #7a8596).",
+          "markdownDescription": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default Dark `$textMuted/60`, Light `$controlBorder` (Dark `#8a9cb399`, Light `#7a8596`)."
         },
         "resultsMessages.foreground": {
           "$ref": "#/definitions/value",
@@ -1258,8 +1258,8 @@
         },
         "notifications.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Notification border. Not used yet; reserved for notifications. Default @widget.border (Dark #40516b, Light #c3ccd8).",
-          "markdownDescription": "(VS Code) Notification border. Not used yet; reserved for notifications. Default `@widget.border` (Dark `#40516b`, Light `#c3ccd8`)."
+          "description": "(VS Code) Notification border. Not used yet; reserved for notifications. Default @widget.border (Dark #5f7089, Light #c3ccd8).",
+          "markdownDescription": "(VS Code) Notification border. Not used yet; reserved for notifications. Default `@widget.border` (Dark `#5f7089`, Light `#c3ccd8`)."
         },
         "notificationsErrorIcon.foreground": {
           "$ref": "#/definitions/value",

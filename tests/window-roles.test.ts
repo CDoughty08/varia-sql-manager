@@ -29,7 +29,7 @@ describe('window roles', () => {
     expect(Object.keys(expected).sort()).toEqual([...rendererRoles].sort())
     for (const role of rendererRoles) {
       const { window, calls } = fakeWindow(1)
-      runRole(role, window, activated)
+      runRole(role, window, activated, { developerTools: true })
       expect(calls, role).toEqual(expected[role])
     }
   })
@@ -52,11 +52,21 @@ describe('window roles', () => {
   it('pastes only just after the user clicked, tapped, or pressed a key, and runs every other role regardless', () => {
     const { window, calls } = fakeWindow()
     // The refusal names the key that still pastes, for activations main never sees (a screen reader's).
-    expect(() => runRole('paste', window, () => false, 'win32')).toThrow('Paste needs a click, tap, or key press in the window. Press Ctrl+V to paste.')
-    expect(() => runRole('paste', window, () => false, 'darwin')).toThrow('Press ⌘V to paste.')
-    for (const role of rendererRoles.filter(role => role !== 'paste')) runRole(role, window, () => false)
+    expect(() => runRole('paste', window, () => false, { platform: 'win32' })).toThrow('Paste needs a click, tap, or key press in the window. Press Ctrl+V to paste.')
+    expect(() => runRole('paste', window, () => false, { platform: 'darwin' })).toThrow('Press ⌘V to paste.')
+    for (const role of rendererRoles.filter(role => role !== 'paste')) runRole(role, window, () => false, { developerTools: true })
     expect(calls).not.toContain('paste')
     expect(calls).toContain('cut')
+  })
+  it('opens developer tools only where main allows them: never in a packaged build', () => {
+    for (const options of [{}, { developerTools: false }]) {
+      const { window, calls } = fakeWindow()
+      expect(() => runRole('toggleDevTools', window, activated, options)).toThrow('Developer tools are available only in development builds.')
+      expect(calls).toEqual([])
+    }
+    const { window, calls } = fakeWindow()
+    runRole('toggleDevTools', window, activated, { developerTools: true })
+    expect(calls).toEqual(['toggleDevTools'])
   })
   it('counts clicks, taps, and key presses as the user acting for a second, but not pointer moves, swipes, or wheel turns', () => {
     let now = 5000
