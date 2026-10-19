@@ -25,7 +25,7 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
  * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell.
  */
-export function outputContribution({ commands, results, menuTargets, documents }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+export function outputContribution({ commands, results, menuTargets, documents, settings }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
   /** The grid's result set, while its results are still readable. */
   const grid = (target: OutputTarget | undefined) => {
@@ -54,7 +54,8 @@ export function outputContribution({ commands, results, menuTargets, documents }
       when: args => { const target = targetOf(args); return !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
       run: async args => {
         const target = targetOf(args), cells = selected(target)
-        if (cells) { const failure = await results.copy(cells.tabId, cells.resultIndex, false); if (failure) commands.reportError(failure) }
+        // Tools › Options › Query Results › Results to Grid decides the header row; Copy with Headers always has one.
+        if (cells) { const failure = await results.copy(cells.tabId, cells.resultIndex, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
         else if (target && target.view !== 'grid' && target.selectedText) unwrap(await api.writeClipboardText(target.selectedText))
       }
     }),

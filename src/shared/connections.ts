@@ -10,6 +10,20 @@ export const advancedDefaults: AdvancedConnectionOptions = {
   serverCertificate: '', attachDbFilename: '', failoverPartner: '', failoverPartnerSpn: '',
   multiSubnetFailover: false, serverSpn: '', userInstance: false
 }
+/**
+ * What OK in Advanced Properties stores: only the fields that differ from their defaults or that the user edited, so
+ * the defaults (and Tools › Options' Execution time-out, for a command timeout left empty) keep applying to the rest.
+ * A command timeout the profile already had stays, even when it is the default.
+ */
+export function advancedToStore(draft: Readonly<Record<keyof AdvancedConnectionOptions, unknown>>, edited: ReadonlySet<string>, previous: Partial<AdvancedConnectionOptions> = {}): Partial<AdvancedConnectionOptions> {
+  const stored: Record<string, unknown> = {}
+  for (const key of Object.keys(advancedDefaults) as (keyof AdvancedConnectionOptions)[]) {
+    const value = draft[key]
+    if (value === '' && key === 'commandTimeout') continue
+    if (edited.has(key) || value !== advancedDefaults[key] || (key === 'commandTimeout' && previous.commandTimeout !== undefined)) stored[key] = value
+  }
+  return stored as Partial<AdvancedConnectionOptions>
+}
 /** Windows authentication on Windows, as SSMS opens; elsewhere SQL Server authentication, since integrated authentication
  *  there needs a Kerberos ticket (kinit) that most Linux and macOS machines do not have. Saved profiles keep their own choice. */
 export function defaultAuthentication(platform: string): ConnectionOptions['authentication'] { return platform === 'win32' ? 'windows' : 'sql' }

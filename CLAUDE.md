@@ -11,7 +11,8 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
-- `npm run test:smoke`: the ten Electron suites in `scripts/`. Needs the Release backend and `out/` from `npm run check`.
+- `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
+  from `npm run check`.
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
@@ -47,9 +48,11 @@ pages, limits, error codes, display formats, benchmarks).
   Every `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
   `--no-sandbox`); only root, as in cloud sessions, runs without it. Only in unpackaged smoke runs, main also honours
   `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
-  takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `globalThis.__variaTest` (kill, states,
-  synthesize), the renderer's test mode (`window.__variaResults`), and passes the backend `VARIA_BACKEND_TEST_HOOKS`
-  (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from
+  takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `globalThis.__variaTest` (kill, pid, state,
+  states, synthesize, and the renderer hooks rendererLosses, holdNextRenderer and releaseHolders), the renderer's test
+  mode (`window.__variaResults`, `window.__variaGrid`, and `window.__variaTestShellFault()`, which makes the workbench's
+  next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and
+  `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from
   `scripts/fixtures/smoke.mjs`: assertions wait 15 s on Windows, whose runners can take seconds to write a file, and
   closing the app logs main's file operations that took 500 ms or more.
 
@@ -78,7 +81,8 @@ pages, limits, error codes, display formats, benchmarks).
   per port), and explicit truncation of results and messages.
   New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
   never re-sent.
-- Preferences are written atomically (`src/main/json-file.ts`); unreadable files are quarantined, never overwritten.
+- Preferences are written atomically (`src/main/json-file.ts`) (`settings.json`, `appearance.json`, `connections.json`,
+  `workspace-layouts.json`); unreadable files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
   (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
@@ -110,6 +114,12 @@ pages, limits, error codes, display formats, benchmarks).
   `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
   unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
   DDL, and never logs scripts, names or options.
+- Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
+  the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
+  schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read
+  before every write, atomic writes, invalid files quarantined); the renderer receives validated values through
+  `SettingsService` and changes them only with `updateSettings` patches. After changing the catalogue, regenerate
+  `docs/settings.md` with `npx vitest run tests/settings-catalog.test.ts -u`.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 

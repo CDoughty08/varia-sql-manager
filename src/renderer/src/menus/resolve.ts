@@ -4,6 +4,7 @@ import type { KeybindingLabel, Platform } from '../../../shared/commands/keybind
 import { assignMnemonics, buildMenuModel, pruneMenu, submenuTitle, trimSeparators, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
 import type { ScriptAsTitleKey } from '../../../shared/scripting/catalog.ts'
 import { evaluateWhen } from '../../../shared/commands/when'
+import { commandTitle, type SettingsValues } from '../../../shared/settings/catalog'
 import type { CommandService } from '../core/commands'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
@@ -51,6 +52,8 @@ export interface ResolveOptions {
   readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'>
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
   readonly dynamic?: { readonly theme?: () => readonly DynamicMenuItem[] }
+  /** Settings that titles follow ("Select Top 50 Rows"); the defaults without them. Applied here, not in the cached model. */
+  readonly settings?: SettingsValues
   /** Each menu's entries; defaults to the catalogue's model (tests pass their own). */
   readonly model?: (menu: MenuId) => readonly MenuEntry[]
 }
@@ -112,7 +115,7 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
   const level = (entries: readonly MenuEntry[], depth: number): Draft[] => pruneMenu(entries, keep, children, depth).map((entry): Draft => {
     // `keep` has already dropped roles.
     if (entry.kind === 'separator' || entry.kind === 'role') return { kind: 'separator' }
-    if (entry.kind === 'command') return command(entry.id, entry.title, { key: entry.nativeId, mnemonic: entry.mnemonic, toggle: entry.toggle })
+    if (entry.kind === 'command') return command(entry.id, commandTitle(entry.id, options.settings, entry.title), { key: entry.nativeId, mnemonic: entry.mnemonic, toggle: entry.toggle })
     const provider = entry.dynamic && options.dynamic?.[entry.dynamic]
     const provided = provider ? guarded(provider, []) : []
     // Dynamic items share the level with the catalogue's, so `finish` assigns their mnemonics together.

@@ -19,6 +19,7 @@ import { createWorkbench } from './core/workbench'
 import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
+import { SettingsService } from './settings/SettingsService'
 import { ShellErrorBoundary, ShellFaultProbe } from './ShellFailure'
 import 'dockview-react/dist/styles/dockview.css'
 import './styles.css'
@@ -28,9 +29,10 @@ export async function start(root: Root): Promise<void> {
   // Bundle Monaco locally; the editor never downloads scripts from a CDN.
   self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
   registerJson(monaco)
-  // React renders only after a theme is applied, so the first frame already has its colors.
-  const theme = await ThemeService.create(window.varia, domThemeTarget(monaco))
-  const workbench = createWorkbench(window.varia, monaco, theme)
+  // React renders only after a theme is applied, so the first frame already has its colors, and with settings, so the
+  // editor's first frame has its font and options; neither waits for main longer than its timeout.
+  const [theme, settings] = await Promise.all([ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia)])
+  const workbench = createWorkbench(window.varia, monaco, theme, settings)
   // Smoke tests drive the results API directly (backend-smoke.mjs) and read the grids' counters (results-smoke.mjs); main
   // enables test mode only in unpackaged smoke runs.
   if (window.varia.testMode) {

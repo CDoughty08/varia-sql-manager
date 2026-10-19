@@ -1,6 +1,7 @@
 import type { ConnectionInfo, QueryResult, VariaApi } from '../../../shared/contracts'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { sessionPromptLimits, type SessionAction, type SessionEnd } from '../../../shared/sessions'
+import { defaultSettings, type SettingsValues } from '../../../shared/settings/catalog'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -22,9 +23,10 @@ export type QuerySnapshot = Readonly<Record<string, QueryState>>
 export type SessionPlan = ReadonlyMap<string, SessionEnd>
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'The operation failed.'
 export const newSessionMessage = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted, so its SET options, temporary tables, and open transaction no longer exist.'
-type QueryConnection = ConnectionInfo & { readonly lost?: true }
-/** Rows are bounded only by the backend's memory budget; up to 1,000 result sets are kept, as SSMS keeps them all. */
-export const queryLimits = { maxRows: 0, maxResultSets: 1000 } as const
+/** A live connection: its Advanced properties' command timeout, when the profile set one, wins over Tools › Options. */
+type QueryConnection = ConnectionInfo & { readonly lost?: true; readonly options?: { readonly advanced?: { readonly commandTimeout?: number } } }
+/** Rows are bounded only by the backend's memory budget; result sets by Tools › Options (up to 1,000, by default all). */
+export const queryLimits = { maxRows: 0 } as const
 /** Failures after which the tab has no session, so no open transaction. */
 const sessionGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['SESSION_LOST', 'SESSION_CLOSED', 'NOT_CONNECTED', 'CONNECTION_LOST', 'BACKEND_LOST'])
 /** How long ending sessions waits for the queries it cancelled to stop; their sessions close (and roll back) either way. */
@@ -48,7 +50,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private readonly runs = new Map<string, Promise<void>>()
   private readonly subscription: Disposable
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
-    private results: Pick<ResultsService, 'begin' | 'finish'>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) })) {
+    private results: Pick<ResultsService, 'begin' | 'finish'>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
+    private settings: () => SettingsValues = () => defaultSettings) {
     super({})
     this.subscription = events.subscribe(event => { if (event.type === 'session.ended') this.sessionEnded(event.tabId) })
   }
@@ -84,6 +87,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const state = this.getSnapshot()[id]
     if (state?.session) this.update(id, { ...state, session: undefined })
   }
+  /** What Tools › Options and the connection's Advanced properties ask of an execution; `stopOnError` only when on. */
+  private executionOptions(connection: QueryConnection) {
+    const settings = this.settings()
+    return {
+      ...queryLimits, maxResultSets: settings['queryResults.grid.maxResultSets'],
+      timeoutSeconds: connection.options?.advanced?.commandTimeout ?? settings['queryExecution.executionTimeout'],
+      ...settings['queryExecution.stopOnError'] ? { stopOnError: true } : {}
+    }
+  }
   /** Runs the active query, or the query `tabId` names. */
   execute(tabId = this.documents.getSnapshot().activeId): Promise<void> {
     if (!this.canExecute(tabId)) return Promise.resolve()
@@ -104,7 +116,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // The run's events are followed before the script is sent, so no early result set is missed.
       this.results.begin(tabId, queryId)
       this.events.emit({ type: 'query.started', tabId, queryId })
-      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId, ...queryLimits, timeoutSeconds: connection.commandTimeout ?? 0 })
+      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId, ...this.executionOptions(connection) })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }

@@ -51,6 +51,11 @@ describe('native application menu template', () => {
     const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, menuActions, platform)
     return template.find(item => item.id === 'menu.' + menu)!.submenu as MenuItemConstructorOptions[]
   }
+  it.each(platforms)('labels command items, role items included, through the settings title hook on %s', platform => {
+    const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes }, title: (id, title) => id === 'file.new' || id === 'edit.copy' ? title + ' (50)' : title }, actions, platform)
+    const file = template.find(item => item.id === 'menu.file')!.submenu as MenuItemConstructorOptions[], edit = template.find(item => item.id === 'menu.edit')!.submenu as MenuItemConstructorOptions[]
+    expect([file.find(item => item.id === 'file.new')?.label, edit.find(item => item.id === 'edit.copy')?.label, edit.find(item => item.id === 'edit.cut')?.label]).toEqual(['New Query (50)', 'Copy (50)', 'Cut'])
+  })
   it.each(platforms)('has no developer tools item, role or key in a packaged build on %s', platform => {
     const roles = (packaged: boolean) => {
       const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, actions, platform, packaged)

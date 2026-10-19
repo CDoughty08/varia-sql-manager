@@ -573,7 +573,10 @@ try {
   await saveItem.click()
   await expect(notice).toHaveText('Saved 400 rows to w1.csv.')
   expect(await lastDialog()).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/SQLQuery1-Result1\.csv$/) })
-  expect(await readFile(join(saveDir, 'w1.csv'), 'utf8')).toBe('﻿' + [w1Names, ...w1Rows(400)].map(row => row.map(csvField).join(',') + '\r\n').join(''))
+  // No header row: Include column headers when copying or saving the results is off by default, as in SSMS.
+  expect(await readFile(join(saveDir, 'w1.csv'), 'utf8')).toBe('﻿' + w1Rows(400).map(row => row.map(csvField).join(',') + '\r\n').join(''))
+  // With the option on (Tools › Options › Query Results › Results to Grid), saves start with the column names.
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': true }))).ok).toBe(true)
   await choose(join(saveDir, 'w1.txt'))
   await cell(0, 0).click()
   await page.keyboard.press('Control+S')
@@ -621,6 +624,8 @@ try {
   await expect(page.locator('.job-strip:not(.job-notice)')).toHaveCount(0)
   expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
   expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
+  // Back to the default (null resets), so the copies below have no header line.
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': null }))).ok).toBe(true)
   // Close Results (from the palette) frees the results and their windows; Messages stay.
   await textbox().focus()
   await page.keyboard.press('F1')
@@ -1245,7 +1250,9 @@ try {
     await page.keyboard.press('Home')
     await expect.poll(async () => (await active()).text, { timeout: 30000 }).toBe(liveText(1_000_000)[0])
     expect(await active()).toMatchObject({ row: 999_999, column: 0, selected: 'true' })
-    // The set ended before the cancel, so it saves whole: a header row and a million rows, as the server sent them.
+    // The set ended before the cancel, so it saves whole: a header row (the Results to Grid option, on for this save) and
+    // a million rows, as the server sent them.
+    expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': true }))).ok).toBe(true)
     const csvPath = join(liveSaves, 'million.csv')
     await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }) }, csvPath)
     await page.keyboard.press('Control+S')
@@ -1257,6 +1264,7 @@ try {
     const csvLine = values => values.map(csvField).join(',') + '\r\n'
     expect(saved.subarray(0, 4096).toString('utf8').startsWith('\uFEFF' + csvLine(liveColumns) + csvLine(liveRow(1)))).toBe(true)
     expect(saved.subarray(saved.lastIndexOf(10, saved.length - 2) + 1).toString('utf8')).toBe(csvLine(liveRow(1_000_000)))
+    expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': null }))).ok).toBe(true)
     // Copy: every row, in order, as the server sent them.
     await run(liveRowsSql(100_000))
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 100,000 rows, 8 columns')
