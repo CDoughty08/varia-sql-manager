@@ -424,8 +424,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` (ntext or nvarchar) arrives as rows of about 2,033 characters;
   `ForXmlCollector` joins them into one pooled buffer of up to 2,097,152 + 1 characters (the excess marks the value
   truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
-  (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`, as SSMS shows one link. `FOR XML … TYPE` already arrives
-  as one xml cell.
+  (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`, as SSMS shows one link. Text past the cap is read past in
+  chunks, row by row, so a long nvarchar(max) value that a query names like that column is never buffered whole.
+  `FOR XML … TYPE` already arrives as one xml cell.
 - **Never unowned.** If a `query.execute` summary still cannot be encoded (`RESPONSE_TOO_LARGE`), its results are
   released at once rather than left without an owner.
 - **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan', columns,
@@ -441,9 +442,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   or one at a time), triggers one gen2 collection shortly after (pages are large arrays that nothing else would
   collect), and so does a release that empties the store once 16 MiB were released since the last aggressive one. The
   collection is aggressive (compacting, so it returns memory to the operating system) when what remains is no more than
-  what was released since the last aggressive one, and non-compacting otherwise, so its pause never copies much. Large
-  xml values, read whole outside the budget (see Display formats), count as released once the reader moves past their
-  row; a row that left more than 64 MiB is collected at once, before the next row is read.
+  what was released since the last aggressive one, and non-compacting otherwise, so its pause never copies much.
 
 Notes appended to the summary's messages:
 
@@ -823,7 +822,7 @@ unread, the next `ReadAsync` would buffer all of it, in time quadratic in its si
 | datetimeoffset(n) | n fractional digits and the offset | `2026-10-08 12:34:56.1234567 +05:30`, `2026-10-08 12:34:56 -08:00` |
 | uniqueidentifier | uppercase | `6F9619FF-8B86-D011-B42D-00C04FC964FF` |
 | char, varchar, text, nchar, nvarchar, ntext, sysname | the text; lone surrogates become U+FFFD; truncation never splits a pair | `héllo 😀` |
-| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Read whole with `GetSqlXml` (linear): `GetChars` on xml is quadratic in a large text node, `GetXmlReader` misreads a value that starts with text, and `GetStream` and `GetTextReader` reject xml. The whole value is held in transient memory outside the result budget, about 2 bytes per character (up to about 4 GB for a 2 GB value), until the reader moves past its row; a row that left more than 64 MiB is collected then, so large values never pile up. Such a row fills a page, and the memory-load check at every page seal stops storing (and reading whole) later rows when the computer runs low | `abc`, `é<a b="1" />` |
+| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Streamed (`Results/SequentialXml.cs`): XmlReader parses the column's sequential stream as UTF-16 as it arrives, a text node's value is copied out in 8,192-character chunks, and once the cap is reached the rest of the value is read past as bytes, without parsing, so a long text node costs a few MB whatever its length (a 200 MB value allocates under 32 MB in all). XmlReader holds a whole start tag (all of its attributes together), comment or processing instruction before returning it, so the stream reports its end once 8 MiB pass with no new output; a node just inside that window is read whole, growing XmlReader's buffer to about 50 MB allocated in all. A cut value keeps only what the writer had written before that node, marked truncated: the parent's start tag without its `>` (`<r`), text before it (`<r>hello`), or nothing when the node is the root element. Every xml cell of a set reuses one output buffer and one feed, so a small cell allocates about 28 KB, mostly XmlReader's and XmlWriter's own buffers (the live .NET suite reports it and checks it stays under 36 KB). SqlClient 7.1.1's `GetXmlReader` lets XmlReader guess the encoding (a value that starts with text throws or, for some characters, reads as other text; fixed after 7.1.1), so the stream is opened as `GetXmlReader` opens it, through SqlClient internals that an offline check pins, with `GetXmlReader` as the fallback. `GetChars` on xml holds each node whole and is quadratic in a large text node, `GetSqlXml` reads the whole value, and `GetStream` and `GetTextReader` reject xml | `abc`, `é<a b="1" />` |
 | json (SQL Server 2025) | the text, role `json`, up to 2,097,152 characters | — |
 | vector (SQL Server 2025) | float32 values, shortest form, role `vector` | `[0.1,2,-3.5]` |
 | binary, varbinary, image | `0x` + uppercase hex, up to 32,766 bytes | `0x0001FF`, `0x` |

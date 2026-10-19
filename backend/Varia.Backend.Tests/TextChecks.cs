@@ -22,6 +22,7 @@ internal static class TextChecks
         await CopyStream(check);
         await Export(check);
         ForXml(check);
+        XmlCells(check);
         Descriptors(check);
         Allocation(check);
     }
@@ -460,6 +461,44 @@ internal static class TextChecks
         };
         check(tokens.SequenceEqual(["ACCESS", "ACCESS", "IN_USE", "IN_USE", "IN_USE", "DISK_FULL", "DISK_FULL", "NOT_FOUND", "IO", "IO"])
             && Token(Io(28)) == (OperatingSystem.IsWindows() ? "IO" : "DISK_FULL"), "export failures map to one token each: " + string.Join(", ", tokens));
+    }
+
+    /// <summary>xml cells stream under sequential access: through SqlClient internals until a release reads xml as UTF-16
+    /// itself, behind a feed that stops XmlReader from holding a huge node; long columns never fall back to whole reads.</summary>
+    private static void XmlCells(Action<bool, string> check)
+    {
+        check(SequentialXml.Available, "SqlClient still has the sequential stream internals that xml cells are read through (SequentialXml)");
+        var bytes = new byte[3 * XmlFeed.Window];
+        var buffer = new byte[4096];
+        long Drain(XmlFeed feed)
+        {
+            long total = 0;
+            for (int read; (read = feed.Read(buffer, 0, buffer.Length)) > 0;) total += read;
+            return total;
+        }
+        var silent = new XmlFeed(() => 0);
+        silent.Reset(new MemoryStream(bytes));
+        var cutAt = Drain(silent);
+        var output = 0;
+        var growing = new XmlFeed(() => ++output);
+        growing.Reset(new MemoryStream(bytes));
+        var whole = Drain(growing);
+        check(cutAt == XmlFeed.Window && silent.Starved && whole == bytes.Length && !growing.Starved,
+            "the xml feed stops after " + cutAt + " bytes without output, and never while output grows (" + whole + " bytes)");
+        // A column plan feeds every xml cell through one feed, so a cell that starved it must not cut the next one short.
+        silent.Reset(new MemoryStream(bytes, 0, 100));
+        var next = Drain(silent);
+        var stuck = 7;
+        var reused = new XmlFeed(() => stuck);
+        reused.Reset(new MemoryStream(bytes));
+        var unchanged = Drain(reused);
+        check(next == 100 && !silent.Starved && unchanged == XmlFeed.Window && reused.Starved,
+            "a reset feed starts a fresh window for the next cell (" + next + " bytes) and counts output from what it was at the reset (" + unchanged + " bytes)");
+        var fallbacks = Enum.GetValues<CellCodec>().SelectMany(codec => new[] { (codec, WireKind.Text), (codec, WireKind.Binary) })
+            .Select(pair => (pair.codec, pair.Item2, Fallback: ColumnPlan.FallbackOf(pair.codec, pair.Item2, true))).ToList();
+        check(fallbacks.All(item => item.Fallback is CellCodec.LongText or CellCodec.Xml or CellCodec.Stream) && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
+            && ColumnPlan.FallbackOf(CellCodec.Chars, WireKind.Text, false) == CellCodec.Value && ColumnPlan.FallbackOf(CellCodec.Bytes, WireKind.Binary, true) == CellCodec.Stream,
+            "a long column whose value could not be read keeps a streaming reader, never GetValue");
     }
 
     /// <summary>FOR XML and FOR JSON output arrives in rows of about 2,033 characters, joined into one value up to the cap.</summary>

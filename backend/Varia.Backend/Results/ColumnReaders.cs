@@ -19,8 +19,8 @@ internal enum CellCodec : byte
 /// follow CommandBehavior.SequentialAccess: IsDBNull first, then each column once, in ordinal order. Long values are kept
 /// up to their cap plus one unit, read in 8,192-unit chunks, and the rest of a longer value is read past in chunks too, so
 /// a huge value never materialises. Left unread, it would be skipped by the next ReadAsync, which buffers all of it in
-/// time quadratic in its size. xml is the exception (see <see cref="Xml"/>). The query's token is checked between
-/// chunks, so a cancel or timeout takes effect inside a long cell.</summary>
+/// time quadratic in its size. xml is parsed as it streams and serialised up to its cap (see <see cref="Xml"/>). The
+/// query's token is checked between chunks, so a cancel or timeout takes effect inside a long cell.</summary>
 internal sealed class ColumnPlan
 {
     public const int TextCap = 65_535;
@@ -29,8 +29,6 @@ internal sealed class ColumnPlan
     public const int BinaryCap = 32_766;
     public const string ShowplanColumn = "Microsoft SQL Server 2005 XML Showplan";
     private const int Chunk = 8192;
-    /// <summary>An xml cell that allocates at least this much counts toward <see cref="TransientBytes"/>.</summary>
-    private const long TransientCell = 1024 * 1024;
     private const int JsonType = 35, VectorType = 36;
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
     // SqlClient's own GetChars on xml serialises with these settings.
@@ -38,8 +36,11 @@ internal sealed class ColumnPlan
     private readonly Column[] columns;
     private char[] chars = new char[Chunk];
     private byte[] bytes = new byte[Chunk];
+    // Reused by every xml cell: a fresh sink and feed per cell made a small cell cost about 45 KB instead of 28 KB.
+    private CharSink? sink;
+    private XmlFeed? feed;
 
-    private sealed class Column(string name, string type, CellCodec codec, WireKind wire, int scale, int cap)
+    private sealed class Column(string name, string type, CellCodec codec, WireKind wire, int scale, int cap, bool isLong)
     {
         public readonly string Name = name;
         public readonly string Type = type;
@@ -47,6 +48,7 @@ internal sealed class ColumnPlan
         public readonly int Scale = scale;
         public readonly int Cap = cap;
         public CellCodec Codec = codec;
+        public readonly CellCodec Fallback = FallbackOf(codec, wire, isLong);
         public bool Warned;
     }
 
@@ -79,10 +81,6 @@ internal sealed class ColumnPlan
     /// (SqlService.SkipRowsAsync).</summary>
     public bool HasLong { get; }
 
-    /// <summary>What the last <see cref="ReadRow"/> allocated to read large xml values, which are read whole (see
-    /// <see cref="Xml"/>), about 2 bytes per character outside the result budget: garbage once the reader moves on.</summary>
-    public long TransientBytes { get; private set; }
-
     /// <summary><see cref="HasLong"/> for a set that has no plan because none of its rows are stored.</summary>
     public static bool HasLongColumns(SqlDataReader reader) => reader.GetColumnSchema().Any(column => column.IsLong == true);
 
@@ -112,7 +110,7 @@ internal sealed class ColumnPlan
             var clrType = row["DataType"] as Type;
             var (codec, wire, role, cap) = Choose(provider, precision, isLong, clrType, isPlan);
             if (count == 1 && ForXmlCollector.RoleOf(name, provider) is { } documentRole) role = forXml = documentRole;
-            columns[i] = new Column(name, type, codec, wire, scale is >= 0 and <= 7 ? scale.Value : 7, cap);
+            columns[i] = new Column(name, type, codec, wire, scale is >= 0 and <= 7 ? scale.Value : 7, cap, isLong);
             var exact = codec is CellCodec.Decimal or CellCodec.SqlDecimal;
             var scaled = codec is CellCodec.Time or CellCodec.DateTime2 or CellCodec.DateTimeOffset;
             descriptors[i] = new ResultColumn(name, type, wire == WireKind.Text ? "text" : "binary", role,
@@ -169,7 +167,6 @@ internal sealed class ColumnPlan
     /// Returns the number of cells stored as truncated prefixes.</summary>
     public int ReadRow(SqlDataReader reader, PageBuilder builder, Action<string> warn, CancellationToken token = default)
     {
-        TransientBytes = 0;
         var truncated = 0;
         for (var i = 0; i < columns.Length; i++)
         {
@@ -184,11 +181,16 @@ internal sealed class ColumnPlan
                     column.Warned = true;
                     warn("Column ‘" + column.Name + "’ (" + column.Type + "): some values could not be read and are shown as NULL.");
                 }
-                column.Codec = column.Wire == WireKind.Binary ? CellCodec.Stream : CellCodec.Value;
+                column.Codec = column.Fallback;
             }
         }
         return truncated;
     }
+
+    /// <summary>The reader a column switches to after a value its own could not read. GetValue reads a whole value, so long
+    /// columns keep a streaming reader: GetTextReader for text, and xml its own (GetTextReader rejects xml).</summary>
+    internal static CellCodec FallbackOf(CellCodec codec, WireKind wire, bool isLong) =>
+        wire == WireKind.Binary ? CellCodec.Stream : !isLong ? CellCodec.Value : codec == CellCodec.Xml ? CellCodec.Xml : CellCodec.LongText;
 
     /// <summary>A value the provider cannot convert; anything else (SQL errors, a closed connection, cancellation) ends the read.</summary>
     private static bool IsCellFailure(Exception error) => error is InvalidCastException or OverflowException or FormatException or ArgumentException
@@ -342,31 +344,54 @@ internal sealed class ColumnPlan
         return total > cap;
     }
 
-    /// <summary>xml, up to cap + 1 characters. SqlClient's GetChars on xml copies each chunk out of a StringBuilder that holds
-    /// the whole serialised node, which is quadratic in a large text node, GetXmlReader under sequential access misdetects
-    /// the encoding of a value that starts with text (FOR XML PATH('') output), and GetStream and GetTextReader reject
-    /// xml. So GetSqlXml reads the whole value, in linear time and about 2 bytes per character (up to 4 GB for the largest
-    /// value), then it is serialised node by node as GetChars would, stopping at the cap. That memory is outside the
-    /// result budget and garbage once the reader moves past the row; <see cref="TransientBytes"/> reports it so it is
-    /// collected then rather than left to pile up across rows.</summary>
+    /// <summary>xml, up to cap + 1 characters, serialised node by node as SqlClient's GetChars would. GetChars itself holds
+    /// each whole node in a StringBuilder and copies chunks out of it, in time quadratic in a large text node, and GetSqlXml
+    /// reads the whole value (about 4 GB for a 2 GB one). Here XmlReader parses the column's stream as it arrives
+    /// (<see cref="SequentialXml"/>), a text node's value is copied out in chunks, an <see cref="XmlFeed"/> cuts a node too
+    /// large to hold, and once the cap is reached the rest of the value is read past as bytes, without parsing it.</summary>
     private bool Xml(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
     {
-        var allocated = GC.GetAllocatedBytesForCurrentThread();
-        try { return Xml(reader.GetSqlXml(i), cap, builder, token); }
-        finally
+        var sink = this.sink ??= new CharSink();
+        sink.Reset(cap + 1);
+        if (SequentialXml.Open(reader, i) is not { } stream)
         {
-            allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
-            if (allocated >= TransientCell) TransientBytes += allocated;
+            using var fallback = reader.GetXmlReader(i);
+            var truncated = Xml(fallback, sink, null, cap, builder, token);
+            // GetXmlReader owns its stream, so the rest is read past by parsing it.
+            while (fallback.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                if (fallback.NodeType == XmlNodeType.Text) while (fallback.ReadValueChunk(chars, 0, Chunk) > 0) token.ThrowIfCancellationRequested();
+            }
+            return truncated;
+        }
+        using (stream)
+        {
+            var feed = this.feed ??= new XmlFeed(() => this.sink!.Count);
+            feed.Reset(stream);
+            bool truncated;
+            try
+            {
+                using var xml = SequentialXml.Read(feed);
+                truncated = Xml(xml, sink, feed, cap, builder, token);
+            }
+            catch (XmlException)
+            {
+                ReadPast(stream, token);
+                throw;
+            }
+            finally { feed.Reset(Stream.Null); }
+            ReadPast(stream, token);
+            return truncated;
         }
     }
 
-    private bool Xml(SqlXml value, int cap, PageBuilder builder, CancellationToken token)
+    private bool Xml(XmlReader xml, CharSink sink, XmlFeed? feed, int cap, PageBuilder builder, CancellationToken token)
     {
-        var sink = new CharSink(cap + 1);
-        using (var xml = value.CreateReader())
+        // Never closed: closing ends open elements, which would only add text past a full sink.
+        var writer = XmlWriter.Create(sink, XmlOutput);
+        try
         {
-            // Never closed: closing ends open elements, which would only add text past a full sink.
-            var writer = XmlWriter.Create(sink, XmlOutput);
             while (!sink.Full && xml.Read())
             {
                 token.ThrowIfCancellationRequested();
@@ -389,17 +414,39 @@ internal sealed class ColumnPlan
                     case XmlNodeType.EndElement: writer.WriteFullEndElement(); break;
                 }
             }
-            if (!sink.Full) writer.Flush();
         }
-        return Text(sink.Text, cap, builder);
+        // The feed ended the stream inside a node, which XmlReader reports as an unexpected end.
+        catch (XmlException) when (feed?.Starved == true) { }
+        if (!sink.Full) writer.Flush();
+        if (feed?.Starved != true || sink.Full) return Text(sink.Text, cap, builder);
+        // The text before the node the feed cut is kept, marked truncated.
+        var text = sink.Text;
+        if (text.Length > 0 && char.IsHighSurrogate(text[^1])) text = text[..^1];
+        builder.AppendText(text, true);
+        return true;
     }
 
-    /// <summary>A TextWriter that keeps the first <c>limit</c> characters written to it and drops the rest.</summary>
-    private sealed class CharSink(int limit) : TextWriter
+    /// <summary>Reads past the rest of a column's stream in chunks.</summary>
+    private void ReadPast(Stream stream, CancellationToken token)
     {
-        private char[] buffer = new char[Math.Min(limit, Chunk)];
+        Bytes(Chunk);
+        while (stream.Read(bytes, 0, Chunk) > 0) token.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>A TextWriter that keeps the first <c>limit</c> characters written to it since <see cref="Reset"/> and drops the
+    /// rest. Its buffer is kept across cells, as <see cref="chars"/> is.</summary>
+    private sealed class CharSink : TextWriter
+    {
+        private char[] buffer = new char[Chunk];
         private int count;
+        private int limit;
+        public void Reset(int limit)
+        {
+            this.limit = limit;
+            count = 0;
+        }
         public bool Full => count == limit;
+        public int Count => count;
         public ReadOnlySpan<char> Text => buffer.AsSpan(0, count);
         public override Encoding Encoding => Encoding.Unicode;
         public override void Write(char value) => Write([value]);

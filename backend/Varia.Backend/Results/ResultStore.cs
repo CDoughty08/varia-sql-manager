@@ -34,7 +34,6 @@ internal sealed class ResultStore
     private long used;
     private long freedSinceCollect;
     private long freedSinceCompact;
-    private long discarded;
     private int collecting;
 
     /// <param name="memory">The operating system's memory load and its high-load threshold, in bytes.</param>
@@ -64,8 +63,6 @@ internal sealed class ResultStore
     public long QueryBytes { get; }
     public long UsedBytes => Interlocked.Read(ref used);
     public int Count { get { lock (gate) return sets.Count; } }
-    /// <summary>Every byte <see cref="Discarded"/> has counted (the live checks read it).</summary>
-    internal long DiscardedBytes => Interlocked.Read(ref discarded);
 
     /// <summary>A new query on a session replaces that session's earlier results, whatever connection produced them.</summary>
     public QueryBudget BeginQuery(string sessionId)
@@ -127,19 +124,6 @@ internal sealed class ResultStore
         if (bytes == 0) return;
         Interlocked.Add(ref used, -bytes);
         Interlocked.Add(ref query.used, -bytes);
-    }
-
-    /// <summary>Counts garbage that a row left outside the budget once the reader has moved past it (a large xml value is
-    /// read whole), so it is collected like released results instead of piling up across rows. More than 64 MiB from one
-    /// row is collected at once, before the next row's values are read, so two such values never coexist.</summary>
-    public void Discarded(long bytes)
-    {
-        if (bytes <= 0) return;
-        Interlocked.Add(ref discarded, bytes);
-        Interlocked.Add(ref freedSinceCompact, bytes);
-        if (Interlocked.Add(ref freedSinceCollect, bytes) <= CollectAfterRelease) return;
-        if (bytes > CollectAfterRelease) CollectNow();
-        else Collect();
     }
 
     public bool IsSystemMemoryLow()
@@ -206,9 +190,9 @@ internal sealed class ResultStore
 
     /// <summary>Pages are large arrays, which only a gen2 collection frees, and nothing else in the backend allocates enough
     /// to trigger one: without it the process keeps its peak memory after results are closed and grows under store and
-    /// close churn. One runs after every 64 MiB released or discarded (large xml values read whole), counted across calls,
-    /// and when a release empties the store after 16 MiB released since the last compacting one; calls that come together
-    /// share it, off the caller's thread (a row that discarded more than 64 MiB collects at once, see <see cref="Discarded"/>).
+    /// close churn. One runs after every 64 MiB released, counted across calls, and when a release
+    /// empties the store after 16 MiB released since the last compacting one; calls that come together share it, off the
+    /// caller's thread.
     /// Only an aggressive (compacting) collection returns the freed memory to the operating system. It copies what remains,
     /// so it runs only when that is no more than what was released since the last one; otherwise a non-compacting one
     /// keeps the pause short.</summary>

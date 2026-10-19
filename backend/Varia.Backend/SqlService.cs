@@ -527,8 +527,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     using var stop = token.Register(Attention, command);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
-                    // Large xml values the last row read whole; an exception can leave them uncounted (see the finally).
-                    long transient = 0;
                     try
                     {
                         // Sequential access streams each value once, in column order, so a huge value is never materialised
@@ -598,9 +596,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                     events.Sealed(currentSet);
                                 }
                                 if (!await read) break;
-                                // The reader has let go of the previous row, so a large xml value read whole is garbage now.
-                                store.Discarded(transient);
-                                transient = 0;
                                 skipped = true;
                                 if (currentSet is null) continue;
                                 currentSet.CountRow();
@@ -611,14 +606,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                 skipped = false;
                                 int truncatedCells;
                                 try { truncatedCells = plan!.ReadRow(reader, builder, text => messages.Add(text), token); }
-                                catch { currentSet.AbortRow(); transient = plan!.TransientBytes; throw; }
-                                transient = plan.TransientBytes;
+                                catch { currentSet.AbortRow(); throw; }
                                 var sealedBefore = currentSet.SealedPages;
                                 if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
                                 if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                             }
-                            store.Discarded(transient);
-                            transient = 0;
                             if (currentSet is not null)
                             {
                                 currentSet.Complete();
@@ -647,9 +639,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     finally
                     {
                         if (reader is not null) await reader.DisposeAsync();
-                        // After a severity 17 to 19 error the next batch runs, and must not read another large xml value before
-                        // this row's is counted for collection.
-                        store.Discarded(transient);
                     }
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;

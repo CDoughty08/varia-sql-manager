@@ -98,17 +98,6 @@ internal static class ExecutionLiveChecks
             var ranOn = await Run("CREATE TABLE #sev (n int);\nGO\nSELECT 1 AS a; RAISERROR('sev18', 18, 1); WAITFOR DELAY '00:00:01'; INSERT #sev VALUES (1);\nGO\nSELECT COUNT(*) AS c FROM #sev; DROP TABLE #sev;");
             check(ranOn.Status == "completedWithErrors" && ranOn.CompletedBatches == 3 && ranOn.ResultSets.Count == 2 && LiveResultChecks.RowsOf(store, ranOn.ResultSets[1])[0][0] == "1",
                 "a batch with a severity 18 error runs to its end on the server: " + string.Join(", ", ranOn.ResultSets.Select(set => set.Columns[0].Name)));
-            // The large xml value a row read whole is counted for collection even when an exception ends its set: after a severity
-            // 17 to 19 error within a set (a resource error) the next batch runs, and must not read another such value first.
-            // No script raises one there on demand, so a deadline while the server computes the next row stands in for it; it
-            // lands while the row is read (SQL Server holds the row's last packet until then) or before the next one.
-            var discardedBefore = store.DiscardedBytes;
-            var abandoned = await Run("SELECT n, x FROM (SELECT 1 AS n, CAST(N'<a>' + REPLICATE(CAST(N'x' AS nvarchar(max)), 4000000) + N'</a>' AS xml) AS x"
-                + " UNION ALL SELECT 2, CAST(N'<b/>' AS xml) WHERE (SELECT CHECKSUM_AGG(a.object_id ^ b.object_id ^ c.object_id) FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b CROSS JOIN sys.all_objects AS c) = 12345) AS t"
-                + " OPTION (MAXDOP 1);", timeout: 2);
-            var discarded = store.DiscardedBytes - discardedBefore;
-            check(abandoned.Status == "timedOut" && abandoned.ResultSets is [{ RowsRead: 1 }] && discarded >= 4_000_000,
-                "a large xml value whose set an exception ended is counted for collection (" + discarded + " bytes, " + abandoned.Status + ", " + string.Join(", ", abandoned.ResultSets.Select(set => set.RowsRead + "/" + set.RowsStored)) + " rows)");
             var after = await Options();
             check(after == Defaults, "the session survives batches that raised errors: " + after);
 
