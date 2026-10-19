@@ -140,8 +140,10 @@ export const scriptActionTitles: { readonly [D in ScriptDestination]: string } =
 
 /** Why an action failed, as a value; `retryable` says whether trying again can help. */
 export const actionErrorRetryable = {
-  NOT_FOUND: false, NOT_SUPPORTED: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false, INVALID_NAME: false,
+  NOT_FOUND: false, NOT_SUPPORTED: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
   DATABASE_UNAVAILABLE: true, TIMEOUT: true, CONNECTION_LOST: true, SQL_ERROR: true,
+  // Stop cancelled the statement in SQL Server; the steps say what completed before it.
+  CANCELLED: true,
   // Off Windows, the action's connection could not sign in with Kerberos (run kinit, then retry).
   AUTH_KERBEROS: true, AUTH_UNSUPPORTED: true
 } as const satisfies Record<string, boolean>
@@ -153,7 +155,11 @@ export const actionLimits = {
   describeMs: 40_000, scriptMs: 25_000, readLockTimeoutMs: 10_000, gateWaitMs: 30_000,
   readPerConnection: 2, readTotal: 4, executePerConnection: 1, executeTotal: 2,
   registered: 128, cancelIds: 16, tombstones: 64, tombstoneMs: 60_000,
-  dependents: 100, messageChars: 2_048, infoMessages: 32, infoMessageChars: 512, scriptChars: 65_536, newName: 128
+  dependents: 100, messageChars: 2_048, infoMessages: 32, infoMessageChars: 512, scriptChars: 65_536, newName: 128,
+  /** How long a stopped action's reply waits for SQL Server to end the statement, then answers CANCELLED (outcome unknown). */
+  stopGraceMs: 10_000,
+  /** When a running rename appears in the status bar, with Stop. */
+  statusDelayMs: 300
 } as const
 
 /** What a renderer says when the backend stopped (or its connection broke) while DDL ran: the outcome is unknown. */

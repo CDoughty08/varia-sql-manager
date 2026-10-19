@@ -272,10 +272,11 @@ internal sealed class ProtocolHost
 
     /// <summary>A unary request answers as soon as it is cancelled or its deadline passes; work that ignores the token
     /// keeps running and its late result is discarded. Queries answer with their summary, and streams after their
-    /// current page.</summary>
+    /// current page. Stop on an object action (actions lane, reason 1) answers with the action's steps once SQL Server has
+    /// ended its statement, within the action service's grace, so the user learns what the DDL completed.</summary>
     private void Cancelled(RequestContext context)
     {
-        if (context.Lane == RequestLane.Query || context.IsStream) return;
+        if (context.Lane == RequestLane.Query || context.IsStream || context.Lane == RequestLane.Actions && context.Reason == CancelReason.User) return;
         Respond(context, CancelledError(context));
     }
 

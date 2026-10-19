@@ -133,6 +133,22 @@ try {
   await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
   console.log('Object action checks: F2 renames inline with the name selected, Escape sends nothing, Enter renames and reselects, and NAME_IN_USE reverts the label.')
 
+  // A rename waiting on a lock shows in the status bar; its Stop cancels it, and the object keeps its name.
+  await select(...tablesPath, 'dbo.Orders2')
+  await page.keyboard.press('F2')
+  await expect(box).toHaveValue('Orders2')
+  await page.keyboard.type('Blocked')
+  await page.keyboard.press('Enter')
+  const status = page.locator('.status-bar .status-scripting')
+  await expect(status).toContainText('Renaming dbo.Orders2 to Blocked…')
+  const blockedId = (await stubCalls('actions.execute')).at(-1).requestId
+  await status.getByRole('button', { name: 'Stop rename', exact: true }).click()
+  await expect.poll(() => application.evaluate(() => globalThis.variaStub.cancels)).toContain(blockedId)
+  await expect(status).not.toContainText('Renaming')
+  await expect(renamed.locator('.oe-label')).toHaveText('dbo.Orders2')
+  await expect(commandBanner()).toHaveCount(0)
+  console.log('Object action checks: a rename waiting on a lock shows in the status bar, and its Stop cancels it in the backend and keeps the name.')
+
   // 4. Delete opens exactly one Delete Object dialog, consuming the key (the hidden menu's Delete role does not also run).
   await select(...tablesPath, 'dbo.Lines')
   await page.evaluate(() => { addEventListener('keydown', event => { if (event.key === 'Delete') window.variaDeleteKey = event.defaultPrevented }, true) })

@@ -46,8 +46,10 @@ internal static class ActionChecks
         check(Catalog.Limit("readPerConnection") == options.ReadPerConnection && Catalog.Limit("readTotal") == options.ReadTotal && Catalog.Limit("executePerConnection") == options.ExecutePerConnection
             && Catalog.Limit("executeTotal") == options.ExecuteTotal && Catalog.Limit("registered") == options.MaxRegistered && Catalog.Limit("describeMs") == (long)options.DescribeBudget.TotalMilliseconds
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
-            && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier, "the backend's limits are the catalogue's");
-        check(Catalog.ErrorCodes.Count() == 14 && Catalog.Retryable("IN_USE") && !Catalog.Retryable("DEPENDENTS") && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject"]),
+            && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
+            && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
+        check(Catalog.ErrorCodes.Count() == 14 && Catalog.Retryable("IN_USE") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject"]),
             "the catalogue lists the action error codes and the Delete Object dialog");
     }
 
@@ -105,9 +107,12 @@ internal static class ActionChecks
     {
         var database = new ObjectRefDto("database", Name: "AppData");
         var full = string.Concat(ActionService.Plan(Delete(database, close: true, history: true), database).Select(ActionSql.ScriptText));
-        check(full == "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = N'AppData'" + NL + "GO" + NL
-            + "USE [master]" + NL + "GO" + NL + "ALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE" + NL + "GO" + NL
-            + "USE [master]" + NL + "GO" + NL + "DROP DATABASE [AppData]" + NL + "GO" + NL, "a database's Delete scripts backup history, single-user mode and the DROP in SSMS's order");
+        // SSMS deletes the history first; Varia only after the DROP succeeded, so a DROP that fails (IN_USE) keeps it.
+        check(full == "USE [master]" + NL + "GO" + NL + "ALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE" + NL + "GO" + NL
+            + "USE [master]" + NL + "GO" + NL + "DROP DATABASE [AppData]" + NL + "GO" + NL
+            + "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = N'AppData'" + NL + "GO" + NL, "a database's Delete scripts single-user mode, the DROP, then its backup history");
+        check(ActionService.Plan(Delete(database, history: true), database).Select(plan => plan.Template).SequenceEqual([ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory]),
+            "the backup history step runs only after the DROP");
         check(ActionService.Plan(Delete(database), database).Select(plan => plan.Template).SequenceEqual([ActionTemplate.DropDatabase]),
             "without its options, deleting a database only drops it (Close existing connections is off by default, as in SSMS)");
         var view = new ObjectRefDto("view", "AppData", "dbo", "V");
@@ -171,6 +176,12 @@ internal static class ActionChecks
         check(sql.LaneOf("actions.execute") == RequestLane.Actions && sql.LaneOf("actions.describe") == RequestLane.Metadata && sql.LaneOf("actions.script") == RequestLane.Metadata
             && new[] { "actions.describe", "actions.script", "actions.execute" }.All(SqlService.MethodNames.Contains), "DDL runs on the actions lane, never holding a metadata slot; HELLO lists the three methods");
         sql.Dispose();
+        // Azure SQL Database refuses EXEC [db].sys.sp_executesql (Msg 40515): tables.columns opens in the object's database there.
+        var azure = Box2022 with { EngineEdition = 5 };
+        check(SqlService.ColumnsPerDatabase(azure, force: false) && !SqlService.ColumnsPerDatabase(Box2022, force: false) && SqlService.ColumnsPerDatabase(Box2022, force: true)
+            && SqlService.ColumnsText(true) == SqlService.ColumnsSql && !SqlService.ColumnsText(true).Contains("sp_executesql", StringComparison.Ordinal)
+            && SqlService.ColumnsText(false).Contains("QUOTENAME(@db) + N'.sys.sp_executesql'", StringComparison.Ordinal),
+            "Select Top's column read on Azure SQL Database runs in the object's database with no cross-database call; box servers use QUOTENAME(@db)'s sp_executesql");
     }
 
     private sealed class FakeHost(int edition = 3) : IActionHost
@@ -185,6 +196,7 @@ internal static class ActionChecks
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public void ClearPoolsFor(string connectionId, string database) => Cleared.Add(database);
+        public void DatabaseChanged(string connectionId, string database, string? newName) => Cleared.Add(database + " -> " + newName);
     }
 
     private static async Task ServiceAsync(Action<bool, string> check)

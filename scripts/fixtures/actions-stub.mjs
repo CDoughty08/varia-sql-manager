@@ -6,7 +6,8 @@ import { explorerStatics } from './explorer-tree.mjs'
 /**
  * What the stub serves below each connected server: Databases › AppData (and System Databases › master) with Tables
  * (dbo.Orders; dbo.Lines, which a foreign key blocks), Views (dbo.OrderSummary) and Programmability › Stored Procedures
- * (dbo.ShipOrder). Renaming to "Taken" is NAME_IN_USE; a rename returns sp_rename's caution.
+ * (dbo.ShipOrder). Renaming to "Taken" is NAME_IN_USE; renaming to "Blocked" waits, as on another session's lock, until
+ * its Stop arrives and then answers as the backend does once SQL Server cancelled it; a rename returns sp_rename's caution.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -17,7 +18,7 @@ export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${na
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'] }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map() }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
@@ -50,6 +51,8 @@ export function installActionsStub({ ipcMain }, { statics }) {
     const { target } = params
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
+      if (params.newName === 'Blocked') return new Promise(resolve => stub.blocked.set(params.requestId, () => resolve(ok({ steps: [{ status: 'cancelled', message: 'Rename' }], messages: [], elapsedMs: 1,
+        error: { code: 'CANCELLED', message: 'The action was stopped at "Rename"; SQL Server cancelled that statement.', retryable: true } }))))
       stub.tables = stub.tables.map(name => name === target.name ? params.newName : name)
       return ok({ steps: [{ status: 'done', message: 'Rename' }], messages: [caution], elapsedMs: 1 })
     }
@@ -82,6 +85,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
   ipcMain.removeHandler('varia:actions-cancel')
   ipcMain.handle('varia:actions-cancel', async (_event, { requestIds }) => {
     stub.cancels.push(...requestIds)
+    for (const id of requestIds) { stub.blocked.get(id)?.(); stub.blocked.delete(id) }
     return ok({ cancelled: requestIds.length })
   })
 }

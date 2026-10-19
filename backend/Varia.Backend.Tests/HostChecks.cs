@@ -47,6 +47,21 @@ internal static class HostChecks
             var cancelled = host.Next(FrameKind.Response);
             check(cancelled?.Header.Id == 2 && ErrorCode(cancelled.Value) == "CANCELLED", "CANCEL answers a unary request CANCELLED");
 
+            // Stop on an object action: the reply waits for the action's own answer, which lists the steps it completed.
+            var settling = Stopwatch.StartNew();
+            host.Request(6, "test.settle", new { });
+            Thread.Sleep(50);
+            host.Send(FrameKind.Cancel, 6, 1, []);
+            var settled = host.Next(FrameKind.Response);
+            var settledMs = settling.ElapsedMilliseconds;
+            host.Request(7, "test.settle", new { });
+            Thread.Sleep(50);
+            host.Send(FrameKind.Cancel, 7, 3, []);
+            var gone = host.Next(FrameKind.Response);
+            check(settled?.Header.Id == 6 && ErrorCode(settled.Value) is null && Body(settled.Value).GetProperty("result").GetProperty("settled").GetBoolean() && settledMs >= 250
+                && gone?.Header.Id == 7 && ErrorCode(gone.Value) == "CANCELLED",
+                "CANCEL reason 1 on the actions lane answers with the action's result once it settles; other reasons answer CANCELLED at once (" + settledMs + " ms)");
+
             var watch = Stopwatch.StartNew();
             host.Request(3, "test.slow", new { ms = 1500 }, deadline: 100);
             var timedOut = host.Next(FrameKind.Response);
@@ -396,8 +411,8 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int Unsent;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure"];
-    public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, _ => RequestLane.Control };
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.settle"];
+    public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, _ => RequestLane.Control };
     public (long GlobalBytes, long QueryBytes) ResultBudget => (256L << 20, 128L << 20);
 
     public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context)
@@ -412,6 +427,11 @@ internal sealed class StubDispatcher : IRequestDispatcher
             case "test.wait":
                 await Task.Delay(Timeout.Infinite, context!.Token);
                 return new { };
+            case "test.settle":
+                // As ActionService does on Stop: SQL Server ends the statement a moment after the attention, then it answers.
+                try { await Task.Delay(Timeout.Infinite, context!.Token); }
+                catch (OperationCanceledException) { await Task.Delay(300); }
+                return new { Settled = true };
             case "test.stream":
                 var pages = parameters.GetProperty("pages").GetInt32();
                 for (var page = 1; page <= pages; page++)

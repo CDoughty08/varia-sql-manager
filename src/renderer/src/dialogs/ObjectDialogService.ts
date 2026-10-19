@@ -49,7 +49,8 @@ export interface ObjectDialogServiceOptions {
 
 export const dialogMessages = {
   disconnected: 'The server was disconnected.',
-  stopped: 'The action was stopped. SQL Server cancelled the statement; if it had already finished, refresh Object Explorer to see.',
+  /** Stop, when the backend could not confirm in time that SQL Server ended the statement. */
+  stopped: 'The action was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.',
   busy: 'Wait for the action to finish, or stop it first.'
 } as const
 const error = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: true })
@@ -136,12 +137,17 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       try { definition.afterSuccess({ refreshListing: () => this.refreshListing(open) }) } catch (failure) { onUnexpectedError(failure) }
       return
     }
-    if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('TIMEOUT', dialogMessages.stopped) }); return }
+    // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step
+    // stopped), so the listing shows what is there now.
+    if (value?.steps.some(step => step.status === 'done')) this.refreshListing(open)
+    // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
+    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); return }
+    if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
     this.update(open, { phase: 'failed', error: failure, ...(value ? { steps: value.steps } : {}) })
   }
 
-  /** Stop: cancels the running action in SQL Server (the dialog reports Stopped when its answer comes). */
+  /** Stop: cancels the running action in SQL Server; the dialog reports Stopped, with what completed, when its answer comes. */
   stop(): void {
     const open = this.current, request = this.request
     if (!open || !request || request.dialog !== open.id) return

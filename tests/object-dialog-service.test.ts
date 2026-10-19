@@ -120,6 +120,20 @@ describe('ObjectDialogService', () => {
     expect(dialogs.current).toMatchObject({ phase: 'stopped', error: { message: dialogMessages.stopped } })
     expect(dialogs.close()).toBe(true)
   })
+  it('reports a Stop SQL Server confirmed with the steps that completed, and reloads the listing they changed', async () => {
+    const { dialogs, api, settle, execute, explorer } = setup()
+    dialogs.open('deleteObject', node(databaseRef))
+    await settle()
+    const ok = dialogs.ok()
+    dialogs.stop()
+    expect(api.cancelObjectActions).toHaveBeenCalledTimes(1)
+    const stopped = { code: 'CANCELLED' as const, message: 'The action was stopped at "Delete backup and restore history"; SQL Server cancelled that statement. Completed before Stop: Close existing connections, Drop the database.', retryable: true }
+    execute.resolve({ ok: true, value: { steps: [{ status: 'done', message: 'Close existing connections' }, { status: 'done', message: 'Drop the database' }, { status: 'cancelled', message: 'Delete backup and restore history' }], messages: [], elapsedMs: 1, error: stopped } })
+    await ok
+    expect(dialogs.current).toMatchObject({ phase: 'stopped', error: stopped, steps: [{ status: 'done' }, { status: 'done' }, { status: 'cancelled' }] })
+    expect(explorer.refresh).toHaveBeenCalledTimes(1)
+    expect(dialogs.close()).toBe(true)
+  })
   it('turns a lost backend into the unknown-outcome sentence, and a disconnect into Close only', async () => {
     const { dialogs, connections, settle, execute, api } = setup()
     dialogs.open('deleteObject', node(ordersRef))

@@ -329,7 +329,7 @@ try
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
     await ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json);
     await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);
-    await ActionLiveChecks.RunAsync(Check, service, info, json);
+    await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }
 finally { await Call<object>("connections.disconnect", new ConnectionArgs(info.Id)); }

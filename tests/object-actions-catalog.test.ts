@@ -99,7 +99,12 @@ describe('object action catalogue', () => {
   })
   it('keeps the limits and error codes', () => {
     expect(actionLimits).toMatchObject({ describeMs: 40_000, scriptMs: 25_000, readPerConnection: 2, readTotal: 4, executePerConnection: 1, executeTotal: 2, registered: 128, cancelIds: 16, newName: 128 })
-    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE', 'INVALID_NAME'])
+    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE'])
+  })
+  it('lists only error codes the backend produces, so a renderer branch on one can be reached', () => {
+    const backend = ['ActionService.cs', 'ActionErrors.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
+    // Each code appears as a C# string literal: ActionErrors.Numbers, an Error(...) or Create(...) call, or (AUTH_*) the sign-in's codes.
+    expect(actionErrorCodes.filter(code => !backend.includes(`"${code}"`))).toEqual([])
   })
   it('loads in plain Node 24, as the fake backend and scripts load the other catalogues', () => {
     const files = ['catalog.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'actions', name))

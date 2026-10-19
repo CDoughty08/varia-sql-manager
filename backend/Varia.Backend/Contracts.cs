@@ -143,8 +143,6 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 /// run it: the object's, or master for databases and server objects. Commands counts the SQL commands the job sent.</summary>
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
-/// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
-/// the server that answered. Never the connection string or the password.</summary>
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options; Validate refuses the rest.</summary>
@@ -158,6 +156,8 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 internal sealed record ActionStepDto(string Status, string? Message = null);
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
 
+/// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
+/// the server that answered. Never the connection string or the password.</summary>
 internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server);
 
 internal sealed class RequestException(string code, string message, ErrorDetails? details = null) : Exception(message)

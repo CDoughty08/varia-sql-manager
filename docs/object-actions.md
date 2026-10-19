@@ -56,8 +56,14 @@ confirmation.
 DDL runs on its own unpooled connection (the program name plus " - Object Actions"), never Object Explorer's or
 scripting's pools, after a preflight in the same connection that finds the object again, re-derives its subtype and
 checks permissions and name collisions. Statements are built by SQL Server from constant text: names are nvarchar(128)
-parameters passed through `QUOTENAME`, and keywords come from the catalogue. DDL waits for locks without a timeout,
-as SSMS does; Stop is always available.
+parameters passed through `QUOTENAME`. DDL waits for locks without a timeout, as SSMS does, and Stop is always
+available: the dialog's Stop, or the status bar's Stop for a rename. A stopped action answers once SQL Server has
+ended the statement, with each step done, cancelled or skipped, so the dialog says what completed before Stop.
+
+Deleting a database runs SSMS's statements in a safer order: Close existing connections (`SET SINGLE_USER WITH ROLLBACK
+IMMEDIATE`), then `DROP DATABASE`, and only after the DROP succeeds, the backup and restore history
+(`msdb.dbo.sp_delete_database_backuphistory`). SSMS deletes the history first, so a DROP that fails (for example, a
+query window still uses the database) would lose it; Script Action shows the order Varia runs.
 
 If the backend stops while an action runs: "The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check."
 
@@ -74,11 +80,11 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `BLOCKED` | Yes |
 | `DEPENDENTS` | No |
 | `NAME_IN_USE` | No |
-| `INVALID_NAME` | No |
 | `DATABASE_UNAVAILABLE` | Yes |
 | `TIMEOUT` | Yes |
 | `CONNECTION_LOST` | Yes |
 | `SQL_ERROR` | Yes |
+| `CANCELLED` | Yes |
 | `AUTH_KERBEROS` | Yes |
 | `AUTH_UNSUPPORTED` | Yes |
 
@@ -104,3 +110,5 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `infoMessageChars` | 512 | Characters in an informational message |
 | `scriptChars` | 65,536 | Characters in a script |
 | `newName` | 128 | UTF-16 code units in a new name (used verbatim, never trimmed) |
+| `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
+| `statusDelayMs` | 300 | How long a rename runs before the status bar shows it with Stop, in ms |

@@ -10,8 +10,9 @@ namespace Varia.Backend.Tests;
 /// unchanged, the server builds exactly the statement Script Action shows for every hostile name, and a script runs
 /// nothing. With VARIA_TEST_SQL_SCRATCH=1, in a marked VariaScratch_…_act database: rename and delete of each kind with
 /// names that break out of brackets, strings, comments and lines, collisions, dependents, a DROP waiting on another
-/// session's lock until Stop, the database's rename and back, and its delete (in use, closing connections, backup
-/// history), with the pool regression.</summary>
+/// session's lock until Stop, the database's rename and back (also from a connection opened in it), and its delete (in
+/// use, which keeps its backup history; Stop after the DROP; closing connections and deleting the history), with the pool
+/// regression and Azure SQL Database's per-database column read.</summary>
 internal static class ActionLiveChecks
 {
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
@@ -37,7 +38,7 @@ internal static class ActionLiveChecks
 
     private static bool Done(ActionExecuteResult result) => result.Error is null && result.Steps.Count > 0 && result.Steps.All(step => step.Status == "done");
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions options, JsonSerializerOptions json)
     {
         var client = new Client(service, info.Id, json);
         async Task<SqlRun> Sql(string text, string database = "master", string? session = null)
@@ -100,11 +101,11 @@ internal static class ActionLiveChecks
             return;
         }
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
-        await ScratchAsync(check, service, client, json, Sql, info, scratch);
+        await ScratchAsync(check, service, client, json, Sql, options, scratch);
     }
 
     private static async Task ScratchAsync(Action<bool, string> check, SqlService service, Client client, JsonSerializerOptions json, Func<string, string, string?, Task<SqlRun>> sql,
-        ConnectionInfo info, ScratchDatabase scratch)
+        ConnectOptions options, ScratchDatabase scratch)
     {
         var db = await scratch.CreateActionsAsync();
         async Task<SqlRun> Exec(string text, string database = "master")
@@ -189,12 +190,15 @@ internal static class ActionLiveChecks
                 + "WHERE s.host_process_id = " + Environment.ProcessId + " AND s.program_name LIKE N'% - Object Actions' AND r.blocking_session_id <> 0;");
             var watch = Stopwatch.StartNew();
             context.Cancel(CancelReason.User);
-            var stopped = "answered";
-            try { await waiting; } catch (OperationCanceledException) { stopped = "cancelled"; }
+            ActionExecuteResult? stopped = null;
+            try { stopped = await waiting; } catch (OperationCanceledException) { }
             var answeredMs = watch.ElapsedMilliseconds;
-            while (service.Actions.ActiveJobs > 0 && watch.ElapsedMilliseconds < 15_000) await Task.Delay(50);
-            check(held.Status == "completed" && stillWaiting && blocked.Scalar?.StartsWith("-1 LCK_M_", StringComparison.Ordinal) == true && stopped == "cancelled" && answeredMs < 5000 && service.Actions.ActiveJobs == 0 && await Count("dbo", "Locked", db) == 1,
-                "a DROP waits on another session's lock without a timeout, and Stop ends it at once, cancelled in SQL Server with the table kept (" + blocked.Scalar + ", " + answeredMs + " ms)");
+            // The answer waited for SQL Server to end the statement, so the job and its connection are already gone.
+            var jobs = service.Actions.ActiveJobs;
+            check(held.Status == "completed" && stillWaiting && blocked.Scalar?.StartsWith("-1 LCK_M_", StringComparison.Ordinal) == true && stopped is { Error.Code: "CANCELLED" }
+                && stopped.Steps.Select(step => step.Status).SequenceEqual(["cancelled"]) && answeredMs < 5000 && jobs == 0 && await Count("dbo", "Locked", db) == 1,
+                "a DROP waits on another session's lock without a timeout, and Stop answers once SQL Server cancelled it, with its step cancelled and the table kept (" + blocked.Scalar + ", " + answeredMs + " ms, "
+                + stopped?.Error?.Message + ")");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json); }
         check(Done(await client.Delete(Ref("table", "Locked"))), "after the lock is released, the same DROP runs");
@@ -206,6 +210,33 @@ internal static class ActionLiveChecks
         var back = await client.Rename(new ObjectRefDto("database", Name: scratch.ActionsRenamed), db);
         check(Done(away) && gone == "0" && Done(back) && (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(db) + ";")).Scalar == "1",
             "a database is renamed with ALTER DATABASE … MODIFY NAME, and back");
+
+        // A connection opened in the database (the Connect dialog's Database) still lists databases and Object Explorer's
+        // Databases folder after it renames that database, and after renaming it back.
+        async Task<string> Listing(string connectionId, string expected)
+        {
+            try
+            {
+                var names = await client.Call<List<DatabaseInfo>>("databases.list", new ConnectionArgs(connectionId));
+                var folder = await client.Call<ExplorerChildrenResult>("explorer.children", new ExplorerChildrenArgs(connectionId, Guid.NewGuid().ToString(),
+                    new NodeRefDto("folder", Owner: new ObjectRefDto("server"), Folder: "databases")));
+                return names.Any(item => item.Name == expected) && folder.Error is null ? "listed" : "missing " + folder.Error?.Message;
+            }
+            catch (RequestException error) { return error.Code + " " + error.Message; }
+            catch (Microsoft.Data.SqlClient.SqlException error) { return "Msg " + error.Number; }
+        }
+        var opened = await client.Call<ConnectionInfo>("connections.connect", options with { Database = db });
+        try
+        {
+            var inside = new Client(service, opened.Id, json);
+            var renamedFromInside = await inside.Rename(database, scratch.ActionsRenamed);
+            var afterRename = await Listing(opened.Id, scratch.ActionsRenamed);
+            var renamedBack = await inside.Rename(new ObjectRefDto("database", Name: scratch.ActionsRenamed), db);
+            var afterBack = await Listing(opened.Id, db);
+            check(opened.Database == db && Done(renamedFromInside) && afterRename == "listed" && Done(renamedBack) && afterBack == "listed",
+                "a connection opened in a database keeps working after it renames that database and back (" + afterRename + ", " + afterBack + ")");
+        }
+        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(opened.Id), json), json); }
 
         // The pool regression: Select Top's column read leaves no pooled connection in the database, and ClearPoolsFor
         // closes the idle connections of the backend's per-database pools.
@@ -220,27 +251,68 @@ internal static class ActionLiveChecks
         service.ClearPoolsFor(client.ConnectionId, db);
         var cleared = (await Exec(sessions)).Scalar;
         check(idle == "1" && cleared == "0", "ClearPoolsFor closes the idle pooled connections in a database before its DDL (" + idle + " then " + cleared + ")");
+        // Azure SQL Database's path (Object Explorer's per-database seam): the column read opens in the object's database.
+        service.Explorer.Options.ForcePerDatabaseScope = true;
+        TableColumnsResult perDatabase;
+        try { perDatabase = await client.Call<TableColumnsResult>("tables.columns", new TableArgs(client.ConnectionId, db, "dbo", "Canary")); }
+        finally { service.Explorer.Options.ForcePerDatabaseScope = false; }
+        var inDatabase = (await Exec(sessions)).Scalar;
+        service.ClearPoolsFor(client.ConnectionId, db);
+        check(perDatabase.Columns.Single().Name == "id" && inDatabase == "1" && (await Exec(sessions)).Scalar == "0",
+            "on Azure SQL Database's path tables.columns reads the columns in the object's database, with no cross-database call (" + inDatabase + " session there)");
 
-        // Delete: in use by a query tab without Close existing connections; with it, the tab's session ends and the database
-        // goes, with its backup history.
+        // Delete: in use by a query tab without Close existing connections, which keeps its backup history (that step runs
+        // only after the DROP); with it, the tab's session ends and the database goes. Stop while msdb's history is locked
+        // answers with what completed: the connections closed and the database dropped, the history kept.
+        var history = $"SELECT COUNT(*) FROM msdb.dbo.backupset WHERE database_name = {Literal(db)};";
+        async Task<SqlRun> Backup(string name) => await sql("DECLARE @device nvarchar(20) = CASE WHEN EXISTS (SELECT 1 FROM sys.all_objects WHERE name = N'dm_os_host_info') "
+            + "AND (SELECT host_platform FROM sys.dm_os_host_info) = N'Linux' THEN N'/dev/null' ELSE N'NUL' END;\n"
+            + "BACKUP DATABASE " + Bracket(name) + " TO DISK = @device WITH COPY_ONLY;", "master", null);
         var tab = Guid.NewGuid().ToString();
+        var historyHolder = Guid.NewGuid().ToString();
         try
         {
             var inTab = await sql("SELECT 1;", db, tab);
-            var inUse = await client.Delete(database, history: true);
-            var backup = await sql("DECLARE @device nvarchar(20) = CASE WHEN EXISTS (SELECT 1 FROM sys.all_objects WHERE name = N'dm_os_host_info') "
-                + "AND (SELECT host_platform FROM sys.dm_os_host_info) = N'Linux' THEN N'/dev/null' ELSE N'NUL' END;\n"
-                + "BACKUP DATABASE " + Bracket(db) + " TO DISK = @device WITH COPY_ONLY;", "master", null);
-            var history = $"SELECT COUNT(*) FROM msdb.dbo.backupset WHERE database_name = {Literal(db)};";
+            var backup = await Backup(db);
             var before = (await Exec(history)).Scalar;
-            var dropped = await client.Delete(database, close: true, history: true);
-            var after = (await Exec(history)).Scalar;
-            check(inTab.Status == "completed" && inUse is { Error.Code: "IN_USE" } && inUse.Steps.Select(step => step.Status).SequenceEqual(["done", "failed"])
-                && inUse.Error.Message.Contains("Close its connections, or check Close existing connections.", StringComparison.Ordinal),
-                "a database a query tab uses is IN_USE without Close existing connections, after its history step ran (" + inUse.Error?.Message + ")");
-            check(Done(dropped) && dropped.Steps.Count == 3 && (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(db) + ";")).Scalar == "0" && after == "0"
-                && (backup.Status != "completed" || before != "0"), "with Close existing connections the database is dropped, and its backup history with it (" + before + " then " + after + ")");
+            var inUse = await client.Delete(database, history: true);
+            var kept = (await Exec(history)).Scalar;
+            check(inTab.Status == "completed" && inUse is { Error.Code: "IN_USE" } && inUse.Steps.Select(step => step.Status).SequenceEqual(["failed", "skipped"])
+                && inUse.Error.Message.Contains("Close its connections, or check Close existing connections.", StringComparison.Ordinal) && kept == before && (backup.Status != "completed" || before != "0"),
+                "a database a query tab uses is IN_USE without Close existing connections, and its backup history is kept (" + before + " then " + kept + "; " + inUse.Error?.Message + ")");
+            var locked = await sql("BEGIN TRANSACTION; SELECT COUNT(*) FROM msdb.dbo.backupset WITH (TABLOCKX, HOLDLOCK);", "msdb", historyHolder);
+            using var context = new RequestContext(2, "actions.execute", RequestLane.Actions, 0);
+            var dropping = client.Delete(database, close: true, history: true, context);
+            var waitingOnHistory = false;
+            for (var watch = Stopwatch.StartNew(); !waitingOnHistory && !dropping.IsCompleted && watch.ElapsedMilliseconds < 15_000; await Task.Delay(100))
+                waitingOnHistory = (await Exec("SELECT COUNT(*) FROM sys.dm_exec_requests AS r JOIN sys.dm_exec_sessions AS s ON s.session_id = r.session_id WHERE s.host_process_id = " + Environment.ProcessId
+                    + " AND s.program_name LIKE N'% - Object Actions' AND r.blocking_session_id <> 0 AND r.database_id = DB_ID(N'msdb');")).Scalar != "0";
+            context.Cancel(CancelReason.User);
+            ActionExecuteResult? stopped = null;
+            try { stopped = await dropping; } catch (OperationCanceledException) { }
+            var dropped = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(db) + ";")).Scalar;
+            await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(historyHolder), json), json);
+            var left = (await Exec(history)).Scalar;
+            check(locked.Status == "completed" && waitingOnHistory && stopped is { Error.Code: "CANCELLED" } && stopped.Steps.Select(step => step.Status).SequenceEqual(["done", "done", "cancelled"])
+                && stopped.Error.Message.EndsWith("Completed before Stop: Close existing connections, Drop the database.", StringComparison.Ordinal) && dropped == "0" && left == before,
+                "Stop during the backup history step answers with the steps that completed: connections closed and the database dropped, its history kept (" + stopped?.Error?.Message + ")");
         }
-        finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab), json), json); }
+        finally
+        {
+            await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(historyHolder), json), json);
+            await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab), json), json);
+            // The history Stop left behind for the dropped name.
+            await sql("EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Literal(db) + ";", "msdb", null);
+        }
+
+        // A second database (the renamed name, which the sweep also knows): Close existing connections and the history go too.
+        var second = await scratch.CreateActionsRenamedAsync();
+        var secondHistory = $"SELECT COUNT(*) FROM msdb.dbo.backupset WHERE database_name = {Literal(second)};";
+        var secondBackup = await Backup(second);
+        var secondBefore = (await Exec(secondHistory)).Scalar;
+        var droppedSecond = await client.Delete(new ObjectRefDto("database", Name: second), close: true, history: true);
+        var after = (await Exec(secondHistory)).Scalar;
+        check(Done(droppedSecond) && droppedSecond.Steps.Count == 3 && (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(second) + ";")).Scalar == "0" && after == "0"
+            && (secondBackup.Status != "completed" || secondBefore != "0"), "with Close existing connections the database is dropped, then its backup history (" + secondBefore + " then " + after + ")");
     }
 }

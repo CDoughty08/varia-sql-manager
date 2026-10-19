@@ -353,6 +353,20 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
     }
 
+    /// <summary>After a rename or drop of the database a connection was opened in (the Connect dialog's Database), every
+    /// connection derived from it would fail with 4060: it moves to the new name, or to master after a drop, and the old
+    /// database's pools are cleared.</summary>
+    public void DatabaseChanged(string connectionId, string database, string? newName)
+    {
+        if (connections.TryGetValue(connectionId, out var current) && new SqlConnectionStringBuilder(current) is var builder
+            && string.Equals(builder.InitialCatalog, database, StringComparison.OrdinalIgnoreCase))
+        {
+            builder.InitialCatalog = newName ?? "master";
+            if (connections.TryUpdate(connectionId, builder.ConnectionString, current) && pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
+        }
+        ClearPoolsFor(connectionId, database);
+    }
+
     private ServerProfile Profile(string connectionId) =>
         connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
 
@@ -410,17 +424,25 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>Runs <see cref="ColumnsSql"/> in the object's database, which reaches T-SQL only through QUOTENAME.</summary>
     internal const string ColumnsCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
         + "EXEC @module @stmt, N'@schema sysname, @name sysname', @schema = @schema, @name = @name;";
+    /// <summary>What tables.columns sends: the statement itself on a connection already in the object's database (Azure SQL
+    /// Database, or Object Explorer's ForcePerDatabaseScope test seam), else the cross-database call.</summary>
+    internal static string ColumnsText(bool perDatabase) => perDatabase ? ColumnsSql : ColumnsCall;
+    /// <summary>Whether tables.columns opens its connection in the object's database: on Azure SQL Database, which refuses a
+    /// three-part module name (Msg 40515).</summary>
+    internal static bool ColumnsPerDatabase(ServerProfile profile, bool force) => profile.Explorer(ExplorerCatalog.Current).Cloud || force;
 
     // Select Top N Rows lists the columns; QUOTENAME and parameters keep the names out of the SQL text. Hidden internal
     // columns (graph tables' graph_id and node ids) cannot be selected, unlike hidden temporal period and ledger columns,
-    // which are GENERATED ALWAYS. The connection keeps the login's database and reaches the object's through
-    // sp_executesql, so no idle pooled connection is left in the object's database to block DROP or MODIFY NAME.
+    // which are GENERATED ALWAYS. On box servers the connection keeps the login's database and reaches the object's through
+    // sp_executesql, so no idle pooled connection is left in the object's database to block DROP or MODIFY NAME. Azure SQL
+    // Database opens it in the object's database, as Object Explorer does there; object actions are not offered there.
     private async Task<TableColumnsResult> ColumnsAsync(TableArgs args, CancellationToken token)
     {
         Name(args.Database);
         Name(args.Schema);
         Name(args.Name);
-        await using var connection = CreateConnection(args.ConnectionId);
+        var perDatabase = ColumnsPerDatabase(Profile(args.ConnectionId), explorer.Options.ForcePerDatabaseScope);
+        await using var connection = perDatabase ? CreateConnection(args.ConnectionId, args.Database) : CreateConnection(args.ConnectionId);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         await Open(connection, deadline.Token);
@@ -428,9 +450,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         // Only the token's deadline: on a pooled connection that opens at once, a 30 s CommandTimeout would expire on the
         // same tick and could leave the connection a response behind for its next user.
         command.CommandTimeout = 0;
-        command.CommandText = ColumnsCall;
-        command.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = args.Database });
-        command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = ColumnsSql });
+        command.CommandText = ColumnsText(perDatabase);
+        if (!perDatabase)
+        {
+            command.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = args.Database });
+            command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = ColumnsSql });
+        }
         command.Parameters.Add(new SqlParameter("@schema", System.Data.SqlDbType.NVarChar, 128) { Value = args.Schema });
         command.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = args.Name });
         SqlDataReader reader;

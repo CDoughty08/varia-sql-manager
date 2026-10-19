@@ -211,7 +211,7 @@ for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metada
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
 | `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`) |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
-| `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it. Never re-sent |
+| `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
 `mainOnlyMethods` (`results.copy`, `results.export`, `debug.results.synthesize`) are sent only by main on its own
@@ -249,15 +249,21 @@ for 60 s). The backend sends an attention for the statement SMO has in flight, a
 gate (2 per connection, 4 in all) until its thread ends; scripting failures are `result.error` values (docs/scripting.md).
 
 **Object action cancellation** works the same way (`ActionRequests`, `varia:actions-cancel`, 1–16 ids, 64 tombstones for
-60 s; 128 running): the object dialog's Stop and a disconnect cancel `actions.describe`, `actions.script` and
-`actions.execute` by `requestId`. The backend cancels the statement in SQL Server (an attention, which rolls it back) and
-answers `CANCELLED` at once; the action's job keeps its gate and connection until the statement has ended. DDL runs on
+60 s; 128 running): the object dialog's Stop, the status bar's Stop for a rename, and a disconnect cancel
+`actions.describe`, `actions.script` and `actions.execute` by `requestId` (main routes exactly these and
+`explorer.children` and `scripting.script` to a cancel channel, `cancellableRequests`). The backend cancels the statement
+in SQL Server (an attention, which rolls it back). A describe, a script, or a disconnect answers `CANCELLED` at once, and
+the action's job keeps its gate and connection until the statement has ended. A user CANCEL (reason 1) of
+`actions.execute`, the one method on the `actions` lane, is the exception: ProtocolHost does not answer it, and the
+request waits up to 10 s (`stopGraceMs`) for SQL Server to end the statement, then answers its result with each step
+`done`, `cancelled` or `skipped` and `error: CANCELLED` (or a success, if the last statement finished first), so the
+renderer can say what completed; past the grace it answers envelope `CANCELLED`, an unknown outcome. DDL runs on
 its own unpooled connection (`ConnectRetryCount=0`, so it is never retried) with `LOCK_TIMEOUT -1`, after a preflight in
 the same connection; describe and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST`, which the
 renderer reports as an unknown outcome ("Refresh Object Explorer to check"), since main never sends a request twice.
 Failures the user can act on are `result.error` values, not envelope codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
-`NAME_IN_USE`, `INVALID_NAME`, `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `AUTH_KERBEROS` and
+`NAME_IN_USE`, `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS` and
 `AUTH_UNSUPPORTED` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is

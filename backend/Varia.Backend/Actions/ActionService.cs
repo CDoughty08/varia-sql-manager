@@ -22,6 +22,9 @@ internal interface IActionHost
     /// <summary>Clears every pool of the connection whose initial catalog is the database, so none of the backend's idle
     /// connections blocks DROP DATABASE or MODIFY NAME.</summary>
     void ClearPoolsFor(string connectionId, string database);
+    /// <summary>A database was renamed (to <paramref name="newName"/>) or dropped (null): a connection whose initial catalog
+    /// it was moves to the new name, or to master, so its later connections can still open.</summary>
+    void DatabaseChanged(string connectionId, string database, string? newName);
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -35,6 +38,8 @@ internal sealed class ActionServiceOptions
     public TimeSpan DescribeBudget { get; set; } = TimeSpan.FromSeconds(40);
     public TimeSpan ScriptBudget { get; set; } = TimeSpan.FromSeconds(25);
     public TimeSpan GateWait { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>How long Stop on DDL waits for SQL Server to end the statement before the request answers CANCELLED.</summary>
+    public TimeSpan StopGrace { get; set; } = TimeSpan.FromSeconds(10);
 }
 
 /// <summary>The object's identity and facts the preflight read: its subtype, row, and what refers to it.</summary>
@@ -43,7 +48,8 @@ internal sealed record ActionSubject(ObjectRefDto Target, string Display, string
 /// <summary>actions.describe, actions.script and actions.execute (spec PR17 §6): validate, register, take the action
 /// gates, open the action's own unpooled connection, run the preflight in it, then the DDL. Failures are values; a
 /// request cancelled by a disconnect throws CANCELLED. The reply never waits on blocked I/O: the request awaits the job
-/// with its token, and the job alone owns the connection and its gate until it ends.</summary>
+/// with its token, and the job alone owns the connection and its gate until it ends. Stop on DDL is the exception, bounded
+/// by StopGrace: its reply waits for SQL Server to end the statement, so it says which steps completed.</summary>
 internal sealed class ActionService : IDisposable
 {
     private readonly IActionHost host;
@@ -162,7 +168,9 @@ internal sealed class ActionService : IDisposable
 
     /// <summary>Registers the request, then runs the job on the pool under the read or execute gates with its own
     /// connection. Past its budget, a describe or script answers TIMEOUT; DDL has none (Stop ends it). A disconnect answers
-    /// CANCELLED. Failures before any DDL, such as a cloud edition or a Kerberos sign-in, are values.</summary>
+    /// CANCELLED. Failures before any DDL, such as a cloud edition or a Kerberos sign-in, are values. Stop on DDL (the
+    /// request's own token) has already sent SQL Server an attention through the job's token; the reply then waits up to
+    /// StopGrace for the job, whose steps say what completed, and past it answers CANCELLED, an unknown outcome.</summary>
     private async Task<T> RunAsync<T>(string connectionId, string requestId, bool read, TimeSpan? budget, CancellationToken token,
         Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed)
     {
@@ -184,6 +192,13 @@ internal sealed class ActionService : IDisposable
             {
                 if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
                 return failed(ActionErrors.Create(catalog, "TIMEOUT", "Reading the object took longer than " + (int)budget!.Value.TotalSeconds + " seconds. Try again."));
+            }
+            catch (OperationCanceledException) when (!read && token.IsCancellationRequested && !entry.Forgotten)
+            {
+                try { return await job.WaitAsync(Options.StopGrace, CancellationToken.None); }
+                catch (TimeoutException) { throw new OperationCanceledException(token); }
+                // Only the preflight, the gates or the sign-in can throw on cancellation: no DDL had started.
+                catch (Exception error) when (error is OperationCanceledException or SqlException) { return failed(Error("CANCELLED", "The action was stopped before it changed anything.")); }
             }
         }
         finally { running.Unregister(requestId, entry); }
@@ -369,10 +384,11 @@ internal sealed class ActionService : IDisposable
                 ? [new(ActionTemplate.RenameDatabase, "master", [target.Name!, args.NewName!])]
                 : [new(ActionTemplate.RenameObject, target.Database!, [target.Schema!, target.Name!, args.NewName!])];
         if (target.Kind != "database") return [new(ActionSql.DropOf(target.Kind), target.Database!, [target.Schema!, target.Name!])];
+        // SSMS deletes the backup history first; deleting it after the DROP keeps it when the DROP fails (IN_USE).
         var plan = new List<PlannedStatement>();
-        if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
         if (args.CloseConnections == true) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!]));
         plan.Add(new(ActionTemplate.DropDatabase, "master", [target.Name!]));
+        if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
         return plan;
     }
 
@@ -429,6 +445,7 @@ internal sealed class ActionService : IDisposable
         if (target.Kind == "database") host.ClearPoolsFor(args.ConnectionId, target.Name!);
         var steps = new List<ActionStepDto>();
         ActionError? failure = null;
+        var renamedOrDropped = false;
         for (var index = 0; index < plan.Count; index++)
         {
             var statement = plan[index];
@@ -438,11 +455,14 @@ internal sealed class ActionService : IDisposable
                 token.ThrowIfCancellationRequested();
                 await RunStatementAsync(connection, statement, dryRun: false, token);
                 steps.Add(new("done", StepTitle(statement.Template)));
+                renamedOrDropped |= statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase;
             }
             catch (Exception exception) when (token.IsCancellationRequested && exception is SqlException or OperationCanceledException)
             {
                 steps.Add(new("cancelled", StepTitle(statement.Template)));
-                failure = Error("TIMEOUT", "The action was stopped.");
+                var done = steps.Where(step => step.Status == "done").Select(step => step.Message!).ToList();
+                failure = Error("CANCELLED", "The action was stopped at \"" + StepTitle(statement.Template) + "\"; SQL Server cancelled that statement."
+                    + (done.Count == 0 ? "" : " Completed before Stop: " + string.Join(", ", done) + "."));
             }
             catch (SqlException sql)
             {
@@ -452,6 +472,8 @@ internal sealed class ActionService : IDisposable
                 failure = done.Count == 0 ? value : value with { Message = ScriptingErrors.Clip(value.Message + " Completed before the failure: " + string.Join(", ", done) + ".", ActionErrors.MaxMessage) };
             }
         }
+        // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
+        if (renamedOrDropped) host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
         List<string> collected;
         lock (messages) collected = [.. messages];
         return new(steps, collected, 0, failure);

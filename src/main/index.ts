@@ -11,6 +11,7 @@ import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { ActionRequests } from './backend/action-requests'
+import { cancellableRequests } from './backend/renderer-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest, validateResult } from './validation'
@@ -535,7 +536,7 @@ app.whenReady().then(async () => {
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
       // An Object Explorer load, a script or an object action is registered before it is sent, so its cancel channel can always find it.
-      const cancellable = method === 'explorer.children' ? explorerRequests : method === 'scripting.script' ? scriptingRequests : method.startsWith('actions.') ? actionRequests : undefined
+      const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests })
       const load = cancellable?.begin((validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute']['params']).requestId)
       let result: unknown
       try {

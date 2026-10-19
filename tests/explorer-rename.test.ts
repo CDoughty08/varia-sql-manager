@@ -3,7 +3,7 @@ import { unknownOutcomeMessage } from '../src/shared/actions/catalog'
 import type { ActionExecuteResult } from '../src/shared/actions/schema'
 import type { ApiResult, ExplorerChildrenResult } from '../src/shared/contracts'
 import type { ExplorerChildrenParams } from '../src/shared/explorer/refs'
-import { moduleRenameNote } from '../src/renderer/src/actions/ObjectActionService'
+import { moduleRenameNote, renameMessages } from '../src/renderer/src/actions/ObjectActionService'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, connectionOptions, explorerAnswer, readyBackend, workbenchFixture } from './fixtures/workbench'
 
@@ -104,18 +104,57 @@ describe('inline Rename in Object Explorer', () => {
     await actions.commitRename(node(orders), 'Orders3')
     expect(commands.getSnapshot().error).toBe(unknownOutcomeMessage)
   })
-  it('runs one rename per node at a time, and drops and cancels it when the server disconnects', async () => {
+  it('runs one rename per node at a time, says so for a second one, and drops and cancels it when the server disconnects', async () => {
     const { actions, api, connections, orders, node, commands } = await setup()
     const pending = deferred<ApiResult<ActionExecuteResult>>()
     api.executeObjectAction.mockReturnValueOnce(pending.promise)
     const first = actions.commitRename(node(orders), 'A')
     await actions.commitRename(node(orders), 'B')
     expect(api.executeObjectAction).toHaveBeenCalledTimes(1)
+    expect(commands.getSnapshot().error).toBe(renameMessages.running('dbo.Orders'))
+    commands.clearError()
     connections.remove('server-a')
     expect(api.cancelObjectActions).toHaveBeenCalledWith([api.executeObjectAction.mock.calls[0][0].requestId])
     pending.resolve({ ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' })
     await first
     expect(commands.getSnapshot().error).toBe('')
+  })
+  it('shows a rename blocked on a lock in the status bar, whose Stop cancels it in SQL Server; the object keeps its name', async () => {
+    const { actions, api, orders, node, commands, explorer } = await setup()
+    const pending = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(pending.promise)
+    const running = actions.commitRename(node(orders), 'Orders2')
+    expect(actions.getSnapshot().renames).toEqual([{ id: expect.any(String), label: 'dbo.Orders', newName: 'Orders2', visible: false, stopping: false }])
+    // Only a rename that takes a moment shows, so a quick one does not flash in the status bar.
+    await vi.waitFor(() => expect(actions.getSnapshot().renames[0]?.visible).toBe(true))
+    const requestId = api.executeObjectAction.mock.calls[0][0].requestId
+    actions.stopRenames([requestId])
+    actions.stopRenames([requestId])
+    expect(api.cancelObjectActions.mock.calls).toEqual([[[requestId]]])
+    expect(actions.getSnapshot().renames[0]).toMatchObject({ stopping: true })
+    pending.resolve({ ok: true, value: { steps: [{ status: 'cancelled', message: 'Rename' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'The action was stopped at "Rename"; SQL Server cancelled that statement.', retryable: true } } })
+    expect(await running).toBe(true)
+    expect(actions.getSnapshot().renames).toEqual([])
+    expect(commands.getSnapshot().error).toBe('')
+    expect(explorer.getSnapshot().rows.nodes.some(item => item?.label === 'dbo.Orders')).toBe(true)
+  })
+  it('reports a Stop SQL Server did not confirm in time as an unknown outcome', async () => {
+    const { actions, api, orders, node, commands } = await setup()
+    const pending = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(pending.promise)
+    const running = actions.commitRename(node(orders), 'Orders2')
+    actions.stopRenames([api.executeObjectAction.mock.calls[0][0].requestId])
+    pending.resolve({ ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' })
+    await running
+    expect(commands.getSnapshot().error).toBe(renameMessages.stoppedUnknown)
+  })
+  it('shows no warning for a database rename, whose MODIFY NAME only confirms the new name', async () => {
+    const { actions, api, orders, node, commands } = await setup()
+    const database = { ...node(orders), kind: 'database' as const, ref: { type: 'object' as const, object: { kind: 'database' as const, name: 'AppData' } } }
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', message: 'Rename' }], messages: ["The database name 'AppData2' has been set."], elapsedMs: 1 } })
+    await actions.commitRename(database, 'AppData2')
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'AppData' }, newName: 'AppData2' })
+    expect(commands.getSnapshot()).toMatchObject({ error: '' })
   })
   it('ends the box without a request when its node leaves the tree or its server is lost', async () => {
     const fixture = await setup(), { explorer, orders, find, setTables, api } = fixture

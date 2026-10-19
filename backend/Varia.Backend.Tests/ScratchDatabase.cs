@@ -183,6 +183,15 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return CreateMarkedAsync(Actions);
     }
 
+    /// <summary>A second object-action database under <see cref="ActionsRenamed"/>, once <see cref="Actions"/> is gone
+    /// (already in the dispose list).</summary>
+    public async Task<string> CreateActionsRenamedAsync()
+    {
+        await CreateMarkedAsync(ActionsRenamed);
+        created.Remove(ActionsRenamed);
+        return ActionsRenamed;
+    }
+
     private async Task<string> CreateMarkedAsync(string name)
     {
         created.Add(name);

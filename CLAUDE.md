@@ -121,7 +121,8 @@ pages, limits, error codes, display formats, benchmarks).
   the explorer or scripting pool; with statements only from `ActionSql`'s constant templates, where names go in as
   parameters through server-side `QUOTENAME` (the offline lint checks every template and band, and live checks prove the
   server builds what Script Action shows for hostile names); after a preflight in the same connection; waiting for locks
-  as SSMS does (`LOCK_TIMEOUT -1`; Stop cancels it); and never logging names, SQL or values. Describe and script reads
+  as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's, or the status bar's for a rename), whose
+  reply waits for SQL Server and lists the steps completed; and never logging names, SQL or values. Describe and script reads
   use `LOCK_TIMEOUT 10000`. The test-only dry run is an internal C# method, never a request field.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
