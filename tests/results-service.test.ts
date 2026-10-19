@@ -115,6 +115,21 @@ describe('results service', () => {
     service.finish('t3', 'q3', { summary: summaryOf([]) })
     expect(tab('t3')).toMatchObject({ status: 'completed', view: 'messages' })
   })
+  it('ends a run whose later batches ran after an error on Messages, completed with errors, its sets in batch order', () => {
+    const { service, tab } = fixture()
+    service.begin('t1', 'q1')
+    const sets = [descriptor(1, { batchNumber: 1 }), descriptor(2, { batchNumber: 3 }), descriptor(3, { batchNumber: 3, incomplete: true })]
+    const error = { code: 'SQL_ERROR', message: 'Msg 208, Level 16, State 1, Line 3\nInvalid object name.', batchNumber: 2, iteration: 1 }
+    service.finish('t1', 'q1', { summary: summaryOf(sets, { status: 'completedWithErrors', error, completedBatches: 3, totalBatches: 3, messages: [
+      { text: error.message, kind: 'error' }, { text: 'Batch 2 raised an error; execution continued with the next batch.', kind: 'info' }] }) })
+    expect(tab()).toMatchObject({ status: 'completedWithErrors', view: 'messages', completedBatches: 3, totalBatches: 3 })
+    expect(tab().sets.map(set => [set.descriptor.batchNumber, set.descriptor.incomplete])).toEqual([[1, false], [3, false], [3, true]])
+    expect(tab().messages.map(entry => entry.kind)).toEqual(['error', 'info'])
+    // A summary whose errors fell past the message caps still shows its error.
+    service.begin('t1', 'q2')
+    service.finish('t1', 'q2', { summary: summaryOf([], { status: 'completedWithErrors', error, messages: [{ text: 'printed', kind: 'info' }] }) })
+    expect(tab().messages).toEqual([{ text: 'printed', kind: 'info' }, { text: error.message, kind: 'error' }])
+  })
   it('ends a run main failed as an error entry, and a lost backend as lost', () => {
     const { service, tab } = fixture()
     service.begin('t1', 'q1')

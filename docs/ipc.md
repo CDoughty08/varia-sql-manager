@@ -29,6 +29,7 @@ The code is the reference implementation; this document describes it.
 - [Requests, deadlines, and cancellation](#requests-deadlines-and-cancellation)
 - [Methods](#methods)
 - [Streams and credits](#streams-and-credits)
+- [Query execution](#query-execution)
 - [Query events](#query-events)
 - [Result pages](#result-pages)
 - [Result store and memory budget](#result-store-and-memory-budget)
@@ -246,6 +247,45 @@ still in the open page builder are not served; the worker reads again after a pr
   credit would otherwise stall. A slow or hung renderer therefore stalls its reads, never the query or SQL Server.
 - Query events have no credit; they are bounded where they are produced.
 
+## Query execution
+
+`query.execute` takes `{ connectionId, sessionId, database, sql, queryId, maxRows, timeoutSeconds, startLine?,
+maxResultSets?, stopOnError? }`. `sessionId` is the query tab's UUID: the tab's SQL session is one unpooled connection
+with connection recovery off, opened on its first execution and kept until the tab closes, its server changes, or it is
+lost.
+
+- **SET prologue.** When a session opens (and so whenever one is reopened after it closed or was lost), the backend
+  runs SSMS's query-window defaults before the script: `SET ARITHABORT ON; SET ANSI_NULLS ON; SET ANSI_PADDING ON;
+  SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON;
+  SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;`. SqlClient's login already sets all of them but ARITHABORT
+  (OFF) and TEXTSIZE (-1); each is sent anyway because a server's `user options` can change login defaults. A script's
+  own SET statements then persist in the session as usual. ARITHABORT ON is part of a plan's cache key, so a statement
+  can get a different plan in a query tab than in an application that leaves it OFF, exactly as between SSMS and that
+  application. A session whose prologue fails is closed, and the next execution opens a new one.
+- **Batches.** `GO` and `GO n` split the script (SQLCMD commands are refused before anything runs; a line starting with
+  `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself: the next batch runs, and
+  Messages gets "Batch {b} raised an error; execution continued with the next batch." ("Batch {b}, repetition {k},
+  raised an error; execution continued with the next repetition." or "… next batch." for `GO n`) when any batch remains.
+  SQL Server decides how much of a batch runs after an error (most errors end only their statement). Severity 17–19
+  errors do not stop the batch on the server either, but SqlClient raises them as an exception, usually once it has read
+  the rest of the batch: result sets and messages after the error in that batch may be missing, or listed before it.
+  With `stopOnError: true` (for SQLCMD's `:on error exit`), the first batch that raised an error ends the script
+  instead. Nothing runs after a cancel, the script's deadline, an error of severity 20 or more, or any failure that
+  closes the session.
+
+| `status` | Meaning | Status line |
+| --- | --- | --- |
+| `completed` | Every batch ran without an error | "Query executed successfully." |
+| `completedWithErrors` | Every batch ran, and at least one raised an error; `error` (`SQL_ERROR`) holds the first 20 errors and the first batch and repetition that raised one | "Query completed with errors." |
+| `failed` | An error stopped the script: opening the session or changing its database, a batch with `stopOnError`, an error that closed the session, or an unexpected failure (`BACKEND_ERROR`) | "Query failed." |
+| `cancelled` | `query.cancel`, a closed tab, a disconnect, or a CANCEL frame other than main's backstop | "Query was cancelled." |
+| `timedOut` | `timeoutSeconds` passed, or main's backstop cancelled the request | "Query timed out." |
+
+`completedBatches` counts the batch executions that finished, including those that raised errors (a batch whose output a
+severity 17–19 error cut short counts too); with `stopOnError`, the batch that stopped the script is not counted.
+Validation errors and a missing, busy or invalid session or connection use the error envelope instead of a summary, and
+nothing runs.
+
 ## Query events
 
 EVENT frames whose id is a running `query.execute` request. Main validates each with `queryEventSchema`, stamps the
@@ -355,7 +395,7 @@ Notes appended to the summary's messages:
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
 | column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
-| a batch's error skipped later batches or repetitions | "Batch {b} raised an error; later batches were not executed." ("Batch {b}, repetition {k}, raised …" for `GO n`); nothing when no later batch was skipped, since SQL Server may have run the batch to its end |
+| an error stopped the script before later batches or repetitions (`stopOnError`, or an error that closed the session) | "Batch {b} raised an error; later batches were not executed." ("Batch {b}, repetition {k}, raised …" for `GO n`); nothing when no later batch was skipped, since SQL Server may have run the batch to its end |
 | a cancel or timeout skipped later batches | "Stopped at batch {b}; {c} of {t} batch executions completed." (", repetition {k}" for `GO n`) |
 
 A cell whose typed read fails becomes NULL with the error flag; that column switches to its fallback reader and the
@@ -368,11 +408,13 @@ the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, si
 "Messages were truncated by the display limit; …" marks where entries stopped, and up to 20 more error entries (each cut
 at 16,384 characters) are still kept, so the error that stopped a script, or its cancellation or timeout, is in Messages
 after a flood of PRINT output or row counts. An event carries at most 1,000 entries; a summary at most 1,028 (the
-stored entries, the late errors, and up to 8 notes). Should a failed run's summary still hold no error entry, the
+stored entries, the late errors, and up to 8 notes). Should a summary with an `error` still hold no error entry, the
 renderer adds its `error` as one.
 
 - **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
-  affected)", no digit grouping), the notes above, and "The SQL session closed. …". As in SSMS, "Changed database
+  affected)", no digit grouping), the notes above, "Batch {b} raised an error; execution continued with the next batch."
+  after a batch that raised an error when another remains ([Query execution](#query-execution)), and "The SQL session
+  closed. …" when a session that had opened closed (not for one that failed to open). As in SSMS, "Changed database
   context to …" (5701) and "Changed language setting to …" (5703) are left out, whether from USE, a session's login, or
   the toolbar's database.
 - **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within

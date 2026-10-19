@@ -85,6 +85,8 @@ export interface QueryOptions {
   startLine?: number
   /** Result sets kept per script, 1..1000 (default 10); later ones are counted, not stored. */
   maxResultSets?: number
+  /** Stop at the first batch that raises an error (SQLCMD's `:on error exit`). By default the next GO batch still runs, as in SSMS. */
+  stopOnError?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -123,6 +125,7 @@ export interface ResultDescriptor {
 }
 /** One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order). */
 export interface MessageEntry { text: string; kind: 'info' | 'error' }
+export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */
 export interface QueryResult {
@@ -131,7 +134,9 @@ export interface QueryResult {
   messages: MessageEntry[]
   recordsAffected: number
   elapsedMs: number
-  status: 'completed' | 'failed' | 'cancelled' | 'timedOut'
+  /** `completedWithErrors`: every batch ran and at least one raised an error (`error` names the first such batch).
+   *  `failed`: an error stopped execution (before the first batch, with `stopOnError`, or by closing the session). */
+  status: QueryStatus
   error?: { code: string; message: string; batchNumber: number; iteration: number }
   completedBatches: number
   totalBatches: number

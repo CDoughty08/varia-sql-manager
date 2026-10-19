@@ -34,6 +34,7 @@ internal sealed class ResultStore
     private long used;
     private long freedSinceCollect;
     private long freedSinceCompact;
+    private long discarded;
     private int collecting;
 
     /// <param name="memory">The operating system's memory load and its high-load threshold, in bytes.</param>
@@ -63,6 +64,8 @@ internal sealed class ResultStore
     public long QueryBytes { get; }
     public long UsedBytes => Interlocked.Read(ref used);
     public int Count { get { lock (gate) return sets.Count; } }
+    /// <summary>Every byte <see cref="Discarded"/> has counted (the live checks read it).</summary>
+    internal long DiscardedBytes => Interlocked.Read(ref discarded);
 
     /// <summary>A new query on a session replaces that session's earlier results, whatever connection produced them.</summary>
     public QueryBudget BeginQuery(string sessionId)
@@ -132,6 +135,7 @@ internal sealed class ResultStore
     public void Discarded(long bytes)
     {
         if (bytes <= 0) return;
+        Interlocked.Add(ref discarded, bytes);
         Interlocked.Add(ref freedSinceCompact, bytes);
         if (Interlocked.Add(ref freedSinceCollect, bytes) <= CollectAfterRelease) return;
         if (bytes > CollectAfterRelease) CollectNow();
