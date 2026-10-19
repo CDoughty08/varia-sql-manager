@@ -13,6 +13,26 @@ namespace Varia.Backend.Tests;
 /// idle seal, cancellation, and query events. Run only with VARIA_TEST_SQL_SERVER; every object is temporary.</summary>
 internal static class LiveResultChecks
 {
+    /// <summary>How long a cancel may take: the floor, or twice a reference this run just measured (the same kind of work,
+    /// run to completion), whichever is longer, so parallel runs that slow the machine down slow the bound with it. A cancel
+    /// that did not stop the script would take all of it, many times the reference, and still fails.</summary>
+    internal static long CancelBound(long floorMs, long referenceMs) => Math.Max(floorMs, 2 * referenceMs);
+
+    /// <summary>Whether a cancelled script stopped before reading all of its one result set's rows. Unlike a time bound, this
+    /// does not depend on the machine's load: a cancel that did nothing reads every row, however slowly.</summary>
+    internal static bool StoppedEarly(QueryResult result, long rows) => result.Status == "cancelled" && result.ResultSets is [{ RowsRead: var read }] && read < rows;
+
+    /// <summary>Measures once more when the first measurement misses its time bound. On a server other runs share, a
+    /// statement now and then waits many seconds on them (with six runs at once, two 8,000,000-character xml cells once took
+    /// 10 s instead of 0.3 s, and one 100,000,000-character value 59 s instead of 1 s), while a regression misses both times.</summary>
+    internal static async Task<T> OnceMore<T>(string name, long boundMs, Func<T, long> ms, Func<Task<T>> measure, Action<string>? log = null)
+    {
+        var first = await measure();
+        if (ms(first) < boundMs) return first;
+        (log ?? Console.WriteLine)("Timing: " + name + " took " + ms(first) + " ms, over its bound of " + boundMs + " ms; measuring it once more.");
+        return await measure();
+    }
+
     /// <summary>A stored result's rows as display text (null for NULL), decoded from its pages as the results worker would.</summary>
     public static List<string?[]> RowsOf(ResultStore store, ResultDescriptor set) => [.. CellsOf(store, set).Select(row => row.Select(cell => cell.Text).ToArray())];
 
@@ -91,21 +111,25 @@ internal static class LiveResultChecks
                 "xml values, including fragments that start with text, keep their serialised text: " + string.Join(" | ", documents));
             // GetChars on xml is quadratic in a large text node (about 12 s for this cell), and nothing checked the token inside it.
             const string bigXml = "DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), 8000000) + '</a>' AS xml); ";
-            watch.Restart();
-            result = await Run(bigXml + "SELECT @x AS doc, 7 AS after FROM (VALUES (1), (2)) AS t(n);");
-            var xmlMs = watch.ElapsedMilliseconds;
+            (result, var xmlMs) = await OnceMore("reading two large xml cells", 10_000, item => item.Ms, async () =>
+            {
+                var started = Stopwatch.StartNew();
+                return (Result: await Run(bigXml + "SELECT @x AS doc, 7 AS after FROM (VALUES (1), (2)) AS t(n);"), Ms: started.ElapsedMilliseconds);
+            });
             check(result.Status == "completed" && RowsOf(store, result.ResultSets[0]).All(row => row[0]!.Length == ColumnPlan.DocumentCap && row[1] == "7") && xmlMs < 10_000,
                 "two 8,000,000-character xml cells are read in linear time (" + xmlMs + " ms)");
-            using (var context = new RequestContext(1, "query.execute", RequestLane.Query, 0))
+            // Uncancelled, the script reads 500 such cells, 250 times the two above.
+            var bound = CancelBound(5000, xmlMs);
+            var (stopped, cancelMs) = await OnceMore("a cancel of large xml cells", bound, item => item.Ms, async () =>
             {
+                using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0);
                 var running = Run(bigXml + "SELECT @x AS doc FROM (SELECT TOP (500) 1 AS n FROM sys.all_objects) AS t;", context, Guid.NewGuid().ToString());
                 await Task.Delay(1000);
-                watch.Restart();
+                var since = Stopwatch.StartNew();
                 context.Cancel(CancelReason.User);
-                var stopped = await running;
-                var cancelMs = watch.ElapsedMilliseconds;
-                check(stopped.Status == "cancelled" && cancelMs < 5000, "a cancel stops a script that is reading large xml cells (" + cancelMs + " ms)");
-            }
+                return (Result: await running, Ms: since.ElapsedMilliseconds);
+            });
+            check(stopped.Status == "cancelled" && cancelMs < bound, "a cancel stops a script that is reading large xml cells (" + cancelMs + " ms, under " + bound + ")");
             await UnreadValues(check, store, (sql, context, maxRows, maxResultSets) => Run(sql, context, Guid.NewGuid().ToString(), maxRows: maxRows, maxResultSets: maxResultSets));
             await XmlCellCost(check, options);
 
@@ -402,7 +426,10 @@ internal static class LiveResultChecks
     private static async Task UnreadValues(Action<bool, string> check, ResultStore store, Func<string, RequestContext?, int, int, Task<QueryResult>> run)
     {
         const string huge = "REPLICATE(CAST(N'x' AS nvarchar(max)), 100000000)";
-        async Task<(QueryResult Result, long Growth, long Ms)> Measure(string sql, int maxRows = 1000, int maxResultSets = 10, int cancelAfterMs = -1)
+        Task<(QueryResult Result, long Growth, long Ms)> Measure(string sql, int maxRows = 1000, int maxResultSets = 10, int cancelAfterMs = -1, long boundMs = long.MaxValue) =>
+            OnceMore(cancelAfterMs >= 0 ? "a cancel of 100,000,000-character values" : "reading past a 100,000,000-character value", boundMs, item => item.Ms,
+                () => MeasureOnce(sql, maxRows, maxResultSets, cancelAfterMs));
+        async Task<(QueryResult Result, long Growth, long Ms)> MeasureOnce(string sql, int maxRows, int maxResultSets, int cancelAfterMs)
         {
             GC.Collect();
             var before = Environment.WorkingSet;
@@ -424,21 +451,27 @@ internal static class LiveResultChecks
         }
         string Measured(long growth, long ms) => "grew the working set by " + growth / 1048576 + " MB, " + ms + " ms";
 
-        var (result, growth, ms) = await Measure("SELECT 7 AS head, " + huge + " AS big;");
+        var (result, growth, ms) = await Measure("SELECT 7 AS head, " + huge + " AS big;", boundMs: 15_000);
         var row = CellsOf(store, result.ResultSets[0])[0];
         check(result.Status == "completed" && row[0].Text == "7" && row[1].Text!.Length == ColumnPlan.TextCap && (row[1].Flags & PageReader.Truncated) != 0
             && growth < 64L * 1024 * 1024 && ms < 15_000, "a truncated 100,000,000-character value in the last column is read past (" + Measured(growth, ms) + ")");
-        (result, growth, ms) = await Measure("SELECT " + huge + " AS big, 7 AS after FROM (VALUES (1), (2)) AS t(n);", maxRows: 1);
+        var firstValueMs = ms;
+        (result, growth, ms) = await Measure("SELECT " + huge + " AS big, 7 AS after FROM (VALUES (1), (2)) AS t(n);", maxRows: 1, boundMs: 15_000);
         check(result.Status == "completed" && result.ResultSets[0] is { RowsRead: 2, RowsStored: 1, Truncated: "rowLimit" } && growth < 64L * 1024 * 1024 && ms < 15_000,
             "a row past maxRows with a 100,000,000-character value is read past (" + Measured(growth, ms) + ")");
-        (result, growth, ms) = await Measure("SELECT 1 AS kept; SELECT " + huge + " AS big;", maxResultSets: 1);
+        (result, growth, ms) = await Measure("SELECT 1 AS kept; SELECT " + huge + " AS big;", maxResultSets: 1, boundMs: 15_000);
         check(result.Status == "completed" && result.ResultSets.Count == 1 && result.DiscardedResultSets == 1 && growth < 64L * 1024 * 1024 && ms < 15_000,
             "a set past maxResultSets with a 100,000,000-character value is read past (" + Measured(growth, ms) + ")");
+        // The faster of two reads of one such value, so one read that stalled on the shared server does not raise the bound.
+        var oneValueMs = Math.Min(firstValueMs, ms);
         foreach (var maxRows in new[] { 1000, 1 })
         {
-            (result, growth, ms) = await Measure("SELECT " + huge + " AS big FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) AS t(n);", maxRows: maxRows, cancelAfterMs: 1500);
-            check(result.Status == "cancelled" && ms < 5000 && growth < 64L * 1024 * 1024,
-                "a cancel stops a script " + (maxRows == 1 ? "skipping rows past maxRows" : "reading truncated cells") + " that hold 100,000,000-character values (" + Measured(growth, ms) + " after the cancel)");
+            // Uncancelled, the script reads eight such values, eight times the one above; whatever the load, it stops before the last.
+            var bound = CancelBound(5000, oneValueMs);
+            (result, growth, ms) = await Measure("SELECT " + huge + " AS big FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) AS t(n);", maxRows: maxRows, cancelAfterMs: 1500, boundMs: bound);
+            check(StoppedEarly(result, 8) && ms < bound && growth < 64L * 1024 * 1024, "a cancel stops a script " + (maxRows == 1 ? "skipping rows past maxRows" : "reading truncated cells")
+                + " that hold 100,000,000-character values (" + Measured(growth, ms) + " after the cancel, under " + bound + "; " + string.Join(", ", result.ResultSets.Select(set => set.RowsRead))
+                + " of 8 rows read)");
         }
 
         // GetChars on text and ntext reads the whole value at once.
@@ -496,7 +529,7 @@ internal static class LiveResultChecks
             && documentAllocated < 64L * 1024 * 1024, "an xml comment just inside the feed's window is read whole and kept to the cap (" + Allocated(documentAllocated, documentMs) + ")");
 
         // A query can name any nvarchar(max) column like FOR XML output; what the collector does not keep is read past too.
-        (result, growth, ms) = await Measure("SELECT " + huge + " AS [XML_F52E2B61-18A1-11d1-B105-00805F49916B];");
+        (result, growth, ms) = await Measure("SELECT " + huge + " AS [XML_F52E2B61-18A1-11d1-B105-00805F49916B];", boundMs: 15_000);
         var joined = CellsOf(store, result.ResultSets[0])[0][0];
         check(result.Status == "completed" && result.ResultSets[0].Columns[0].Role == "xml" && joined.Text!.Length == ColumnPlan.DocumentCap && (joined.Flags & PageReader.Truncated) != 0
             && growth < 64L * 1024 * 1024 && ms < 15_000, "a 100,000,000-character value named like FOR XML output is kept to its cap and read past (" + Measured(growth, ms) + ")");
