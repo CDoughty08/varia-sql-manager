@@ -13,7 +13,7 @@ import { ScriptingRequests } from './backend/scripting-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest, validateResult } from './validation'
-import { SqlFileStore, fileKinds, saveFileSchema, type SaveOptions } from './sql-files'
+import { SqlFileStore, fileKinds, saveDocument, saveFileSchema } from './sql-files'
 import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
@@ -585,28 +585,15 @@ app.whenReady().then(async () => {
     const options = saveFileSchema.parse(value), kind = fileKinds[options.kind ?? 'sql']
     // While settings.json cannot be read, Options cannot open either, so the defaults apply.
     const values = (await settings.load().catch(() => ({ values: settings.current() }))).values
-    let encoding: SaveOptions['encoding'] = values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined
-    let saveAs = !options.fileId || options.saveAs
-    if (!saveAs && options.fileId && await files.readOnly(options.fileId)) {
-      const answer = await askReadOnly(files.get(options.fileId).path)
-      if (answer === 'cancel') return null
-      if (answer === 'saveAs') saveAs = true
-      else await files.makeWritable(options.fileId)
-    }
-    const registered = options.fileId ? files.get(options.fileId) : undefined
-    if (!encoding && registered?.encoding === 'legacy') {
-      if (!await askUnicode(registered.name, registered.codePage ?? 'ANSI')) return null
-      encoding = 'utf8bom'
-    }
-    let selectedPath: string | undefined
-    if (saveAs) {
-      const safeName = sanitizeFileName(options.name)
-      const defaultPath = registered ? registered.path : join(app.getPath('documents'), safeName)
-      const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
-      if (selection.canceled || !selection.filePath) return null
-      selectedPath = selection.filePath
-    }
-    return files.save(options.content, options.fileId, selectedPath, options.kind, encoding ? { encoding } : {})
+    const encoding = values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined
+    return saveDocument(files, options, encoding, {
+      readOnly: askReadOnly, unicode: askUnicode,
+      saveDialog: async registeredPath => {
+        const defaultPath = registeredPath ?? join(app.getPath('documents'), sanitizeFileName(options.name))
+        const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
+        return selection.canceled || !selection.filePath ? undefined : selection.filePath
+      }
+    })
   })
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })

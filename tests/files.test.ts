@@ -94,6 +94,16 @@ describe('file commands', () => {
     expect(activate).toHaveBeenCalledWith(tab.id)
     expect(api.releaseSqlFile).not.toHaveBeenCalled()
   })
+  it('finds an open file\'s tab by the id main gave it, whatever path spelling main returns', async () => {
+    const { documents, api, commands, events } = fixture()
+    const tab = documents.create('Orders.sql', 'SELECT 1', 'master', 'server-a', false, openedFile('orders', 'C:/Orders.sql'))
+    const activate = vi.fn()
+    events.subscribe(event => { if (event.type === 'documents.activated') activate(event.tabId) })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [openedFile('orders', 'C:/ORDERS.SQL')] })
+    await commands.run('file.open')
+    expect(documents.getSnapshot().documents.filter(document => document.file?.id === 'orders')).toHaveLength(1)
+    expect(activate).toHaveBeenCalledWith(tab.id)
+  })
   it('saves an explicit document and keeps that target when activation changes during Save As', async () => {
     const { documents, model, api, commands } = fixture()
     const left = documents.active!

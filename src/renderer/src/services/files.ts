@@ -67,7 +67,8 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       try {
         if (this.disposed) return
         for (const file of opened) {
-          const existing = this.documents.getSnapshot().documents.find(document => document.file?.path === file.path)
+          // Main gives a file one id, however its path was spelled or linked.
+          const existing = this.documents.getSnapshot().documents.find(document => document.file?.id === file.id)
           if (existing) { this.documents.activate(existing.id); continue }
           this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, registeredFile(file), file.eol)
           if (file.mixedEol) mixed.push(`Line endings in ${file.name} were mixed; it will be saved with ${lineEndingLabel(file.eol)} line endings.`)

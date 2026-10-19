@@ -279,7 +279,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-segments { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-left: auto; }
 .query-status-segment { flex-shrink: 0; }
 .query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
-.query-status-server { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Short of room, the server gives way first, then the login, then the database (each whole in the bar's tooltip); the
+   time and rows keep their size. The weights make the shrinking all but sequential. */
+.query-status-server, .query-status-login, .query-status-database { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.query-status-server { flex-shrink: 1000000; }
+.query-status-login { flex-shrink: 1000; }
+.query-status-database { flex-shrink: 1; }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .workspace-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: 13px; }

@@ -1,4 +1,4 @@
-import { encodingLabel, lineEndingLabel } from '../../shared/files/encoding'
+import { documentEncodingLabel, lineEndingLabel } from '../../shared/files/encoding'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 
 /**
@@ -14,9 +14,7 @@ export default function EditorStatus() {
   const active = list.find(document => document.id === activeId)
   if (!active || !caret) return <span className="editor-status" />
   const file = active.file
-  // Save files with a specific encoding converts every file on its next save; until then the file is what it was read as.
-  const encoding = file ? encodingLabel(file.encoding, file.codePage)
-    : encodingLabel(values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : 'utf8')
+  const encoding = documentEncodingLabel(file, values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined)
   return <span className="editor-status">
     <span className="editor-status-position" aria-label={`Line ${caret.line}, column ${caret.column}, character ${caret.character}`}><span>Ln {caret.line}</span><span>Col {caret.column}</span><span>Ch {caret.character}</span></span>
     <span className="editor-status-mode" title={mode === 'insert' ? 'Insert mode (Insert switches to overtype)' : 'Overtype mode (Insert switches to insert)'}>{mode === 'insert' ? 'INS' : 'OVR'}</span>

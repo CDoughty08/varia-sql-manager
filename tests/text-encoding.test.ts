@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { codePageName, detectAndDecode, detectEol, encodeText, legacyCodePage, type DecoderFactory } from '../src/main/text-encoding'
 import type { FileEncoding } from '../src/shared/contracts'
-import { encodingLabel } from '../src/shared/files/encoding'
+import { documentEncodingLabel, encodingLabel } from '../src/shared/files/encoding'
 
 const bytes = (...values: number[]) => Uint8Array.from(values)
 const utf16be = (text: string) => Buffer.from(text, 'utf16le').swap16()
@@ -15,8 +15,8 @@ describe('detecting and decoding SQL files', () => {
       ['UTF-8 with BOM', Buffer.concat([bytes(0xef, 0xbb, 0xbf), Buffer.from(text)]), 'utf8bom'],
       ['UTF-16 LE with BOM', Buffer.concat([bytes(0xff, 0xfe), Buffer.from(text, 'utf16le')]), 'utf16le'],
       ['UTF-16 BE with BOM', Buffer.concat([bytes(0xfe, 0xff), utf16be(text)]), 'utf16be'],
-      ['UTF-16 LE without BOM', Buffer.from(text, 'utf16le'), 'utf16le'],
-      ['UTF-16 BE without BOM', utf16be(text), 'utf16be']
+      ['UTF-16 LE without BOM', Buffer.from(text, 'utf16le'), 'utf16leNoBom'],
+      ['UTF-16 BE without BOM', utf16be(text), 'utf16beNoBom']
     ]
     for (const [name, data, encoding] of cases) expect(decode(data), name).toEqual({ text, encoding })
     expect(decode(new Uint8Array())).toEqual({ text: '', encoding: 'utf8' })
@@ -30,15 +30,21 @@ describe('detecting and decoding SQL files', () => {
   })
   it('detects BOM-less UTF-16 only from mostly NUL bytes on one side of each pair', () => {
     // ASCII in UTF-16: every other byte is NUL.
-    expect(decode(Buffer.from('SELECT 1;', 'utf16le')).encoding).toBe('utf16le')
+    expect(decode(Buffer.from('SELECT 1;', 'utf16le')).encoding).toBe('utf16leNoBom')
     // An odd length is not UTF-16, and NUL in UTF-8 text is not SQL.
     expect(() => decode(Buffer.concat([Buffer.from('SELECT 1;', 'utf16le'), bytes(0x41)]))).toThrow('not a supported SQL text file')
     // NULs on both sides (binary data) is neither.
     expect(() => decode(bytes(0, 0, 0x41, 0, 0, 0x42, 0x43, 0))).toThrow('not a supported SQL text file')
+    // Half the pairs NUL on one side and a fifth on the other: no pair is 00 00, so it would decode as UTF-16 without
+    // NUL either way, but text with that many NULs on both sides is not UTF-16 (here it is UTF-8 holding NUL).
+    const pattern = [0x41, 0, 0x41, 0, 0x41, 0, 0x41, 0, 0x41, 0, 0, 0x42, 0, 0x42, 0x43, 0x44, 0x43, 0x44, 0x43, 0x44]
+    const lopsided = Buffer.from(Array.from({ length: 20 }, () => pattern).flat())
+    expect(() => decode(lopsided)).toThrow('not a supported SQL text file')
+    expect(() => decode(Buffer.from(lopsided).swap16())).toThrow('not a supported SQL text file')
     // Mostly CJK text has few NUL bytes, so it is not taken for UTF-16 without a BOM; it is valid UTF-8 here.
     expect(decode(Buffer.from('日本語のテキスト')).encoding).toBe('utf8')
     // Only the first 4 KiB are sampled: a long ASCII UTF-16 text is still detected.
-    expect(decode(Buffer.from('x'.repeat(10_000) + 'é', 'utf16le')).encoding).toBe('utf16le')
+    expect(decode(Buffer.from('x'.repeat(10_000) + 'é', 'utf16le')).encoding).toBe('utf16leNoBom')
   })
   it('refuses UTF-32, a BOM that does not match its text, and text that holds NUL', () => {
     expect(() => decode(bytes(0xff, 0xfe, 0, 0, 0x41, 0, 0, 0))).toThrow('UTF-32 files are not supported. Save the file as UTF-8 or UTF-16 first.')
@@ -71,11 +77,13 @@ describe('writing SQL files', () => {
     for (const text of ["SELECT N'Grüße 😀';\r\nGO", "SELECT N'Grüße 😀';\r\nGO\r\n", '', '﻿']) {
       const files: [FileEncoding, Buffer][] = [
         ['utf8', Buffer.from(text)], ['utf8bom', Buffer.concat([bytes(0xef, 0xbb, 0xbf), Buffer.from(text)])],
-        ['utf16le', Buffer.concat([bytes(0xff, 0xfe), Buffer.from(text, 'utf16le')])], ['utf16be', Buffer.concat([bytes(0xfe, 0xff), utf16be(text)])]
+        ['utf16le', Buffer.concat([bytes(0xff, 0xfe), Buffer.from(text, 'utf16le')])], ['utf16be', Buffer.concat([bytes(0xfe, 0xff), utf16be(text)])],
+        ['utf16leNoBom', Buffer.from(text, 'utf16le')], ['utf16beNoBom', utf16be(text)]
       ]
       for (const [encoding, data] of files) {
-        // An empty UTF-8 file has nothing to detect; it is UTF-8.
+        // An empty UTF-8 file has nothing to detect; it is UTF-8. A U+FEFF that starts BOM-less UTF-16 is its BOM.
         if (encoding === 'utf8' && text === '﻿') continue
+        if (encoding.endsWith('NoBom') && (!text || text.startsWith('﻿'))) continue
         const decoded = decode(data)
         expect(decoded, `${encoding} ${JSON.stringify(text)}`).toEqual({ text, encoding: data.length || encoding === 'utf8' ? encoding : 'utf8' })
         if (data.length) expect(encodeText(decoded.text, decoded.encoding).equals(data), `${encoding} ${JSON.stringify(text)}`).toBe(true)
@@ -100,8 +108,16 @@ describe('the ANSI code page of a locale', () => {
   })
   it('names code pages as the status bar shows them', () => {
     expect(['windows-1252', 'windows-874', 'shift_jis', 'gbk', 'big5', 'euc-kr'].map(codePageName)).toEqual(['Windows-1252', 'Windows-874', 'Shift_JIS', 'GBK', 'Big5', 'EUC-KR'])
-    expect(['utf8', 'utf8bom', 'utf16le', 'utf16be'].map(encoding => encodingLabel(encoding as FileEncoding))).toEqual(['UTF-8', 'UTF-8 with BOM', 'UTF-16 LE', 'UTF-16 BE'])
+    expect(['utf8', 'utf8bom', 'utf16le', 'utf16be', 'utf16leNoBom', 'utf16beNoBom'].map(encoding => encodingLabel(encoding as FileEncoding)))
+      .toEqual(['UTF-8', 'UTF-8 with BOM', 'UTF-16 LE', 'UTF-16 BE', 'UTF-16 LE without BOM', 'UTF-16 BE without BOM'])
     expect(encodingLabel('legacy', 'Windows-1252')).toBe('Windows-1252')
+  })
+  it('names what a query never saved will be written in, and a file\'s own encoding until a save converts it', () => {
+    expect(documentEncodingLabel(undefined)).toBe('UTF-8')
+    expect(documentEncodingLabel(undefined, 'utf16be')).toBe('UTF-16 BE')
+    expect(documentEncodingLabel(undefined, 'utf8bom')).toBe('UTF-8 with BOM')
+    expect(documentEncodingLabel({ encoding: 'legacy', codePage: 'Windows-1252' }, 'utf16le')).toBe('Windows-1252')
+    expect(documentEncodingLabel({ encoding: 'utf16leNoBom' }, 'utf8')).toBe('UTF-16 LE without BOM')
   })
 })
 

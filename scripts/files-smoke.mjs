@@ -1,8 +1,9 @@
 // Files and status bars on the fake backend: encodings and line endings kept on save, the Save as Unicode and Save of
-// Read-Only File prompts, Save All, the IDE status bar's Ln/Col/Ch, INS/OVR, line ending and encoding, and the query
+// Read-Only File prompts, Save files with a specific encoding, Save All, the IDE status bar's Ln/Col/Ch, INS/OVR, line ending and encoding, and the query
 // status bar with its Options. Native dialogs are stubbed in main, as electron-smoke does; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
 
@@ -41,6 +42,8 @@ const footer = () => page.locator('.status-bar .editor-status')
 const queryBar = () => page.locator('.query-status-bar')
 const banner = () => page.locator('.global-error')
 const bytes = async path => [...await readFile(path)]
+const writable = path => access(path, constants.W_OK).then(() => true, () => false)
+const be = text => Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()])
 /** Opens files through File › Open (Ctrl+O, ⌘O) and waits for the last one's tab. */
 async function open(...paths) {
   await queue('open', paths)
@@ -96,7 +99,7 @@ try {
   }
 
   // 4. A UTF-16 BE file with CRLF keeps its byte order mark, byte order and line endings when saved.
-  const bigEndian = join(folder, 'big-endian.sql'), be = text => Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()])
+  const bigEndian = join(folder, 'big-endian.sql')
   await writeFile(bigEndian, be("SELECT N'Grüße';\r\nGO\r\n"))
   await open(bigEndian)
   await expect(footer().locator('.editor-status-encoding')).toHaveText('UTF-16 BE')
@@ -164,7 +167,64 @@ try {
     await expect(activeTab().locator('.tab-readonly')).toHaveCount(0)
     expect(await prompts()).toEqual([readOnlyPrompt])
     console.log('Files checks: Save of Read-Only File cancels without writing, and Overwrite clears the attribute and saves.')
+
+    // A read-only file in the ANSI code page: Overwrite, then Cancel at Save as Unicode, leaves it read-only and as it
+    // was; Save As… asks Save as Unicode, opens one Save dialog and writes the new file, leaving the original alone.
+    const lockedLegacy = join(folder, 'locked-legacy.sql'), copy = join(folder, 'locked-copy.sql')
+    await writeFile(lockedLegacy, Uint8Array.from(legacyBytes))
+    await chmod(lockedLegacy, 0o444)
+    await open(lockedLegacy)
+    await typeAtEnd('SELECT 1')
+    await queue('answers', 1)
+    await save()
+    await expect.poll(() => application.evaluate(() => globalThis.variaFiles.prompts.length)).toBe(2)
+    expect((await prompts()).map(prompt => prompt.title)).toEqual(['Save of Read-Only File', 'Save as Unicode'])
+    await expect(activeTab().locator('.dirty-dot')).toHaveCount(1)
+    expect(await writable(lockedLegacy)).toBe(false)
+    expect(await bytes(lockedLegacy)).toEqual(legacyBytes)
+    const dialogs = await saveDialogs()
+    await queue('answers', 0, 0)
+    await queue('save', copy)
+    await save()
+    await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'locked-copy.sql')
+    await expect(activeTab().locator('.dirty-dot')).toHaveCount(0)
+    expect((await prompts()).map(prompt => prompt.title)).toEqual(['Save of Read-Only File', 'Save as Unicode'])
+    expect(await saveDialogs()).toBe(dialogs + 1)
+    expect(await bytes(copy)).toEqual([0xef, 0xbb, 0xbf, ...Buffer.from(legacyText + 'SELECT 1')])
+    expect(await bytes(lockedLegacy)).toEqual(legacyBytes)
+    expect(await writable(lockedLegacy)).toBe(false)
+    console.log('Files checks: Cancel after Overwrite keeps the file read-only, and Save As… writes a new file and leaves the original alone.')
   }
+
+  // 7b. Save files with a specific encoding: a new query says, and is saved in, the Save encoding; a legacy file is
+  // converted to it without Save as Unicode. A file already open keeps showing what it was read as until it is saved.
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.documents.saveWithSpecificEncoding': true, 'environment.documents.saveEncoding': 'utf16be' }))).toMatchObject({ ok: true })
+  await page.getByRole('button', { name: 'New query', exact: true }).click()
+  await expect(footer().locator('.editor-status-encoding')).toHaveText('UTF-16 BE')
+  await textbox().focus()
+  await page.keyboard.insertText('SELECT 5')
+  const specific = join(folder, 'specific.sql')
+  await queue('save', specific)
+  await save()
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'specific.sql')
+  expect(await bytes(specific)).toEqual([...be('SELECT 5')])
+  await expect(footer().locator('.editor-status-encoding')).toHaveText('UTF-16 BE')
+  const converted = join(folder, 'converted.sql')
+  await writeFile(converted, Uint8Array.from(legacyBytes))
+  await open(converted)
+  await expect(footer().locator('.editor-status-encoding')).toHaveText(codePageName(label))
+  await typeAtEnd('SELECT 6')
+  await save()
+  await expect(activeTab().locator('.dirty-dot')).toHaveCount(0)
+  expect(await bytes(converted)).toEqual([...be(legacyText + 'SELECT 6')])
+  await expect(footer().locator('.editor-status-encoding')).toHaveText('UTF-16 BE')
+  expect(await prompts()).toEqual([])
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.documents.saveWithSpecificEncoding': null, 'environment.documents.saveEncoding': null }))).toMatchObject({ ok: true })
+  await page.getByRole('button', { name: 'New query', exact: true }).click()
+  await expect(footer().locator('.editor-status-encoding')).toHaveText('UTF-8')
+  await page.keyboard.press(mac ? 'Meta+W' : 'Control+W')
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'converted.sql')
+  console.log('Files checks: Save files with a specific encoding labels and saves a new query in its encoding, and converts a legacy file without asking.')
 
   // 8. Save All (Ctrl+Shift+S, ⌥⌘S) in tab order: the first, untitled query asks for its file, the saved one is saved,
   // and the last, untitled one asks in turn; all end clean.
@@ -220,6 +280,41 @@ try {
   await page.locator('.query-status-bar').screenshot({ path: resolve('artifacts', 'files-query-status.png') })
   await page.locator('.status-bar').screenshot({ path: resolve('artifacts', 'files-status-bar.png') })
   console.log('Files checks: the query status bar shows SSMS\'s segments below the query, and its Options move it and switch segments off.')
+
+  // 10. In a small window a long server name gives way first, and the database stays whole; a 127-character database
+  // name gives way too (both whole in the tooltip), while the time and rows always stay whole inside the bar.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024)
+  const longServer = 'sqlprod-analytics-warehouse-cluster-01.' + 'reporting-'.repeat(6) + 'corp.contoso.com\\INSTANCE01', longDatabase = 'Warehouse_'.repeat(12) + 'Archive'
+  /** Connects to the long server (a new query on it) and runs a query there. */
+  async function connectAndRun(database) {
+    await page.getByRole('button', { name: 'Connect', exact: true }).click()
+    await page.getByLabel('Server Name', { exact: true }).fill(longServer)
+    await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    await page.getByLabel('Database Name', { exact: true }).fill(database)
+    await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(queryBar().locator('.query-status-database')).toHaveText(`Database: ${database || 'master'}`)
+    await textbox().focus()
+    await page.keyboard.insertText('-- varia-fake: sets=W1*10')
+    await page.keyboard.press('F5')
+    await expect(queryBar().locator('.query-status-rows')).toHaveText('Rows: 10 rows')
+    await expect(queryBar()).toHaveAttribute('title', new RegExp(`\\| ${database || 'master'}(\\n|$)`))
+  }
+  /** Which segments lie inside the bar, and which show their whole text. */
+  const layout = () => page.evaluate(() => {
+    const bar = document.querySelector('.query-status-bar').getBoundingClientRect()
+    const part = name => document.querySelector(`.query-status-${name}`)
+    const inside = element => { const box = element.getBoundingClientRect(); return box.left >= bar.left - 0.5 && box.right <= bar.right + 0.5 }
+    const whole = element => element.scrollWidth <= element.clientWidth
+    return { inside: ['state', 'server', 'login', 'database', 'time', 'rows'].every(name => inside(part(name))), whole: ['server', 'login', 'database', 'time', 'rows'].filter(name => whole(part(name))), page: document.documentElement.scrollWidth <= innerWidth }
+  })
+  await connectAndRun('')
+  expect(await layout()).toEqual({ inside: true, whole: ['login', 'database', 'time', 'rows'], page: true })
+  await connectAndRun(longDatabase)
+  expect(await layout()).toEqual({ inside: true, whole: ['time', 'rows'], page: true })
+  await queryBar().screenshot({ path: resolve('artifacts', 'files-query-status-small.png') })
+  console.log('Files checks: in a small window the server, then the login and database, give way in the query status bar, and the time and rows stay whole.')
 
   expect(failures).toEqual([])
   console.log('Files suite passed.')

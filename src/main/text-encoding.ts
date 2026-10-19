@@ -87,7 +87,8 @@ export function detectAndDecode(bytes: Uint8Array, legacyLabel: string, decoder:
     const utf8 = attempt(() => decoder('utf-8').decode(bytes))
     const order = utf8 === undefined || utf8.includes('\0') ? utf16Order(bytes) : undefined
     const utf16 = order ? attempt(() => decoder('utf-16le').decode(order === 'le' ? bytes : swapped(bytes))) : undefined
-    if (order && utf16 !== undefined) decoded = { text: utf16, encoding: order === 'le' ? 'utf16le' : 'utf16be' }
+    // Without its byte order mark, so a save writes none either.
+    if (order && utf16 !== undefined) decoded = { text: utf16, encoding: order === 'le' ? 'utf16leNoBom' : 'utf16beNoBom' }
     else if (utf8 !== undefined) decoded = { text: utf8, encoding: 'utf8' }
     else decoded = decodeLegacy(bytes, legacyLabel, decoder)
   }
@@ -105,13 +106,15 @@ function decodeLegacy(bytes: Uint8Array, label: string, decoder: DecoderFactory)
   return { text, encoding: 'legacy', codePage: name }
 }
 
-/** The bytes of `text` in `encoding`, with its byte order mark. A legacy code page is never written. */
+/** The bytes of `text` in `encoding`, with its byte order mark if it has one. A legacy code page is never written. */
 export function encodeText(text: string, encoding: FileEncoding): Buffer {
   switch (encoding) {
     case 'utf8': return Buffer.from(text, 'utf8')
     case 'utf8bom': return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')])
     case 'utf16le': return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')])
     case 'utf16be': return Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()])
+    case 'utf16leNoBom': return Buffer.from(text, 'utf16le')
+    case 'utf16beNoBom': return Buffer.from(text, 'utf16le').swap16()
     default: throw new Error('Varia SQL Manager saves only Unicode.')
   }
 }

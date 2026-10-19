@@ -290,8 +290,9 @@ export type BackendState =
   | { status: 'stopped' }
 export type BackendStatus = BackendState['status']
 
-/** How a file's text is stored: Unicode with or without a byte order mark, or the system's ANSI code page (`legacy`, read only). */
-export const fileEncodings = ['utf8', 'utf8bom', 'utf16le', 'utf16be', 'legacy'] as const
+/** How a file's text is stored: Unicode with or without a byte order mark (`utf16le` and `utf16be` have one), or the
+ *  system's ANSI code page (`legacy`, read only). */
+export const fileEncodings = ['utf8', 'utf8bom', 'utf16le', 'utf16be', 'utf16leNoBom', 'utf16beNoBom', 'legacy'] as const
 export type FileEncoding = typeof fileEncodings[number]
 export type LineEnding = 'crlf' | 'lf'
 /** A file main registered: `codePage` names a `legacy` encoding ('Windows-1252'); `readOnly` is what the last read or save saw. */

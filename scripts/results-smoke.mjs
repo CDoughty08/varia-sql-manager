@@ -1150,12 +1150,14 @@ try {
   await expect(page.locator('.query-status-bar')).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')}( \\(\\d+\\.\\d+\\))? \\| \\S`))
   expect(await page.evaluate(() => {
     const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, .query-status-segment')].every(child => { const part = child.getBoundingClientRect(); return part.left >= box.left - 0.5 && part.right <= box.right + 0.5 && part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 }) }
-    const server = document.querySelector('.query-status-server')
+    const server = document.querySelector('.query-status-server'), database = document.querySelector('.query-status-database')
     return {
       fits: fits(document.querySelector('.status-bar')) && fits(document.querySelector('.query-status-bar')), rows: document.querySelector('.query-status-rows')?.textContent,
-      overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: server.scrollWidth > server.clientWidth
+      overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: server.scrollWidth > server.clientWidth,
+      // The server gives way before the database, which stays whole while the server can shrink.
+      database: database.scrollWidth <= database.clientWidth
     }
-  })).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true })
+  })).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true, database: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
   // Script As requests held in the backend keep Cancel and the start of their text: the editor's segments give way,
   // no segment covers another, and the text keeps a gap from the backend status even when it fills its segment (two
