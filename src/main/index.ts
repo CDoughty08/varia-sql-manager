@@ -26,6 +26,7 @@ import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
+import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -503,6 +504,14 @@ app.whenReady().then(async () => {
     const name = z.string().min(1).max(512).parse(value)
     const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)
     return (['save', 'discard', 'cancel'] as const)[response.response]
+  })
+  // Open transactions and running queries in sessions about to end. Main writes the prompt from validated facts, and a page
+  // that reloads or crashes while it is open gets Cancel (its sessions ended with it), so a dead page cannot hold it open.
+  handle('varia:confirm-sessions', async value => {
+    const prompt = sessionPrompt(sessionPromptRequestSchema.parse(value))
+    if (!prompt) return 'proceed'
+    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal }), { response: prompt.cancelId, checkboxChecked: false }, true)
+    return prompt.buttons[response]?.answer ?? 'cancel'
   })
   ipcMain.handle('varia:close-window', event => {
     if (!trusted(event)) return

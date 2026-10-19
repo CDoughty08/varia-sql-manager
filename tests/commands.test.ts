@@ -61,14 +61,43 @@ describe('command execution', () => {
     const first = documents.create('first.sql', 'SELECT 1', 'master', 'server-a'), second = documents.create('second.sql', '', 'master')
     documents.activate(first.id)
     const running = startQuery()
-    // The active tab is running, so it cannot close; another tab can.
-    expect(commands.isEnabled('file.close')).toBe(false)
-    expect(commands.isEnabled('file.close', { tabId: second.id })).toBe(true)
-    await expect(commands.execute('file.close', { tabId: first.id }, 'toolbar')).resolves.toBe(false)
+    // The handler checks the tab its arguments name: one that is gone cannot close. A running query can (main asks to
+    // cancel it first), but nothing can while the document lock is held.
+    expect(commands.isEnabled('file.close')).toBe(true)
+    expect(commands.isEnabled('file.close', { tabId: 'gone' })).toBe(false)
+    await expect(commands.execute('file.close', { tabId: 'gone' }, 'toolbar')).resolves.toBe(false)
     expect(close).not.toHaveBeenCalled()
+    const hold = deferred<void>(), task = documents.runTask(() => hold.promise)
+    expect(commands.isEnabled('file.close', { tabId: first.id })).toBe(false)
+    hold.resolve(); await task
     await running.finish()
     await expect(commands.execute('file.close', { tabId: second.id }, 'toolbar')).resolves.toBe(true)
     expect(close).toHaveBeenCalledWith(second.id)
+  })
+  it('connects a disconnected query first when Execute runs, as SSMS\'s F5 does, but never a lost one', async () => {
+    const { commands, documents, connections, backend, events, api } = fixture()
+    const requested: string[] = []
+    events.subscribe(event => { if (event.type === 'query.connectRequested') requested.push(event.tabId) })
+    const tab = documents.create('first.sql', 'SELECT 1', 'master')
+    // Not until the backend is ready: the Connect dialog could not connect.
+    expect(commands.isEnabled('query.execute')).toBe(false)
+    backend.receive(readyBackend())
+    expect(commands.isEnabled('query.execute')).toBe(true)
+    await expect(commands.execute('query.execute', undefined, 'keybinding')).resolves.toBe(true)
+    expect(requested).toEqual([tab.id])
+    expect(api.execute).not.toHaveBeenCalled()
+    // A connected query runs at once; one whose connection was lost waits for Reconnect; a value never executes.
+    connections.add(connectionInfo('server-a'), connectionOptions)
+    documents.update(tab.id, { connectionId: 'server-a' })
+    await commands.execute('query.execute', undefined, 'keybinding')
+    expect(api.execute).toHaveBeenCalledOnce()
+    backend.receive({ status: 'restarting', generation: 1, retryInMs: 0 })
+    backend.receive(readyBackend(2))
+    expect(connections.get('server-a')?.lost).toBe(true)
+    expect(commands.isEnabled('query.execute')).toBe(false)
+    documents.openText({ name: 'doc1.xml', text: '<a/>', kind: 'xml' })
+    expect(commands.isEnabled('query.execute')).toBe(false)
+    expect(requested).toEqual([tab.id])
   })
   it('turns a failing handler into the error banner and never rejects', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})

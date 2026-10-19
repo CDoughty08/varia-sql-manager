@@ -22,6 +22,10 @@ export type WorkbenchEvent =
   | { type: 'documents.closed'; tabId: string }
   | { type: 'query.started'; tabId: string; queryId: string }
   | { type: 'query.finished'; tabId: string; queryId: string; summary?: QueryResult; error?: string }
+  /** Execute ran on a query with no connection: the Connect dialog opens, and the query runs once connected. */
+  | { type: 'query.connectRequested'; tabId: string }
+  /** The query's SQL session ended (closed, or found lost), and its open transaction with it. */
+  | { type: 'session.ended'; tabId: string }
   /** Object Explorer reloaded a server, a databases folder, or another node of the connection. */
   | { type: 'explorer.refreshed'; connectionId: string; scope: 'server' | 'databases' | 'other' }
 export interface ExternalStore<T> { getSnapshot(): T; subscribe(listener: () => void): () => void }

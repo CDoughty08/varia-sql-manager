@@ -200,8 +200,9 @@ export const commandCatalog = {
   },
   'query.execute': {
     title: 'Execute', category: 'Query', icon: 'play', keywords: ['run', 'go'],
-    precondition: 'activeDocumentConnected && !queryRunning && !documentBusy',
-    unavailableHint: 'Connect this query to a server and wait for its running query to finish.',
+    // A disconnected query connects first (the Connect dialog), as in SSMS; a lost connection needs Reconnect.
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected || (backendReady && !activeConnectionLost))',
+    unavailableHint: 'Open a query, wait for its running query to finish, and reconnect a lost connection.',
     keybindings: [{ key: 'f5', when: 'editorFocus' }, { key: 'mod+enter', when: 'editorFocus' }, { win: 'ctrl+e', linux: 'ctrl+e', when: 'editorFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 1, mnemonic: 'x' }, { menu: 'editor.context', group: '2_execute', order: 1, mnemonic: 'x' }]
   },

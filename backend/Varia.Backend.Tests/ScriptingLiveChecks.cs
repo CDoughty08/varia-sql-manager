@@ -67,8 +67,9 @@ internal static partial class ScriptingLiveChecks
             var session = Guid.NewGuid().ToString();
             try
             {
+                // Fixtures stop at their first error, so a batch that failed cannot leave later ones to run in the wrong place.
                 var result = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
-                    new QueryArgs(info.Id, session, database, text, Guid.NewGuid().ToString(), 100_000, 300), json), json);
+                    new QueryArgs(info.Id, session, database, text, Guid.NewGuid().ToString(), 100_000, 300, StopOnError: true), json), json);
                 return new(result.Status, result.Error?.Message, [.. result.ResultSets.Select(set => LiveResultChecks.RowsOf(service.Results, set))]);
             }
             finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }

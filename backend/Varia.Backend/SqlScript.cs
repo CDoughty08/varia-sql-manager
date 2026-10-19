@@ -56,7 +56,8 @@ internal static class SqlScript
             }
             var text = new string(visible);
             var trimmed = text.AsSpan().Trim();
-            if (trimmed.StartsWith(":", StringComparison.Ordinal) || trimmed.StartsWith("!!", StringComparison.Ordinal))
+            // A line that starts with "::" continues T-SQL (FROM ::fn_helpcollations(), geography ::Point); no SQLCMD command does.
+            if (trimmed.StartsWith(":", StringComparison.Ordinal) && !trimmed.StartsWith("::", StringComparison.Ordinal) || trimmed.StartsWith("!!", StringComparison.Ordinal))
                 throw Invalid(lineNumber, "SQLCMD directives are not supported. No file includes, variable expansion, or shell commands are performed.");
             var isGo = trimmed.Length >= 2 && trimmed[..2].Equals("GO", StringComparison.OrdinalIgnoreCase)
                 && (trimmed.Length == 2 || !IsIdentifierPart(trimmed[2]));

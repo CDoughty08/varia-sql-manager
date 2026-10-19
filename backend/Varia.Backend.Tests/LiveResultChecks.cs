@@ -150,13 +150,13 @@ internal static class LiveResultChecks
             check(overflow.Status == "completed" && overflow.ResultSets.Count == 1000 && overflow.DiscardedResultSets == 1
                 && Texts(overflow).Contains("Only the first 1,000 result sets are displayed. Display limits do not stop script execution."),
                 "sets past maxResultSets are discarded with a note that groups the count");
-            // Past the cap of 1,000 entries, the error that stopped the script is still in Messages, after the truncation
-            // note and before the note about the batches it skipped; the summary stays within main's bound.
+            // Past the cap of 1,000 entries, a batch's error is still in Messages, after the truncation note, and the next
+            // batch still runs; the summary stays within main's bound.
             var flooded = await Run("DECLARE @i int = 0; WHILE @i < 1200 BEGIN PRINT @i; SET @i += 1 END; SELECT 1/0 AS boom;\nGO\nSELECT 2 AS later;");
             var floodedTexts = Texts(flooded).ToList();
             var errorAt = flooded.Messages.FindIndex(entry => entry.Kind == "error" && entry.Text.StartsWith("Msg 8134, Level 16"));
-            check(flooded.Status == "failed" && flooded.MessagesTruncated && flooded.Messages.Count <= 1000 + QueryMessages.MaxLateErrors + 8
-                && floodedTexts[1000].StartsWith("Messages were truncated") && errorAt > 1000 && floodedTexts[^1] == "Batch 1 raised an error; later batches were not executed.",
+            check(flooded.Status == "completedWithErrors" && flooded.MessagesTruncated && flooded.Messages.Count <= 1000 + QueryMessages.MaxLateErrors + 8
+                && floodedTexts[1000].StartsWith("Messages were truncated") && errorAt > 1000 && flooded.ResultSets.Any(set => set.Columns[0].Name == "later"),
                 "an error after 1,000 messages is kept in Messages (" + flooded.Messages.Count + " entries, error at " + errorAt + ")");
 
             await ResultText(check, service, store, info, options, json, Run, Close);
@@ -247,13 +247,14 @@ internal static class LiveResultChecks
         var messages = await run("SELECT 1 AS one;\nPRINT 'a';\nSELECT 1/0;\nPRINT 'b';\nSELECT TOP (2) name FROM sys.objects;");
         var entries = messages.Messages;
         // A single batch that SQL Server ran to its end after an error says nothing more than SSMS does.
-        check(messages.Status == "failed" && entries.Count == 5 && entries[0] == new MessageEntry("(1 row affected)", "info") && entries[1] == new MessageEntry("a", "info")
+        check(messages.Status == "completedWithErrors" && entries.Count == 5 && entries[0] == new MessageEntry("(1 row affected)", "info") && entries[1] == new MessageEntry("a", "info")
             && entries[2] == new MessageEntry("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.", "error") && entries[3] == new MessageEntry("b", "info")
             && entries[4] == new MessageEntry("(2 rows affected)", "info") && messages.Error!.Message.StartsWith("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered."),
             "messages keep their order and kinds in SSMS's formats: " + string.Join(" | ", entries.Select(entry => entry.Kind + ":" + entry.Text)));
         var skipped = await run("PRINT 'one';\nGO\nRAISERROR('sev16', 16, 1);\nPRINT 'after';\nGO\nPRINT 'three';");
-        check(skipped.Status == "failed" && Texts(skipped).SequenceEqual(["one", "Msg 50000, Level 16, State 1, Line 3\nsev16", "after", "Batch 2 raised an error; later batches were not executed."]),
-            "a batch's error skips the later batches, and only then says so: " + string.Join(" | ", Texts(skipped)));
+        check(skipped.Status == "completedWithErrors" && Texts(skipped).SequenceEqual(["one", "Msg 50000, Level 16, State 1, Line 3\nsev16", "after",
+                "Batch 2 raised an error; execution continued with the next batch.", "three"]),
+            "the batch after an error still runs, and Messages say so: " + string.Join(" | ", Texts(skipped)));
         // SSMS leaves "Changed database context to …" out: USE says only that the commands completed, and the database
         // the toolbar chose is changed to without a message.
         var useSession = Guid.NewGuid().ToString();
