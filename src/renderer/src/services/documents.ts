@@ -1,6 +1,7 @@
 import type { editor } from 'monaco-editor'
 import type { DocumentKind, VariaApi } from '../../../shared/contracts'
 import type { SessionEnd } from '../../../shared/sessions'
+import type { SettingsValues } from '../../../shared/settings/catalog'
 import { afterClose, isQueryDocument, kindInfo, type QueryDocument } from '../documents'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -27,6 +28,16 @@ export interface DocumentOptions {
   readonly modelOptions?: () => ModelOptions
   /** Automatic delimiter highlighting; large values never match brackets, whatever it says. */
   readonly matchBrackets?: () => boolean
+}
+/** The document options Tools › Options sets. Keep tabs (SSMS's default) inserts tab characters. */
+export function settingsDocumentOptions(values: () => SettingsValues): Required<DocumentOptions> {
+  return {
+    modelOptions: () => {
+      const current = values()
+      return { tabSize: current['textEditor.sql.tabSize'], indentSize: current['textEditor.sql.indentSize'], insertSpaces: current['textEditor.sql.tabs'] === 'spaces' }
+    },
+    matchBrackets: () => values()['textEditor.delimiterHighlighting']
+  }
 }
 
 export class DocumentService extends SnapshotStore<DocumentSnapshot> implements Disposable {

@@ -75,6 +75,17 @@ const layout = () => page.evaluate(() => {
 
 try {
   await launch()
+  // 0. SSMS's default, Keep tabs: Tab inserts a tab character, so an x typed before it leaves the tab filling to column 4.
+  await textbox().focus()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.insertText('SELECT 1')
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.insertText('x')
+  await expect.poll(editorText).toBe('x   SELECT 1')
+  console.log('Options checks: with the default settings, Tab inserts a tab character.')
+
   // 1. Tools › Options… opens on Environment › General with the search box focused; the tree holds SSMS's pages.
   await openOptions()
   await expect(search()).toBeFocused()
@@ -100,6 +111,11 @@ try {
   // The Keyboard page explains that shortcuts follow SSMS's and cannot be changed yet.
   await node('Keyboard').click(fast)
   await expect(dialog().locator('.options-note')).toContainText('cannot be changed yet')
+  // Fonts and Colors says where colors are set, above its Size row and while that row is focused.
+  await node('Fonts and Colors').click(fast)
+  await field('Size').focus()
+  await expect(dialog().locator('.options-note')).toHaveText('Colors come from the color theme (View › Theme).')
+  await expect(dialog().locator('.options-description')).toContainText('Size')
   console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, and the tree has SSMS\'s 19 nodes and keys.')
 
   // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.

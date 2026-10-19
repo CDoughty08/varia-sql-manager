@@ -10,6 +10,7 @@ import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
 import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
+import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
@@ -140,7 +141,8 @@ export function manualTimers() {
  * shell host, so command enablement can be tested in Node.
  */
 export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; packaged?: boolean; settings?: Partial<SettingsValues> } = {}) {
-  const doc = documentFixture()
+  // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
+  const doc = documentFixture(settingsDocumentOptions(() => settings.getSnapshot().values))
   const api = {
     ...doc.api,
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
@@ -179,6 +181,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const { documents, events } = doc
   // Seeded values apply at once, as if main had answered before the workbench was created.
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
+  settings.subscribe(() => documents.refreshOptions())
   const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const databaseList = new DatabaseListService(api, connections, events)

@@ -4,7 +4,7 @@ import {
 } from '../src/renderer/src/settings/options-form'
 import { highlightParts, normalizeQuery, searchPages } from '../src/renderer/src/settings/search'
 import { scriptingOptionKeys } from '../src/shared/scripting/options'
-import { defaultSettings, settingDef, settingsLimits, type SettingDef, type SettingKey, type SettingsValues } from '../src/shared/settings/catalog'
+import { defaultSettings, settingDef, settingDefs, settingsLimits, type SettingDef, type SettingKey, type SettingsValues } from '../src/shared/settings/catalog'
 
 const draft: OptionsDraft = draftFrom(defaultSettings)
 const scripting = (value: OptionsDraft) => pageForm('objectExplorer.scripting', value, 'win32').groups.flatMap(group => group.rows)
@@ -121,6 +121,10 @@ describe('Options OK', () => {
     ])
     expect(validateDraft(set(draft, 'textEditor.sql.indentSize', '1.5')).ok).toBe(false)
     expect(validateDraft(draft)).toEqual({ ok: true, values: draft })
+    // Areas registered out of tree order (a later area's pages early in the tree) still report in tree order.
+    const reversed = [...settingDefs].reverse()
+    const late = validateDraft(next, reversed)
+    expect(late.ok ? [] : late.errors.map(error => error.key)).toEqual(['textEditor.sql.tabSize', 'queryExecution.executionTimeout', 'objectExplorer.selectTopRows'])
   })
   it('sends only the settings that differ from what main stored', () => {
     const stored: SettingsValues = { ...defaultSettings, 'textEditor.sql.wordWrap': true }

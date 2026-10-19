@@ -150,6 +150,17 @@ export class SettingsService extends SnapshotStore<SettingsSnapshot> implements 
   /** Opens Options on `page`, else the page last shown in this session, else Environment › General. */
   openDialog(page?: string): void { this.dialogStore.set({ open: true, page: page ?? this.lastPage ?? 'environment.general' }) }
   closeDialog(): void { this.dialogStore.set({ open: false }) }
+  /**
+   * OK in Options: saves `patch`, then closes the dialog that asked, and resolves to whether it did. A dialog that closed,
+   * or was opened again, while the save was on its way is left as it is. Throws main's error.
+   */
+  async saveDialog(patch: SettingsPatch): Promise<boolean> {
+    const asking = this.dialogStore.getSnapshot()
+    await this.update(patch)
+    if (!asking.open || this.dialogStore.getSnapshot() !== asking) return false
+    this.closeDialog()
+    return true
+  }
   /** The dialog reports the page it shows, so the next open returns to it. */
   showedPage(page: string): void { this.lastPage = page }
 

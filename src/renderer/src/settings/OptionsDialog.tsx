@@ -75,9 +75,12 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     document.getElementById(controlId(key))?.focus()
   })
 
+  const restoreFocus = () => { if (returnFocus?.isConnected) returnFocus.focus() }
+  // While OK's save is on its way the dialog stays: the changes cannot be cancelled any more.
   const close = () => {
+    if (saving) return
     settings.closeDialog()
-    if (returnFocus?.isConnected) returnFocus.focus()
+    restoreFocus()
   }
   /** Shows `id`'s first page with its path expanded; `node` is the tree row that keeps focus (a category stays focused). */
   const showPage = (id: string, node = firstPage(id)) => {
@@ -114,8 +117,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     if (!Object.keys(patch).length) { close(); return }
     setSaving(true); setError('')
     try {
-      await settings.update(patch)
-      close()
+      if (await settings.saveDialog(patch)) restoreFocus()
     } catch (failure) { setError(errorText(failure)); setSaving(false) }
   }
   const treeKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
@@ -166,7 +168,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   // Focusable itself, so pressing a greyed row, a label or the description keeps focus (and Escape and Enter) in the dialog.
   return <div className="modal-backdrop"><form className="connection-modal options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void ok() }} onKeyDown={keyDown}>
-    <div className="connection-heading"><h2 id="options-title">Options</h2><button type="button" className="icon-button" aria-label="Close options" onClick={close}><Icon name="close" /></button></div>
+    <div className="connection-heading"><h2 id="options-title">Options</h2><button type="button" className="icon-button" aria-label="Close options" disabled={saving} onClick={close}><Icon name="close" /></button></div>
     <div className="options-body">
       <div className="options-nav">
         <input ref={search} type="search" className="options-search" placeholder={platform === 'darwin' ? 'Search Options (⌘E)' : 'Search Options (Ctrl+E)'} aria-label="Search Options"
@@ -184,17 +186,18 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
       <div className="options-page">
         <h3 className="options-heading">{pagePath(form.page.id).map(node => node.title).join(' › ')}</h3>
         {form.provider === 'theme' && <p className="options-note">{highlight('Color theme')}: View › Theme</p>}
+        {/* A form page's own note (Fonts and Colors: where colors come from) stays above its rows. */}
+        {form.page.layout !== 'propertyGrid' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
         {form.page.layout === 'propertyGrid'
           ? <PropertyGrid label={form.page.title} groups={form.groups} focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
           : <div className="options-form">{groups(form.groups)}</div>}
-        {form.page.layout !== 'propertyGrid' && form.page.description && !form.groups.length && <p className="options-note">{form.page.description}</p>}
       </div>
     </div>
     <div className="options-description"><strong>{described.title}</strong>{described.text && <p>{described.text}</p>}{described.notes.map(note => <p key={note}>{note}</p>)}</div>
     {error && <p className="connect-error options-error" role="alert">{error}</p>}
     <div className="connection-footer">
       <button type="button" onClick={() => { setDraft(current => resetPage(current, page, platform)); setErrors(new Map()); setError('') }}>Reset to Defaults</button><span />
-      <button className="primary" type="submit" disabled={saving}>OK</button><button type="button" onClick={close}>Cancel</button>
+      <button className="primary" type="submit" disabled={saving}>OK</button><button type="button" disabled={saving} onClick={close}>Cancel</button>
     </div>
   </form></div>
 }

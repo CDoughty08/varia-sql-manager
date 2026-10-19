@@ -4,13 +4,15 @@ import { SettingsService } from '../src/renderer/src/settings/SettingsService'
 import { EditorOptionsService } from '../src/renderer/src/services/editor-options'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 import type { SettingsState } from '../src/shared/settings/schema'
-import { deferred } from './fixtures/documents'
-import { settingsApi } from './fixtures/workbench'
+import { deferred, TestEditor } from './fixtures/documents'
+import { createTestWorkbench, settingsApi } from './fixtures/workbench'
+import { settingsDocumentOptions } from '../src/renderer/src/services/documents'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.useRealTimers() })
 
 type Loaded = Awaited<ReturnType<VariaApi['getSettings']>>
+type Updated = Awaited<ReturnType<VariaApi['updateSettings']>>
 const stored: SettingsValues = { ...defaultSettings, 'textEditor.sql.wordWrap': true, 'queryExecution.executionTimeout': 30 }
 function setup(get?: () => Promise<Loaded>) {
   const api = settingsApi({ 'textEditor.sql.wordWrap': true, 'queryExecution.executionTimeout': 30 })
@@ -124,10 +126,37 @@ describe('settings service', () => {
   it('flips a second toggle pressed while the first is being saved', async () => {
     const { api, service } = setup()
     await service.load()
+    // As over IPC, main's answer comes later, and nothing has changed before it does.
+    const answers: ReturnType<typeof deferred<Updated>>[] = []
+    api.updateSettings.mockImplementation(() => { const answer = deferred<Updated>(); answers.push(answer); return answer.promise })
     const first = service.toggle('textEditor.sql.wordWrap'), second = service.toggle('textEditor.sql.wordWrap')
-    await Promise.all([first, second])
     expect(api.updateSettings.mock.calls.map(call => call[0])).toEqual([{ 'textEditor.sql.wordWrap': false }, { 'textEditor.sql.wordWrap': true }])
+    answers[0].resolve({ ok: true, value: { revision: 2, values: { ...stored, 'textEditor.sql.wordWrap': false } } })
+    answers[1].resolve({ ok: true, value: { revision: 3, values: stored } })
+    await Promise.all([first, second])
     expect(service.get('textEditor.sql.wordWrap')).toBe(true)
+  })
+  it('closes only the dialog whose OK saved, once main has the changes', async () => {
+    const { api, service } = setup()
+    await service.load()
+    const answer = deferred<Updated>()
+    api.updateSettings.mockImplementationOnce(() => answer.promise)
+    service.openDialog()
+    const saving = service.saveDialog({ 'textEditor.sql.tabSize': 2 })
+    expect(service.dialog.getSnapshot().open).toBe(true)
+    // Closed and opened again before the answer: the new dialog stays open.
+    service.closeDialog()
+    service.openDialog('objectExplorer.scripting')
+    answer.resolve({ ok: true, value: { revision: 2, values: { ...stored, 'textEditor.sql.tabSize': 2 } } })
+    expect(await saving).toBe(false)
+    expect(service.dialog.getSnapshot()).toEqual({ open: true, page: 'objectExplorer.scripting' })
+    expect(await service.saveDialog({ 'textEditor.sql.tabSize': 3 })).toBe(true)
+    expect(service.dialog.getSnapshot()).toEqual({ open: false })
+    // A refused save leaves the dialog open, with main's error to show.
+    service.openDialog()
+    api.updateSettings.mockResolvedValueOnce({ ok: false, error: 'Disk full.' })
+    await expect(service.saveDialog({ 'textEditor.sql.tabSize': 4 })).rejects.toThrow('Disk full.')
+    expect(service.dialog.getSnapshot().open).toBe(true)
   })
   it('opens the dialog on a page, else the page last shown, else Environment › General', () => {
     const { service } = setup()
@@ -174,5 +203,32 @@ describe('editor options from settings', () => {
     // A change to a setting the editor does not use leaves it alone.
     api.onSettingsChanged.mock.calls[0][0]({ revision: 3, values: { ...service.getSnapshot().values, 'queryExecution.executionTimeout': 5 } })
     expect(applied).toHaveLength(3)
+  })
+})
+
+describe('document options from settings', () => {
+  it('maps Tabs and delimiter highlighting: Keep tabs, SSMS\'s default, inserts tab characters', () => {
+    let values: SettingsValues = defaultSettings
+    const options = settingsDocumentOptions(() => values)
+    expect(defaultSettings['textEditor.sql.tabs']).toBe('tabs')
+    expect([options.modelOptions(), options.matchBrackets()]).toEqual([{ tabSize: 4, indentSize: 4, insertSpaces: false }, true])
+    values = { ...defaultSettings, 'textEditor.sql.tabs': 'spaces', 'textEditor.sql.tabSize': 3, 'textEditor.sql.indentSize': 2, 'textEditor.delimiterHighlighting': false }
+    expect([options.modelOptions(), options.matchBrackets()]).toEqual([{ tabSize: 3, indentSize: 2, insertSpaces: true }, false])
+  })
+  it('applies them through the workbench to new and open documents and to the bound editor', async () => {
+    const workbench = createTestWorkbench()
+    cleanups.push(() => workbench.dispose())
+    const { documents, model, settings } = workbench
+    const query = documents.create('a.sql', 'SELECT (1)', 'master')
+    const editor = new TestEditor()
+    const binding = documents.bindEditor(editor.asEditor())
+    cleanups.push(() => binding.dispose())
+    expect(model(query.id).options).toEqual({ tabSize: 4, indentSize: 4, insertSpaces: false })
+    expect(editor.options).toEqual([])
+    await settings.update({ 'textEditor.sql.tabs': 'spaces', 'textEditor.sql.tabSize': 8, 'textEditor.sql.indentSize': 2, 'textEditor.delimiterHighlighting': false })
+    expect(model(query.id).options).toEqual({ tabSize: 8, indentSize: 2, insertSpaces: true })
+    expect(editor.options).toEqual([{ matchBrackets: 'never' }])
+    const next = documents.create('b.sql', '', 'master')
+    expect(model(next.id).options).toEqual({ tabSize: 8, indentSize: 2, insertSpaces: true })
   })
 })

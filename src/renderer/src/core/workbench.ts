@@ -1,7 +1,7 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
-import { DocumentService } from '../services/documents'
+import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
@@ -114,11 +114,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
-  const setting = settings.get.bind(settings)
-  const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) }, {
-    modelOptions: () => ({ tabSize: setting('textEditor.sql.tabSize'), indentSize: setting('textEditor.sql.indentSize'), insertSpaces: setting('textEditor.sql.tabs') === 'spaces' }),
-    matchBrackets: () => setting('textEditor.delimiterHighlighting')
-  })
+  const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
+    settingsDocumentOptions(() => settings.getSnapshot().values))
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
