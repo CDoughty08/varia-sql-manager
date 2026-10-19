@@ -8,6 +8,8 @@ import 'monaco-editor/editor/contrib/find/browser/findController.js'
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js'
 import 'monaco-editor/editor/contrib/comment/browser/comment.js'
+// Insert Snippet and Surround With insert through it; it adds only Tab, Shift+Tab and Escape while a snippet is active.
+import 'monaco-editor/editor/contrib/snippet/browser/snippetController2.js'
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js'
 import 'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js'
 import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js'

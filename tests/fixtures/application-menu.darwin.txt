@@ -24,12 +24,40 @@
   {"id":"edit.delete","label":"Delete","registerAccelerator":false,"type":"normal","click":[["pageHasKeyFocus"],["command","edit.delete"]]}
   {"accelerator":"Cmd+A","id":"edit.selectAll","label":"Select All","registerAccelerator":false,"type":"normal","click":[["pageHasKeyFocus"],["command","edit.selectAll"]]}
   {"type":"separator"}
-  {"accelerator":"Cmd+F","id":"edit.find","label":"Find","registerAccelerator":false,"type":"normal","click":[["command","edit.find"]]}
-  {"accelerator":"Cmd+Alt+F","id":"edit.replace","label":"Replace","registerAccelerator":false,"type":"normal","click":[["command","edit.replace"]]}
+  {"id":"edit.findReplace","label":"Find and Replace"}
+    {"accelerator":"Cmd+F","id":"edit.find","label":"Quick Find","registerAccelerator":false,"type":"normal","click":[["command","edit.find"]]}
+    {"accelerator":"Cmd+Alt+F","id":"edit.replace","label":"Quick Replace","registerAccelerator":false,"type":"normal","click":[["command","edit.replace"]]}
+    {"type":"separator"}
+    {"accelerator":"Cmd+G","id":"edit.findNext","label":"Find Next","registerAccelerator":false,"type":"normal","click":[["command","edit.findNext"]]}
+    {"accelerator":"Cmd+Shift+G","id":"edit.findPrevious","label":"Find Previous","registerAccelerator":false,"type":"normal","click":[["command","edit.findPrevious"]]}
+  {"id":"edit.goToLine","label":"Go To Line…","registerAccelerator":false,"type":"normal","click":[["command","edit.goToLine"]]}
   {"type":"separator"}
-  {"accelerator":"Cmd+/","id":"edit.toggleLineComment","label":"Toggle Line Comment","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleLineComment"]]}
-  {"id":"edit.commentLines","label":"Comment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.commentLines"]]}
-  {"id":"edit.uncommentLines","label":"Uncomment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.uncommentLines"]]}
+  {"id":"edit.advanced","label":"Advanced"}
+    {"accelerator":"Cmd+Shift+U","id":"edit.makeUppercase","label":"Make Uppercase","registerAccelerator":false,"type":"normal","click":[["command","edit.makeUppercase"]]}
+    {"accelerator":"Cmd+Shift+L","id":"edit.makeLowercase","label":"Make Lowercase","registerAccelerator":false,"type":"normal","click":[["command","edit.makeLowercase"]]}
+    {"type":"separator"}
+    {"id":"editor.toggleWhitespace","label":"View White Space","registerAccelerator":false,"type":"checkbox","click":[["command","editor.toggleWhitespace"]],"checkedAfterClick":false}
+    {"id":"editor.toggleWordWrap","label":"Word Wrap","registerAccelerator":false,"type":"checkbox","click":[["command","editor.toggleWordWrap"]],"checkedAfterClick":true}
+    {"type":"separator"}
+    {"id":"edit.commentLines","label":"Comment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.commentLines"]]}
+    {"id":"edit.uncommentLines","label":"Uncomment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.uncommentLines"]]}
+    {"accelerator":"Cmd+/","id":"edit.toggleLineComment","label":"Toggle Line Comment","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleLineComment"]]}
+    {"type":"separator"}
+    {"id":"edit.increaseIndent","label":"Increase Line Indent","registerAccelerator":false,"type":"normal","click":[["command","edit.increaseIndent"]]}
+    {"id":"edit.decreaseIndent","label":"Decrease Line Indent","registerAccelerator":false,"type":"normal","click":[["command","edit.decreaseIndent"]]}
+  {"id":"edit.bookmarks","label":"Bookmarks"}
+    {"id":"edit.toggleBookmark","label":"Toggle Bookmark","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleBookmark"]]}
+    {"type":"separator"}
+    {"id":"edit.previousBookmark","label":"Previous Bookmark","registerAccelerator":false,"type":"normal","click":[["command","edit.previousBookmark"]]}
+    {"id":"edit.nextBookmark","label":"Next Bookmark","registerAccelerator":false,"type":"normal","click":[["command","edit.nextBookmark"]]}
+    {"type":"separator"}
+    {"id":"edit.clearBookmarks","label":"Clear Bookmarks","registerAccelerator":false,"type":"normal","click":[["command","edit.clearBookmarks"]]}
+    {"type":"separator"}
+    {"id":"edit.previousBookmarkInDocument","label":"Previous Bookmark In Document","registerAccelerator":false,"type":"normal","click":[["command","edit.previousBookmarkInDocument"]]}
+    {"id":"edit.nextBookmarkInDocument","label":"Next Bookmark In Document","registerAccelerator":false,"type":"normal","click":[["command","edit.nextBookmarkInDocument"]]}
+  {"id":"edit.intellisense","label":"IntelliSense"}
+    {"id":"edit.insertSnippet","label":"Insert Snippet…","registerAccelerator":false,"type":"normal","click":[["command","edit.insertSnippet"]]}
+    {"id":"edit.surroundWith","label":"Surround With…","registerAccelerator":false,"type":"normal","click":[["command","edit.surroundWith"]]}
 {"id":"menu.view","label":"View"}
   {"accelerator":"Cmd+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Cmd+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
@@ -37,8 +65,6 @@
   {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
   {"id":"layout.reset","label":"Reset Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
-  {"type":"separator"}
-  {"id":"editor.toggleWordWrap","label":"Word Wrap","registerAccelerator":false,"type":"checkbox","click":[["command","editor.toggleWordWrap"]],"checkedAfterClick":true}
   {"type":"separator"}
   {"id":"view.theme","label":"Theme"}
     {"id":"preferences.colorTheme","label":"Color Theme…","registerAccelerator":false,"type":"normal","click":[["command","preferences.colorTheme"]]}

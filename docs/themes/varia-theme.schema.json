@@ -941,6 +941,16 @@
           "description": "(VS Code) Line number of the current line. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
           "markdownDescription": "(VS Code) Line number of the current line. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
         },
+        "editorWhitespace.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Whitespace glyphs when View White Space is on. Default $textMuted/50 (Dark #8a9cb380, Light #525e7280).",
+          "markdownDescription": "(VS Code) Whitespace glyphs when View White Space is on. Default `$textMuted/50` (Dark `#8a9cb380`, Light `#525e7280`)."
+        },
+        "editorBookmark.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Bookmark glyph in the editor's indicator margin. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(Varia) Bookmark glyph in the editor's indicator margin. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
         "editorBracketHighlight.foreground1": {
           "$ref": "#/definitions/value",
           "description": "(VS Code) Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six. Default $syntaxBracket1 (Dark #ffd700, Light #0431fa).",

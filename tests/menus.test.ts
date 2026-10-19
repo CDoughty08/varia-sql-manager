@@ -28,8 +28,16 @@ describe('menu model', () => {
     expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close', '-', 'submenu:file.recent'])
     expect(outline('window', 'darwin')).toEqual([...windowMenu, '-', 'role:minimize', 'role:zoom'])
     for (const platform of platforms) {
-      expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', '-', 'edit.find', 'edit.replace', '-', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
-      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'editor.toggleWordWrap', '-', 'submenu:view.theme', '-',
+      // SSMS's Edit menu: its submenus in the Visual Studio shell's order, Advanced before Bookmarks.
+      expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', '-', 'submenu:edit.findReplace', 'edit.goToLine', '-',
+        'submenu:edit.advanced', 'submenu:edit.bookmarks', 'submenu:edit.intellisense'])
+      expect(outline('edit.findReplace', platform)).toEqual(['edit.find', 'edit.replace', '-', 'edit.findNext', 'edit.findPrevious'])
+      // Word Wrap is here, where SSMS has it, and not in View.
+      expect(outline('edit.advanced', platform)).toEqual(['edit.makeUppercase', 'edit.makeLowercase', '-', 'editor.toggleWhitespace', 'editor.toggleWordWrap', '-', 'edit.commentLines', 'edit.uncommentLines',
+        'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent'])
+      expect(outline('edit.bookmarks', platform)).toEqual(['edit.toggleBookmark', '-', 'edit.previousBookmark', 'edit.nextBookmark', '-', 'edit.clearBookmarks', '-', 'edit.previousBookmarkInDocument', 'edit.nextBookmarkInDocument'])
+      expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith'])
+      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
@@ -46,6 +54,9 @@ describe('menu model', () => {
     const submenu = (menu: MenuId, platform: Platform) => buildMenuModel(menu, platform).filter(entry => entry.kind === 'submenu')
     expect(submenu('view', 'linux')).toEqual([{ kind: 'submenu', id: 'theme', nativeId: 'view.theme', title: 'Theme', mnemonic: 'h', dynamic: 'theme' }])
     expect(submenu('editor.context', 'win32')).toEqual([{ kind: 'submenu', id: 'query.connection', nativeId: 'query.connection@editor.context', title: 'Connection', mnemonic: 'o' }])
+    expect(submenu('edit', 'darwin').map(entry => entry.kind === 'submenu' && [entry.nativeId, entry.title, entry.mnemonic])).toEqual([
+      ['edit.findReplace', 'Find and Replace', 'f'], ['edit.advanced', 'Advanced', 'v'], ['edit.bookmarks', 'Bookmarks', 'k'], ['edit.intellisense', 'IntelliSense', 'i']
+    ])
     const [scriptAs] = submenu('explorer.context', 'darwin')
     expect(scriptAs).toMatchObject({ id: 'explorer.scriptAs', nativeId: 'explorer.scriptAs', title: 'Script as', dynamicTitle: 'scriptAs' })
     expect(scriptAs.kind === 'submenu' && scriptAs.when && [evaluateWhen(scriptAs.when, { explorerScriptTitle: 'table', explorerNode: 'table' }), evaluateWhen(scriptAs.when, { explorerScriptTitle: '', explorerNode: 'database' }),
@@ -60,7 +71,8 @@ describe('menu model', () => {
     expect(menuRoots('query.connection')).toEqual(['query', 'editor.context'])
     expect(menuRoots('theme')).toEqual(['view'])
     expect(menuRoots('file')).toEqual(['file'])
-    expect(nativeMenuIds).toEqual(['file', 'file.recent', 'edit', 'view', 'theme', 'query', 'query.connection', 'tools', 'window'])
+    expect(nativeMenuIds).toEqual(['file', 'file.recent', 'edit', 'edit.findReplace', 'edit.advanced', 'edit.bookmarks', 'edit.intellisense', 'view', 'theme', 'query', 'query.connection', 'tools', 'window'])
+    expect(menuRoots('edit.bookmarks')).toEqual(['edit'])
   })
   it('carries placement mnemonics, platform titles, and compiled when clauses', () => {
     expect(buildMenuModel('file', 'win32').find(entry => entry.kind === 'command' && entry.id === 'file.saveAs')).toMatchObject({ title: 'Save As…', mnemonic: 'a' })
@@ -110,8 +122,13 @@ describe('menu model', () => {
     expect(find('file', 'darwin', 'file.saveAs')).toMatchObject({ title: 'Save As…', accelerator: 'Cmd+Shift+S' })
     expect(find('edit', 'linux', 'edit.redo')).toMatchObject({ accelerator: 'Ctrl+Y' })
     expect(find('edit', 'darwin', 'edit.redo')).toMatchObject({ accelerator: 'Cmd+Shift+Z' })
-    expect(find('edit', 'darwin', 'edit.replace')).toMatchObject({ accelerator: 'Cmd+Alt+F' })
-    expect(find('edit', 'win32', 'edit.commentLines')).toEqual({ kind: 'command', id: 'edit.commentLines', nativeId: 'edit.commentLines', title: 'Comment Selection', mnemonic: 'm', toggle: false })
+    expect(find('edit.findReplace', 'darwin', 'edit.replace')).toMatchObject({ title: 'Quick Replace', accelerator: 'Cmd+Alt+F' })
+    expect(find('edit.findReplace', 'win32', 'edit.findNext')).toMatchObject({ title: 'Find Next', accelerator: 'F3' })
+    expect(find('edit.advanced', 'win32', 'edit.commentLines')).toEqual({ kind: 'command', id: 'edit.commentLines', nativeId: 'edit.commentLines', title: 'Comment Selection', mnemonic: 'm', toggle: false })
+    // A bridge chord shows as a label in custom menus, but is no accelerator: Electron accelerators are single chords.
+    expect(find('edit.bookmarks', 'win32', 'edit.toggleBookmark')).not.toHaveProperty('accelerator')
+    expect(find('edit.advanced', 'linux', 'edit.makeUppercase')).toMatchObject({ accelerator: 'Ctrl+Shift+U' })
+    expect(find('edit', 'darwin', 'edit.goToLine')).not.toHaveProperty('accelerator')
     expect(find('query', 'linux', 'query.execute')).toMatchObject({ title: 'Execute', accelerator: 'F5' })
     // On macOS a key equivalent without ⌘ would reach the menu before the page, running Execute from any pane.
     for (const [menu, id] of [['query', 'query.execute'], ['window', 'window.explorer'], ['window', 'document.next'], ['window', 'document.previous']] as const) {
@@ -119,8 +136,8 @@ describe('menu model', () => {
       expect(find(menu, 'darwin', id), id).not.toHaveProperty('accelerator')
     }
     expect(find('query', 'win32', 'query.cancel')).not.toHaveProperty('accelerator')
-    expect(find('view', 'linux', 'editor.toggleWordWrap')).toEqual({ kind: 'command', id: 'editor.toggleWordWrap', nativeId: 'editor.toggleWordWrap', title: 'Word Wrap', mnemonic: 'w', toggle: true, accelerator: 'Alt+Z' })
-    expect(find('view', 'darwin', 'editor.toggleWordWrap')).not.toHaveProperty('accelerator')
+    expect(find('edit.advanced', 'linux', 'editor.toggleWordWrap')).toEqual({ kind: 'command', id: 'editor.toggleWordWrap', nativeId: 'editor.toggleWordWrap', title: 'Word Wrap', mnemonic: 'w', toggle: true, accelerator: 'Alt+Z' })
+    expect(find('edit.advanced', 'darwin', 'editor.toggleWordWrap')).not.toHaveProperty('accelerator')
     expect(find('window', 'win32', 'layout.reset@window')).toMatchObject({ id: 'layout.reset', title: 'Reset Window Layout' })
     expect(find('window', 'win32', 'window.explorer')).toEqual({ kind: 'command', id: 'window.explorer', nativeId: 'window.explorer', title: 'Object Explorer', mnemonic: 'o', toggle: false, accelerator: 'F8' })
     expect(find('window', 'linux', 'document.next')).toMatchObject({ accelerator: 'Ctrl+Tab' })
@@ -175,7 +192,7 @@ describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
     // The editor menu's Connection submenu is Query › Connection.
     expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.reconnect',
-      'query.changeConnection', 'query.disconnect', 'query.disconnectAll'])
+      'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith'])
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.float', 'pane.dock', 'pane.close'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
@@ -307,7 +324,7 @@ describe('menu state', () => {
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', ...scriptCommandIds,
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
-      'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved']
+      'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -315,7 +332,9 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap', 'editor.toggleOvertype'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers'])
+    // Main checks only toggles the schema names.
+    expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })
   it('accepts unique catalogue ids only', () => {
     expect(menuStateSchema.parse({ disabled: ['file.save', 'query.cancel'], checked: ['editor.toggleWordWrap'] })).toEqual({ disabled: ['file.save', 'query.cancel'], checked: ['editor.toggleWordWrap'] })

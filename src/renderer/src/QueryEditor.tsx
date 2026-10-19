@@ -16,6 +16,13 @@ export default function QueryEditor() {
       automaticLayout: true,
       scrollBeyondLastLine: false,
       padding: { top: 16 },
+      // SSMS's indicator margin: bookmarks show there.
+      glyphMargin: true,
+      // SSMS's Comment Selection writes --SELECT, with no space, and leaves empty lines alone.
+      comments: { insertSpace: false, ignoreEmptyLines: true },
+      // Quick Find starts from the selection or the word at the caret, and looks in a multi-line selection, as SSMS's
+      // Look in: Selection does.
+      find: { autoFindInSelection: 'multiline', seedSearchStringFromSelection: 'always', loop: true, addExtraSpaceOnTop: false },
       // The workbench's editor menu (MenuService) replaces Monaco's; right-click still moves the caret first.
       contextmenu: false,
       // OVR (the Insert key) shows a block caret, as Visual Studio does.

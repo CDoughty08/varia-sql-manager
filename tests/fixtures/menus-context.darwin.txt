@@ -1,5 +1,8 @@
 # Context menus on darwin; enablement per state: disconnected, connected, running, busy
 editor.context, for the query editor
+  &Insert Snippet…  ⌘K ⌘X  +++-
+  &Surround With…  ⌘K ⌘S  +++-
+  ---
   C&onnection >
     &Connect…  ++++
     &Disconnect  -+--

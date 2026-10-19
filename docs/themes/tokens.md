@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (203)
+## Color keys (205)
 
 ### Base
 
@@ -223,6 +223,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `editor.selectionBackground` | VS Code | `$textSelection` | `#264f78` | `#add6ff` | Selected text in the editor. |
 | `editorLineNumber.foreground` | VS Code | Dark `$textMuted/80`, Light `$textMuted` | `#728195` | `#525e72` | Line numbers. Made opaque over `editor.background`. |
 | `editorLineNumber.activeForeground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Line number of the current line. |
+| `editorWhitespace.foreground` | VS Code | `$textMuted/50` | `#8a9cb380` | `#525e7280` | Whitespace glyphs when View White Space is on. |
+| `editorBookmark.foreground` | Varia | `$accent` | `#8fb7ff` | `#005fb8` | Bookmark glyph in the editor's indicator margin. |
 | `editorBracketHighlight.foreground1` | VS Code | `$syntaxBracket1` | `#ffd700` | `#0431fa` | Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six. |
 | `editorBracketHighlight.foreground2` | VS Code | `$syntaxBracket2` | `#da70d6` | `#287a28` | Brackets one level in. |
 | `editorBracketHighlight.foreground3` | VS Code | `$syntaxBracket3` | `#179fff` | `#7b3814` | Brackets two levels in. |

@@ -13,6 +13,7 @@ import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
+import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
 import BackendBanner from './BackendBanner'
@@ -60,6 +61,7 @@ export default function App() {
   const databaseLists = useServiceSnapshot(workbench.databaseList)
   const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
   const optionsDialog = useServiceSnapshot(workbench.settings.dialog)
+  const editorDialogs = useServiceSnapshot(workbench.editorDialogs)
   const { open: recoveryOpen } = useServiceSnapshot(workbench.recovery)
   const { values: settings } = useServiceSnapshot(workbench.settings)
   const [explorerError, setExplorerError] = useState('')
@@ -258,6 +260,7 @@ export default function App() {
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
+    {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
     <QuickInput />
     <MenuLayer />

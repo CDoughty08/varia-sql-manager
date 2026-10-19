@@ -166,6 +166,40 @@ describe('keybinding dispatch', () => {
     expect(press(letter('u', platform)).consumed).toBe(true)
     expect(ran()).toEqual(['query.changeDatabase', 'query.changeDatabase'])
   })
+  // Varia's own chords (Bookmarks, Insert Snippet, Surround With) are Monaco's to dispatch through the bridge: their second
+  // keys are workbench keys elsewhere (New Query, Go to Query, Save), which must not run.
+  it.each(platforms)("passes the second key of Varia's editor chords through to Monaco on %s", platform => {
+    const { press, ran, state } = service(platform, { values: editorText, textFocus: true })
+    for (const character of ['n', 'p', 's', 'k', 'l', 'x']) {
+      expect(press(letter('k', platform)).consumed, character).toBe(false)
+      expect(press(letter(character, platform)).consumed, character).toBe(false)
+    }
+    expect(ran()).toEqual([])
+    // Outside editor text Ctrl/⌘+K does nothing, so New Query still has its key.
+    state.textFocus = false
+    press(letter('k', platform))
+    expect(press(letter('n', platform)).consumed).toBe(true)
+    expect(ran()).toEqual(['file.new'])
+  })
+  it.each(platforms)('runs Make Uppercase and Lowercase in editor text only, and Go To Line in the editor on %s', platform => {
+    const { press, ran } = service(platform, { values: editorText, textFocus: true })
+    expect(press(letter('u', platform, { shift: true })).consumed).toBe(true)
+    expect(press(letter('l', platform, { shift: true })).consumed).toBe(true)
+    // ⌃G on macOS, where ⌘G is Find Next; Ctrl+G elsewhere.
+    expect(press(key('KeyG', 'g', { ctrl: true })).consumed).toBe(true)
+    expect(ran()).toEqual(['edit.makeUppercase', 'edit.makeLowercase', 'edit.goToLine'])
+    const outside = service(platform, { values: { activePanel: 'explorer' } })
+    // macOS's menu would run ⇧⌘U from its key equivalent, so there the key is consumed without running anything.
+    const menuKey = platform === 'darwin'
+    for (const event of [letter('u', platform, { shift: true }), letter('l', platform, { shift: true })]) expect(outside.press(event).consumed, event.code).toBe(menuKey)
+    expect(outside.press(key('KeyG', 'g', { ctrl: true })).consumed).toBe(false)
+    expect(outside.ran()).toEqual([])
+    // In the find widget (editorFocus without text focus) Ctrl+G still goes to a line; the case keys are the widget's.
+    const find = service(platform, { values: { editorFocus: true, inputFocus: true, textInputFocus: true, activePanel: 'editor' } })
+    expect(find.press(letter('u', platform, { shift: true })).consumed).toBe(menuKey)
+    expect(find.press(key('KeyG', 'g', { ctrl: true })).consumed).toBe(true)
+    expect(find.ran()).toEqual(['edit.goToLine'])
+  })
   // Monaco stops waiting for the second key after 5 s (and on a dead key); a later key is the workbench's again.
   it.each(platforms)('gives keys back to the workbench once Monaco stops waiting for the chord on %s', platform => {
     const { press, ran, state } = service(platform, { values: editorText, textFocus: true })

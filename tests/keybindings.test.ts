@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { CommandId } from '../src/shared/commands/catalog'
+import type { CommandId, KeybindingSpec } from '../src/shared/commands/catalog'
 import { contextRecord, type ContextKeys } from '../src/shared/commands/context-keys'
 import {
-  ariaLabel, chordFromEvent, defaultRules, formatLabel, keybindingLabel, KeySpecError, parseKeySpec, platforms, primaryRule, reservedChords, reservedReason,
+  ariaLabel, bridgeRules, chordFromEvent, defaultRules, formatLabel, keybindingLabel, KeySpecError, parseKeySpec, platforms, primaryRule, reservedChords, reservedReason,
   resolveKeybinding, specForPlatform, toAccelerator, toPlatform, workbenchRules, type KeyEventLike, type Platform
 } from '../src/shared/commands/keybindings'
 import { applicationMenus, menuAccelerator, menuCommandIds } from '../src/shared/commands/menus'
@@ -40,6 +40,28 @@ describe('key specs', () => {
   it('allow two-part chords only on native keybindings', () => {
     expect(() => resolveKeybinding('file.new', { key: 'mod+k mod+n' }, 'win32')).toThrow(/only native keybindings may be chords/)
     expect(resolveKeybinding('file.new', { key: 'mod+k mod+n', native: true }, 'darwin')).toMatchObject({ chords: ['meta+k', 'meta+n'], native: true, allowRepeat: false })
+  })
+  it('allow bridge chords only as native mod+k chords without a when clause', () => {
+    for (const platform of platforms) {
+      const prefix = platform === 'darwin' ? 'meta+k' : 'ctrl+k'
+      expect(resolveKeybinding('edit.toggleBookmark', { key: 'mod+k mod+k', native: true, bridge: true }, platform)).toMatchObject({ chords: [prefix, prefix], native: true, bridge: true })
+    }
+    const invalid: [KeybindingSpec, RegExp][] = [
+      [{ key: 'mod+k mod+k', bridge: true }, /must be native/],
+      [{ key: 'mod+shift+k', native: true, bridge: true }, /must have two parts/],
+      [{ key: 'mod+j mod+k', native: true, bridge: true }, /chord prefix/],
+      [{ key: 'ctrl+k ctrl+k', native: true, bridge: true }, /chord prefix/],
+      [{ key: 'mod+k mod+k', native: true, bridge: true, when: 'editorTextFocus' }, /cannot have a when clause/]
+    ]
+    // ctrl+k is the prefix on Windows and Linux but not on macOS, where it is ⌘K.
+    for (const [spec, message] of invalid) expect(() => resolveKeybinding('edit.toggleBookmark', spec, spec.key === 'ctrl+k ctrl+k' ? 'darwin' : 'win32'), spec.key).toThrow(message)
+    expect(resolveKeybinding('edit.commentLines', { key: 'mod+k mod+c', native: true }, 'win32')?.bridge).toBe(false)
+  })
+  it("list the bridge rules: Varia's own editor chords", () => {
+    for (const platform of platforms) {
+      expect(bridgeRules(platform).map(rule => rule.command), platform).toEqual(['edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith'])
+      expect(bridgeRules(platform).map(rule => rule.chords[1].split('+').at(-1)), platform).toEqual(['k', 'p', 'n', 'l', 'x', 's'])
+    }
   })
   it('apply platform overrides, null meaning unbound', () => {
     const spec = { key: 'mod+e', win: 'ctrl+shift+e', mac: null }
@@ -166,16 +188,20 @@ describe('default keybindings', () => {
     expect(defaultRules('win32')).toBe(defaultRules('win32'))
     expect(Object.isFrozen(defaultRules('darwin'))).toBe(true)
     const native = ['edit.find', 'edit.replace', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines']
+    const bookmarksAndSnippets = ['edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith']
+    const editing = ['edit.findNext', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
+    // macOS has ⌘G and F3 for Find Next, as Monaco does.
+    const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs']
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh',
-        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...display, ...output])
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...display, ...output])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
-      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.previous', ...native,
+      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.previous', ...native, ...macEditing,
       'preferences.options', ...display, ...output])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
     expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])
@@ -209,7 +235,8 @@ describe('default keybindings', () => {
     // SSMS's Save All took Ctrl+Shift+S from Save As, which keeps ⇧⌘S on macOS (where Save All is ⌥⌘S).
     const saveKeys: Readonly<Record<Platform, CommandId>> = { win32: 'file.saveAll', linux: 'file.saveAll', darwin: 'file.saveAs' }
     const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane' }
-    const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute' }, linux: { e: 'query.execute' }, darwin: {} }
+    // Go To Line is Ctrl+G in the editor; Make Uppercase and Lowercase need its text focused, which editorFocus alone is not.
+    const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine' }, linux: { e: 'query.execute', g: 'edit.goToLine' }, darwin: {} }
     for (const platform of platforms) {
       const primary = platform === 'darwin' ? 'metaKey' : 'ctrlKey'
       for (const character of 'abcdefghijklmnopqrstuvwxyz') for (const shiftKey of [false, true]) {

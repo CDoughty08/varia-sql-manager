@@ -3,6 +3,7 @@ import { contextRecord, type ContextKeys } from '../../../shared/commands/contex
 import type { Platform } from '../../../shared/commands/keybindings'
 import { isQueryDocument } from '../documents'
 import type { DocumentSnapshot } from '../services/documents'
+import type { BookmarkSnapshot } from '../editor/bookmarks'
 import type { EditorOptions } from '../services/editor-options'
 import type { PaneVisibility } from '../services/panes'
 import type { QuerySnapshot } from '../services/queries'
@@ -41,6 +42,11 @@ export interface ContextInputs {
   readonly connections: readonly Pick<LiveConnection, 'id' | 'lost'>[]
   readonly quickInputVisible: boolean
   readonly wordWrap: boolean
+  /** View White Space and line numbers in the query editor; without them, those keys are false. */
+  readonly whitespace?: boolean
+  readonly lineNumbers?: boolean
+  /** Bookmarks per open document (`BookmarkService`). */
+  readonly bookmarks?: Readonly<Record<string, number>>
   readonly backendStatus: BackendStatus | ''
   readonly panes?: PaneVisibility
   /** The Object Explorer selection's keys; without them, those keys are false or ''. */
@@ -63,6 +69,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   return contextRecord(inputs.platform, {
     ...focus, textInputFocus: focus.editorTextFocus || focus.inputFocus,
     quickInputVisible: inputs.quickInputVisible, backendStatus: inputs.backendStatus, backendReady: inputs.backendStatus === 'ready', editorWordWrap: inputs.wordWrap,
+    editorWhitespace: !!inputs.whitespace, editorLineNumbers: !!inputs.lineNumbers,
+    hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), multipleDocuments: documents.documents.length > 1, documentBusy: documents.busy,
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
@@ -85,6 +93,7 @@ export interface ContextKeyOptions {
   readonly results?: ExternalStore<Readonly<Record<string, true>>>
   /** Whether a Script As request is running (`scriptingRunning`). */
   readonly scripting?: ExternalStore<boolean>
+  readonly bookmarks?: ExternalStore<BookmarkSnapshot>
   /** Insert or overtype (`editorOvertype`). */
   readonly inputMode?: ExternalStore<InputModeSnapshot>
   /** File › Recent Files (`hasRecentFiles`). */
@@ -104,13 +113,13 @@ export class ContextKeyService implements Disposable {
   private cache?: { readonly inputs: readonly unknown[]; readonly keys: ContextKeys }
   private readonly unsubscribe: (() => void)[]
   constructor(private readonly options: ContextKeyOptions) {
-    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.scripting, options.inputMode, options.recentFiles, options.recovery].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
+    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
   }
   private inputs(focus?: FocusFacts): ContextInputs {
-    const { options } = this
+    const { options } = this, editor = options.editorOptions.getSnapshot()
     return {
       platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
-      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: options.editorOptions.getSnapshot().wordWrap, backendStatus: options.backend.getSnapshot().state.status,
+      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
       panes: options.panes?.getSnapshot(), explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,
       recoveryFiles: !!options.recovery?.getSnapshot().entries.length
@@ -119,7 +128,7 @@ export class ContextKeyService implements Disposable {
   /** Static and state keys, for enablement: focus keys are false or ''. Cached until a snapshot changes. */
   getState(): ContextKeys {
     const { options } = this
-    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.scripting?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot()]
+    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot()]
     if (this.cache?.inputs.every((value, index) => value === inputs[index])) return this.cache.keys
     const keys = computeContextKeys(this.inputs())
     this.cache = { inputs, keys }

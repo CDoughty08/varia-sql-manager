@@ -15,6 +15,10 @@ export const contextMenuIds = ['editor.context', 'explorer.context', 'documentTa
 export type ContextMenuId = typeof contextMenuIds[number]
 export const submenuIds = [
   'file.recent',
+  'edit.findReplace',
+  'edit.advanced',
+  'edit.bookmarks',
+  'edit.intellisense',
   'theme',
   'query.connection',
   ...scriptSubmenuIds
@@ -32,6 +36,10 @@ export const menuIds: readonly MenuId[] = [
   'file',
   'file.recent',
   'edit',
+  'edit.findReplace',
+  'edit.advanced',
+  'edit.bookmarks',
+  'edit.intellisense',
   'view',
   'theme',
   'query',
@@ -74,6 +82,12 @@ export type DynamicSubmenu = 'theme' | 'recentFiles'
 export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   // Visual Studio's File › Recent Files, before Exit; its items are the files (File › Open Recent File… runs each).
   'file.recent': { title: 'Recent Files', nativeId: 'file.recent', dynamic: 'recentFiles', placements: [{ menu: 'file', group: '7_recent', order: 1, mnemonic: 'f' }] },
+  // Edit's submenus in the order of the Visual Studio shell SSMS 22 runs on: Advanced comes before Bookmarks.
+  'edit.findReplace': { title: 'Find and Replace', nativeId: 'edit.findReplace', placements: [{ menu: 'edit', group: '3_find', order: 1, mnemonic: 'f' }] },
+  'edit.advanced': { title: 'Advanced', nativeId: 'edit.advanced', placements: [{ menu: 'edit', group: '4_more', order: 1, mnemonic: 'v' }] },
+  'edit.bookmarks': { title: 'Bookmarks', nativeId: 'edit.bookmarks', placements: [{ menu: 'edit', group: '4_more', order: 2, mnemonic: 'k' }] },
+  // List Members, Parameter Info and the other IntelliSense commands join the snippets here with the language service.
+  'edit.intellisense': { title: 'IntelliSense', nativeId: 'edit.intellisense', placements: [{ menu: 'edit', group: '4_more', order: 3, mnemonic: 'i' }] },
   theme: { title: 'Theme', nativeId: 'view.theme', dynamic: 'theme', placements: [{ menu: 'view', group: '3_theme', order: 1, mnemonic: 'h' }] },
   'query.connection': {
     title: 'Connection', nativeId: 'query.connection',

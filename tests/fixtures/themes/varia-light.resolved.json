@@ -117,6 +117,8 @@
     "editor.selectionBackground": "#add6ff",
     "editorLineNumber.foreground": "#525e72",
     "editorLineNumber.activeForeground": "#2f3a49",
+    "editorWhitespace.foreground": "#525e7280",
+    "editorBookmark.foreground": "#005fb8",
     "editorBracketHighlight.foreground1": "#0431fa",
     "editorBracketHighlight.foreground2": "#287a28",
     "editorBracketHighlight.foreground3": "#7b3814",

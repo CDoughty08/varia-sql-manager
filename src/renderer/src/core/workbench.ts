@@ -35,6 +35,9 @@ import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
 import { scriptingContribution } from '../contributions/scripting'
 import { settingsContribution } from '../contributions/settings'
+import { editingContribution } from '../contributions/editing'
+import { BookmarkService } from '../editor/bookmarks'
+import { EditorDialogs } from '../editor/go-to-line'
 import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
@@ -84,6 +87,10 @@ export interface Workbench extends Disposable {
   readonly recovery: RecoveryService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
+  /** Edit › Bookmarks: each open query's bookmarks, for this session. */
+  readonly bookmarks: BookmarkService
+  /** The query editor's dialogs (Go To Line). */
+  readonly editorDialogs: EditorDialogs
   /** The editor caret's Ln, Col and Ch and the line ending, for the IDE status bar. */
   readonly editorStatus: EditorStatusService
   /** Insert or overtype (the Insert key). */
@@ -131,6 +138,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
+  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
@@ -162,6 +170,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer: explorer.context,
     results: results.context,
     scripting: scripting.running,
+    bookmarks,
     inputMode,
     recentFiles,
     recovery,
@@ -206,6 +215,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     targets,
     editorOptions,
+    bookmarks,
+    editorDialogs,
     editorStatus,
     inputMode,
     panes,
@@ -240,6 +251,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       scripting.dispose()
       connections.dispose()
       editorOptions.dispose()
+      bookmarks.dispose()
+      editorDialogs.dispose()
       editorStatus.dispose()
       inputMode.dispose()
       panes.dispose()
@@ -253,6 +266,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     queryContribution(workbench, api),
     filesContribution(workbench, api),
     editorContribution(workbench),
+    editingContribution(workbench, monaco),
     editContribution(workbench, api),
     windowContribution(workbench, api),
     menusContribution(workbench),

@@ -279,8 +279,9 @@ try {
   await expect(page.locator('#query-database')).toHaveValue('AppData')
   await expect(textbox()).toBeFocused()
 
-  // 9. Ctrl+K belongs to the editor: Ctrl+K Ctrl+U uncomments instead of opening Change Database.
-  await typeSql('-- x')
+  // 9. Ctrl+K belongs to the editor: Ctrl+K Ctrl+U uncomments instead of opening Change Database. SSMS comments with --
+  // and no space, and Uncomment Selection removes only the --.
+  await typeSql('--x')
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Control+K')
   await page.keyboard.press('Control+U')

@@ -26,6 +26,10 @@ import { browserTimers } from '../../src/renderer/src/core/timers'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
 import { outputContribution } from '../../src/renderer/src/contributions/output'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
+import { editingContribution } from '../../src/renderer/src/contributions/editing'
+import { BookmarkService } from '../../src/renderer/src/editor/bookmarks'
+import { EditorDialogs } from '../../src/renderer/src/editor/go-to-line'
+import type { BridgeMonaco } from '../../src/renderer/src/editor/keybinding-bridge'
 import { editContribution } from '../../src/renderer/src/contributions/edit'
 import { windowContribution } from '../../src/renderer/src/contributions/window'
 import { MenuService } from '../../src/renderer/src/menus/MenuService'
@@ -240,6 +244,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
   settings.subscribe(() => documents.refreshOptions())
   const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
+  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
+  // Monaco's command and keybinding registries, for the editor chords the bridge registers.
+  const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
   const explorer = new ExplorerService({ api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
@@ -276,6 +283,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     explorer: explorer.context,
     results: results.context,
     scripting: scripting.running,
+    bookmarks,
     recentFiles,
     recovery,
     activeElement
@@ -305,6 +313,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     editorOptions,
+    bookmarks,
+    editorDialogs,
     inputMode,
     connections,
     backend,
@@ -327,6 +337,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     queryContribution(workbench, api),
     filesContribution(workbench, api),
     editorContribution(workbench),
+    editingContribution(workbench, monaco),
     editContribution(workbench, api),
     windowContribution(workbench, api),
     menusContribution(workbench),
@@ -363,6 +374,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     explorer.dispose()
     databaseList.dispose()
     scripting.dispose()
+    bookmarks.dispose()
+    editorDialogs.dispose()
     settings.dispose()
     documents.dispose()
     backend.dispose()
@@ -373,6 +386,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    bookmarks,
+    editorDialogs,
+    monaco,
     panes,
     explorer,
     databaseList,

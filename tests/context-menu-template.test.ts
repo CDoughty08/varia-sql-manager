@@ -32,6 +32,8 @@ describe('native context menu template', () => {
   it('shows the catalogue\'s labels and keys on macOS, with Electron roles for the clipboard and keys that never register', () => {
     const editor = contextMenuTemplate(request('editor.context', { disabled: ['query.execute', 'edit.cut'] }), 'darwin', () => {})
     expect(describeTemplate(editor)).toEqual([
+      // SSMS's query window menu starts with the snippet pickers; their chords cannot be accelerators.
+      'Insert Snippet… (click)', 'Surround With… (click)', '---',
       'Connection >', '  Connect… (click)', '  Disconnect (click)', '  Disconnect All Queries (click)', '  Reconnect… (click)', '  ---', '  Change Connection… (click)', '---',
       'Execute (click, F5, disabled)', 'Cancel Executing Query (click)', '---', 'Cut (role cut, Cmd+X, disabled)', 'Copy (role copy, Cmd+C)', 'Paste (role paste, Cmd+V)', '---',
       'Command Palette… (click, Cmd+Shift+P)'

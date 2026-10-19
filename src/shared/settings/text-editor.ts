@@ -16,7 +16,11 @@ export const textEditorSettings = [
   },
   {
     key: 'textEditor.sql.wordWrap', page: 'textEditor.transactSql.general', group: 'Settings', label: 'Word wrap', type: 'boolean', default: false,
-    keywords: ['wrap', 'alt+z'], description: 'Wraps long lines at the edge of the editor instead of scrolling. View › Word Wrap changes it too (Alt+Z on Windows and Linux).'
+    keywords: ['wrap', 'alt+z'], description: 'Wraps long lines at the edge of the editor instead of scrolling. Edit › Advanced › Word Wrap changes it too (Alt+Z on Windows and Linux).'
+  },
+  {
+    key: 'textEditor.sql.viewWhiteSpace', page: 'textEditor.transactSql.general', group: 'Display', label: 'View white space', type: 'boolean', default: false, hidden: true,
+    keywords: ['whitespace', 'tabs', 'spaces'], description: 'Shows spaces as dots and tabs as arrows. Edit › Advanced › View White Space changes it; as in SSMS, Options has no row for it.'
   },
   {
     key: 'textEditor.sql.lineNumbers', page: 'textEditor.transactSql.general', group: 'Display', label: 'Line numbers', type: 'boolean', default: true,

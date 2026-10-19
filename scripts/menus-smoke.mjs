@@ -470,13 +470,13 @@ try {
   console.log('Menus checks: Ctrl+R toggles the results pane and never reloads.')
 
   // 7. The editor's context menu replaces Monaco's: a right-click shows the workbench's items for the query, Copy copies
-  // the selection, and Shift+F10 or the context-menu key opens it below the caret with its first item focused.
+  // the selection, and Shift+F10 or the context-menu key opens it below the caret with its first item (SSMS's Insert Snippet…) focused.
   await typeSql('SELECT 7 AS seven')
   const selectToken = page.locator('.monaco-editor .view-lines').getByText('SELECT', { exact: true }).first()
   await selectToken.click({ button: 'right', force: true })
   const editorMenu = menu('Query editor')
   await expect(editorMenu).toBeVisible()
-  expect(await editorMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Connection', 'Execute', 'Cancel Executing Query', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
+  expect(await editorMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Insert Snippet…', 'Surround With…', 'Connection', 'Execute', 'Cancel Executing Query', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
   // The query is not connected: Execute connects it first; nothing is running to cancel.
   await expect(editorMenu.getByRole('menuitem', { name: 'Execute', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
   await expect(editorMenu.getByRole('menuitem', { name: 'Cancel Executing Query', exact: true })).toHaveAttribute('aria-disabled', 'true')
@@ -493,7 +493,7 @@ try {
   await expect(textbox()).toBeFocused()
   await page.keyboard.press('End')
   await page.keyboard.press('Shift+F10')
-  await expect(editorMenu.getByRole('menuitem', { name: 'Connection', exact: true })).toBeFocused()
+  await expect(editorMenu.getByRole('menuitem', { name: 'Insert Snippet…', exact: true })).toBeFocused()
   await expect(page.locator('.menu-layer')).toHaveAttribute('data-mnemonics', 'visible')
   const caret = await page.locator('.monaco-editor .cursor').first().boundingBox(), below = await editorMenu.boundingBox()
   expect(below.y).toBeGreaterThanOrEqual(caret.y + caret.height - 1)
@@ -990,7 +990,7 @@ try {
     ['Window by mouse', fromEditor(() => tap(menubarItem('Window'))), textbox()],
     ['the editor by mouse', () => rightClick(page.locator('.monaco-editor .view-lines').getByText('SELECT', { exact: true }).first()), textbox()],
     ['the editor by Shift+F10', fromEditor(() => page.keyboard.press('Shift+F10')), textbox()],
-    ['the editor\'s Connection by the context-menu key', fromEditor(async () => { await page.keyboard.press('ContextMenu'); await page.keyboard.press('ArrowRight'); await expect(menu('Connection')).toBeVisible() }), textbox()],
+    ['the editor\'s Connection by the context-menu key', fromEditor(async () => { for (const key of ['ContextMenu', 'ArrowDown', 'ArrowDown', 'ArrowRight']) await page.keyboard.press(key); await expect(menu('Connection')).toBeVisible() }), textbox()],
     ['a query tab by mouse', () => rightClick(firstTab.locator('.tab-name')), firstTab.getByRole('tab')],
     ['a query tab by Shift+F10', async () => { await firstTab.getByRole('tab').focus(); await page.keyboard.press('Shift+F10') }, firstTab.getByRole('tab')],
     ['a panel tab by mouse', () => rightClick(page.locator('[data-pane-tab="explorer"]')), dockTab('explorer')],

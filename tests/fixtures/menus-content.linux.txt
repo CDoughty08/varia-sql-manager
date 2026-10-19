@@ -26,12 +26,40 @@ Edit
   &Delete  Delete  ++++
   Select &All  Ctrl+A  ++++
   ---
-  &Find  Ctrl+F  ++++
-  R&eplace  Ctrl+H  ++++
+  &Find and Replace >
+    &Quick Find  Ctrl+F  ++++
+    Quick &Replace  Ctrl+H  ++++
+    ---
+    Find &Next  F3  ++++
+    Find &Previous  Shift+F3  ++++
+  &Go To Line…  Ctrl+G  ++++
   ---
-  Toggle &Line Comment  Ctrl+/  ++++
-  Co&mment Selection  Ctrl+K Ctrl+C  ++++
-  U&ncomment Selection  Ctrl+K Ctrl+U  ++++
+  Ad&vanced >
+    Make &Uppercase  Ctrl+Shift+U  ++++
+    Make &Lowercase  Ctrl+Shift+L  ++++
+    ---
+    View W&hite Space [ ]  ++++
+    &Word Wrap  Alt+Z [ ]  ++++
+    ---
+    Co&mment Selection  Ctrl+K Ctrl+C  ++++
+    U&ncomment Selection  Ctrl+K Ctrl+U  ++++
+    &Toggle Line Comment  Ctrl+/  ++++
+    ---
+    &Increase Line Indent  ++++
+    &Decrease Line Indent  ++++
+  Boo&kmarks >
+    &Toggle Bookmark  Ctrl+K Ctrl+K  ++++
+    ---
+    &Previous Bookmark  Ctrl+K Ctrl+P  ----
+    &Next Bookmark  Ctrl+K Ctrl+N  ----
+    ---
+    &Clear Bookmarks  Ctrl+K Ctrl+L  ----
+    ---
+    P&revious Bookmark In Document  ----
+    Ne&xt Bookmark In Document  ----
+  &IntelliSense >
+    &Insert Snippet…  Ctrl+K Ctrl+X  +++-
+    &Surround With…  Ctrl+K Ctrl+S  +++-
 View
   &Command Palette…  Ctrl+Shift+P  ++++
   &Go to Query…  Ctrl+P  ++++
@@ -39,8 +67,6 @@ View
   &Save Layout…  ++++
   &Load Layout…  ++++
   &Reset Layout  ++++
-  ---
-  &Word Wrap  Alt+Z [ ]  ++++
   ---
   T&heme >
     &Color Theme…  ++++

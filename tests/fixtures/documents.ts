@@ -34,6 +34,10 @@ export class TestModel {
     return this.getValue().slice(this.offset(range.startLineNumber, range.startColumn), this.offset(range.endLineNumber, range.endColumn))
   }
   getLineCount(): number { return this.getValue().split('\n').length }
+  getLineContent(line: number): string { return this.getValue().split('\n')[line - 1] }
+  getValueLengthInRange(range: IRange): number { return this.getValueInRange(range).length }
+  /** The indentation DocumentService set, as Monaco's resolved options. */
+  getOptions() { return { tabSize: 4, indentSize: 4, insertSpaces: false, ...this.options } }
   getLineMaxColumn(line: number): number { return this.getValue().split('\n')[line - 1].length + 1 }
   /** Monaco's applyEdits: a new version, but no undo stop. */
   applyEdits(edits: { range: IRange; text: string }[]): void {
