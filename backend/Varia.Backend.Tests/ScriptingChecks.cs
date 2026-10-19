@@ -46,7 +46,7 @@ internal static class ScriptingChecks
         check(rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))), "every row names an Object Explorer kind and subtype");
         check(Catalog.Verbs.Select(verb => verb.Verb).SequenceEqual(Enum.GetValues<ScriptVerb>()) && Catalog.Verb("dropAndCreate") is { Name: "DROP And CREATE", Class: VerbClass.Ddl }
             && Catalog.Verb("execute")?.Class == VerbClass.Execute && Catalog.Verb("Create") is null, "the ten verbs map onto ScriptVerb in order");
-        check(Catalog.ErrorCodes.Count() == 14 && Catalog.Retryable("BLOCKED") && !Catalog.Retryable("NOT_FOUND") && Catalog.Limit("maxScriptChars") == 4_000_000
+        check(Catalog.ErrorCodes.Count() == 16 && Catalog.Retryable("AUTH_KERBEROS") && Catalog.Retryable("BLOCKED") && !Catalog.Retryable("NOT_FOUND") && Catalog.Limit("maxScriptChars") == 4_000_000
             && Catalog.Limit("maxDefinitionBytes") == ScriptPreflight.MaxDefinitionBytes && Catalog.Limit("budgetMs") == (long)new ScriptingServiceOptions().Budget.TotalMilliseconds
             && Catalog.Limit("gatePerConnection") == new ScriptingServiceOptions().PerConnection && Catalog.Limit("gateTotal") == new ScriptingServiceOptions().Total
             && Catalog.Limit("registered") == new ScriptingServiceOptions().MaxRegistered, "the backend's limits are the catalogue's");
@@ -470,7 +470,7 @@ internal static class ScriptingChecks
         check(Classify(new ScriptRefusedException("it depends on an object in another database.")) is { Code: "SMO_ERROR", Message: "Could not script dbo.Orders: it depends on an object in another database." },
             "a script Varia refuses is a value that says why");
         var messages = Catalog.ErrorCodes.Select(code => ScriptingErrors.Create(Catalog, code, subject with { Display = new string('x', 400) }, new string('d', 5000), 1)).ToList();
-        check(messages.All(error => error.Message.Length <= ScriptingErrors.MaxMessage && error.Retryable == Catalog.Retryable(error.Code)) && messages.Count == 14,
+        check(messages.All(error => error.Message.Length <= ScriptingErrors.MaxMessage && error.Retryable == Catalog.Retryable(error.Code)) && messages.Count == 16,
             "every message stays within 2,048 characters and carries the catalogue's retryability");
         check(ScriptingErrors.Display("a\u202eb\u0007\uD800") == "a⟨U+202E⟩b⟨U+0007⟩⟨U+D800⟩" && ScriptingErrors.Display(new string('x', 500)).Length == 400
             && ScriptingErrors.Display("😀") == "😀" && ScriptingErrors.Detail("a\r\nb\tc", 100) == "a b c", "names in messages show hidden characters as markers and stay within 400 characters");
@@ -583,12 +583,10 @@ internal static class ScriptingChecks
             "a connection that cannot open is an error value: " + unreachable.Error?.Code);
         using (var expired = new ScriptingService(new FakeHost { Opening = ConnectionFailureChecks.ExpiredTicket }))
         {
-            try { await expired.ScriptAsync(Args(), CancellationToken.None); check(false, "a connection whose Kerberos ticket expired scripted"); }
-            catch (RequestException error)
-            {
-                check(error.Code == "AUTH_KERBEROS" && error.Message == ConnectionFailures.Messages.Expired && SpinWait.SpinUntil(() => expired.ActiveJobs == 0 && expired.RunningCount == 0, 2000),
-                    "a scripting connection whose Kerberos ticket expired answers AUTH_KERBEROS with the kinit advice, as NOT_CONNECTED answers");
-            }
+            var refused = await expired.ScriptAsync(Args(), CancellationToken.None);
+            check(refused.Error is { Code: "AUTH_KERBEROS", Retryable: true } && refused.Error.Message == "Could not script dbo.Orders: " + ConnectionFailures.Messages.Expired
+                && refused.Text is null && refused.Database == "Sales" && SpinWait.SpinUntil(() => expired.ActiveJobs == 0 && expired.RunningCount == 0, 2000),
+                "a scripting connection whose Kerberos ticket expired is the job's retryable AUTH_KERBEROS value with the kinit advice, as Object Explorer's node shows it");
         }
         var cloud = await new ScriptingService(new FakeHost(5)).ScriptAsync(Args(new ObjectRefDto("login", Name: "sa")), CancellationToken.None);
         check(cloud.Error?.Code == "NOT_SUPPORTED" && cloud.Database == "master", "cloud editions refuse server-level objects");

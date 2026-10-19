@@ -197,6 +197,8 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `UNREPRESENTABLE` | No |
 | `SMO_ERROR` | Yes |
 | `SQL_ERROR` | Yes |
+| `AUTH_KERBEROS` | Yes |
+| `AUTH_UNSUPPORTED` | Yes |
 
 ## Limits
 

@@ -757,8 +757,8 @@ contacting the KDC) and answers `AUTH_UNSUPPORTED` when the GSSAPI library is mi
 On Windows, SSPI failures keep SqlClient's message as `SQL_ERROR`. A ticket can also expire while connected, so every later open
 from the connection maps a token failure the same way, without `details`: a query tab's session (`query.execute` answers
 `AUTH_KERBEROS`, as it answers `SESSION_LOST`, and the next execution opens a new session), `databases.list`,
-`tables.columns` and `scripting.script` (an error response), and `explorer.children` (a retryable `AUTH_KERBEROS` value on the
-node). Connect's settings, which those pools derive from, set `Pool Blocking Period=NeverBlock`: SqlClient's default blocks
+`tables.columns` (an error response), and `explorer.children` and `scripting.script` (a retryable `AUTH_KERBEROS` value: on the
+node, and as Script As' `result.error`, "Could not script dbo.Orders: " and the advice). Connect's settings, which those pools derive from, set `Pool Blocking Period=NeverBlock`: SqlClient's default blocks
 a pool after a failed open and rethrows that failure for 5 to 60 seconds without trying, so a Connect or Retry after
 `kinit` would show the stale failure.
 

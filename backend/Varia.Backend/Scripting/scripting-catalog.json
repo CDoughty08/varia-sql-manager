@@ -13,7 +13,9 @@
     {"code":"CONNECTION_LOST","retryable":true},
     {"code":"UNREPRESENTABLE","retryable":false},
     {"code":"SMO_ERROR","retryable":true},
-    {"code":"SQL_ERROR","retryable":true}
+    {"code":"SQL_ERROR","retryable":true},
+    {"code":"AUTH_KERBEROS","retryable":true},
+    {"code":"AUTH_UNSUPPORTED","retryable":true}
   ],
   "limits": {"budgetMs":55000,"cancelIds":64,"fileNameChars":200,"gatePerConnection":2,"gateTotal":4,"lockTimeoutMs":10000,"maxColumns":30000,"maxDefinitionBytes":8000000,"maxParameters":2100,"maxScriptChars":4000000,"messageChars":2048,"noticeMs":4000,"preflightTimeoutS":30,"prefsBytes":16384,"registered":256,"rendererJobs":4,"requestMs":60000,"statementTimeoutS":30,"statusDelayMs":300,"tombstoneMs":60000,"tombstones":256,"warningChars":512,"warningNoticeMs":8000,"warnings":8},
   "options": [
