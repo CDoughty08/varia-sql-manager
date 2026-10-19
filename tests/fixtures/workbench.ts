@@ -143,6 +143,8 @@ export function manualTimers() {
 export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; packaged?: boolean; settings?: Partial<SettingsValues> } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture(settingsDocumentOptions(() => settings.getSnapshot().values))
+  /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
+  const sessionStates = new Map<string, number | 'unchecked'>()
   const api = {
     ...doc.api,
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
@@ -158,6 +160,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
     // Nothing to ask unless a test says otherwise; answers Cancel when asked.
     confirmSessions: vi.fn<VariaApi['confirmSessions']>(async () => ({ ok: true, value: 'cancel' })),
+    querySessionState: vi.fn<VariaApi['querySessionState']>(async sessionId => {
+      const state = sessionStates.get(sessionId)
+      return state === undefined ? { ok: false, error: 'This query has no open SQL session.', code: 'SESSION_CLOSED' } : { ok: true, value: state === 'unchecked' ? { transactionCount: 0, checked: false } : { transactionCount: state, checked: true } }
+    }),
     databases: vi.fn<VariaApi['databases']>(async () => ({ ok: true, value: [] })),
     previewTheme: vi.fn<VariaApi['previewTheme']>(async () => ({ ok: true, value: null })),
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
@@ -328,7 +334,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     theme,
     startQuery,
     connect,
-    dispose
+    dispose,
+    sessionStates
   }
 }
 /** The contract name sibling tests use: the workbench fixture, with `settings` seeding the stored values. */

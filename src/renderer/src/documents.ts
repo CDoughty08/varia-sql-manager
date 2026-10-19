@@ -8,8 +8,9 @@ export interface QueryDocument {
   readonly connectionId?: string
   readonly database: string
   readonly file?: SqlFile
-  /** Reconnect moved this query to a new session; its next execution says so before its own messages. */
-  readonly sessionNotice?: boolean
+  /** The query's session ended without the user ending it (a Reconnect after the backend restarted, or a session found
+   *  lost); its next execution says so before its own messages. */
+  readonly sessionNotice?: SessionNotice
   /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes. */
   readonly kind?: DocumentKind
 }
@@ -17,6 +18,8 @@ export interface QueryDocument {
 // Presentation projection; results are owned by ResultsService.
 export type QueryTab = QueryDocument
 
+/** Why a query's next execution opens a new session: the backend restarted, or its session was lost. */
+export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): DocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'

@@ -45,13 +45,16 @@ internal sealed record MessageEntry(string Text, string Kind);
 /// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:". Status is completed, completedWithErrors
 /// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error
 /// stopped execution: before the first batch, with stopOnError, or by closing the session), cancelled, or timedOut.
-/// Spid is the session's, present while it is still open after the script; TransactionCount and Login are the session probed
-/// after the script (@@TRANCOUNT, SUSER_SNAME()), absent when the session was lost or never opened, or the probe read nothing.</summary>
+/// Spid (SqlConnection.ServerProcessId) and Login (SUSER_SNAME(), read with the SET prologue) are the session's, read once when
+/// it opened; both are present while it is still open after the script.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
-    int? TransactionCount = null, int? Spid = null, string? Login = null);
-/// <summary>A query session as probed after a script.</summary>
-internal sealed record SessionProbe(int TransactionCount, string? Login);
+    int? Spid = null, string? Login = null);
+internal sealed record SessionStateArgs(string SessionId);
+/// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
+/// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
+/// then 0 and the session may hold a transaction.</summary>
+internal sealed record SessionState(int TransactionCount, bool Checked);
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);

@@ -111,9 +111,10 @@ describe('IPC validation', () => {
       database: 'master', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, seq: 1 }, completedAt: '2026-10-09T12:34:56.1234567+02:00'
     }
     expect(queryResultSchema.safeParse(summary).success).toBe(true)
-    // The session probe: @@TRANCOUNT, a smallint @@SPID, and a login name.
-    expect(queryResultSchema.safeParse({ ...summary, transactionCount: 2, spid: 32767, login: 'x'.repeat(128) }).success).toBe(true)
-    for (const patch of [{ transactionCount: -1 }, { transactionCount: 1.5 }, { spid: 32768 }, { login: 'x'.repeat(129) }, { login: 1 }])
+    // The session's smallint @@SPID and login name, read when it opened. No transaction count: the session is not asked
+    // after a script, only when it is about to end (query.session.state).
+    expect(queryResultSchema.safeParse({ ...summary, spid: 32767, login: 'x'.repeat(128) }).success).toBe(true)
+    for (const patch of [{ transactionCount: 0 }, { spid: 32768 }, { spid: 1.5 }, { login: 'x'.repeat(129) }, { login: 1 }])
       expect(queryResultSchema.safeParse({ ...summary, ...patch }).success, JSON.stringify(patch)).toBe(false)
     // The budget's seq orders it with the results.memory events; main adds the generation.
     for (const patch of [{ completedAt: undefined }, { completedAt: 'x'.repeat(41) }, { messages: ['(1 row affected)'] }, { budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 } },
@@ -126,6 +127,13 @@ describe('IPC validation', () => {
     for (const params of [{ sessionId, transaction: 'save' }, { sessionId, transaction: null }, { sessionId, commit: true }]) expect(() => validateRequest('query.session.close', params)).toThrow()
     expect(deadlineFor('query.session.close', { sessionId, transaction: 'commit' }).deadlineMs).toBe(60_000)
     expect(deadlineFor('query.session.close', { sessionId, transaction: 'rollback' }).deadlineMs).toBe(10_000)
+  })
+  it('reads a query session\'s transaction with only its id, on the control lane, within a short deadline', () => {
+    const sessionId = crypto.randomUUID()
+    expect(validateRequest('query.session.state', { sessionId })).toEqual({ sessionId })
+    for (const params of [{}, { sessionId: 'tab-1' }, { sessionId, transaction: 'commit' }, { sessionId: 'x'.repeat(4096) }]) expect(() => validateRequest('query.session.state', params)).toThrow()
+    expect(methodPolicies['query.session.state']).toMatchObject({ kind: 'unary', lane: 'control' })
+    expect(deadlineFor('query.session.state', { sessionId })).toEqual({ deadlineMs: 5000, backstopMs: 10_000 })
   })
   it('validates copy and save requests strictly', () => {
     const copy = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, headers: true, parts: [{ rows: [[0, 9], [20, Number.MAX_SAFE_INTEGER]], columns: [[0, 0], [2, 4095]] }] }

@@ -16,8 +16,10 @@
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
-// A tab's session counts BEGIN TRAN, COMMIT and ROLLBACK in its scripts, so every summary carries the probe the real
-// backend adds (transactionCount, spid, login); query.session.close commits or rolls back what is open.
+// A tab's session counts BEGIN TRAN, COMMIT and ROLLBACK in its scripts, and notes SET NOEXEC, PARSEONLY, FMTONLY and
+// SHOWPLAN_* ON and OFF: every summary carries its spid and login, query.session.state answers its @@TRANCOUNT (unchecked
+// while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
+// commits or rolls back what is open.
 import { appendFileSync, existsSync, rmSync } from 'node:fs'
 import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -182,20 +184,22 @@ let logged = Promise.resolve()
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const workbenchConnections = new Map()
 const waitingScripts = new Map()
-// Each tab's session: its SPID and open transaction count, until query.session.close or its connection's disconnect.
+// Each tab's session: its SPID, open transaction count and compile-only options, until query.session.close or its
+// connection's disconnect.
 const sessions = new Map()
 let nextSpid = 51
 /** Applies a script's BEGIN TRAN, COMMIT and ROLLBACK to its session, as SQL Server would count them in @@TRANCOUNT. */
 function runInSession({ sessionId, connectionId, sql }) {
-  const session = sessions.get(sessionId) ?? { spid: nextSpid++, connectionId, transactions: 0 }
+  const session = sessions.get(sessionId) ?? { spid: nextSpid++, connectionId, transactions: 0, compileOnly: new Set() }
   sessions.set(sessionId, session)
+  for (const [, option, value] of sql.matchAll(/\bSET\s+(NOEXEC|PARSEONLY|FMTONLY|SHOWPLAN_\w+)\s+(ON|OFF)\b/gi)) session.compileOnly[value.toUpperCase() === 'ON' ? 'add' : 'delete'](option.toUpperCase())
   for (const [statement] of sql.matchAll(/\b(BEGIN\s+TRAN(?:SACTION)?|COMMIT(?:\s+TRAN(?:SACTION)?)?|ROLLBACK(?:\s+TRAN(?:SACTION)?)?)\b/gi)) {
     const verb = statement.slice(0, 1).toUpperCase()
     session.transactions = verb === 'B' ? session.transactions + 1 : verb === 'C' ? Math.max(0, session.transactions - 1) : 0
   }
 }
-/** The session probe SqlService adds to every summary. */
-const probe = sessionId => { const session = sessions.get(sessionId); return session ? { transactionCount: session.transactions, spid: session.spid, login: 'fake' } : {} }
+/** The session's SPID and login, which SqlService adds to every summary while the session is open. */
+const probe = sessionId => { const session = sessions.get(sessionId); return session ? { spid: session.spid, login: 'fake' } : {} }
 const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
@@ -490,6 +494,12 @@ async function workbench(id, method, params, credit) {
         return fail(id, 'SQL_ERROR', 'The transaction was not committed, and the query stays open. Msg 3930, Level 16, State 1\nThe current transaction cannot be committed.')
       }
       return respond(id, { closed: sessions.delete(params.sessionId) })
+    }
+    case 'query.session.state': {
+      const session = sessions.get(params.sessionId)
+      if (!session) return fail(id, 'SESSION_CLOSED', 'This query has no open SQL session.')
+      if ([...waitingScripts.values()].some(script => script.sessionId === params.sessionId)) return fail(id, 'SESSION_BUSY', 'A query is running in this tab.')
+      return respond(id, session.compileOnly.size ? { transactionCount: 0, checked: false } : { transactionCount: session.transactions, checked: true })
     }
     case 'query.cancel': {
       const script = waitingScripts.get(params.queryId)

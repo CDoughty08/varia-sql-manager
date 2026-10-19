@@ -22,6 +22,7 @@ export const sentences = {
   closing: 'The application is closing.',
   reloaded: 'The workbench was reloaded.',
   connectionLost: 'This connection was lost when the SQL backend restarted. Reconnect to continue; its sessions, temporary tables, and open transactions are gone.',
+  sessionEnded: 'The SQL session ended with the SQL backend, so SQL Server rolled back its transaction.',
   resultUnavailable: 'These results are no longer available because the SQL backend restarted.',
   unavailable: 'The SQL backend is not running. Use Restart SQL Backend from the command palette.',
   crashLoop: 'The SQL backend stopped repeatedly and was not restarted again.',

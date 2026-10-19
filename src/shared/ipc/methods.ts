@@ -39,6 +39,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'query.cancel': control,
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
   'query.session.close': { ...control, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 10_000 },
+  // One SELECT @@TRANCOUNT in an idle session (a busy one answers at once); a prompt waits on it, so it is short.
+  'query.session.state': { ...control, deadlineMs: 5000 },
   // Pages arrive as DATA frames within the stream's credit; the RESPONSE ends the stream.
   'results.read': { kind: 'stream', lane: 'results', deadlineMs: 60_000 },
   'results.close': control,

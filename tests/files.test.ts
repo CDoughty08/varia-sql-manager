@@ -22,7 +22,7 @@ function fixture() {
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>()
   }
   // Nothing to ask about unless a test says otherwise: every session ends plainly.
-  const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false), mayHaveTransaction: vi.fn<(id: string) => boolean>(() => false), confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map()) }
+  const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false), mayHaveTransaction: vi.fn<(id: string) => Promise<boolean>>(async () => false), confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map()) }
   const files = new FileService(doc.documents, queries, api), commands = new CommandService()
   // Focus is in Object Explorer when `explorer.panel` says so; its selection is `explorer.target`.
   const explorer: { panel: '' | 'explorer'; target?: { connectionId: string; database?: string } } = { panel: '' }
@@ -187,7 +187,7 @@ describe('file commands', () => {
     // Both finish while the prompt about open.sql is open: late.sql with a transaction nobody was asked about.
     queries.confirmSessions.mockImplementationOnce(async () => {
       running.clear()
-      queries.mayHaveTransaction.mockImplementation(id => id === late.id || id === open.id)
+      queries.mayHaveTransaction.mockImplementation(async id => id === late.id || id === open.id)
       return new Map([[open.id, 'commit']])
     })
     await commands.run('file.closeAll')
@@ -195,6 +195,8 @@ describe('file commands', () => {
     expect(api.closeQuerySession.mock.calls).toEqual([[first.id], [open.id, 'commit'], [clean.id]])
     expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([late.id])
     expect(files.getSnapshot().error).toBe('1 query finished with an open transaction while this ran and stayed open; run it again to be asked about it.')
+    // Its session was read once it finished (only the queries the prompt did not cover are read again).
+    expect(queries.mayHaveTransaction.mock.calls).toEqual([[late.id], [clean.id]])
   })
   it('saves a copy to a file the user picks without opening it, and saves nothing on Cancel', async () => {
     const { documents, api, files } = fixture()
@@ -348,7 +350,7 @@ describe('file commands', () => {
     expect(flush).not.toHaveBeenCalled()
     expect(api.closeWindow).not.toHaveBeenCalled()
     expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
-    // Commit All: each session commits in turn before the window closes; one that fails keeps the window open.
+    // Yes: each session commits in turn before the window closes; one that fails keeps the window open.
     queries.confirmSessions.mockImplementation(async () => new Map([[first.id, 'commit'], [second.id, 'commit']]))
     api.closeQuerySession.mockResolvedValueOnce({ ok: true, value: { closed: true } }).mockResolvedValueOnce({ ok: false, error: 'The transaction was not committed, and the query stays open.' })
     await files.closeWindow(flush)

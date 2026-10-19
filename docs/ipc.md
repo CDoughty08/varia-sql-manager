@@ -199,6 +199,7 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
+| `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -267,8 +268,17 @@ lost.
   Messages gets "Batch {b} raised an error; execution continued with the next batch." ("Batch {b}, repetition {k},
   raised an error; execution continued with the next repetition." or "… next batch." for `GO n`) when any batch remains.
   SQL Server decides how much of a batch runs after an error (most errors end only their statement). Severity 17–19
-  errors do not stop the batch on the server either, but SqlClient raises them as an exception, usually once it has read
-  the rest of the batch: result sets and messages after the error in that batch may be missing, or listed before it.
+  errors do not stop the batch on the server either, but SqlClient raises them as exceptions. After the batch's first
+  result set, SqlClient raises one where SQL Server sent it and keeps the reader, so the batch's later result sets and
+  messages follow it in order, as in SSMS; one raised partway through a result set's rows (a resource error such as
+  701) ends that set as `incomplete` with the rows read so far (a live check raises it through a test hook, since no
+  statement raises one there on demand). Before the batch's first result set it cannot: SqlClient reads the rest of
+  the batch inside `ExecuteReader` (SqlClient 7.1.1, seen with a minimal live probe), discarding the batch's later
+  result sets (their row counts still appear) and delivering its later messages, and only then raises the error, so
+  those messages are listed before it. SQL Server ran the whole batch either way. `FireInfoMessageEventOnUserErrors`
+  routes only severity 16 and below, and no SqlClient switch changes this; recovering those result sets would take a
+  fork of SqlClient's TDS reader, so it is a known difference from SSMS, pinned by a live check that fails if a
+  SqlClient update changes it.
   With `stopOnError: true` (for SQLCMD's `:on error exit`), the first batch that raised an error ends the script
   instead. Nothing runs after a cancel, the script's deadline, an error of severity 20 or more, or any failure that
   closes the session.
@@ -282,29 +292,33 @@ lost.
 | `timedOut` | `timeoutSeconds` passed, or main's backstop cancelled the request | "Query timed out." |
 
 `completedBatches` counts the batch executions that finished, including those that raised errors (a batch whose output a
-severity 17–19 error cut short counts too); with `stopOnError`, the batch that stopped the script is not counted.
+severity 17–19 error raised before its first result set cut short counts too); with `stopOnError`, the batch that
+stopped the script is not counted.
 Validation errors and a missing, busy or invalid session or connection use the error envelope instead of a summary, and
 nothing runs.
 
-**Session probe.** After every script, in the same `finally` path and while it still holds the session, the backend runs
-`SELECT @@TRANCOUNT, SUSER_SNAME();` on the session (its own 5 s timeout, no token: the script's may already be
-cancelled) and returns `transactionCount` and `login` (≤ 128 characters; an `EXECUTE AS LOGIN` in force shows the
-impersonated login) with the summary, and `spid` (`SqlConnection.ServerProcessId`, no round trip) whenever the session
-is still open. All three are absent when the session was lost or never opened. A probe that reads nothing (no row under
-`SET NOEXEC`, `PARSEONLY` or `FMTONLY ON`, a plan under `SET SHOWPLAN_XML`, `_TEXT` or `_ALL ON`, or its timeout)
-leaves `spid` alone: the renderer then keeps what it knew of that session (same SPID) and marks it `unchecked`, so its
-query is asked about as one that may hold a transaction. `elapsedMs` stops before the probe. A cancel does not roll
-back, so a cancelled script's open transaction is still reported; an error that dooms a transaction (`XACT_ABORT`) ends
-it by the batch's end (3998), and the probe says 0. The renderer keeps the count per tab for the connection it ran on;
-moving the query, a lost connection, or a session that ended (or was found lost) clears it. The status bar shows
-`login (spid)`, as SSMS does.
+**Session identity.** When a session opens, the SET prologue and `SELECT SUSER_SNAME();` go in one command, so opening a
+session costs no extra round trip; `spid` is `SqlConnection.ServerProcessId` (from the login acknowledgement, no round
+trip). Both are read once, as SSMS shows them from the connection, and every summary returns `spid` and `login` (≤ 128
+characters) while the session is still open after the script; both are absent when the session was lost or never
+opened. The status bar shows `login (spid)`, as SSMS does. Nothing runs in the session after a script, so the next
+script sees the `@@ROWCOUNT` and `@@ERROR` the previous one's last statement left, and the session's most recent SQL
+(`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`, sp_WhoIsActive) is the user's own; the live checks pin both.
 
-The probe is a statement in the user's session, and that is visible: the next script sees `@@ROWCOUNT` 1 and `@@ERROR` 0
-instead of what the previous script's last statement left, and the session's most recent SQL (`DBCC INPUTBUFFER`,
-`sys.dm_exec_input_buffer`, `most_recent_sql_handle`, sp_WhoIsActive) is the probe rather than the script. SqlClient
-does not expose the transaction ENVCHANGEs it receives, and `sys.dm_exec_sessions.open_transaction_count` read from
-another session needs VIEW SERVER STATE, so there is no side-effect-free way to learn `@@TRANCOUNT` for every login. The
-live checks pin both effects.
+**Transaction state.** As SSMS asks a query window's session when it closes or disconnects, the renderer reads an idle
+session's open transaction only when the session is about to end: `query.session.state` takes `{ sessionId }` (a UUID)
+and runs `SELECT @@TRANCOUNT;` in the session, answering `{ transactionCount, checked }`. It runs on the control lane
+with a 5 s deadline and never waits for the session: a session running a script answers `SESSION_BUSY` at once, an
+unknown (never opened, or closed) one `SESSION_CLOSED` ("This query has no open SQL session."), and one found lost is
+closed and answers `SESSION_LOST` ("The SQL session was lost, so SQL Server rolled back its transaction."); main answers
+`SESSION_LOST` itself for a session of an ended generation. Under `SET SHOWPLAN_XML`, `_TEXT`, `_ALL`, `NOEXEC`,
+`PARSEONLY` or `FMTONLY ON` the SELECT returns a plan or no row: the answer is then `{ transactionCount: 0, checked:
+false }`, and the options are left as they are, since the user may still keep the session (a commit turns them off
+first, below). The read is a statement in the session, as SSMS's own check is, and the renderer reads every idle
+connected query a flow covers, not only those it then asks about: a session the user keeps (Cancel, or nothing to ask
+about it) then sees `@@ROWCOUNT` 1 and `@@ERROR` 0, and other sessions see `SELECT @@TRANCOUNT;` as its most recent
+SQL (`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`); the live checks pin these. A cancel does not roll back, so a cancelled script's open transaction is still there; an error
+that dooms a transaction (`XACT_ABORT`) ends it by the batch's end (3998), and the read says 0.
 
 **Ending a session.** `query.session.close` takes `{ sessionId, transaction? }`. Without `transaction` it cancels the tab's
 running script and closes the session (SQL Server rolls back what is open). With `'commit'` it first reads
@@ -321,29 +335,48 @@ committed. Check the data before running the work again." `'rollback'` is a plai
 closed session left open, and the close does not wait for it (an explicit `ROLLBACK`, or an attention sent during one,
 waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
 
-**Session limit.** The backend keeps at most 128 query sessions (each one unpooled connection), which leaves room within
-main's 256 pending requests for every session to run a script and still be cancelled. The next session is refused with
-`SESSION_LIMIT`: "This query was not executed: 128 query tabs already hold SQL sessions, the most Varia SQL Manager keeps
-open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute
-again." Idle sessions are never reclaimed to make room: a session's SET options, temporary objects and open transaction
-cannot be seen from outside (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing
-it would lose them silently.
+**Session limit.** SSMS has no cap on query windows. The backend keeps at most 1,000 query sessions (each one unpooled
+connection) only as a backstop on connections; scripts running at once are bounded by main's 256 pending requests.
+Main keeps a reserve of only 32 more for control-lane requests (cancels, state reads, closes), so with 256 scripts
+running at most 32 of those can be outstanding; the renderer therefore sends a flow's state reads and cancels 8 at a
+time, and ends sessions one at a time. The next session is refused with `SESSION_LIMIT`: "This query was not executed:
+1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or
+disconnect idle ones (Query > Connection > Disconnect), then execute again." Idle sessions are never reclaimed to make
+room: a session's SET options, temporary objects and open transaction cannot be seen from outside (an empty temporary
+table allocates no pages, so tempdb's space views miss it), and closing it would lose them silently.
 
-**Prompts.** Before sessions end, the renderer sends main `varia:confirm-sessions` with `{ action, tabs }` (`action`:
-`close`, `closeAll`, `changeConnection`, `disconnectQuery` (Disconnect, or Change Connection to Disconnected),
-`disconnect` (the server), `disconnectAll` or `exit`; at most 1,024 tabs, each `{ name ≤ 512, transactions, running,
-unchecked? }` and only those with an open or unchecked transaction or a running script). Main composes the message box
-from these facts (`src/shared/sessions.ts`) and shows it through its dialog queue, so a page that crashes or reloads
-while it is open gets Cancel and the box closes. One query with an open transaction asks **Commit**, **Roll Back** or
-**Cancel**; several ask once, **Commit All**, **Roll Back All** or **Cancel**, listing up to 10 by name; a query still
-executing is never committed: it is cancelled (the renderer waits up to 15 s for it to stop) and its session rolls back,
-and when only executing queries are involved the box asks **Cancel Query and Close** or **Keep Running**. Cancel (Keep
-Running) is the default and the Escape answer. An unchecked session asks the same buttons, worded "may have an
-uncommitted transaction". The renderer then ends each session with `query.session.close` and the chosen `transaction`; a
-commit that fails is shown and the close, move, disconnect or quit stops there. Close All and Disconnect All Queries
-leave running queries alone; one that was running when their prompt opened and has finished since with a transaction
-stays open (or connected) and is reported, rather than have that transaction rolled back without asking. A run that
-settles after its tab closed (its cancel took longer than 15 s) still has its result sets released (`results.close`).
+**Prompts.** Before sessions end, the renderer reads the transaction state of each idle query among them that is on a live
+connection (`query.session.state`, 8 at a time, within 5 s in all: one not read by then, because the backend or the
+server does not answer, is treated as unchecked, so an unresponsive backend delays the prompt by 5 s, not by every
+read's deadline in turn). A count above 0 is an open transaction; `checked: false`, or any
+failure other than a session that is gone (`SESSION_CLOSED`, `SESSION_LOST`, `NOT_CONNECTED`, `CONNECTION_LOST`,
+`BACKEND_LOST`), such as `SESSION_BUSY`, `TIMEOUT` or `TOO_MANY_REQUESTS`, is one that may be open (`unchecked`).
+A read that finds the session lost (`SESSION_LOST`) makes the query's next execution say, before its own messages,
+that it runs in a new SQL session and that SQL Server rolled back the previous one's transaction, unless the query
+moves to another connection or disconnects first. Executing queries are not read. It then sends main
+`varia:confirm-sessions` with `{ action, tabs }` (`action`: `close`,
+`closeAll`, `changeConnection`, `disconnectQuery` (Disconnect, or Change Connection to Disconnected), `disconnect` (the
+server), `disconnectAll` or `exit`; at most 1,024 tabs, each `{ name ≤ 512, transactions, running, unchecked? }` and only
+those with an open or unchecked transaction or a running script). Main composes the message box from these facts
+(`src/shared/sessions.ts`) and shows it through its dialog queue, so a page that crashes or reloads while it is open gets
+Cancel and the box closes. Open transactions ask SSMS's question, "There are uncommitted transactions. Do you wish to
+commit these transactions before closing the window?" (… "before changing the connection?", "before disconnecting?",
+"before disconnecting the server?", "before closing Varia SQL Manager?"), with **Yes** (commit), **No** (roll back) and
+**Cancel**; Yes is the default, as in SSMS, and Escape is Cancel. The wording and the default come from SSMS as users
+report it; Microsoft's documentation does not show this dialog. SSMS asks per window; several queries are asked about
+once ("There are uncommitted transactions in 3 queries. …"), listing up to 10 by name with their nesting. A session
+that could not be read is worded "There may be uncommitted transactions", and is listed as "not checked". A query
+still executing is never committed: it is cancelled (the renderer waits up to 15 s for it to stop) and its session
+rolls back. Executing queries are asked about in a box of their own, **Cancel Query and Close** or **Keep Running**,
+with Keep Running the default and the Escape answer; when a flow also has open transactions, as SSMS asks each window,
+the renderer sends the executing queries first and the open transactions in a second request only after Cancel Query
+and Close, and cancels nothing until both are answered, so Enter never cancels a running query. (A request that mixes
+both lists the executing queries under "Still executing" and defaults to Cancel.) The renderer then ends each session with `query.session.close` and
+the chosen `transaction`; a commit that fails is shown and the close, move, disconnect or quit stops there. Close All and
+Disconnect All Queries leave running queries alone; one that was running when their prompt opened and has finished
+since is read then, and if its session may hold a transaction it stays open (or connected) and is reported, rather than
+have that transaction rolled back without asking. A run that settles after its tab closed (its cancel took longer than
+15 s) still has its result sets released (`results.close`).
 
 ## Query events
 
@@ -716,7 +749,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 128 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
@@ -784,7 +817,7 @@ a pool after a failed open and rethrows that failure for 5 to 60 seconds without
 | Banner: crash loop | "The SQL backend stopped repeatedly and was not restarted again." **Restart SQL Backend** **Copy details** |
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
-| `SESSION_LIMIT` | "This query was not executed: 128 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
+| `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
 | `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
@@ -867,7 +900,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   `no-hello`, `v1`, `wrong-version`, `missing-method`, `late`, `credit-overrun`, `seq-gap`, `unknown-id`, `contained`,
   `unresponsive`, and others) and a `workbench` mode for the Electron smoke tests, controlled through
   `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `fail-commit`, `silent-<generation>`). Each
-  session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK, so summaries carry the session probe. A
+  session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK and notes SET NOEXEC, PARSEONLY, FMTONLY and SHOWPLAN_*,
+  so `query.session.state` answers as SQL Server would. A
   script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92
   hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`; `@rate` is rows a second, `M1*n` is n one-row sets)
   with progress, message entries and a memory event, pages encoded per block on first read; `results.copy` and
@@ -910,7 +944,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   planning, and the shared window cache (full, so every insert evicts).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
-  `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab, each with its session probe.
+  `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
   while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
@@ -945,7 +979,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
-| Live: `SELECT 1` in a warm tab, with its session probe, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.7 ms (Windows, 24 CPUs, local SQL Server; 0.6 ms without the probe) | not measured |
+| Live: `SELECT 1` in a warm tab, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.6 ms, p99 1.3 ms (Windows, 24 CPUs, local SQL Server; 0.7 ms when every execution was followed by a session probe) | not measured |
 | Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 56 ms | 57 ms |
 | Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 8 % | 9 % |
 | Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |

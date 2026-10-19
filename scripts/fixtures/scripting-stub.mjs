@@ -61,6 +61,7 @@ export function installScriptingStub({ ipcMain }, { statics }) {
       case 'explorer.children': return children(params)
       case 'scripting.script': return script(params)
       case 'query.session.close': return ok({ closed: true })
+      case 'query.session.state': return ok({ transactionCount: 0, checked: true })
       default: return { ok: false, error: 'Unsupported stub operation.' }
     }
   })
