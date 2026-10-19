@@ -48,5 +48,8 @@ describe('generated command documentation', () => {
     expect(menus).toContain('| `0_connection` | C**o**nnection › | Submenu: Query › Connection | Always |')
     expect(menus).toContain('| theme items | **D**ark, **L**ight, Follow **S**ystem | `preferences.setTheme` | Always |')
     expect(menus).toContain('| `4_window` | Minimize | Electron role `minimize` | macOS only |')
+    // Plans open in their own tabs, so the output menu's targets are only the views outputView names.
+    expect(menus).toContain('Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus.')
+    expect(menus).not.toMatch(/XML plan/)
   })
 })

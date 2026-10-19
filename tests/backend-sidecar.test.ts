@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { resolve } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { join, resolve } from 'node:path'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { readFileSync } from 'node:fs'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { BackendConnection } from '../src/main/backend/connection'
@@ -439,5 +441,77 @@ describe('real .NET sidecar results (test hooks)', () => {
     const answered = backend.frames.filter(frame => frame.kind === FrameKind.RESPONSE).length
     expect(elapsed, `PONG after ${elapsed} ms with ${answered} of 64 answered`).toBeLessThan(1000)
     expect(answered).toBeLessThan(64)
+  }, 60_000)
+
+  it('copies a result as a stream of UTF-8 chunks within credit, with progress, TOO_LARGE before any DATA, and cancel', async () => {
+    const connection = backend(hooks)
+    const stored = await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 200_000 }) as ResultDescriptor
+    const params = { resultId: stored.resultId, parts: [{ rows: [[0, Number.MAX_SAFE_INTEGER] as const], columns: [[0, 7] as const] }], headers: true, eol: 'lf' as const, maxBytes: 64 * 1024 * 1024 }
+    const chunks: Uint8Array[] = [], progress: unknown[] = []
+    let granted = 64 * 1024, received = 0, worstOverdraft = 0
+    const sent = connection.send('results.copy', params, { ...deadlineFor('results.copy', params), credit: granted, onEvent: event => { progress.push(event) }, stream: {
+      data: (_seq, body) => {
+        received += body.byteLength
+        worstOverdraft = Math.max(worstOverdraft, received - granted - body.byteLength)
+        chunks.push(new Uint8Array(body))
+        const grant = () => { granted += body.byteLength; connection.credit(sent.id, body.byteLength) }
+        // Progress goes out once a copy has run 250 ms: the first chunk's credit comes back after 300, so a fast machine
+        // reports it too.
+        if (chunks.length === 1) setTimeout(grant, 300)
+        else grant()
+      }
+    } })
+    const result = await sent.done as { rows: number; bytes: number; partial: boolean }
+    const text = new TextDecoder().decode(Buffer.concat(chunks))
+    const lines = text.split('\n')
+    expect(result).toMatchObject({ rows: 200_000, bytes: received, partial: false })
+    expect(chunks.every(chunk => chunk.length <= 1024 * 1024)).toBe(true)
+    expect(worstOverdraft).toBeLessThanOrEqual(0)
+    expect([lines.length, lines[0], lines[1].split('\t')[0], lines.at(-1)!.split('\t')[0]]).toEqual([200_001, 'id\tname\tcreated\tamount\tkey\tnote\tactive\tscore', '0', '199999'])
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress.every(event => (event as { type: string; rowsTotal: number }).type === 'job.progress' && (event as { rowsTotal: number }).rowsTotal === 200_000)).toBe(true)
+
+    let refusedData = 0
+    const refused = connection.send('results.copy', { ...params, maxBytes: 1024 * 1024 }, { deadlineMs: 120_000, credit: 64 * 1024, stream: { data: () => { refusedData++ } } })
+    await expect(refused.done).rejects.toMatchObject({ code: 'TOO_LARGE', message: expect.stringMatching(/^The selection is too large to copy \(\d+ MB; the limit is 1 MB\)\. Use Save Results As instead\.$/) })
+    expect(refusedData).toBe(0)
+
+    // Without more credit the copy waits after its first chunk; CANCEL then ends it.
+    let waiting = 0
+    const stalled = connection.send('results.copy', params, { deadlineMs: 120_000, credit: 64 * 1024, stream: { data: () => { waiting++ } } })
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(waiting).toBe(1)
+    connection.cancel(stalled.id, 1)
+    await expect(stalled.done).rejects.toMatchObject({ code: 'CANCELLED' })
+  }, 60_000)
+
+  it('exports a result to a file through a temporary file, and a cancel leaves neither', async () => {
+    const connection = backend(hooks)
+    const folder = await mkdtemp(join(tmpdir(), 'varia-sidecar-export-'))
+    try {
+      const stored = await call(connection, 'debug.results.synthesize', { shape: 'N1', rows: 1000 }) as ResultDescriptor
+      const path = join(folder, 'n1.json')
+      const temporaryId = () => crypto.randomUUID().replaceAll('-', '')
+      const saved = await call(connection, 'results.export', { resultId: stored.resultId, path, format: 'json', headers: true, nullText: 'NULL', temporaryId: temporaryId() })
+      const rows = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>[]
+      expect(saved).toMatchObject({ rows: 1000, partial: false, truncatedCells: 500 })
+      expect([rows.length, rows[1]]).toEqual([1000, { id: 1, maybe: null, unicode: 'é', clipped: 'truncated pre', failed: 37, bytes: null, none: null }])
+      await expect(call(connection, 'results.export', { resultId: stored.resultId, path: 'relative.csv', format: 'csv', headers: true, nullText: 'empty', temporaryId: temporaryId() })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+      await expect(call(connection, 'results.export', { resultId: stored.resultId, path, format: 'csv', headers: true, nullText: 'empty', temporaryId: '../x' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+      await expect(call(connection, 'results.export', { resultId: stored.resultId, path: folder, format: 'csv', headers: true, nullText: 'empty', temporaryId: temporaryId() })).rejects.toMatchObject({ code: 'EXPORT_FAILED', message: 'IS_DIRECTORY' })
+
+      const big = await call(connection, 'debug.results.synthesize', { shape: 'W1', rows: 1_000_000 }) as ResultDescriptor
+      const target = join(folder, 'big.csv')
+      const progress: unknown[] = []
+      const named = temporaryId()
+      const exporting = connection.send('results.export', { resultId: big.resultId, path: target, format: 'csv', headers: true, nullText: 'empty', temporaryId: named }, { deadlineMs: 0, onEvent: event => { progress.push(event) } })
+      await vi.waitUntil(() => progress.length > 0, { timeout: 20_000, interval: 20 })
+      // The file being written has the name main chose, so main can remove it if the backend dies.
+      expect(await readdir(folder)).toContain(`.varia-${named}.tmp`)
+      connection.cancel(exporting.id, 1)
+      await expect(exporting.done).rejects.toMatchObject({ code: 'CANCELLED' })
+      await vi.waitUntil(async () => (await readdir(folder)).every(name => !name.endsWith('.tmp')), { timeout: 10_000, interval: 50 })
+      expect((await readdir(folder)).sort()).toEqual(['n1.json'])
+    } finally { await rm(folder, { recursive: true, force: true }) }
   }, 60_000)
 })

@@ -15,20 +15,33 @@ export class TestModel {
   disposed = false
   private listeners = new Set<() => void>()
   private history: { value: string; alternative: number }[]
+  readonly options: Record<string, unknown> = {}
   private index = 0
   private version = 1
-  constructor(value: string, readonly uri: string) { this.history = [{ value, alternative: 1 }] }
+  constructor(value: string, readonly uri: string, readonly language = 'sql') { this.history = [{ value, alternative: 1 }] }
   getValue(): string { return this.history[this.index].value }
   getValueLength(): number { return this.getValue().length }
   getVersionId(): number { return this.version }
   getAlternativeVersionId(): number { return this.history[this.index].alternative }
-  getValueInRange(range: IRange): string {
+  private offset(line: number, column: number): number {
     const lines = this.getValue().split('\n')
-    const offset = (line: number, column: number) => lines.slice(0, line - 1).reduce((total, text) => total + text.length + 1, 0) + column - 1
-    return this.getValue().slice(offset(range.startLineNumber, range.startColumn), offset(range.endLineNumber, range.endColumn))
+    return lines.slice(0, line - 1).reduce((total, text) => total + text.length + 1, 0) + column - 1
+  }
+  getValueInRange(range: IRange): string {
+    return this.getValue().slice(this.offset(range.startLineNumber, range.startColumn), this.offset(range.endLineNumber, range.endColumn))
+  }
+  getLineCount(): number { return this.getValue().split('\n').length }
+  getLineMaxColumn(line: number): number { return this.getValue().split('\n')[line - 1].length + 1 }
+  /** Monaco's applyEdits: a new version, but no undo stop. */
+  applyEdits(edits: { range: IRange; text: string }[]): void {
+    let value = this.getValue()
+    for (const { range, text } of edits) value = value.slice(0, this.offset(range.startLineNumber, range.startColumn)) + text + value.slice(this.offset(range.endLineNumber, range.endColumn))
+    this.history[this.index] = { value, alternative: ++this.version }
+    this.emit()
   }
   onDidChangeContent(listener: () => void) { this.listeners.add(listener); return { dispose: () => { this.listeners.delete(listener) } } }
   pushStackElement(): void {}
+  updateOptions(options: Record<string, unknown>): void { Object.assign(this.options, options) }
   edit(value: string): void {
     this.history = this.history.slice(0, this.index + 1)
     this.history.push({ value, alternative: ++this.version })
@@ -46,6 +59,8 @@ export class TestEditor {
   model: editor.ITextModel | null = null
   selection: (IRange & ISelection & { isEmpty?(): boolean }) | null = null
   viewState: editor.ICodeEditorViewState | null = null
+  readonly options: Record<string, unknown>[] = []
+  updateOptions(options: Record<string, unknown>): void { this.options.push(options) }
   getModel(): editor.ITextModel | null { return this.model }
   setModel(model: editor.ITextModel | null): void { this.model = model; this.selection = null; this.viewState = null }
   getSelection() {
@@ -63,10 +78,13 @@ export function documentFixture() {
     saveSqlFile: vi.fn<VariaApi['saveSqlFile']>(async () => ({ ok: true, value: { id: 'file-id', name: 'saved.sql', path: 'C:/saved.sql' } })),
     closeQuerySession: vi.fn<VariaApi['closeQuerySession']>(async () => ({ ok: true, value: { closed: true } }))
   }
-  const documents = new DocumentService((sql, uri) => {
-    const model = new TestModel(sql, uri); models.set(uri, model); return model.asModel()
-  }, api, events)
+  const frames: (() => void)[] = []
+  const documents = new DocumentService((text, uri, language) => {
+    const model = new TestModel(text, uri, language); models.set(uri, model); return model.asModel()
+  }, api, events, callback => { frames.push(callback) })
   const model = (id: string) => models.get(`varia-sql://query/${id}`)!
-  return { documents, events, api, model, models }
+  /** Runs the callbacks waiting for the next animation frame. */
+  const frame = () => { for (const callback of frames.splice(0)) callback() }
+  return { documents, events, api, model, models, frames, frame }
 }
 export type SaveResponse = ApiResult<SqlFile | null>

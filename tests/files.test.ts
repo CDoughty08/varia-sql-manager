@@ -17,7 +17,8 @@ function fixture() {
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
-    closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {})
+    closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
+    closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>()
   }
   const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false) }
   const files = new FileService(doc.documents, queries, api), commands = new CommandService()
@@ -243,7 +244,7 @@ describe('file commands', () => {
     expect(api.closeQuerySession).not.toHaveBeenCalled()
     expect(files.getSnapshot().error).toContain('changed while saving')
   })
-  it('does not flush or quit when a window-close confirmation is cancelled', async () => {
+  it('does not flush or quit when a window-close confirmation is cancelled, and tells main the close ended', async () => {
     const { documents, model, api, files } = fixture()
     model(documents.active!.id).edit('SELECT dirty')
     api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'cancel' })
@@ -251,6 +252,18 @@ describe('file commands', () => {
     await files.closeWindow(flush)
     expect(flush).not.toHaveBeenCalled()
     expect(api.closeWindow).not.toHaveBeenCalled()
+    // Main would otherwise hand the quit it asked for to the next page after a reload.
+    expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
+  })
+  it('tells main when its close fails, but not when the window closes', async () => {
+    const { api, files } = fixture()
+    api.closeWindow.mockRejectedValueOnce(new Error('The window is gone.'))
+    await files.closeWindow(async () => {})
+    expect(files.exiting).toBe(false)
+    expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
+    await files.closeWindow(async () => {})
+    expect(api.closeWindow).toHaveBeenCalledTimes(2)
+    expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
   })
   it('rechecks approved revisions after flushing the layout before quitting', async () => {
     const { documents, model, api, files } = fixture()
@@ -272,12 +285,34 @@ describe('file commands', () => {
     api.confirmClose.mockReturnValueOnce(pending.promise)
     const flush = vi.fn(async () => { expect(api.closeWindow).not.toHaveBeenCalled() })
     const closing = files.closeWindow(flush)
-    await files.closeWindow(flush); await commands.run('file.new')
+    // A second request while the first asks is the same close, not a second round of prompts.
+    expect(files.closeWindow(flush)).toBe(closing)
+    await commands.run('file.new')
     expect(api.confirmClose).toHaveBeenCalledTimes(1)
     pending.resolve({ ok: true, value: 'discard' }); await closing
     expect(flush).toHaveBeenCalledTimes(1)
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
+    expect(api.closeWindowCancelled).not.toHaveBeenCalled()
     expect(documents.getSnapshot().documents).toHaveLength(1)
+  })
+  it('waits for a file task to end before closing the window, instead of dropping the close', async () => {
+    const { api, files, documents, model } = fixture()
+    model(documents.active!.id).edit('SELECT dirty')
+    // A Script As File… whose save dialog waits in main's queue behind Save Grid Results.
+    const save = deferred<SaveResponse>()
+    api.saveSqlFile.mockReturnValueOnce(save.promise)
+    const copy = files.saveCopy('dbo.Orders.sql', 'CREATE TABLE dbo.Orders (Id int);')
+    await vi.waitFor(() => expect(documents.getSnapshot().busy).toBe(true))
+    const flush = vi.fn(async () => {})
+    const closing = files.closeWindow(flush)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(api.confirmClose).not.toHaveBeenCalled()
+    save.resolve({ ok: true, value: { id: 'file-id', name: 'dbo.Orders.sql', path: 'C:/dbo.Orders.sql' } })
+    await copy
+    await closing
+    expect(api.confirmClose).toHaveBeenCalledTimes(1)
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
   it('releases unclaimed file handles after a late open result without releasing an owned handle', async () => {
     const { api, files, documents, commands } = fixture()

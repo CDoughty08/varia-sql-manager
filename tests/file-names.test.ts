@@ -9,7 +9,7 @@ describe('sanitizeFileName', () => {
     expect(sanitizeFileName('dbo.a/b\\c:d*e?f"g<h>i|j.sql')).toBe('dbo.a_b_c_d_e_f_g_h_i_j.sql')
     expect(sanitizeFileName('../../etc/passwd')).toBe('.._.._etc_passwd')
     expect(sanitizeFileName('dbo.x*/ DROP TABLE dbo.Victim /*.sql')).toBe('dbo.x__ DROP TABLE dbo.Victim __.sql')
-    for (const character of ['\u0000', '\u0007', '\t', '\n', '\r', '\u001f', '\u007f', '\u0085', '\u009f', '\u2028', '\u2029', '\u202a', '\u202e', '\u2066', '\u2069', '\ufeff']) {
+    for (const character of ['\u0000', '\u0007', '\t', '\n', '\r', '\u001f', '\u007f', '\u0085', '\u009f', '\u061c', '\u200e', '\u200f', '\u2028', '\u2029', '\u202a', '\u202e', '\u2066', '\u2069', '\ufeff']) {
       expect(sanitizeFileName(`dbo.a${character}b.sql`), JSON.stringify(character)).toBe('dbo.a_b.sql')
     }
   })
@@ -51,6 +51,19 @@ describe('sanitizeFileName', () => {
     expect(pairs.endsWith('😀.sql')).toBe(true)
     expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(pairs)).toBe(false)
     expect(sanitizeFileName('x'.repeat(250)).length).toBe(200)
+  })
+  it('keeps a suffix whole before the extension, cutting the stem instead', () => {
+    expect(sanitizeFileName('Query1.csv', '-Result2')).toBe('Query1-Result2.csv')
+    expect(sanitizeFileName('a/b\u200f.txt', '-Result1')).toBe('a_b_-Result1.txt')
+    // Only the whole name is checked against Windows' device names.
+    expect(sanitizeFileName('CON.csv', '-Result1')).toBe('CON-Result1.csv')
+    const names = [1, 2].map(n => sanitizeFileName('\u5831\u544a'.repeat(50) + '.csv', `-Result${n}`))
+    for (const [index, name] of names.entries()) {
+      expect(name).toMatch(new RegExp(`^(\u5831\u544a)+\u5831?-Result${index + 1}\\.csv$`))
+      expect(Buffer.byteLength(name)).toBeLessThanOrEqual(240)
+      expect(Buffer.byteLength(name)).toBeGreaterThan(236)
+    }
+    expect(sanitizeFileName('x'.repeat(300) + '.json', '-Result1000')).toBe('x'.repeat(184) + '-Result1000.json')
   })
   it('falls back to Script.sql when nothing is left', () => {
     for (const name of ['', '...', '   ', '. .', '.']) expect(sanitizeFileName(name), JSON.stringify(name)).toBe('Script.sql')

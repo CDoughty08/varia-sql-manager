@@ -121,11 +121,14 @@ export interface ResultDescriptor {
   truncated?: TruncationReason
   incomplete: boolean
 }
-/** The query.execute summary: the rows stay in the backend (ResultClient reads them). */
+/** One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order). */
+export interface MessageEntry { text: string; kind: 'info' | 'error' }
+/** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
+ *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */
 export interface QueryResult {
   resultSets: ResultDescriptor[]
   discardedResultSets: number
-  messages: string[]
+  messages: MessageEntry[]
   recordsAffected: number
   elapsedMs: number
   status: 'completed' | 'failed' | 'cancelled' | 'timedOut'
@@ -134,19 +137,12 @@ export interface QueryResult {
   totalBatches: number
   database: string
   messagesTruncated: boolean
-  budget: { usedBytes: number; globalBytes: number; queryBytes: number }
+  budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
+  completedAt: string
 }
-/** A result set materialised for the PR6 results table (results/legacy.ts): display text, null for NULL. */
-export interface DisplayResultSet {
-  columns: { name: string; dataType: string }[]
-  rows: (string | null)[][]
-  truncated: boolean
-  incomplete?: boolean
-  batchNumber?: number
-  iteration?: number
-  kind?: 'rows' | 'executionPlan'
-}
-export interface DisplayQueryResult extends Omit<QueryResult, 'resultSets' | 'budget' | 'discardedResultSets'> { resultSets: DisplayResultSet[] }
+/** Orders what the backend reports about result memory (results.memory events and summaries): `seq` counts within the
+ *  backend process that main numbered `generation`, so a figure overtaken by a newer one is never shown after it. */
+export interface MemoryOrder { generation: number; seq: number }
 /** Rows read so far for one result set of a running script. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */
@@ -154,13 +150,37 @@ export type QueryEvent =
   | { type: 'resultSet.opened'; descriptor: ResultDescriptor }
   | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
   | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
-  | { type: 'messages'; messages: string[] }
+  | { type: 'messages'; messages: MessageEntry[] }
 export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number }
 /** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
 export interface ResultsReadResult { nextRow: number; rowsAvailable: number; complete: boolean; pages: number; rows: number }
 export interface ResultsCloseResult { closed: number; usedBytes: number }
+/** Inclusive row indexes; a last row of 2^53 − 1 runs to the end of the result. */
+export type RowRange = readonly [first: number, last: number]
+/** Inclusive column indexes, 0..4095. */
+export type ColumnRange = readonly [first: number, last: number]
+/** One rectangle-like piece of a copy: 1..64 ascending, disjoint row ranges by 1..64 column ranges. */
+export interface CopyPart { rows: readonly RowRange[]; columns: readonly ColumnRange[] }
 /** The backend's descriptor, before main stamps its generation. */
 export type BackendResultDescriptor = Omit<ResultDescriptor, 'generation'>
+/** Save Results As formats: CSV, tab-delimited text (.txt, .tsv, .tab) and JSON. */
+export type ResultsFormat = 'csv' | 'tsv' | 'json'
+/** Copy a grid selection: main runs results.copy and writes the text to the clipboard. `jobId` names the job for
+ *  cancellation and progress. */
+export interface ResultsCopyRequest { jobId: string; generation: number; resultId: number; headers: boolean; parts: readonly CopyPart[] }
+/** Save Results As: main shows the save dialog (the renderer never supplies a path) and runs results.export. */
+export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string }
+/** `partial`: the set was still open, so open-ended selections ended at the rows stored then. */
+export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean }
+/** Only the file's name returns to the renderer, never its path. */
+export interface SavedResults extends ResultsJobResult { fileName: string; format: ResultsFormat }
+/** Pushed on `varia:results-job` at most 4 times a second per job. A save reports once as soon as its file is chosen;
+ *  its reports carry the file's name (never its path). */
+export interface ResultsJobProgress { jobId: string; kind: 'copy' | 'save'; rowsDone: number; rowsTotal: number; bytes: number; fileName?: string }
+export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[]; headers: boolean; eol: 'crlf' | 'lf'; maxBytes: number }
+/** `temporaryId` (32 hex digits) names the file written beside the target, `.varia-{temporaryId}.tmp`, which main removes
+ *  if the backend dies before it does. */
+export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string }
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts
  *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`. */
 export interface ExplorerNode {
@@ -212,12 +232,19 @@ export interface PortMethods {
   'results.read': { params: ResultsReadParams; result: ResultsReadResult }
   'results.close': { params: { resultIds: number[] }; result: ResultsCloseResult }
 }
+/** Methods only main sends (results jobs): no renderer or port schema accepts them. */
+export interface JobMethods {
+  'results.copy': { params: ResultsCopyParams; result: ResultsJobResult }
+  'results.export': { params: ResultsExportParams; result: ResultsJobResult }
+}
+/** Synthetic result shapes (backend SyntheticRows, the fake backend's shapes.mjs). */
+export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
 /** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
 export interface DebugMethods {
-  'debug.results.synthesize': { params: { shape: 'W1' | 'B1' | 'N1'; rows: number }; result: BackendResultDescriptor }
+  'debug.results.synthesize': { params: { shape: SyntheticShape; rows: number }; result: BackendResultDescriptor }
 }
 /** Every method main sends to the backend. */
-export interface BackendMethods extends RpcMethods, PortMethods, DebugMethods {}
+export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode }
@@ -241,7 +268,11 @@ export type BackendStatus = BackendState['status']
 
 export interface SqlFile { id: string; name: string; path: string }
 export interface OpenSqlFile extends SqlFile { content: string }
-export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean }
+/** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
+export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
+export type DocumentKind = typeof documentKinds[number]
+/** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
+export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
 export interface VariaApi {
   readonly platform: string
@@ -290,6 +321,13 @@ export interface VariaApi {
   /** Asks main for this page's results port. It arrives as a window message { type: 'varia:results-port' } carrying one
    *  MessagePort, which ResultClient hands to the results worker. */
   openResultsPort(): Promise<ApiResult<void>>
+  /** Copies result rows to the clipboard; the text is formatted by the backend and written by main. */
+  copyResults(request: ResultsCopyRequest): Promise<ApiResult<ResultsJobResult>>
+  /** Save Results As; resolves to null when the dialog is cancelled. */
+  saveResults(request: ResultsSaveRequest): Promise<ApiResult<SavedResults | null>>
+  /** Cancels a running copy or save by its job id. */
+  cancelResultsJob(jobId: string): Promise<ApiResult<{ cancelled: boolean }>>
+  onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void
   /** True only in unpackaged smoke runs (main passed --varia-test-mode). */
   readonly testMode: boolean
   openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
@@ -301,6 +339,9 @@ export interface VariaApi {
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
   closeWindow(): Promise<void>
+  /** The page's close ended without closing (a prompt was cancelled, or a save failed). Main hands a close it asked for
+   *  to the next page when this one reloads or crashes first, but not one that ended. */
+  closeWindowCancelled(): void
   loadLayouts(): Promise<ApiResult<LayoutLoad>>
   saveLayouts(state: LayoutState): Promise<ApiResult<void>>
   importLayout(): Promise<ApiResult<WorkspaceLayout | null>>

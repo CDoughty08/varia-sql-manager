@@ -225,20 +225,20 @@ output.context, for a results grid with selected cells
   Copy with &Headers  Ctrl+Shift+C  ++++
   ---
   Select &All  Ctrl+A  ++++
+  ---
+  Sa&ve Results As…  Ctrl+S  ----
 output.context, for a results grid without
   &Copy  Ctrl+C  ----
   Copy with &Headers  Ctrl+Shift+C  ----
   ---
   Select &All  Ctrl+A  ++++
+  ---
+  Sa&ve Results As…  Ctrl+S  ----
 output.context, for Messages with selected text
   &Copy  Ctrl+C  ++++
   ---
   Select &All  Ctrl+A  ++++
 output.context, for Messages without
-  &Copy  Ctrl+C  ----
-  ---
-  Select &All  Ctrl+A  ++++
-output.context, for the XML plan
   &Copy  Ctrl+C  ----
   ---
   Select &All  Ctrl+A  ++++

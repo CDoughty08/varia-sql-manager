@@ -428,8 +428,8 @@
         },
         "textPreformat.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Preformatted text such as execution plan XML. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
-          "markdownDescription": "(VS Code) Preformatted text such as execution plan XML. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
+          "description": "(VS Code) Preformatted text in the editor. Default $textSecondary (Dark #c3cddd, Light #2f3a49).",
+          "markdownDescription": "(VS Code) Preformatted text in the editor. Default `$textSecondary` (Dark `#c3cddd`, Light `#2f3a49`)."
         },
         "sash.hoverBorder": {
           "$ref": "#/definitions/value",
@@ -1043,13 +1043,13 @@
         },
         "resultsGrid.background": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Results grid. Not used yet; reserved for the results grid. Default @panel.background (Dark #141a23, Light #fafbfc).",
-          "markdownDescription": "(Varia) Results grid. Not used yet; reserved for the results grid. Default `@panel.background` (Dark `#141a23`, Light `#fafbfc`)."
+          "description": "(Varia) Results grid. Default @panel.background (Dark #141a23, Light #fafbfc).",
+          "markdownDescription": "(Varia) Results grid. Default `@panel.background` (Dark `#141a23`, Light `#fafbfc`)."
         },
         "resultsGrid.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Results grid cells. Not used yet; reserved for the results grid. Default @foreground (Dark #d9e1ec, Light #1f2733).",
-          "markdownDescription": "(Varia) Results grid cells. Not used yet; reserved for the results grid. Default `@foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+          "description": "(Varia) Results grid cells. Default @foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Results grid cells. Default `@foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
         },
         "resultsGrid.headerBackground": {
           "$ref": "#/definitions/value",
@@ -1063,8 +1063,8 @@
         },
         "resultsGrid.headerDescriptionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Column data types below the names. Default $textMuted (Dark #8a9cb3, Light #525e72).",
-          "markdownDescription": "(Varia) Column data types below the names. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
+          "description": "(Varia) The (No column name) placeholder. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) The (No column name) placeholder. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "resultsGrid.gridlines": {
           "$ref": "#/definitions/value",
@@ -1086,10 +1086,15 @@
           "description": "(Varia) NULL values. Default Dark $warning/70, Light $warning (Dark #dfbd82b3, Light #8a5300).",
           "markdownDescription": "(Varia) NULL values. Default Dark `$warning/70`, Light `$warning` (Dark `#dfbd82b3`, Light `#8a5300`)."
         },
+        "resultsGrid.nullBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) NULL cells, tinted as in SSMS. Default Dark $warning/8, Light $warning/12 (Dark #dfbd8214, Light #8a53001f).",
+          "markdownDescription": "(Varia) NULL cells, tinted as in SSMS. Default Dark `$warning/8`, Light `$warning/12` (Dark `#dfbd8214`, Light `#8a53001f`)."
+        },
         "resultsGrid.truncationForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Notice that results were truncated. Default @warningForeground (Dark #dfbd82, Light #8a5300).",
-          "markdownDescription": "(Varia) Notice that results were truncated. Default `@warningForeground` (Dark `#dfbd82`, Light `#8a5300`)."
+          "description": "(Varia) Truncation notices and the marker on truncated values. Default @warningForeground (Dark #dfbd82, Light #8a5300).",
+          "markdownDescription": "(Varia) Truncation notices and the marker on truncated values. Default `@warningForeground` (Dark `#dfbd82`, Light `#8a5300`)."
         },
         "resultsGrid.selectionBackground": {
           "$ref": "#/definitions/value",
@@ -1113,8 +1118,28 @@
         },
         "resultsGrid.hoverBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default @list.hoverBackground (Dark #263041, Light #d0d8e3).",
-          "markdownDescription": "(Varia) Hovered row. Not used yet; reserved for the results grid. Default `@list.hoverBackground` (Dark `#263041`, Light `#d0d8e3`)."
+          "description": "(Varia) Hovered column or row header. Default @list.hoverBackground (Dark #263041, Light #d0d8e3).",
+          "markdownDescription": "(Varia) Hovered column or row header. Default `@list.hoverBackground` (Dark `#263041`, Light `#d0d8e3`)."
+        },
+        "resultsGrid.headerSelectionBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Column and row headers of selected cells. Default $selection (Dark #24324a, Light #d6e3f3).",
+          "markdownDescription": "(Varia) Column and row headers of selected cells. Default `$selection` (Dark `#24324a`, Light `#d6e3f3`)."
+        },
+        "resultsGrid.headerSelectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of the headers of selected cells. Default $textAccent (Dark #bcd4fa, Light #0b4f99).",
+          "markdownDescription": "(Varia) Text of the headers of selected cells. Default `$textAccent` (Dark `#bcd4fa`, Light `#0b4f99`)."
+        },
+        "resultsGrid.linkForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) XML, JSON and plan values that open in a new tab. Default $accent (Dark #8fb7ff, Light #005fb8).",
+          "markdownDescription": "(Varia) XML, JSON and plan values that open in a new tab. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
+        },
+        "resultsGrid.splitterBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default Dark $textMuted/60, Light $controlBorder (Dark #8a9cb399, Light #8792a2).",
+          "markdownDescription": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default Dark `$textMuted/60`, Light `$controlBorder` (Dark `#8a9cb399`, Light `#8792a2`)."
         },
         "resultsMessages.foreground": {
           "$ref": "#/definitions/value",

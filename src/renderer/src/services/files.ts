@@ -4,13 +4,14 @@ import type { Disposable } from '../core/types'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
 
-type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow'>
+type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
 export interface FileSnapshot { readonly error: string }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
 export class FileService extends SnapshotStore<FileSnapshot> implements Disposable {
   private disposed = false
   private readonly waiters = new Set<() => void>()
+  private closing: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
   constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning'>, private api: FileApi) { super({ error: '' }) }
@@ -54,7 +55,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         for (const file of opened) {
           const existing = this.documents.getSnapshot().documents.find(document => document.file?.path === file.path)
           if (existing) { this.documents.activate(existing.id); continue }
-          this.documents.create(file.name, file.content, target?.database ?? 'master', target?.connectionId, false, { id: file.id, name: file.name, path: file.path })
+          this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, { id: file.id, name: file.name, path: file.path })
         }
       } finally { await this.releaseUnclaimed(opened) }
     })
@@ -120,7 +121,25 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       if (running) throw new Error(running === 1 ? '1 query is still running and stayed open.' : `${running} queries are still running and stayed open.`)
     })
   }
-  async closeWindow(beforeClose: () => Promise<void>): Promise<void> {
+  /**
+   * Asks about each unsaved query, then closes the window. A close or quit that arrives while a file task runs (a Script
+   * As File… waiting behind another dialog) waits for it rather than being dropped, so the app exits once the dialogs
+   * are answered; requests made meanwhile are the same close. A close that ends without closing tells main, which
+   * otherwise hands a close it asked for to the next page if this one reloads or crashes first.
+   */
+  closeWindow(beforeClose: () => Promise<void>): Promise<void> {
+    this.closing ??= (async () => {
+      try {
+        while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
+        await this.closeDocuments(beforeClose)
+      } finally {
+        this.closing = undefined
+        if (!this.exiting && !this.disposed) this.api.closeWindowCancelled()
+      }
+    })()
+    return this.closing
+  }
+  private async closeDocuments(beforeClose: () => Promise<void>): Promise<void> {
     await this.perform(async () => {
       const approved = new Map<string, { model: NonNullable<ReturnType<DocumentService['getModel']>>; version: number }>()
       for (const document of this.documents.getSnapshot().documents) {

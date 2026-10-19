@@ -125,12 +125,18 @@ export class ResultsPortHost {
     }
   }
 
+  /** Whether this renderer may use the result: the current generation holds it for this renderer (copy and save). */
+  owns(generation: number, resultId: number): boolean { return generation === this.generation && this.owned.has(resultId) }
+
   queryEvent(queryId: string, event: QueryEvent): void {
     if (event.type === 'resultSet.opened') this.own([event.descriptor])
     this.post({ t: 'query', queryId, event })
   }
 
-  memory(usedBytes: number, globalBytes: number): void { this.post({ t: 'memory', usedBytes, globalBytes }) }
+  /** A results.memory event of `generation`; the renderer orders it with the summaries by generation and seq. */
+  memory(generation: number, report: { usedBytes: number; globalBytes: number; seq: number }): void {
+    this.post({ t: 'memory', usedBytes: report.usedBytes, globalBytes: report.globalBytes, generation, seq: report.seq })
+  }
 
   private receive(data: unknown): void {
     const parsed = portRequestSchema.safeParse(data)

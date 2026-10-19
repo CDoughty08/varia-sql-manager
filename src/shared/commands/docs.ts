@@ -22,7 +22,7 @@ const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Right-click the query editor, or press Shift+F10 or the context-menu key in it. A right-click outside the selection moves the caret there first.',
   'explorer.context': 'Right-click an Object Explorer node (which selects it) or the empty area below the servers, or press Shift+F10 or the context-menu key in the tree for the selected node. Items act on that node. Script … as names the node\'s kind (Script Table as, Script View as, …) and greys the verbs it does not support; docs/scripting.md lists them.',
   'documentTab.context': 'Right-click a query tab, or press Shift+F10 or the context-menu key on a focused tab. Items act on that tab\'s query.',
-  'output.context': 'Right-click the results grid, Messages, or an XML plan, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid\'s selection selects that cell first.',
+  'output.context': 'Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid\'s selection selects that cell first.',
   'dockTab.context': 'Right-click a panel\'s tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.',
   'input.context': 'Right-click a text field, including those in dialogs and the editor\'s find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette\'s field has none.'
 }

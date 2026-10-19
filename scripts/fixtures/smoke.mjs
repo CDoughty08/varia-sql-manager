@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { _electron, expect as baseExpect } from '@playwright/test'
 
 /**
@@ -44,10 +45,24 @@ async function reportFileOperations(application) {
   if (operations?.length) console.log(`Main's slow or refused file operations (${slowMs} ms or more): ` + operations.map(({ operation, file, ms, error }) => `${operation} ${file} ${ms} ms${error ? ` (${error})` : ''}`).join('; '))
 }
 
+// On Windows Playwright starts Electron through cmd.exe, so the launched process is that shell and kill() ended only it:
+// an app that would not close kept running, orphaned beyond the reach of a later tree kill, holding the clipboard every
+// following suite reads. There kill() ends the whole tree, and so does the suite's exit for any app still running.
+const running = new Set()
+const killTree = pid => { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ } }
+if (process.platform === 'win32') process.on('exit', () => { for (const pid of running) killTree(pid) })
+
 /** Playwright's Electron launcher, with main's file operations traced and reported when the app is closed. */
 export const electron = {
   async launch(options) {
     const application = await _electron.launch(options)
+    const child = application.process()
+    if (process.platform === 'win32' && child?.pid) {
+      const pid = child.pid
+      running.add(pid)
+      child.once('exit', () => running.delete(pid))
+      child.kill = () => { killTree(pid); return true }
+    }
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))
     const close = application.close.bind(application)
     application.close = async () => { await reportFileOperations(application); return close() }

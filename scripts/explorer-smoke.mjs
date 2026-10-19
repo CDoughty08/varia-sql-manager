@@ -682,9 +682,9 @@ try {
       await page.keyboard.press('Control+A')
       await page.keyboard.insertText(`${sql}\nPRINT '${marker}';`)
       await page.keyboard.press('F5')
-      await page.getByRole('button', { name: /^Messages/ }).click()
+      await page.locator('.output-toolbar').getByRole('tab', { name: /^Messages/ }).click()
       await expect(page.locator('.messages')).toContainText(marker, wait)
-      await expect(page.locator('.messages .query-error')).toHaveCount(0)
+      await expect(page.locator('.messages .msg.error')).toHaveCount(0)
     }
     await connect(process.env.VARIA_TEST_SQL_SERVER)
     const live = page.locator('.explorer-row.server').first()

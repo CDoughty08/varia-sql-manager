@@ -8,10 +8,12 @@ import { backendSpawnSpec } from './backend/spawn-spec'
 import { installTestHooks } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
+import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
+import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest } from './validation'
-import { SqlFileStore, maxSqlFileBytes } from './sql-files'
+import { SqlFileStore, fileKinds, saveFileSchema } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { ScriptingOptionsStore } from './scripting-options-store'
@@ -39,10 +41,24 @@ const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
 let resultsPort: ResultsPortHost | undefined
+let resultsJobs: ResultsJobHost | undefined
 // Test seams (fake backend, liveness override, __variaTest, the renderer test-mode flag) exist only in unpackaged smoke runs.
 const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 const files = new SqlFileStore()
+// Main's file dialogs and prompts, one at a time: a dialog asked for while another is open waits for it. A renderer reset
+// drops those not yet shown, and `rendererGeneration` tells a handler whose dialog was open then that its page is gone.
+const oneDialog = dialogQueue()
+let rendererGeneration = 0
+// Restart SQL Backend while one is pending (a double-click on the banner's Restart) shares it.
+let restarting: Promise<boolean> | undefined
+// The answer to "Workbench not responding", while it waits or shows; repeated closes share it.
+let unresponsivePrompt: Promise<void> | undefined
+// The user chose Reload in the reload prompt: the next unload is allowed.
+let reloadApproved = false
 let closeApproved = false
+// Main asked the page to close (a quit or the window's close button) and the page has not said that its close ended
+// without closing. A page that reloads or crashes first cannot finish it, so it goes to the next page.
+let closePending = false
 /** The app is quitting (before-quit went ahead), so a closed window needs no new backend. */
 let quitting = false
 let backendStopped = false
@@ -96,7 +112,7 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
   ipcMain.handle(channel, async (event, value: unknown): Promise<ApiResult<T>> => {
     if (!trusted(event)) return { ok: false, error: 'Untrusted IPC sender.' }
     try { return { ok: true, value: await action(value) } }
-    catch (error) { return { ok: false, error: errorMessage(error, 'The operation failed.') } }
+    catch (error) { return { ok: false, error: errorMessage(error, 'The operation failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
 }
 
@@ -104,24 +120,66 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
  *  `relaunch` (the app is quitting) no new backend starts. */
 function resetRendererState(relaunch = true): void {
   rendererReady = false
+  reloadApproved = false
+  rendererGeneration++
+  oneDialog.reset()
   menuBridge.reset()
   contextMenus.close()
   endPreview()
   resultsPort?.reset()
+  resultsJobs?.reset()
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   files.clear()
 }
 
-/** Restarting closes every connection and rolls back open transactions, so main asks first when there are any. */
-async function restartBackend(): Promise<boolean> {
-  const count = backend.connectionCount()
-  const window = mainWindow
-  if (count > 0 && window && !window.isDestroyed()) {
-    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true })
-    if (response !== 0) return false
-  }
-  await backend.restart('manual')
-  return true
+/** A dialog the page asked for, on the window, in turn. If the page reloads or crashes before the user answers, the
+ *  answer is `cancelled`: that page is gone, and what it asked for must not happen for the next one. A message box is
+ *  `abortable`: it gets a signal, and the reset closes it then, so the crash prompt and the next page's dialogs do not
+ *  wait behind it (a file chooser cannot be closed from main). */
+function pageDialog<T>(show: (window: BrowserWindow, signal?: AbortSignal) => Promise<T>, cancelled: T, abortable = false): Promise<T> {
+  const asked = rendererGeneration
+  return oneDialog(signal => mainWindow && !mainWindow.isDestroyed() ? show(mainWindow, signal) : Promise.resolve(cancelled), cancelled, abortable)
+    .then(answer => asked === rendererGeneration ? answer : cancelled)
+}
+
+/** Asks the page to close, as the window's close button and a quit do; the request outlives a reload or crash. */
+function requestClose(): void {
+  closePending = true
+  command('window.close')
+}
+
+/** Restarting closes every connection and rolls back open transactions, so main asks first when there are any. The
+ *  connections are counted when the prompt's turn comes (another dialog may be open first), and a request made while
+ *  one is pending shares its answer, so a double-click restarts once. */
+function restartBackend(): Promise<boolean> {
+  restarting ??= (async () => {
+    try {
+      if (backend.connectionCount() > 0) {
+        const { response } = await pageDialog((window, signal) => {
+          const count = backend.connectionCount()
+          return count === 0 ? Promise.resolve({ response: 0 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal })
+        }, { response: 1 }, true)
+        if (response !== 0) return false
+      }
+      await backend.restart('manual')
+      return true
+    } finally { restarting = undefined }
+  })()
+  return restarting
+}
+
+/** Closing while the workbench does not respond skips its unsaved-query prompts, so main asks first, after any open
+ *  dialog. A workbench that recovered by then is asked to close as usual instead. Close goes on with a quit if one was
+ *  under way. */
+function confirmUnresponsiveClose(window: BrowserWindow, quit: boolean): void {
+  unresponsivePrompt ??= oneDialog(async () => window.isDestroyed() ? { response: 1 } : !rendererUnresponsive ? { response: -1 }
+    : dialog.showMessageBox(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: 'The workbench is not responding. Unsaved queries will be lost.', buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }),
+  { response: 1 }).then(({ response }) => {
+    if (window.isDestroyed() || response === 1) return
+    if (response === 0) closeApproved = true
+    if (quit) app.quit()
+    else window.close()
+  }, () => {}).finally(() => { unresponsivePrompt = undefined })
 }
 
 function rendererCanConfirm(window: BrowserWindow): boolean {
@@ -194,6 +252,7 @@ function applyAppearance(state: ThemeState): void {
 function createWindow(): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
+  closePending = false
   windowActive = true
   rendererLoaded = false
   rendererReady = false
@@ -235,20 +294,34 @@ function createWindow(): void {
   contents.on('did-start-navigation', details => {
     if (details.isMainFrame && !details.isSameDocument && rendererLoaded && details.url === contents.getURL()) resetRendererState()
   })
-  // The renderer blocks unload only while queries are unsaved or servers are connected.
+  // The renderer blocks unload only while queries are unsaved or servers are connected. This reload waits; the prompt
+  // takes its turn after any open dialog, and Reload starts it again, allowed this time.
   contents.on('will-prevent-unload', event => {
-    if (closeApproved) { event.preventDefault(); return }
-    const choice = dialog.showMessageBoxSync(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: 'Unsaved queries will be lost. Connections are closed and uncommitted transactions are rolled back.', buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true })
-    if (choice === 0) event.preventDefault()
+    if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
+    const generation = rendererGeneration
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: 'Unsaved queries will be lost. Connections are closed and uncommitted transactions are rolled back.', buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+      { response: 1 }, true).then(({ response }) => {
+      if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) return
+      reloadApproved = true
+      // Once the page has finished cancelling this unload (a round trip to it): a reload asked for before then is dropped.
+      void contents.executeJavaScript('0').catch(() => {}).then(() => { if (!window.isDestroyed() && generation === rendererGeneration) contents.reload() })
+    }, () => {})
   })
+  // The prompt waits for any open dialog (a Save dialog the page asked for just before it stopped); the reset drops
+  // those it asked for that were not shown yet.
   contents.on('render-process-gone', (_event, details) => {
     if (details.reason === 'clean-exit' || window.isDestroyed()) return
+    // This reset is the crash's: the reload that follows must not reset (restart the backend) again. It would spawn the
+    // backend while Chromium launches the new renderer, and on Windows the backend then inherits that renderer's channel
+    // handle, so Chromium never sees the new renderer die and its crash leaves the window frozen.
+    rendererLoaded = false
     resetRendererState()
-    void dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.', buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }).then(({ response }) => {
+    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.', buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
+      { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
       if (response === 0) window.reload()
-      else { closeApproved = true; window.close() }
-    })
+      else if (response === 1) { closeApproved = true; window.close() }
+    }, () => {})
   })
   window.on('unresponsive', () => { rendererUnresponsive = true })
   window.on('responsive', () => { rendererUnresponsive = false })
@@ -256,9 +329,15 @@ function createWindow(): void {
   else void window.loadFile(rendererFile)
   window.on('close', event => {
     if (closeApproved) return
-    if (rendererCanConfirm(window)) { event.preventDefault(); command('window.close'); return }
-    // A crashed, hung, or unmounted workbench cannot run the unsaved-query prompts, so never trap the user.
-    if (rendererUnresponsive && dialog.showMessageBoxSync(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: 'The workbench is not responding. Unsaved queries will be lost.', buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }) !== 0) { quitting = false; event.preventDefault(); return }
+    if (rendererCanConfirm(window)) { event.preventDefault(); requestClose(); return }
+    // A crashed, hung, or unmounted workbench cannot run the unsaved-query prompts, so never trap the user. A hung one
+    // is asked about first; the close (and a quit under way) waits for the answer.
+    if (rendererUnresponsive) {
+      event.preventDefault()
+      confirmUnresponsiveClose(window, quitting)
+      quitting = false
+      return
+    }
     closeApproved = true
   })
   // A closed window can no longer address its sessions. Only macOS keeps the app running after its last window closes,
@@ -277,14 +356,20 @@ app.whenReady().then(async () => {
     // Frame kinds, ids and lengths only; never bodies.
     trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined,
     power: powerMonitor,
-    onGlobalEvent: event => {
+    onGlobalEvent: (event, generation) => {
       const memory = memoryEventSchema.safeParse(event)
-      if (memory.success) resultsPort?.memory(memory.data.usedBytes, memory.data.globalBytes)
+      if (memory.success) resultsPort?.memory(generation, memory.data)
     },
     ...liveness
   })
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
   const explorerRequests = new ExplorerRequests(backend)
+  const jobs = resultsJobs = new ResultsJobHost({
+    backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), platform: process.platform,
+    writeClipboard: text => clipboard.writeText(text), documentsDir: () => app.getPath('documents'),
+    showSaveDialog: options => pageDialog<{ canceled: boolean; filePath?: string }>(window => dialog.showSaveDialog(window, options), { canceled: true }),
+    progress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:results-job', progress) }
+  })
   const scriptingRequests = new ScriptingRequests(backend)
   backend.onState(state => {
     results.backendState(state)
@@ -320,7 +405,15 @@ app.whenReady().then(async () => {
   handle('varia:themes-reload', () => appearance.reload())
   handle('varia:themes-open-folder', () => openThemesFolder())
   handle('varia:themes-create', async () => { shell.showItemInFolder(await appearance.createStarterTheme()) })
-  ipcMain.on('varia:commands-ready', (event, ready: unknown) => { if (trusted(event)) rendererReady = ready === true })
+  ipcMain.on('varia:commands-ready', (event, ready: unknown) => {
+    if (!trusted(event)) return
+    rendererReady = ready === true
+    // A close or quit that the previous page could not finish (it reloaded or crashed first) goes to this one; a page
+    // whose close is already under way shares it.
+    if (rendererReady && closePending) command('window.close')
+  })
+  // Only the live page can end a close: a page being unloaded (not ready since the reset) may still report its own.
+  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) closePending = false })
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
@@ -331,12 +424,12 @@ app.whenReady().then(async () => {
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
   handle('varia:layout-import', async () => {
-    const selection = await dialog.showOpenDialog(mainWindow!, { title: 'Load workspace layout', filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['openFile'] })
+    const selection = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Load workspace layout', filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['openFile'] }), { canceled: true, filePaths: [] })
     return selection.canceled || !selection.filePaths[0] ? null : layouts.import(selection.filePaths[0])
   })
   handle('varia:layout-export', async value => {
     const layout = parseWorkspaceLayout(value)
-    const selection = await dialog.showSaveDialog(mainWindow!, { title: 'Save workspace layout', defaultPath: join(app.getPath('documents'), 'workspace.varia-layout.json'), filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] })
+    const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: 'Save workspace layout', defaultPath: join(app.getPath('documents'), 'workspace.varia-layout.json'), filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
     if (selection.canceled || !selection.filePath) return false
     await layouts.export(selection.filePath, layout)
     return true
@@ -372,22 +465,28 @@ app.whenReady().then(async () => {
     } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
+  // Copy and Save Results As: the renderer names a result it owns; the backend formats the text, main writes the
+  // clipboard or chooses the file, and only the file's name goes back.
+  handle('varia:results-copy', value => jobs.copy(value))
+  handle('varia:results-save', value => jobs.save(value))
+  handle('varia:results-job-cancel', value => jobs.cancel(value))
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   handle('varia:files-open', async () => {
-    const selected = await dialog.showOpenDialog(mainWindow!, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] })
+    const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return []
     return Promise.all(selected.filePaths.map(path => files.read(path)))
   })
   handle('varia:files-save', async value => {
-    const options = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxSqlFileBytes), saveAs: z.boolean() }).strict().parse(value)
+    const options = saveFileSchema.parse(value), kind = fileKinds[options.kind ?? 'sql']
     let selectedPath: string | undefined
     if (!options.fileId || options.saveAs) {
       const safeName = sanitizeFileName(options.name)
-      const selection = await dialog.showSaveDialog(mainWindow!, { title: 'Save SQL query', defaultPath: options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName), filters: [{ name: 'SQL files', extensions: ['sql'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] })
+      const defaultPath = options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName)
+      const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
       if (selection.canceled || !selection.filePath) return null
       selectedPath = selection.filePath
     }
-    return files.save(options.content, options.fileId, selectedPath)
+    return files.save(options.content, options.fileId, selectedPath, options.kind)
   })
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
@@ -396,7 +495,7 @@ app.whenReady().then(async () => {
   handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
-    const response = await dialog.showMessageBox(mainWindow!, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true })
+    const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)
     return (['save', 'discard', 'cancel'] as const)[response.response]
   })
   ipcMain.handle('varia:close-window', event => {
@@ -413,7 +512,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
-  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); command('window.close'); return }
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); requestClose(); return }
   quitting = true
 })
 // A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is

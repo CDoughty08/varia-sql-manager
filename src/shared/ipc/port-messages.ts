@@ -25,7 +25,7 @@ export type PortMessage =
   | { t: 'end'; rid: number; ok: true; result: ResultsReadResult | ResultsCloseResult }
   | { t: 'end'; rid: number; ok: false; code: ErrorCode; message: string }
   | { t: 'query'; queryId: string; event: QueryEvent }
-  | { t: 'memory'; usedBytes: number; globalBytes: number }
+  | { t: 'memory'; usedBytes: number; globalBytes: number; generation: number; seq: number }
 
 const columnSchema = z.object({
   name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector']).optional(),
@@ -38,7 +38,7 @@ export const backendDescriptorSchema = z.object({
   columns: z.array(columnSchema).min(1).max(limits.page.maxColumns), rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncatedCells: count,
   state: z.enum(['open', 'complete', 'released']), truncated: truncationSchema.optional(), incomplete: z.boolean()
 }).strict()
-const message = z.string().max(limits.messages.characters)
+const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'error']) }).strict()
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),
@@ -49,13 +49,16 @@ export const queryEventSchema = z.discriminatedUnion('type', [
   }).strict(),
   z.object({ type: z.literal('messages'), messages: z.array(message).min(1).max(limits.messages.count) }).strict()
 ])
-/** The query.execute summary. Notes about truncation follow the stored messages, hence the few extra entries. */
+/** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
-  resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max), discardedResultSets: count, messages: z.array(message).max(limits.messages.count + 8),
+  resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max), discardedResultSets: count, messages: z.array(message).max(limits.messages.count + limits.messages.lateErrors + 8),
   recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'failed', 'cancelled', 'timedOut']),
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),
-  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count }).strict()
+  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count }).strict(), completedAt: z.string().max(40)
 }).strict()
-/** The global EVENT (id 0) for result memory. */
-export const memoryEventSchema = z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count }).strict()
+/** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
+export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()
+export type JobProgressEvent = z.infer<typeof jobProgressSchema>
+/** The global EVENT (id 0) for result memory; `seq` orders it with the summaries' budgets (QueryResult). */
+export const memoryEventSchema = z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count, seq: count }).strict()

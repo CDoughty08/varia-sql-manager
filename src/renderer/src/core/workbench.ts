@@ -9,8 +9,10 @@ import { EditorOptionsService } from '../services/editor-options'
 import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
-import { legacyExecute } from '../results/legacy'
+import { ResultsService } from '../results/ResultsService'
+import { ResultMemoryService } from '../results/memory'
 import ResultsWorker from '../results/results.worker.ts?worker'
+import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
 import { ExplorerService } from '../explorer/ExplorerService'
 import { DatabaseListService } from '../services/database-list'
@@ -41,6 +43,7 @@ import { domFocusAdapter } from './focus'
 import { KeybindingService } from './keybindings'
 import { MenuStatePublisher } from './menu-state'
 import { modalOpen } from './modal'
+import { nextFrame as frame } from './frame'
 import type { Disposable } from './types'
 
 export interface Workbench extends Disposable {
@@ -60,7 +63,13 @@ export interface Workbench extends Disposable {
   readonly connections: ConnectionService
   readonly backend: BackendStateService
   /** Stored query results, read through the results worker. */
-  readonly results: ResultClient
+  readonly resultClient: ResultClient
+  /** Each query tab's results: its result sets, Messages, view state, and copy jobs. */
+  readonly results: ResultsService
+  /** What the backend holds for results, for the status bar. */
+  readonly resultMemory: ResultMemoryService
+  /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
+  readonly gridStats?: GridStats
   readonly files: FileService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
@@ -103,18 +112,21 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
-  const documents = new DocumentService((sql, uri) => monaco.editor.createModel(sql, 'sql', monaco.Uri.parse(uri)), api, events)
-  const results = new ResultClient({ api, createWorker: () => new ResultsWorker(), window })
-  const queries = new QueryService(documents, { execute: (options, onProgress) => legacyExecute(api, results, options, onProgress), cancel: queryId => api.cancel(queryId) }, id => connections.get(id), events)
+  const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) })
+  const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
+  const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
+  const resultMemory = new ResultMemoryService(resultClient, events)
+  const gridStats = api.testMode ? new GridStats() : undefined
+  const queries = new QueryService(documents, api, id => connections.get(id), events, results)
   const files = new FileService(documents, queries, api)
-  const resultSelection = new ResultSelectionService(events)
+  const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, api)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
   const scriptingOptions = new ScriptingOptionsService(api, (message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, scripting: scripting.running, editor: () => documents.boundEditor })
+  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, scripting: scripting.running, editor: () => documents.boundEditor })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
@@ -130,13 +142,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, results, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, scripting, theme, dispose: () => {
+  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, resultClient, results, resultMemory, ...gridStats ? { gridStats } : {}, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, scripting, theme, dispose: () => {
     if (disposed) return
     disposed = true
     // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
     listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
     contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); scripting.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); scriptingOptions.dispose(); theme.dispose(); events.dispose()
+    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); resultMemory.dispose(); resultClient.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); scripting.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); scriptingOptions.dispose(); theme.dispose(); events.dispose()
   } }
   const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
     menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench), scriptingContribution(workbench)]

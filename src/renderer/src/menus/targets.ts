@@ -5,6 +5,7 @@ import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
+import { gridAnchor } from '../grid/anchor'
 
 /**
  * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`), its
@@ -23,10 +24,10 @@ export interface InputTarget {
   readonly canUndo: boolean
   readonly canRedo: boolean
 }
-export type OutputView = 'grid' | 'messages' | 'plan'
+export type OutputView = 'grid' | 'messages'
 /**
- * A Query Output view: the query's results grid for one result set (its cell selection lives in
- * `ResultSelectionService`), or Messages or the XML plan with the text selected in them when the menu opened.
+ * A Query Output view: the query's results grid for one result set (its cell selection lives in the grid's view state,
+ * `ResultsService`), or Messages with the text selected in them when the menu opened.
  */
 export interface OutputTarget {
   readonly kind: 'output'
@@ -132,7 +133,7 @@ const focusable = 'button, [tabindex], input, textarea, [contenteditable]'
 /** Parts of the query editor whose right-click shows no menu: scroll bars, the overview ruler, hovers, suggestions, and the find widget around its inputs. */
 const editorChrome = '.scrollbar, .decorationsOverviewRuler, .contentWidgets, .overflowingContentWidgets, .overlayWidgets'
 const documentCommandEnabled: CommandEnabled = command => typeof document === 'undefined' || document.queryCommandEnabled(command)
-const outputViews: ReadonlySet<string> = new Set<OutputView>(['grid', 'messages', 'plan'])
+const outputViews: ReadonlySet<string> = new Set<OutputView>(['grid', 'messages'])
 
 /** The text selected inside `element`, or '' when the selection is elsewhere or crosses its edge. */
 export function selectedTextIn(element: Element): string {
@@ -140,7 +141,7 @@ export function selectedTextIn(element: Element): string {
   if (!selection?.anchorNode || !selection.focusNode || !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return ''
   return selection.toString()
 }
-/** The Query Output view `element` is in: QueryOutput marks each with its query, view, and result set. */
+/** The Query Output view `element` is in: OutputPane marks each with its query, view, and result set. */
 export function outputTarget(element: Element): OutputTarget | undefined {
   const view = element.closest<HTMLElement>('[data-output-view]')
   const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', resultIndex = Number(view?.getAttribute('data-result-index') ?? 0)
@@ -183,7 +184,7 @@ export class MenuTargetService {
       const output = outputTarget(element)
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
-      const anchor = output.view === 'grid' ? output.element.querySelector('td.active-cell') ?? output.element.querySelector('td[data-col]') ?? undefined : undefined
+      const anchor = output.view === 'grid' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
       return { target: output, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
     } catch (error) { onUnexpectedError(error); return undefined }
   }

@@ -3,7 +3,8 @@ namespace Varia.Backend.Results;
 /// <summary>A query's EVENT frames (docs/ipc.md): resultSet.opened and resultSet.closed as they happen, progress at most
 /// 10 times a second (latest value wins), and stored messages every 100 ms or 64 KiB. It never blocks the query task:
 /// emitting only queues a frame, and progress is sampled by a timer, except that a sealed page is reported at once when
-/// no progress went out in the last 100 ms, so the first rows become readable without waiting for a tick. Disposing
+/// no progress went out in the last 100 ms, and a set's first sealed page always at once, so the first rows of every set
+/// become readable without waiting for a tick. Disposing
 /// flushes, and nothing is emitted after that, so every event precedes the query's summary. The summary stays
 /// authoritative; progress and messages may be dropped when main is not reading.</summary>
 internal sealed class QueryEventSink : IDisposable
@@ -16,7 +17,8 @@ internal sealed class QueryEventSink : IDisposable
     private readonly Action<object, bool>? emit;
     private readonly object gate = new();
     private readonly List<ResultSetBuffer> open = [];
-    private readonly List<string> messages = [];
+    private readonly List<MessageEntry> messages = [];
+    private readonly HashSet<uint> firstSeals = [];
     private readonly Timer? timer;
     private int characters;
     private long lastProgress, lastFlush;
@@ -67,27 +69,30 @@ internal sealed class QueryEventSink : IDisposable
     /// <summary>Marks rows read since the last report.</summary>
     public void RowsChanged() => dirty = true;
 
-    /// <summary>A page was sealed: reported now unless progress went out in the last 100 ms (then at the next tick).</summary>
-    public void Sealed()
+    /// <summary>A page of the set was sealed: reported now when it is the set's first, or when no progress went out in the
+    /// last 100 ms (otherwise at the next tick).</summary>
+    public void Sealed(ResultSetBuffer set)
     {
         dirty = true;
-        if (emit is null || Environment.TickCount64 - Interlocked.Read(ref lastProgress) < IntervalMs) return;
+        if (emit is null) return;
         lock (gate)
         {
-            if (!stopped && dirty) EmitProgress();
+            if (stopped || !dirty) return;
+            if (firstSeals.Add(set.ResultId) || Environment.TickCount64 - Interlocked.Read(ref lastProgress) >= IntervalMs) EmitProgress();
         }
     }
 
     /// <summary>A message stored in the summary (QueryMessages enforces the caps).</summary>
-    public void Message(string text)
+    public void Message(MessageEntry entry)
     {
         if (emit is null) return;
         lock (gate)
         {
             if (stopped) return;
-            messages.Add(text);
-            characters += text.Length;
-            if (characters >= FlushCharacters) FlushMessages();
+            messages.Add(entry);
+            characters += entry.Text.Length;
+            // Main accepts at most MaxMessages entries per event; the late errors past that cap go out in the next one.
+            if (characters >= FlushCharacters || messages.Count >= QueryMessages.MaxMessages) FlushMessages();
         }
     }
 

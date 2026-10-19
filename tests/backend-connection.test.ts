@@ -101,7 +101,7 @@ describe('BackendConnection malformed input', () => {
     const events: unknown[] = []
     const { done } = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0, onEvent: event => { events.push(event) } })
     expect(await failure(done)).toMatchObject({ code: 'STREAM_PROTOCOL' })
-    expect(events).toEqual([{ type: 'messages', messages: ['first'] }])
+    expect(events).toEqual([{ type: 'messages', messages: [{ text: 'first', kind: 'info' }] }])
     expect(global).toEqual([{ type: 'results.memory', usedBytes: 1, globalBytes: 2 }])
     expect(connection.lost).toBeUndefined()
   })

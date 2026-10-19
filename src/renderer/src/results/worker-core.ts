@@ -4,9 +4,12 @@
 import type { BackendStatus, ResultsCloseResult, ResultsReadResult, WireKind } from '../../../shared/contracts'
 import type { PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
-import { CELL_NULL, CELL_TRUNCATED, cellFlags, cellText, runText, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
+import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
-import { FLAG_OVER_BUDGET, FLAG_TRUNCATED, type ResultKey, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
+import { gridLimits as g } from '../grid/constants'
+import { displayColumns } from '../grid/measure'
+import { formatJson, formatXml } from './doc-format'
+import { FLAG_CAPPED, FLAG_OVER_BUDGET, type MeasureRequest, type ResultKey, type ValueFormat, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
 
 /** The parts of a MessagePort the core uses. */
 export interface PortLike { postMessage(message: unknown): void }
@@ -103,10 +106,12 @@ export class ResultsWorkerCore {
     switch (request.type) {
       case 'attach': return
       case 'window': return this.window(request)
-      case 'cell': return this.cell(request.id, request.key, request.wires, request.row, request.col)
+      case 'cell': return this.cell(request.id, request.key, request.wires, request.row, request.col, request.format)
       case 'prefetch': return this.prefetch(request.key, request.wires, request.first, request.count)
       case 'cancel': return this.cancel(request.id)
       case 'close': return this.close(request.id, request.generation, request.resultIds)
+      case 'measure': return this.measure(request)
+      case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size }); return
     }
   }
 
@@ -117,7 +122,7 @@ export class ResultsWorkerCore {
       case 'page': return this.page(message.rid, message.body)
       case 'end': return message.ok ? this.ended(message.rid, message.result) : this.failed(message.rid, message.code, message.message)
       case 'query': this.post({ type: 'query', queryId: message.queryId, event: message.event }); return
-      case 'memory': this.post({ type: 'memory', usedBytes: message.usedBytes, globalBytes: message.globalBytes }); return
+      case 'memory': this.post({ type: 'memory', usedBytes: message.usedBytes, globalBytes: message.globalBytes, generation: message.generation, seq: message.seq }); return
     }
   }
 
@@ -146,15 +151,52 @@ export class ResultsWorkerCore {
     })
   }
 
-  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number): void {
+  /** The widest display text per column over the rows asked for (those cached once the reads end), in monospace
+   *  columns up to 512; NULL counts as its 4 letters. The grid sizes columns from it. */
+  private measure(request: MeasureRequest): void {
+    const columns = request.wires.length
+    const colStart = Math.max(0, Math.min(columns, request.colStart)), colEnd = Math.max(colStart, Math.min(columns, request.colEnd))
+    const width = Math.max(1, colEnd - colStart)
+    const first = Math.max(0, request.first), count = Math.max(0, Math.min(request.count, this.limits.windowRows, Math.floor(this.limits.windowCells / width)))
+    this.wait(request.id, request.key, request.wires, first, count, () => {
+      const result = resultOf(request.key), rows = this.covered(result, first, count), cap = g.measureCap
+      const widths = new Uint16Array(colEnd - colStart)
+      const bounds: WindowRequest = { type: 'window', id: request.id, key: request.key, wires: request.wires, first, count: rows, colStart, colEnd, maxCellChars: cap, textBudget: Number.POSITIVE_INFINITY }
+      let page: CachedPage | undefined
+      let runs: (TextRun | undefined)[] = []
+      for (let r = 0; r < rows; r++) {
+        const row = first + r
+        if (!page || row >= page.firstRow + page.rowCount) {
+          page = this.pageAt(result, row)!
+          this.touch(page)
+          runs = this.runs(page.view, row - page.firstRow, Math.min(page.rowCount, row - page.firstRow + rows - r), bounds, Number.POSITIVE_INFINITY)
+        }
+        const local = row - page.firstRow
+        for (let column = colStart; column < colEnd; column++) {
+          const at = column - colStart
+          if (widths[at] >= cap) continue
+          if ((cellFlags(page.view, column, local) & CELL_NULL) !== 0) { if (widths[at] < 4) widths[at] = 4; continue }
+          const run = runs[at]
+          const text = (run ? runSlice(run, page.view, column, local, cap) : cellSlice(page.view, column, local, cap)).text
+          const columnsWide = displayColumns(displayText(text), cap)
+          if (columnsWide > widths[at]) widths[at] = columnsWide
+        }
+      }
+      this.post({ type: 'measure', id: request.id, rows, widths }, [widths.buffer])
+    })
+  }
+
+  /** A whole stored value. Formatting runs here, off the UI thread; a value stored as a prefix is never formatted. */
+  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number, format?: ValueFormat): void {
     this.wait(id, key, wires, row, 1, () => {
       const page = this.pageAt(resultOf(key), row)
       if (!page || col < 0 || col >= wires.length) return this.error(id, 'RESULT_UNAVAILABLE', 'That row is not available.')
       this.touch(page)
       const flags = cellFlags(page.view, col, row - page.firstRow)
-      const isNull = (flags & CELL_NULL) !== 0
-      const value = isNull ? { text: '', truncated: false } : cellText(page.view, col, row - page.firstRow)
-      this.post({ type: 'cell', id, text: value.text, isNull, truncated: value.truncated })
+      const isNull = (flags & CELL_NULL) !== 0, error = (flags & CELL_ERROR) !== 0
+      const value = isNull || error ? { text: '', truncated: false } : cellText(page.view, col, row - page.firstRow)
+      const shown = format && value.text && !value.truncated ? (format === 'json' ? formatJson : formatXml)(value.text) : { text: value.text, formatted: false }
+      this.post({ type: 'cell', id, text: shown.text, isNull, truncated: value.truncated, error, formatted: shown.formatted })
     })
   }
 
@@ -441,9 +483,9 @@ export class ResultsWorkerCore {
         if (budget <= 0) { text[index] = ''; flags[index] = flag | FLAG_OVER_BUDGET; continue }
         const cap = Math.min(request.maxCellChars, budget)
         const run = runs[column - request.colStart]
-        const cell = run ? runText(run, page.view, column, local, cap) : cellText(page.view, column, local, cap)
-        if (cell.truncated && (flag & CELL_TRUNCATED) === 0) flag |= cap < request.maxCellChars ? FLAG_OVER_BUDGET : FLAG_TRUNCATED
-        text[index] = cell.text
+        const cell = run ? runSlice(run, page.view, column, local, cap) : cellSlice(page.view, column, local, cap)
+        if (cell.cut) flag |= cap < request.maxCellChars ? FLAG_OVER_BUDGET : FLAG_CAPPED
+        text[index] = request.display ? displayText(cell.text) : cell.text
         flags[index] = flag
         budget -= cell.text.length
       }

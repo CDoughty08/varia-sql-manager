@@ -5,6 +5,7 @@ using System.IO.Pipes;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Varia.Backend.Protocol;
+using Varia.Backend.Results;
 
 namespace Varia.Backend.Tests;
 
@@ -133,10 +134,11 @@ internal static class HostChecks
             host.Request(8, "test.events", new { });
             var firstEvent = host.Next(FrameKind.Event);
             var secondEvent = host.Next(FrameKind.Event);
+            var thirdEvent = host.Next(FrameKind.Event);
             var eventsDone = host.Next(FrameKind.Response);
             check(firstEvent?.Header.Id == 8 && Body(firstEvent.Value).GetProperty("messages")[0].GetString() == "first" && Body(secondEvent!.Value).GetProperty("type").GetString() == "resultSet.closed"
-                && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(secondEvent.Value) && host.Next(FrameKind.Event, 200) is null,
-                "a request's EVENT frames precede its RESPONSE, and an event body over 256 KiB is dropped");
+                && thirdEvent?.Body.Length > 1024 * 1024 && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(thirdEvent.Value) && host.Next(FrameKind.Event, 200) is null,
+                "a request's EVENT frames precede its RESPONSE; a droppable event over 256 KiB and an essential one over 4 MiB are dropped, a 1 MiB descriptor event is not");
 
             for (var id = 10u; id < 18; id++) host.Request(id, "test.slow", new { ms = 1500 });
             Thread.Sleep(100);
@@ -213,6 +215,8 @@ internal static class HostChecks
         }
 
         OutboundChecks(check);
+        MemoryOrder(check);
+        MemoryBackpressure(check);
 
         // HELLO announces MethodNames and main refuses a backend missing any of its methods, so every name must dispatch.
         using var service = new SqlService();
@@ -225,6 +229,7 @@ internal static class HostChecks
         }
         check(undispatched.Count == 0 && service.LaneOf("query.execute") == RequestLane.Query && service.LaneOf("scripting.script") == RequestLane.Metadata
             && service.LaneOf("tables.columns") == RequestLane.Metadata
+            && service.LaneOf("results.copy") == RequestLane.Results && service.LaneOf("results.export") == RequestLane.Results
             && service.LaneOf("query.cancel") == RequestLane.Control && service.LaneOf("no.such.method") == RequestLane.Control,
             "every method announced in HELLO is dispatched, on its lane: " + string.Join(", ", undispatched));
         // explorer.children replaced the v1 catalog lists and scripting.script replaced tables.script; a stale renderer or
@@ -239,6 +244,81 @@ internal static class HostChecks
         }
         check(retired.Count == retiredMethods.Length && !retiredMethods.Any(SqlService.MethodNames.Contains),
             "the retired v1 catalog and table script methods are neither announced nor dispatched: " + string.Join(", ", retired));
+    }
+
+    /// <summary>A summary is written after SummaryBudget took its figure, so a results.close answered meanwhile (Close
+    /// Results in another tab while a summary of a thousand sets is serialized) sends its fall first, and the older summary
+    /// arrives last. Applied in arrival order, skipping any report older than one already applied (as the status bar
+    /// does), the reports end on what the store holds.</summary>
+    private static void MemoryOrder(Action<bool, string> check)
+    {
+        HostHarness? harness = null;
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var taken = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var host = harness = new HostHarness(dispatcher: () => new HeldSummary(new SqlService(store, hooks: true, publish: value => harness!.Host.Publish(value)), taken, release));
+        host.Hello();
+        host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
+        var resultId = Body(host.Next(FrameKind.Response)!.Value).GetProperty("result").GetProperty("resultId").GetUInt32();
+        host.Request(2, "test.summary", new { });
+        var held = taken.Wait(5000);
+        host.Request(3, "results.close", new { resultIds = new[] { resultId } });
+        var closed = host.Next(FrameKind.Response);
+        release.Set();
+        var summary = host.Next(FrameKind.Response);
+        var reports = new List<(long Arrival, long Seq, long Used, string Kind)>();
+        while (host.Next(FrameKind.Event, 300) is { } frame)
+        {
+            var body = Body(frame);
+            if (frame.Header.Id == 0 && body.GetProperty("type").GetString() == "results.memory")
+                reports.Add((host.ArrivalOf(frame), body.TryGetProperty("seq", out var seq) ? seq.GetInt64() : -1, body.GetProperty("usedBytes").GetInt64(), "event"));
+        }
+        if (summary is { } answer && Body(answer).GetProperty("result").GetProperty("budget") is var budget)
+            reports.Add((host.ArrivalOf(answer), budget.TryGetProperty("seq", out var seq) ? seq.GetInt64() : -1, budget.GetProperty("usedBytes").GetInt64(), "summary"));
+        reports.Sort((left, right) => left.Arrival.CompareTo(right.Arrival));
+        long shown = -1, shownSeq = 0;
+        foreach (var report in reports.Where(report => report.Seq > shownSeq)) (shown, shownSeq) = (report.Used, report.Seq);
+        var fall = reports.FindIndex(report => report is { Kind: "event", Used: 0 });
+        check(held && closed?.Header.Id == 3 && summary?.Header.Id == 2 && fall >= 0 && reports[^1] is { Kind: "summary", Used: > 0 } && reports.All(report => report.Seq > 0)
+            && reports.Select(report => report.Seq).Distinct().Count() == reports.Count && shown == store.UsedBytes && shown == 0,
+            "a summary overtaken by a close's fall carries an older sequence number, so the newest report is what the store holds: "
+            + string.Join(", ", reports.Select(report => report.Kind + " #" + report.Seq + " " + report.Used)));
+    }
+
+    /// <summary>results.memory is droppable: while main is not reading, the control lane refuses it. A refused fall must
+    /// not count as reported, or the status bar keeps showing memory a close already returned; the 1 s timer sends it
+    /// once the lane drains.</summary>
+    private static void MemoryBackpressure(Action<bool, string> check)
+    {
+        HostHarness? harness = null;
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var host = harness = new HostHarness(dispatcher: () => new SqlService(store, hooks: true, publish: value => harness!.Host.Publish(value)), valve: true);
+        host.Hello();
+        host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
+        var resultId = Body(host.Next(FrameKind.Response)!.Value).GetProperty("result").GetProperty("resultId").GetUInt32();
+        long Memory(int timeoutMs, Func<long, bool> wanted)
+        {
+            var deadline = Environment.TickCount64 + timeoutMs;
+            while (deadline - Environment.TickCount64 > 0 && host.Next(FrameKind.Event, (int)Math.Max(1, deadline - Environment.TickCount64)) is { } frame)
+                if (frame.Header.Id == 0 && Body(frame) is var body && body.GetProperty("type").GetString() == "results.memory" && wanted(body.GetProperty("usedBytes").GetInt64()))
+                    return body.GetProperty("usedBytes").GetInt64();
+            return -1;
+        }
+        var rise = Memory(3000, used => used > 0);
+        // Main stops reading: the writer blocks on its first frame, then a thousand queued events fill the control lane.
+        host.Valve!.Shut();
+        host.Host.Publish(new { Type = "test.filler" });
+        var blocked = SpinWait.SpinUntil(() => host.Valve.Blocked, 2000);
+        for (var i = 0; i < Outbound.MaxDroppableFrames + 10; i++) host.Host.Publish(new { Type = "test.filler" });
+        host.Request(2, "results.close", new { resultIds = new[] { resultId } });
+        var closedWhileFull = SpinWait.SpinUntil(() => store.UsedBytes == 0 && host.Host.InFlight == 0, 5000);
+        // A timer tick while the lane is still full.
+        Thread.Sleep(1200);
+        host.Valve.Open();
+        var closed = host.Next(FrameKind.Response);
+        var fall = Memory(3000, used => used == 0);
+        check(rise > 0 && blocked && closedWhileFull && closed?.Header.Id == 2 && fall == 0 && store.UsedBytes == 0,
+            "a results.memory fall refused while the control lane is full is sent once it drains (rise " + rise + ", fall " + fall + ")");
     }
 
     private static void OutboundChecks(Action<bool, string> check)
@@ -337,7 +417,10 @@ internal sealed class StubDispatcher : IRequestDispatcher
                 context!.SendEvent(new { Type = "messages", Messages = new[] { "first" } }, true);
                 context.SendEvent(new { Type = "messages", Messages = new[] { new string('x', 300 * 1024) } }, true);
                 context.SendEvent(new { Type = "resultSet.closed" }, false);
-                return new { Sent = 3 };
+                // Essential events carry descriptors of up to 4,096 columns: 1 MiB passes, 5 MiB does not.
+                context.SendEvent(new { Type = "resultSet.opened", Descriptor = new string('d', 1024 * 1024) }, false);
+                context.SendEvent(new { Type = "resultSet.opened", Descriptor = new string('d', 5 * 1024 * 1024) }, false);
+                return new { Sent = 5 };
             case "test.unsent":
                 context!.Unsent = () => Interlocked.Increment(ref Unsent);
                 return new { Text = new string('x', ProtocolLimits.ResponseBody) };
@@ -347,6 +430,27 @@ internal sealed class StubDispatcher : IRequestDispatcher
 
     public void CancelAll() => Interlocked.Increment(ref CancelAllCalls);
     public void Dispose() => Disposed = true;
+}
+
+/// <summary>SqlService plus test.summary: a summary budget taken at once and answered only when the check says so, as a
+/// summary of a thousand result sets is still being serialized when a close from another tab is answered.</summary>
+internal sealed class HeldSummary(SqlService service, ManualResetEventSlim taken, ManualResetEventSlim release) : IRequestDispatcher
+{
+    public IReadOnlyList<string> Methods { get; } = [.. service.Methods, "test.summary"];
+    public RequestLane LaneOf(string method) => method == "test.summary" ? RequestLane.Query : service.LaneOf(method);
+    public (long GlobalBytes, long QueryBytes) ResultBudget => service.ResultBudget;
+
+    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context)
+    {
+        if (method != "test.summary") return await service.DispatchAsync(method, parameters, json, context);
+        var budget = service.SummaryBudget();
+        taken.Set();
+        await Task.Run(() => release.Wait(10_000));
+        return new { Budget = budget };
+    }
+
+    public void CancelAll() => service.CancelAll();
+    public void Dispose() => service.Dispose();
 }
 
 /// <summary>A ProtocolHost on its own thread, spoken to through anonymous pipes as main would.</summary>
@@ -362,11 +466,13 @@ internal sealed class HostHarness : IDisposable
     private long arrivals;
 
     /// <param name="dispatcher">Replaces the stub dispatcher, for example with a SqlService.</param>
-    public HostHarness(HostOptions? options = null, Stream? output = null, Func<IRequestDispatcher>? dispatcher = null)
+    /// <param name="valve">Puts a <see cref="ValveStream"/> in front of the pipe the frames are read from.</param>
+    public HostHarness(HostOptions? options = null, Stream? output = null, Func<IRequestDispatcher>? dispatcher = null, bool valve = false)
     {
         hostInput = new AnonymousPipeClientStream(PipeDirection.In, toHost.ClientSafePipeHandle);
         hostOutput = new AnonymousPipeClientStream(PipeDirection.Out, fromHost.ClientSafePipeHandle);
-        Host = new ProtocolHost(hostInput, output ?? hostOutput, () => { Dispatcher.Created = true; return dispatcher?.Invoke() ?? Dispatcher; }, HostChecks.Json,
+        if (valve && output is null) Valve = new ValveStream(hostOutput);
+        Host = new ProtocolHost(hostInput, output ?? Valve ?? (Stream)hostOutput, () => { Dispatcher.Created = true; return dispatcher?.Invoke() ?? Dispatcher; }, HostChecks.Json,
             (options ?? new HostOptions()) with { Exit = code => { Exits.Enqueue(code); Exited.Set(); }, Diagnostic = _ => { } });
         hostThread = new Thread(() => Host.Run()) { IsBackground = true, Name = "test-host" };
         hostThread.Start();
@@ -374,6 +480,7 @@ internal sealed class HostHarness : IDisposable
     }
 
     public ProtocolHost Host { get; }
+    public ValveStream? Valve { get; }
     public StubDispatcher Dispatcher { get; } = new();
     public ConcurrentQueue<int> Exits { get; } = new();
     public ManualResetEventSlim Exited { get; } = new();
@@ -434,6 +541,7 @@ internal sealed class HostHarness : IDisposable
 
     public void Dispose()
     {
+        Valve?.Open();
         toHost.Dispose();
         hostThread.Join(5000);
         // Closing the write end first ends the frame reader's blocked read.
@@ -441,4 +549,31 @@ internal sealed class HostHarness : IDisposable
         hostInput.Dispose();
         fromHost.Dispose();
     }
+}
+
+/// <summary>Passes writes through, but holds them while shut, as when main stops reading the backend's stdout.</summary>
+internal sealed class ValveStream(Stream inner) : Stream
+{
+    private readonly ManualResetEventSlim open = new(true);
+    private int blocked;
+    /// <summary>A write is waiting for the valve to open.</summary>
+    public bool Blocked => Volatile.Read(ref blocked) != 0;
+    public void Shut() => open.Reset();
+    public void Open() => open.Set();
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+        if (!open.IsSet) Volatile.Write(ref blocked, 1);
+        open.Wait();
+        Volatile.Write(ref blocked, 0);
+        inner.Write(buffer, offset, count);
+    }
+    public override void Flush() => inner.Flush();
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
 }

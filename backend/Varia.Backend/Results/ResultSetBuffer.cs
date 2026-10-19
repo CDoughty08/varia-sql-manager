@@ -6,7 +6,9 @@ internal sealed record StoredPage(long FirstRow, int Rows, byte[] Body);
 /// <summary>One stored result set: an append-only page directory that results.read serves, and, while the set is open,
 /// the page being built. One query task writes; readers, progress events and releases may run concurrently.
 /// Budget: each sealed page costs its length plus <see cref="ResultStore.PageOverhead"/>, and the builder's buffers are
-/// charged as they grow; both come from reservations taken in 256 KiB steps.</summary>
+/// charged as they grow; both come from reservations taken in 256 KiB steps.
+/// Copy and export jobs lease the set: a release during a job ends reads and stops storing at once, but its pages and
+/// budget are freed only when the last lease ends, so re-executing or closing a tab never breaks a save.</summary>
 internal sealed class ResultSetBuffer
 {
     private static readonly TimeSpan FirstPageDelay = TimeSpan.FromMilliseconds(20);
@@ -21,6 +23,8 @@ internal sealed class ResultSetBuffer
     private int truncated;
     private int state;
     private int sealedPages;
+    private int leases;
+    private bool freePending;
     private volatile bool incomplete;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
@@ -188,19 +192,58 @@ internal sealed class ResultSetBuffer
         }
     }
 
-    /// <summary>Drops every page and returns all memory charged for this set; in-flight reads stop after their current page.</summary>
+    /// <summary>Marks the set released, so in-flight reads stop after their current page and nothing more is stored, and
+    /// returns the memory it frees: all of it, or nothing while a job holds a lease (the last lease frees it).</summary>
     internal long Release()
     {
         lock (gate)
         {
             state = 2;
             builder = null;
-            pages.Clear();
-            var freed = charged;
-            ReturnLocked(charged);
-            slack = working = pending = 0;
-            return freed;
+            if (leases > 0)
+            {
+                freePending = true;
+                return 0;
+            }
+            return FreeLocked();
         }
+    }
+
+    /// <summary>Keeps the pages and their budget for a copy or export until <see cref="ReleaseLease"/>; false once the set
+    /// has been released.</summary>
+    public bool TryLease()
+    {
+        lock (gate)
+        {
+            if (state == 2) return false;
+            leases++;
+            return true;
+        }
+    }
+
+    /// <summary>Ends a lease. The last one frees a set that was released while it was held.</summary>
+    public void ReleaseLease()
+    {
+        long freed;
+        lock (gate)
+        {
+            if (leases == 0) throw new InvalidOperationException("The result set is not leased.");
+            if (--leases > 0 || !freePending) return;
+            freed = FreeLocked();
+        }
+        store.Freed(freed);
+    }
+
+    public int Leases { get { lock (gate) return leases; } }
+
+    private long FreeLocked()
+    {
+        freePending = false;
+        pages.Clear();
+        var freed = charged;
+        ReturnLocked(charged);
+        slack = working = pending = 0;
+        return freed;
     }
 
     private void ReturnLocked(long bytes)

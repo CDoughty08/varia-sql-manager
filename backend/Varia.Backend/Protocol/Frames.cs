@@ -9,6 +9,8 @@ internal static class ProtocolLimits
     public const int RequestBody = 4 * 1024 * 1024;
     public const int ResponseBody = 16 * 1024 * 1024;
     public const int EventBody = 256 * 1024;
+    /// <summary>Essential (non-droppable) events: a result set's descriptor, whose 4,096 columns may take about 3.5 MB.</summary>
+    public const int EssentialEventBody = 4 * 1024 * 1024;
 }
 
 internal enum FrameKind : byte { Hello = 1, Request = 2, Response = 3, Event = 4, Data = 5, Cancel = 6, Credit = 7, Ping = 8, Pong = 9, GoAway = 10 }

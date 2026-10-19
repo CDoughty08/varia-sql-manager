@@ -1,5 +1,5 @@
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
-import type { QueryDocument } from '../documents'
+import { isQueryDocument, type QueryDocument } from '../documents'
 import type { ConnectionService } from './connections'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
@@ -13,17 +13,18 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 export class TargetService {
   constructor(
     private readonly documents: DocumentService,
-    private readonly queries: Pick<QueryService, 'clear' | 'isRunning'>,
+    private readonly queries: Pick<QueryService, 'isRunning'>,
     private readonly connections: Pick<ConnectionService, 'get'>,
     private readonly files: Pick<FileService, 'clearError' | 'reportError'>,
     private readonly api: Pick<VariaApi, 'closeQuerySession'>
   ) {}
   update(tabId: string, patch: TargetPatch): void {
     const current = this.documents.get(tabId)
-    // Re-selecting the current target keeps the query's results.
     if (current && Object.entries(patch).every(([key, value]) => current[key as keyof TargetPatch] === value)) return
+    // A value opened from the results (XML, JSON, plan) never has a server or database.
+    if (current && !isQueryDocument(current)) return
+    // The query's results stay, as in SSMS: they live until it runs again, closes, or the user closes them.
     this.documents.update(tabId, patch)
-    this.queries.clear(tabId)
   }
   /**
    * Moves a query to another server (or disconnects it), ending its session first so no transaction follows it.
@@ -31,7 +32,7 @@ export class TargetService {
    */
   async changeConnection(tabId: string, connectionId?: string): Promise<void> {
     const document = this.documents.get(tabId)
-    if (!document) return
+    if (!document || !isQueryDocument(document)) return
     const next = connectionId === undefined ? undefined : this.connections.get(connectionId)
     if (document.connectionId === next?.id) return
     const database = next?.database ?? document.database

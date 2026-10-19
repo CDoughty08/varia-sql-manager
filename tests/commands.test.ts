@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CommandId } from '../src/shared/commands/catalog'
+import { commandDescriptor, type CommandId } from '../src/shared/commands/catalog'
 import { contextRecord } from '../src/shared/commands/context-keys'
+import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { menuCommandIds } from '../src/shared/commands/menus'
 import { CommandService, type CommandSource } from '../src/renderer/src/core/commands'
 import { computeContextKeys, ContextKeyService, focusFacts, type FocusElement } from '../src/renderer/src/core/contextkeys'
@@ -169,13 +170,25 @@ describe('context keys', () => {
     const base = { platform: 'win32' as const, queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendStatus: 'starting' as const }
     expect(computeContextKeys({ ...base, documents: snapshot() })).toMatchObject({ isWindows: true, hasActiveDocument: false, multipleDocuments: false, documentBusy: false, hasConnection: false, activeDocumentConnected: false, queryRunning: false, editorFocus: false, activePanel: '' })
     const documents = snapshot({ documents: [doc('a', 'server-a'), doc('b', 'gone')], activeId: 'a', busy: true })
-    const running = { a: { running: { queryId: 'q', connectionId: 'server-a' } } }
+    const running = { a: { running: { queryId: 'q', connectionId: 'server-a', startedAt: 0 } } }
     expect(computeContextKeys({ ...base, documents, queries: running, connections: [connectionInfo('server-a')], quickInputVisible: true, wordWrap: true, backendStatus: 'ready' })).toMatchObject({
       hasActiveDocument: true, multipleDocuments: true, documentBusy: true, hasConnection: true, activeDocumentConnected: true, queryRunning: true, quickInputVisible: true, editorWordWrap: true, backendReady: true
     })
     // The active query's server was disconnected; a stale running entry for another tab does not count.
     expect(computeContextKeys({ ...base, documents: { ...documents, activeId: 'b' }, queries: running, connections: [connectionInfo('server-a')] })).toMatchObject({ activeDocumentConnected: false, queryRunning: false })
     expect(computeContextKeys({ ...base, documents: snapshot({ documents: [doc('a')], activeId: 'missing' }) })).toMatchObject({ hasActiveDocument: false })
+    // Results are the active query's own.
+    expect(computeContextKeys({ ...base, documents, results: { a: true } })).toMatchObject({ hasResults: true })
+    expect(computeContextKeys({ ...base, documents, results: { b: true } })).toMatchObject({ hasResults: false })
+    expect(computeContextKeys({ ...base, documents })).toMatchObject({ hasResults: false })
+    // A value opened from the results is a document but not a query: Change Connection is off there.
+    expect(computeContextKeys({ ...base, documents })).toMatchObject({ activeDocumentIsQuery: true })
+    expect(computeContextKeys({ ...base, documents: snapshot() })).toMatchObject({ activeDocumentIsQuery: false })
+    const values = snapshot({ documents: [doc('a'), { ...doc('x'), kind: 'xml' as const, database: '' }], activeId: 'x' })
+    const keys = computeContextKeys({ ...base, documents: values, connections: [connectionInfo('server-a')] })
+    expect(keys).toMatchObject({ hasActiveDocument: true, activeDocumentIsQuery: false, activeDocumentConnected: false })
+    expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), keys)).toBe(false)
+    expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), computeContextKeys({ ...base, documents: { ...documents, busy: false } }))).toBe(true)
   })
   it('derive focus keys from the focused element', () => {
     const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editable?: boolean; grid?: boolean } = {}): FocusElement & { tag: string } => ({

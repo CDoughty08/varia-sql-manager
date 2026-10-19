@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions } from '../../shared/contracts'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
-import type { QueryTab } from './documents'
+import { documentKind, isQueryDocument, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
 import type { CommandArgs, CommandId } from './core/types'
@@ -13,7 +13,8 @@ import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './scripting/OptionsDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
 import BackendBanner from './BackendBanner'
-import QueryOutput from './QueryOutput'
+import OutputPane from './results/OutputPane'
+import MemoryIndicator from './results/MemoryIndicator'
 import TitleBar from './TitleBar'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
@@ -70,10 +71,15 @@ export default function App() {
   }
   const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), execute: useKeybindingLabel('query.execute') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
-  const active: QueryTab = { ...(tabs.find(tab => tab.id === activeId) ?? emptyTab), result: queryState[activeId]?.result, error: queryState[activeId]?.error }
+  const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
+  // An XML, JSON or plan value opened from the results: no server, database, or results of its own.
+  const activeKind = documentKind(active), isQuery = activeKind === 'sql'
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
+  // The status bar's server and database, cut short when the bar is too narrow; its tooltip holds the whole text.
+  const place = connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'
+  const placeContext = !active.id ? 'No query' : isQuery ? active.database : kindInfo[activeKind].label
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
@@ -127,8 +133,8 @@ export default function App() {
   }, [workbench, shellHost])
   useEffect(() => {
     const subscription = workbench.events.subscribe(event => {
-      // Failures without a result also need the output panel; background tabs must not steal the editor.
-      if (event.type === 'query.finished' && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.reveal('output')
+      // As in SSMS, executing shows the results (even when Ctrl+R hid them); background tabs must not steal the editor.
+      if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.reveal('output')
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
     })
     return () => subscription.dispose()
@@ -158,8 +164,8 @@ export default function App() {
     }
     workbench.connections.add(info, chosen)
     const tab = documents.active
-    // Connecting a second server must not silently retarget an existing query.
-    if (tab && !tab.connectionId && !queries.isRunning(tab.id)) targets.update(tab.id, { connectionId: info.id, database: info.database })
+    // Connecting a second server must not silently retarget an existing query, and a value's document never connects.
+    if (tab && !tab.connectionId && isQueryDocument(tab) && !queries.isRunning(tab.id)) targets.update(tab.id, { connectionId: info.id, database: info.database })
     else documents.newQuery('', undefined, info.id, info.database)
   }
 
@@ -199,7 +205,7 @@ export default function App() {
         <button onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
       </div>
       <div className="toolbar-context">
-        <label className="context-field" htmlFor="query-server">Server</label><select id="query-server" aria-label="Query server" disabled={!active.id || !!activeRunning || documentBusy} value={connection?.id ?? ''} onChange={event => void targets.changeConnection(active.id, event.target.value || undefined)}><option value="">Disconnected</option>{connections.filter(value => !value.lost || value === connection).map(value => <option key={value.id} value={value.id} disabled={value.lost}>{value.displayName ? `${value.displayName} (${value.server})` : value.server}{value.lost ? ' (connection lost)' : ''}</option>)}</select>
+        <label className="context-field" htmlFor="query-server">Server</label><select id="query-server" aria-label="Query server" disabled={!active.id || !isQuery || !!activeRunning || documentBusy} value={connection?.id ?? ''} onChange={event => void targets.changeConnection(active.id, event.target.value || undefined)}><option value="">Disconnected</option>{connections.filter(value => !value.lost || value === connection).map(value => <option key={value.id} value={value.id} disabled={value.lost}>{value.displayName ? `${value.displayName} (${value.server})` : value.server}{value.lost ? ' (connection lost)' : ''}</option>)}</select>
         <label className="context-field" htmlFor="query-database">Database</label><select id="query-database" aria-label="Query database" disabled={!liveConnection || !!activeRunning || documentBusy} value={active.database} onChange={event => targets.changeDatabase(active.id, event.target.value)}>{availableDatabases.map(value => <option key={value.name}>{value.name}</option>)}</select>
       </div>
     </div>
@@ -211,15 +217,16 @@ export default function App() {
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
         <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><span className="sql-icon">SQL</span><span className="tab-name">{tab.name}</span>{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
+          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><span className="sql-icon">{kindInfo[documentKind(tab)].badge}</span><span className="tab-name">{tab.name}</span>{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? 'Cancel the running query before closing' : `Close ${tab.name}`} disabled={!!queryState[tab.id]?.running || documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div>)}</div>
         {active.id ? <>
-          <div className="query-context" style={{ borderBottom: accent ? `3px solid ${accent}` : undefined }}><span>{connection?.displayName || connection?.server || 'Disconnected'}{connection?.lost ? ' (connection lost)' : ''} <span className="breadcrumb">/</span> {active.database}</span><span>Transact-SQL · {activeRunning ? 'Executing…' : connection?.lost ? 'Connection lost' : 'Ready'}</span></div>
+          {isQuery ? <div className="query-context" style={{ borderBottom: accent ? `3px solid ${accent}` : undefined }}><span>{connection?.displayName || connection?.server || 'Disconnected'}{connection?.lost ? ' (connection lost)' : ''} <span className="breadcrumb">/</span> {active.database}</span><span>Transact-SQL · {activeRunning ? 'Executing…' : connection?.lost ? 'Connection lost' : 'Ready'}</span></div>
+            : <div className="query-context"><span>{kindInfo[activeKind].label}</span></div>}
           <div className="editor-container"><QueryEditor /></div>
         </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
-      </main>} output={<QueryOutput tabId={active.id} result={active.result} error={active.error} running={!!activeRunning} rowsRead={activeRunning?.rowsRead} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><span title={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''}>{connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'}<span className="status-divider">|</span>{active.id ? active.database : 'No query'}<span className="status-divider">|</span>1,000 row display limit</span></footer>
+      </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
+    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><span className="status-place" title={[`${place} | ${placeContext}`, health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''].filter(Boolean).join('\n')}>{place}<span className="status-divider">|</span>{placeContext}</span><MemoryIndicator /></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsOpen && <OptionsDialog />}

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ApiResult, BackendState, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
+import type { ApiResult, BackendState, ResultsJobProgress, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
@@ -47,6 +47,14 @@ const api: VariaApi = {
   },
   restartBackend: () => ipcRenderer.invoke('varia:backend-restart'),
   openResultsPort: () => ipcRenderer.invoke('varia:results-port-open'),
+  copyResults: request => ipcRenderer.invoke('varia:results-copy', request),
+  saveResults: request => ipcRenderer.invoke('varia:results-save', request),
+  cancelResultsJob: jobId => ipcRenderer.invoke('varia:results-job-cancel', jobId),
+  onResultsJob: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ResultsJobProgress) => callback(progress)
+    ipcRenderer.on('varia:results-job', listener)
+    return () => { ipcRenderer.removeListener('varia:results-job', listener) }
+  },
   testMode: process.argv.includes('--varia-test-mode'),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
@@ -55,6 +63,7 @@ const api: VariaApi = {
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),
+  closeWindowCancelled: () => { ipcRenderer.send('varia:close-cancelled') },
   loadLayouts: () => ipcRenderer.invoke('varia:layouts-load'),
   saveLayouts: state => ipcRenderer.invoke('varia:layouts-save', state),
   importLayout: () => ipcRenderer.invoke('varia:layout-import'),

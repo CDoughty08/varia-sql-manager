@@ -43,10 +43,22 @@ try { SqlScript.Parse("SELECT 1;\nGO 0", 20); throw new Exception("Invalid selec
 catch (RequestException error) { Check(error.Message.Contains("Line 21:"), "preflight errors include selected-text line offsets"); }
 var messages = new QueryMessages();
 messages.Add(new string('x', 1_000_001));
-Check(messages.Truncated && messages.Snapshot()[0].Length == 1_000_000 && messages.Snapshot().Last().Contains("truncated"), "message text budget is explicit");
+Check(messages.Truncated && messages.Snapshot()[0].Text.Length == 1_000_000 && messages.Snapshot().Last().Text.Contains("truncated"), "message text budget is explicit");
 messages = new QueryMessages();
 for (var i = 0; i < 1001; i++) messages.Add("message");
 Check(messages.Truncated && messages.Snapshot().Count == 1001, "message count budget is explicit");
+for (var i = 0; i < 25; i++) messages.Add("Msg 50000, Level 16, State 1, Line 1\n" + new string('e', 20_000), MessageKind.Error);
+messages.Add("printed later");
+var late = messages.Snapshot();
+Check(late.Count == 1000 + 1 + QueryMessages.MaxLateErrors && late[1000].Text.StartsWith("Messages were truncated") && late.Skip(1001).All(entry => entry.Kind == "error" && entry.Text.Length == 16_384),
+    "after the message caps, up to 20 errors are still kept (cut at 16,384 characters), after the truncation note");
+var stored = new List<MessageEntry>();
+messages = new QueryMessages(stored.Add);
+messages.Add("printed");
+messages.Add("Msg 8134, Level 16, State 1, Line 1\nDivide by zero error encountered.", MessageKind.Error);
+messages.Add("(1 row affected)");
+Check(messages.Snapshot().Select(entry => entry.Kind).SequenceEqual(["info", "error", "info"]) && stored.SequenceEqual(messages.Snapshot()),
+    "messages keep their kinds and order, and each is reported as it is stored");
 var settings = new ConnectOptions("localhost", "", "sql", "reader", "private-marker", true, "strict", "db.example", Advanced: new(
     CommandTimeout: 0, ConnectTimeout: 12, MultipleActiveResultSets: true, NetworkProtocol: "tcp", PacketSize: 8192,
     ConnectRetryCount: 2, ConnectRetryInterval: 3, ApplicationName: "Test Workbench", WorkstationId: "workstation",
@@ -68,6 +80,7 @@ ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
 StoreChecks.Run(Check);
+await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
 await ScriptingChecks.RunAsync(Check);
 using (var offline = new SqlService())
@@ -98,6 +111,7 @@ Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, stri
     Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine));
 // Rows stay in the backend's result store; read them back as the results worker would, from the stored pages.
 List<string?[]> RowsOf(ResultDescriptor set) => LiveResultChecks.RowsOf(service.Results, set);
+List<string> Texts(QueryResult value) => LiveResultChecks.Texts(value);
 QueryResult result;
 try
 {
@@ -112,18 +126,18 @@ try
     result = await Run("SET STATISTICS TIME, IO ON;\nGO\nCREATE TABLE #VariaBatchTest (id int);\nINSERT #VariaBatchTest VALUES (1);\nGO\nINSERT #VariaBatchTest VALUES (2);\nGO 2\nSELECT COUNT(*) AS count FROM #VariaBatchTest;\nGO");
     Check(result.Status == "completed" && result.CompletedBatches == 5, "batches and repeats execute on one session");
     Check(Convert.ToInt32(RowsOf(result.ResultSets.Last())[0][0]) == 3, "temporary table persists across GO");
-    Check(result.Messages.Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)) && result.Messages.Any(value => value.Contains("logical reads", StringComparison.OrdinalIgnoreCase)), "TIME and IO messages reach output");
+    Check(Texts(result).Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)) && Texts(result).Any(value => value.Contains("logical reads", StringComparison.OrdinalIgnoreCase)), "TIME and IO messages reach output");
     result = await Run("SELECT COUNT(*) FROM #VariaBatchTest;");
-    Check(result.Status == "completed" && result.Messages.Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)), "SET options and temp tables persist across Execute calls");
+    Check(result.Status == "completed" && Texts(result).Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)), "SET options and temp tables persist across Execute calls");
     result = await Run("SELECT 'isolated';", Guid.NewGuid().ToString());
-    Check(!result.Messages.Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)), "statistics settings do not leak to another query tab");
+    Check(!Texts(result).Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)), "statistics settings do not leak to another query tab");
     result = await Run("DECLARE @value int = 1;\nGO\nSELECT @value;\nGO\nPRINT 'SHOULD_NOT_RUN';", startLine: 20);
     Check(result.Status == "failed" && result.Error?.Message.Contains("Line 22") == true, "variables are batch scoped and selected-text line offsets are mapped");
-    Check(result.CompletedBatches == 1 && !result.Messages.Any(value => value.Contains("SHOULD_NOT_RUN")), "later batches stop on error");
+    Check(result.CompletedBatches == 1 && !Texts(result).Any(value => value.Contains("SHOULD_NOT_RUN")), "later batches stop on error");
     result = await Run("SELECT 42 AS retained; PRINT 'before error';\nGO\nTHROW 51000, 'expected failure', 1;\nGO\nPRINT 'SHOULD_NOT_RUN';");
-    Check(result.Status == "failed" && RowsOf(result.ResultSets[0]).Count == 1 && result.Messages.Contains("before error"), "partial results and messages survive later batch errors");
+    Check(result.Status == "failed" && RowsOf(result.ResultSets[0]).Count == 1 && Texts(result).Contains("before error"), "partial results and messages survive later batch errors");
     result = await Run("SET STATISTICS TIME, IO OFF;\nGO\nSELECT * FROM #VariaBatchTest;");
-    Check(result.Status == "completed" && !result.Messages.Any(value => value.Contains("logical reads", StringComparison.OrdinalIgnoreCase)), "statistics OFF applies to subsequent batches");
+    Check(result.Status == "completed" && !Texts(result).Any(value => value.Contains("logical reads", StringComparison.OrdinalIgnoreCase)), "statistics OFF applies to subsequent batches");
     result = await Run("SET STATISTICS XML ON;\nGO\nSELECT COUNT(*) AS planned FROM #VariaBatchTest;\nGO\nSET STATISTICS XML OFF;");
     Check(result.Status == "completed" && result.ResultSets.Any(set => set.Kind == "executionPlan" && Convert.ToString(RowsOf(set)[0][0])!.Contains("ShowPlanXML")), "STATISTICS XML preserves raw plan output");
     result = await Run("SET STATISTICS PROFILE ON;\nGO\nSELECT COUNT(*) AS profiled FROM #VariaBatchTest;\nGO\nSET STATISTICS PROFILE OFF;");
@@ -136,9 +150,9 @@ try
         Check(result.Status == "completed" && result.ResultSets.Count > 0 && result.ResultSets.All(set => set.Kind == "rows"), mode + " preserves estimated plan result sets");
     }
     result = await Run("SELECT 1 AS before_error; SELECT 1/0 AS failed;\nSELECT 2 AS after_error; PRINT 'after statement error';\nGO\nPRINT 'SHOULD_NOT_RUN';", startLine: 5);
-    Check(result.Status == "failed" && result.ResultSets.Any(set => set.Columns[0].Name == "after_error" && RowsOf(set).Count == 1) && result.Messages.Contains("after statement error"),
+    Check(result.Status == "failed" && result.ResultSets.Any(set => set.Columns[0].Name == "after_error" && RowsOf(set).Count == 1) && Texts(result).Contains("after statement error"),
         "statement-level errors leave the rest of the batch to SQL Server, as in SSMS");
-    Check(result.Error?.Message.Contains("Msg 8134") == true && result.Error.Message.Contains("Line 5") && result.CompletedBatches == 0 && !result.Messages.Contains("SHOULD_NOT_RUN"),
+    Check(result.Error?.Message.Contains("Msg 8134") == true && result.Error.Message.Contains("Line 5") && result.CompletedBatches == 0 && !Texts(result).Contains("SHOULD_NOT_RUN"),
         "a batch with a statement-level error reports its mapped line and stops later batches");
     result = await Run("SELECT hierarchyid::GetRoot() AS h, geography::Point(1, 2, 4326) AS g, CAST(NULL AS hierarchyid) AS n, CAST(12345678901234567890123456789012345678 AS decimal(38,0)) AS d;");
     Check(result.Status == "completed" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "0x" && Convert.ToString(RowsOf(result.ResultSets[0])[0][1])!.StartsWith("0xE6100000")
@@ -181,7 +195,7 @@ try
     result = await Run("SELECT 1 AS a;\nGO\nSELECT * FROM dbo.VariaTableThatDoesNotExist;");
     Check(result.Status == "failed" && result.ResultSets.Count == 1 && result.Error?.Message.Contains("Msg 208") == true, "compile errors in later batches keep earlier output");
     result = await Run("RAISERROR ('expected informational message', 10, 1); PRINT 'expected print';");
-    Check(result.Status == "completed" && result.Messages.Contains("expected informational message") && result.Messages.Contains("expected print"), "low severity informational messages do not become errors");
+    Check(result.Status == "completed" && Texts(result).Contains("expected informational message") && Texts(result).Contains("expected print"), "low severity informational messages do not become errors");
     result = await Run("USE tempdb;\nGO\nSELECT DB_NAME();");
     Check(result.Status == "completed" && result.Database == "tempdb" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "tempdb", "USE persists across batches and returns the new database context");
     result = await Run("SELECT DB_NAME();", database: result.Database);
@@ -215,7 +229,7 @@ try
     result = await Run("WAITFOR DELAY '00:00:00.700';\nGO\nWAITFOR DELAY '00:00:00.700';\nGO\nPRINT 'SHOULD_NOT_RUN';", timeout: 1);
     Check(result.Status == "timedOut" && result.CompletedBatches == 1, "one deadline covers the entire script");
     result = await Run("SELECT TOP (10) object_id FROM sys.all_objects;\nGO 2\nPRINT 'after display cap';", maxRows: 2);
-    Check(result.Status == "completed" && result.ResultSets.Sum(set => RowsOf(set).Count) == 2 && result.Messages.Contains("after display cap"), "display limits do not skip later SQL");
+    Check(result.Status == "completed" && result.ResultSets.Sum(set => RowsOf(set).Count) == 2 && Texts(result).Contains("after display cap"), "display limits do not skip later SQL");
     await Call<object>("query.session.close", new SessionArgs(sessionId));
     result = await Run("SELECT * FROM #VariaBatchTest;");
     Check(result.Status == "failed", "closing a tab removes temporary objects and session state");

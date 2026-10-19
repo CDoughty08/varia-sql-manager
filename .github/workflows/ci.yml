@@ -24,7 +24,7 @@ jobs:
   linux:
     name: Linux (live SQL Server, Electron smoke)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     services:
       sql:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -70,19 +70,25 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
       - name: Electron smoke tests
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
       - name: Scripting smoke test on a 1024x768 display
         # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere.
         timeout-minutes: 5
         run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/scripting-smoke.mjs
       - name: IPC benchmarks
-        # Floors (tests/bench/floors.json) are enforced here only; the table goes to the job summary.
-        timeout-minutes: 10
+        # The IPC and results grid benchmarks. Floors (tests/bench/floors.json) are enforced here only; the table goes to
+        # the job summary.
+        timeout-minutes: 15
         run: |
           npm run bench
           xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
           node scripts/check-bench.mjs --enforce
+      - name: Results grid smoke test on a 1024x768 display
+        # Windows runners have a 1024x768 display; the grid, its strips and the toolbar must work and fit there too.
+        timeout-minutes: 8
+        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/results-smoke.mjs
       - name: Upload smoke-test screenshots
         if: failure()
         uses: actions/upload-artifact@v7
@@ -133,12 +139,13 @@ jobs:
         timeout-minutes: 20
         run: npm run test:smoke
       - name: IPC benchmarks (report only)
-        # Shared Windows and macOS runners vary too much for floors; the end-to-end run follows the smoke tests' platforms.
-        timeout-minutes: 10
+        # The IPC and results grid benchmarks. Shared Windows and macOS runners vary too much for floors; the end-to-end
+        # runs follow the smoke tests' platforms.
+        timeout-minutes: 15
         shell: bash
         run: |
           npm run bench
-          if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; fi
+          if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; npm run bench:grid; fi
           node scripts/check-bench.mjs
       - name: Upload smoke-test screenshots
         if: failure()

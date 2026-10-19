@@ -1,4 +1,4 @@
-import type { DisplayQueryResult } from '../../../shared/contracts'
+import type { QueryResult } from '../../../shared/contracts'
 import type { ThemePreferencePatch } from '../../../shared/theme/types'
 import type { MenuTarget } from '../menus/targets'
 
@@ -12,6 +12,8 @@ export interface CommandContext {
   readonly theme?: ThemePreferencePatch
   /** What the context menu that runs the command was opened for. */
   readonly target?: MenuTarget
+  /** The results grid cell a click or Enter opens (Open Value in New Tab), in the query tab `tabId`. */
+  readonly cell?: { readonly resultIndex: number; readonly row: number; readonly column: number }
 }
 export type CommandArgs = CommandContext
 export type WorkbenchEvent =
@@ -19,7 +21,7 @@ export type WorkbenchEvent =
   | { type: 'documents.activated'; tabId: string }
   | { type: 'documents.closed'; tabId: string }
   | { type: 'query.started'; tabId: string; queryId: string }
-  | { type: 'query.finished'; tabId: string; queryId: string; result?: DisplayQueryResult; error?: string }
+  | { type: 'query.finished'; tabId: string; queryId: string; summary?: QueryResult; error?: string }
   /** Object Explorer reloaded a server, a databases folder, or another node of the connection. */
   | { type: 'explorer.refreshed'; connectionId: string; scope: 'server' | 'databases' | 'other' }
 export interface ExternalStore<T> { getSnapshot(): T; subscribe(listener: () => void): () => void }

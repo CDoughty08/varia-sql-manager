@@ -1,35 +1,20 @@
-import type { EventBus } from '../core/events'
-import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import { selectAll, type GridSelection } from '../grid/selection'
-
-export type ResultSelections = Readonly<Record<string, GridSelection>>
+import type { ResultsService } from '../results/ResultsService'
+import type { GridSelection } from '../grid/selection'
 
 /**
- * The selected cells of each query's results grid, kept outside React so the output menu and its commands read the
- * same selection the grid shows. A new run, a finished run, and closing the query clear it; a selection made in
- * another result set of the query does not apply to the one showing.
+ * The selected cells of each query's results grids, read and written through the grids' view state in ResultsService,
+ * so the output menu and its commands act on the selection the grid shows. A new run and closing the query clear it
+ * (ResultsService starts the tab's view state afresh); finishing a run keeps it. A selection belongs to one result set.
  */
-export class ResultSelectionService extends SnapshotStore<ResultSelections> implements Disposable {
-  private readonly subscription: Disposable
-  constructor(events: EventBus) {
-    super({})
-    this.subscription = events.subscribe(event => {
-      if (event.type === 'query.started' || event.type === 'query.finished' || event.type === 'documents.closed') this.clear(event.tabId)
-    })
-  }
-  /** The query's selection; with `resultIndex`, only when it is in that result set. */
+export class ResultSelectionService implements Disposable {
+  constructor(private readonly results: Pick<ResultsService, 'selection' | 'setSelection' | 'selectAll' | 'clearSelections' | 'viewState'>) {}
+  /** The selection in result set `resultIndex`, or without one in the grid that last had focus. */
   get(tabId: string, resultIndex?: number): GridSelection | undefined {
-    const selection = Object.hasOwn(this.getSnapshot(), tabId) ? this.getSnapshot()[tabId] : undefined
-    return selection && (resultIndex === undefined || selection.resultIndex === resultIndex) ? selection : undefined
+    return this.results.selection(tabId, resultIndex ?? this.results.viewState(tabId).focusedIndex)
   }
-  set(tabId: string, selection: GridSelection): void { if (this.getSnapshot()[tabId] !== selection) this.publish({ ...this.getSnapshot(), [tabId]: selection }) }
-  selectAll(tabId: string, resultIndex: number): void { this.set(tabId, selectAll(resultIndex)) }
-  clear(tabId: string): void {
-    if (!Object.hasOwn(this.getSnapshot(), tabId)) return
-    const next = { ...this.getSnapshot() }
-    delete next[tabId]
-    this.publish(next)
-  }
-  dispose(): void { this.subscription.dispose(); this.clearListeners(); this.publish({}) }
+  set(tabId: string, selection: GridSelection): void { this.results.setSelection(tabId, selection.resultIndex, selection) }
+  selectAll(tabId: string, resultIndex: number): void { this.results.selectAll(tabId, resultIndex) }
+  clear(tabId: string): void { this.results.clearSelections(tabId) }
+  dispose(): void {}
 }

@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { dialogLifecycle } from './fixtures/dialog-lifecycle.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -99,9 +100,11 @@ try {
   await application.evaluate(({ dialog }) => {
     globalThis.variaReloadPrompts = 0
     // A reload would ask first (unsaved queries); count the question and cancel it, so a reload attempt shows up.
-    dialog.showMessageBoxSync = () => { globalThis.variaReloadPrompts++; return 1 }
     // Unsaved queries make a normal exit ask first; answer Don't Save.
-    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
+    dialog.showMessageBox = async (_window, options) => {
+      if (options.title === 'Reload workbench') globalThis.variaReloadPrompts++
+      return { response: 1, checkboxChecked: false }
+    }
   })
 
   // 1. The menubar by mouse: a click opens a themed menu below its button, hovering another button switches menus, and
@@ -744,6 +747,29 @@ try {
   await expect.poll(() => readFile(scriptFile, 'utf8').catch(() => null)).toBe(createScript)
   expect(await application.evaluate(() => globalThis.variaSaveDialogs.map(path => path.split(/[\\/]/).at(-1)))).toEqual(['dbo.Orders.sql'])
   await expect(tabs()).toHaveCount(tabCount)
+  // One native dialog at a time: a script for File… that arrives while Save Grid Results is still open waits for it,
+  // rather than opening a second modal dialog over it, and the page stays busy with it until then.
+  await rm(scriptFile)
+  await application.evaluate(({ dialog }, path) => {
+    globalThis.variaSaveDialogs = []
+    dialog.showSaveDialog = async (_window, options) => {
+      globalThis.variaSaveDialogs.push(options.title)
+      if (options.title !== 'Save Grid Results') return { canceled: false, filePath: path }
+      await new Promise(resolve => { globalThis.variaReleaseGridSave = resolve })
+      return { canceled: true }
+    }
+  }, scriptFile)
+  await page.locator('[data-result-grid] .rg-row[aria-rowindex="2"] .rg-c[aria-colindex="2"]').first().click()
+  await page.keyboard.press('Control+S')
+  await expect.poll(() => application.evaluate(() => globalThis.variaSaveDialogs)).toEqual(['Save Grid Results'])
+  await scriptTo('File…')
+  await expect(page.locator('.toolbar').getByRole('button', { name: 'Open', exact: true })).toBeDisabled()
+  await page.waitForTimeout(500)
+  expect(await application.evaluate(() => globalThis.variaSaveDialogs)).toEqual(['Save Grid Results'])
+  await application.evaluate(() => globalThis.variaReleaseGridSave())
+  await expect.poll(() => readFile(scriptFile, 'utf8').catch(() => null)).toBe(createScript)
+  expect(await application.evaluate(() => globalThis.variaSaveDialogs)).toEqual(['Save Grid Results', 'Save SQL query'])
+  await expect(page.locator('.toolbar').getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
   // Refresh on Tables reloads that folder only. Tables can be filtered (explorer-smoke.mjs covers Filter Settings).
   const tables = await row(...ordersPath.slice(0, -1)), stale = await (await row(...ordersPath)).getAttribute('id')
   const listed = { tables: await loads('tables'), databases: await loads('databases') }
@@ -806,8 +832,8 @@ try {
   expect(await calls('connections.disconnect')).toHaveLength(1)
   console.log('Menus checks: Object Explorer menus for the empty area, a server, a database, a table, Tables, and a login, by mouse and keyboard.')
 
-  // 13. Query Output: the results grid selects cells as SSMS does and copies them as tab-separated text, by its menu,
-  // its keys, and Edit › Copy; Messages keep text selection, with Select All and Copy in their menu.
+  // 13. Query Output: the results grid selects cells as SSMS does and copies them through the backend as tab-separated
+  // text, by its menu, its keys, and Edit › Copy; Messages keep text selection, with Select All and Copy in their menu.
   await choose('File', 'Connect to Server…')
   await page.getByLabel('Server Name', { exact: true }).fill('server-b')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
@@ -815,12 +841,12 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await typeSql('SELECT Id, Name, Note FROM dbo.Notes -- MENUS_GRID_FIXTURE')
   await page.keyboard.press('F5')
-  const grid = page.locator('.grid-scroll'), outputMenu = menu('Query output'), eol = process.platform === 'win32' ? '\r\n' : '\n'
-  const cell = (row, column) => grid.locator(`td[data-row="${row}"][data-col="${column}"]`), selected = () => grid.locator('td.selected')
+  const grid = page.locator('[data-result-grid]').first(), outputMenu = menu('Query output'), eol = process.platform === 'win32' ? '\r\n' : '\n'
+  const cell = (row, column, of = grid) => of.locator(`.rg-row[aria-rowindex="${row + 2}"] .rg-c[aria-colindex="${column + 2}"]`), selected = () => grid.locator('.rg-c.is-sel')
   const outputLabels = () => outputMenu.locator('.menu-item .menu-label').allTextContents()
   await expect(grid).toContainText('n3')
-  // Focusable output views are named regions, so screen readers announce their names.
-  await expect(page.getByRole('region', { name: 'Result 1, 3 rows, 3 columns', exact: true })).toBeVisible()
+  // The grid is a named ARIA grid, so screen readers announce its place and size.
+  await expect(page.getByRole('grid', { name: 'Result 1 of 1, 3 rows, 3 columns', exact: true })).toBeVisible()
   // Earlier steps shrank the window, so the output panel may be short. Every row must show: Playwright scrolls a cell
   // into view before pressing it, and that scroll would close a menu the press had just opened.
   const outputTop = (await page.locator('.output-panel').boundingBox()).y
@@ -831,13 +857,13 @@ try {
   await page.mouse.down()
   await page.mouse.move(above.x + above.width / 2, Math.min(above.y, 260), { steps: 5 })
   await page.mouse.up()
-  await expect.poll(() => grid.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true)
+  await expect.poll(() => grid.locator('.rg-scroll').evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true)
   await expect(grid.getByRole('columnheader').nth(2)).toContainText('(No column name)')
   // A right-click selects the cell under it first; Copy copies its value.
   await cell(1, 2).click({ button: 'right', force: true })
-  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Select All'])
+  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
   await expect(selected()).toHaveCount(1)
-  await expect(cell(1, 2)).toHaveClass(/selected/)
+  await expect(cell(1, 2)).toHaveClass(/is-sel/)
   await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('n2')
   await expect(grid).toBeFocused()
@@ -864,13 +890,12 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'menus-grid-dark.png') })
   await outputMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click(fast)
   await expect.poll(clipboard).toBe(['Id\t(No column name)', '1\ta', '2\tb', '3\tc'].join(eol))
-  // macOS reports Control+click as a left press with Control and opens the menu, so there it keeps the selection as a
-  // right-click does; elsewhere it is a left press.
-  await cell(0, 0).click(fast)
-  await cell(2, 1).click({ modifiers: ['Shift'], force: true })
-  await cell(1, 1).dispatchEvent('pointerdown', { button: 0, buttons: 1, ctrlKey: true, pointerType: 'mouse', isPrimary: true })
-  await cell(1, 1).dispatchEvent('pointerup', { button: 0, buttons: 0, ctrlKey: true, pointerType: 'mouse', isPrimary: true })
-  await expect(selected()).toHaveCount(process.platform === 'darwin' ? 6 : 1)
+  // Ctrl+click adds a block (⌘ on macOS, where Control+click opens the menu); blocks that share neither rows nor
+  // columns are copied one after the other.
+  await cell(0, 2).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'], force: true })
+  await expect(selected()).toHaveCount(7)
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(['1\ta', '2\tb', '3\tc', 'NULL'].join(eol))
   // Ctrl+A and Ctrl+C in the focused grid, then Ctrl+Shift+C with headers.
   await expect(grid).toBeFocused()
   await page.keyboard.press('Control+A')
@@ -886,6 +911,7 @@ try {
   await expect.poll(clipboard).toBe(['NULL', 'n2', 'n3'].join(eol))
   // Shift+F10 opens the grid's menu below its active cell.
   await cell(2, 0).click(fast)
+  await expect(cell(2, 0)).toHaveClass(/is-act/)
   await page.keyboard.press('Shift+F10')
   await expect(outputMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeFocused()
   const activeCell = await cell(2, 0).boundingBox(), gridMenu = await outputMenu.boundingBox()
@@ -893,9 +919,9 @@ try {
   await page.keyboard.press('Escape')
   await expect(grid).toBeFocused()
   // Messages: no Copy with Headers; Select All selects only the messages, which Copy then copies.
-  await page.locator('.output-toolbar').getByRole('button', { name: /^Messages/ }).click(fast)
+  await page.locator('.output-toolbar').getByRole('tab', { name: /^Messages/ }).click(fast)
   const messages = page.locator('.messages')
-  await expect(page.getByRole('region', { name: 'Messages', exact: true })).toBeVisible()
+  await expect(page.getByRole('log', { name: 'Messages', exact: true })).toBeVisible()
   await messages.locator('pre').first().click({ button: 'right', force: true })
   expect(await outputLabels()).toEqual(['Copy', 'Select All'])
   await expect(outputMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toHaveAttribute('aria-disabled', 'true')
@@ -904,7 +930,7 @@ try {
   await page.keyboard.press('Shift+F10')
   await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click(fast)
   await expect.poll(clipboard).toContain('(3 rows affected)')
-  expect(await clipboard()).toContain('Completed in 1 ms.')
+  expect(await clipboard()).toContain('Completion time: ')
   expect(await clipboard()).not.toContain('SELECT')
   console.log('Menus checks: results grid cell selection and copying by menu, keys, and Edit › Copy, and the Messages menu.')
 
@@ -920,9 +946,10 @@ try {
   await expect(await row('server-a', 'Security', 'Logins', 'sa')).toBeVisible()
   await typeSql('SELECT Id, CustomerName FROM dbo.Orders -- MENUS_PLAN_FIXTURE')
   await page.keyboard.press('F5')
-  await page.locator('.output-toolbar').getByRole('button', { name: /^Results/ }).click(fast)
-  await expect(page.locator('.result-selector').getByRole('button', { name: 'XML plan · Batch 1', exact: true })).toBeVisible()
-  const showResult = name => page.locator('.result-selector').getByRole('button', { name, exact: true }).click({ force: true })
+  await page.locator('.output-toolbar').getByRole('tab', { name: /^Results/ }).click(fast)
+  // The plan's result set is stacked below the first, as SSMS stacks them.
+  const planGrid = page.locator('[data-result-grid][data-result-index="1"]')
+  await expect(planGrid).toContainText('ShowPlanXML')
   // These presses skip the stability check (see `fast`). An element out of view is scrolled first, and the menu opens
   // only after the scroll event, which would otherwise close it. The find widget slides in, so a press there waits for
   // it to settle.
@@ -977,14 +1004,10 @@ try {
     ['a table by Shift+F10', async () => { await tap(await row(...ordersPath)); await page.keyboard.press('Shift+F10') }, tree],
     ['the Logins folder', async () => rightClick(await row('server-a', 'Security', 'Logins')), tree],
     ['a login', async () => rightClick(await row('server-a', 'Security', 'Logins', 'sa')), tree],
-    ['a results grid cell', async () => { await showResult('Result 1 · Batch 1'); await rightClick(cell(0, 1)) }, grid],
+    ['a results grid cell', async () => { await tap(page.locator('.output-toolbar').getByRole('tab', { name: /^Results/ })); await rightClick(cell(0, 1)) }, grid],
     ['the results grid by Shift+F10', async () => { await grid.focus(); await page.keyboard.press('Shift+F10') }, grid],
-    ['Messages', async () => { await tap(page.locator('.output-toolbar').getByRole('button', { name: /^Messages/ })); await rightClick(messages.locator('pre').first()) }, messages],
-    ['the XML plan', async () => {
-      await tap(page.locator('.output-toolbar').getByRole('button', { name: /^Results/ }))
-      await showResult('XML plan · Batch 1')
-      await rightClick(page.locator('.plan-output'))
-    }, page.locator('.plan-output')],
+    ['the second result set\'s grid', async () => { await rightClick(cell(0, 0, planGrid)) }, planGrid],
+    ['Messages', async () => { await tap(page.locator('.output-toolbar').getByRole('tab', { name: /^Messages/ })); await rightClick(messages.locator('pre').first()) }, messages],
     ['the find widget\'s field', fromEditor(async () => { await page.keyboard.press('Control+F'); await expect(findField).toBeFocused(); await rightClick(findField, { force: false }) }), findField, () => page.keyboard.press('Escape')],
     ['a dialog\'s field', async () => { await tap(page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true })); await rightClick(page.locator('#connect-server')) },
       page.locator('#connect-server'), async () => { await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0) }]
@@ -1006,7 +1029,7 @@ try {
   }
   expect(opened).toBeGreaterThanOrEqual(50)
   expect(failures).toEqual([])
-  await showResult('Result 1 · Batch 1')
+  await tap(page.locator('.output-toolbar').getByRole('tab', { name: /^Results/ }))
   for (const mode of ['dark', 'light']) {
     await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
     await expect.poll(appearance).toContain(`"mode": "${mode}"`)
@@ -1188,11 +1211,19 @@ try {
   expect((await popups()).length).toBe(8)
   console.log('Menus checks: native context menus with their token round trip, roles on the focused field, the keyboard, the fallback, and none for an idle page.')
 
-  // 16. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
+  // 16. Main's dialogs across the page's lifecycle, in fresh apps (fixtures/dialog-lifecycle.mjs): Restart asked for
+  // twice restarts once; a crash's prompt waits for the open Save dialog and the dead page's queued save never opens,
+  // but the dead page's open message box closes; the reload and not-responding prompts take their turn too; a quit
+  // while a Script As save waits exits once the dialogs are answered, and one during the reload prompt survives Reload.
+  expect(failures).toEqual([])
+  await application.close()
+  application = undefined
+  await dialogLifecycle(launchOptions)
+  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload.')
+
+  // 17. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
   // master, and the server's Refresh reloads its lists without an error.
   if (process.env.VARIA_TEST_SQL_SERVER) {
-    expect(failures).toEqual([])
-    await application.close()
     application = await electron.launch({ ...launchOptions, env: liveEnv })
     page = await application.firstWindow()
     page.setDefaultTimeout(10000)
@@ -1225,19 +1256,19 @@ try {
     await expect(page.locator('#query-database')).toHaveValue('master')
     await page.keyboard.insertText('SELECT DB_NAME()')
     await page.keyboard.press('F5')
-    await expect(page.locator('.grid-scroll td[data-row="0"][data-col="0"]')).toHaveText('master', { timeout: 30000 })
+    await expect(page.locator('[data-result-grid] .rg-row[aria-rowindex="2"] .rg-c[aria-colindex="2"]').first()).toHaveText('master', { timeout: 30000 })
     await liveServer.click({ button: 'right' })
     await menu('Object Explorer').getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
     // The server's folders come back as new rows, collapsed, as in SSMS.
     await expect.poll(async () => (await explorerRow(page, liveName, 'Databases', wait)).getAttribute('aria-expanded'), wait).toBe('false')
     await expect(page.locator('.explorer-row.progress, .explorer-row.error')).toHaveCount(0, wait)
     // Monaco's empty live regions are alerts too; these are the workbench's error messages.
-    await expect(page.locator('.global-error, .explorer-error, .query-error')).toHaveCount(0)
+    await expect(page.locator('.global-error, .explorer-error, .messages .msg.error')).toHaveCount(0)
     console.log('Menus checks: a real server\'s master database opens a query on master from its menu, and the server refreshes with its folders collapsed.')
   } else console.log('Menus checks: the live server step was skipped (VARIA_TEST_SQL_SERVER is not set).')
 
   expect(failures).toEqual([])
-  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; and a live server when configured.')
+  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; main\'s dialogs across a restart, a crash and a quit; and a live server when configured.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'menus-failure.png') }).catch(() => {})
   console.log(await page?.evaluate(() => ({ focused: document.activeElement?.outerHTML.slice(0, 300), menus: document.querySelectorAll('.menu').length, errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })).catch(() => 'no page'))

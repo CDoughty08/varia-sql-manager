@@ -8,7 +8,7 @@ editor, the browser engine, or Electron (zoom, full screen, quit): menus show th
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (105)
+## Commands (109)
 
 ### File
 
@@ -16,7 +16,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
-| Save | `file.save` | Ctrl+S | Ctrl+S | ⌘S | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
+| Save | `file.save` | Ctrl+S (`!outputGridFocus`) | Ctrl+S (`!outputGridFocus`) | ⌘S (`!outputGridFocus`) | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
 | Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
 | Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
 | Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
@@ -49,6 +49,7 @@ keys it uses are listed below.
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
+| Switch Between Query and Results | `window.switchPane` | F6, Shift+F6 | F6, Shift+F6 | F6, ⇧F6 | `hasActiveDocument` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
@@ -69,13 +70,16 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
-| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
+| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
 | Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
 | Copy (not in the palette) | `output.copy` | Ctrl+C * (`outputGridFocus`) | Ctrl+C * (`outputGridFocus`) | ⌘C * (`outputGridFocus`) | Always | Query Output context menu › Copy |
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A * (`outputGridFocus`) | Ctrl+A * (`outputGridFocus`) | ⌘A * (`outputGridFocus`) | Always | Query Output context menu › Select All |
+| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | `hasResults` | Query Output context menu › Save Results As… |
+| Close Results | `output.closeResults` | — | — | — | `hasResults && !queryRunning` | — |
+| Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
 ### Connection
 
@@ -421,13 +425,14 @@ Right-click a query tab, or press Shift+F10 or the context-menu key on a focused
 
 #### Query Output context menu (`output.context`)
 
-Right-click the results grid, Messages, or an XML plan, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid's selection selects that cell first.
+Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid's selection selects that cell first.
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `output.copy` | Always |
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
+| `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 
 #### Panel tab context menu (`dockTab.context`)
 
@@ -453,7 +458,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (50)
+## Context keys (52)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -475,6 +480,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
+| `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
 | `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |
@@ -482,6 +488,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
 | `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
+| `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
@@ -510,7 +517,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
-| `outputView` | `'grid'`, `'messages'`, `'plan'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or an execution plan. |
+| `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
 | `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
 
 ## Reserved keys

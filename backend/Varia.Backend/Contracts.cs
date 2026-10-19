@@ -32,14 +32,27 @@ internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumbe
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
-internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes);
-/// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read.</summary>
-internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<string> Messages, long RecordsAffected, long ElapsedMs,
-    string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget);
+/// <summary>Seq orders it with the results.memory events: the status bar applies only a figure newer than the last it showed.</summary>
+internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes, long Seq);
+/// <summary>One line of the Messages tab: kind is "info" or "error" (SQL errors, cancellation and timeout, shown in red).</summary>
+internal sealed record MessageEntry(string Text, string Kind);
+/// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt
+/// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:".</summary>
+internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
+    string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt);
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
+/// <summary>A piece of a copy: inclusive row ranges (a last row of 2^53 - 1 runs to the end) by inclusive column ranges.</summary>
+internal sealed record CopyPartArgs(long[][] Rows, int[][] Columns);
+/// <summary>results.copy (main only): the parts' text streams as DATA; eol is "crlf" or "lf".</summary>
+internal sealed record ResultsCopyArgs(uint ResultId, CopyPartArgs[] Parts, bool Headers, string Eol, long MaxBytes);
+/// <summary>results.export (main only): Path comes from main's save dialog; Format is csv, tsv or json; NullText is
+/// "empty" or "NULL"; TemporaryId (32 hex digits) names the temporary file, .varia-{id}.tmp beside the target, which main
+/// removes if the backend dies while writing it.</summary>
+internal sealed record ResultsExportArgs(uint ResultId, string Path, string Format, bool Headers, string NullText, string TemporaryId);
+internal sealed record ResultsJobResult(long Rows, long Bytes, long TruncatedCells, bool Partial);
 /// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only).</summary>
 internal sealed record SynthesizeArgs(string Shape, int Rows);
 

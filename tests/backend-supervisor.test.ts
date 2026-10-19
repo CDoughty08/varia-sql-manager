@@ -423,6 +423,8 @@ describe('BackendSupervisor results', () => {
     const events: QueryEvent[] = []
     const result = await value.request('query.execute', { ...query('tab-1'), connectionId: info.id }, { onEvent: event => { events.push(event) } })
     expect(result.resultSets).toEqual([expect.objectContaining({ generation: 1, resultId: 1, rowsAvailable: 1, state: 'complete' })])
+    // The budget's seq orders it with this generation's results.memory events.
+    expect(result.budget).toMatchObject({ generation: 1, seq: 1 })
     expect(events.map(event => event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? [event.type, event.descriptor.generation] : [event.type])).toEqual([['resultSet.opened', 1], ['resultSet.closed', 1]])
     const pages: ArrayBuffer[] = []
     let id = 0
@@ -443,10 +445,10 @@ describe('BackendSupervisor results', () => {
     const script = failure(value.request('query.execute', query('tab-1'), { onEvent: event => { events.push(event) } }))
     await settle(8)
     const request = last().requests.at(-1)!
-    last().send(FrameKind.EVENT, request.id, 0, { type: 'messages', messages: ['ok'] })
+    last().send(FrameKind.EVENT, request.id, 0, { type: 'messages', messages: [{ text: 'ok', kind: 'info' }] })
     last().send(FrameKind.RESPONSE, request.id, 0, { result: { resultSets: [], messages: [] } })
     expect(await script).toMatchObject({ code: 'BACKEND_ERROR', message: sentences.invalid })
-    expect(events).toEqual([{ type: 'messages', messages: ['ok'] }])
+    expect(events).toEqual([{ type: 'messages', messages: [{ text: 'ok', kind: 'info' }] }])
     const second = failure(value.request('query.execute', query('tab-2'), { onEvent: () => {} }))
     await settle(8)
     last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, { type: 'progress', results: 'many' })

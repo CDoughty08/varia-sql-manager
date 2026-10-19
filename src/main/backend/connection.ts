@@ -56,8 +56,9 @@ export interface ConnectionDeps {
   appVersion?: string
   /** Main's timers run before it polls I/O, so a backstop first yields one turn for an answer already in the pipe. */
   yieldTurn?: (callback: () => void) => void
-  /** Global EVENT bodies (id 0), decoded under the control limits but otherwise unchecked. */
-  onGlobalEvent?: (event: unknown) => void
+  /** Global EVENT bodies (id 0), decoded under the control limits but otherwise unchecked, with the generation that sent
+   *  them (a replaced backend can still send one while it shuts down). */
+  onGlobalEvent?: (event: unknown, generation: number) => void
 }
 
 /** Why a generation ended. `closed` means main closed it; every other reason is unexpected. */
@@ -134,7 +135,7 @@ export class BackendConnection {
   private readonly limits: ConnectionLimits
   private readonly trace: ((line: string) => void) | undefined
   private readonly yieldTurn: (callback: () => void) => void
-  private readonly onGlobalEvent: ((event: unknown) => void) | undefined
+  private readonly onGlobalEvent: ((event: unknown, generation: number) => void) | undefined
   private readonly parser: FrameParser
   private readonly pending = new Map<number, Pending>()
   private readonly abandoned = new Set<number>()
@@ -315,7 +316,7 @@ export class BackendConnection {
     // A global event (results.memory) is advisory: an undecodable one is dropped, never fatal.
     if (id === 0 && frame.kind === FrameKind.EVENT) {
       const event = frame.oversize ? undefined : decoded(frame.body)
-      if (event) this.onGlobalEvent?.(event.value)
+      if (event) this.onGlobalEvent?.(event.value, this.generation)
       return
     }
     if (id === 0 || id >= this.nextId) return this.fatal(`${frameNames[frame.kind]} for unissued id ${id}`)

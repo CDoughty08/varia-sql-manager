@@ -19,15 +19,18 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close",
-        "results.read", "results.close", "explorer.children",
+        "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
     private const long MaxSafeInteger = 9_007_199_254_740_991;
     private const long MemoryReportStep = 64L * 1024 * 1024;
-    // The summary must fit the 16 MiB response limit: descriptors get 12 MiB, messages (1,000,000 characters) the rest.
-    private const long MaxSummaryDescriptorBytes = 12L * 1024 * 1024;
+    private const string CancelledSentence = "The script was cancelled. Remaining batches were not executed.";
+    private const string TimedOutSentence = "The script exceeded its execution timeout. Remaining batches were not executed.";
+    // The summary must fit the 16 MiB response limit: descriptors get 8 MiB, messages (1,000,000 characters, with their
+    // kinds) and the error text the rest, with room to spare.
+    private const long MaxSummaryDescriptorBytes = 8L * 1024 * 1024;
 
     private readonly ConcurrentDictionary<string, string> connections = new();
     private readonly ConcurrentDictionary<string, RunningQuery> queries = new();
@@ -39,11 +42,15 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
+    private readonly ResultJobs jobs;
     private readonly bool hooks;
-    private readonly Action<object>? publish;
+    private readonly Func<object, bool>? publish;
     private readonly Timer? memoryTimer;
+    private readonly object memoryGate = new();
     private long reportedBytes = -1;
     private int reportedBand;
+    /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
+    private long memorySeq;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -60,10 +67,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
-    /// <param name="publish">Sends a global EVENT; result memory usage is reported through it at most once a second.</param>
-    public SqlService(ResultStore? store = null, bool hooks = false, Action<object>? publish = null)
+    /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
+    /// at most once a second.</param>
+    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null)
     {
         this.store = store ?? ResultStore.FromSystem();
+        jobs = new ResultJobs(this.store);
         this.hooks = hooks;
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
@@ -74,7 +83,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
     /// apply only with VARIA_BACKEND_TEST_HOOKS=1; main passes those variables only to unpackaged smoke runs.</summary>
-    public static SqlService FromEnvironment(Action<object>? publish)
+    public static SqlService FromEnvironment(Func<object, bool>? publish)
     {
         var hooks = Environment.GetEnvironmentVariable("VARIA_BACKEND_TEST_HOOKS") == "1";
         long? budget = hooks && long.TryParse(Environment.GetEnvironmentVariable("VARIA_RESULT_BUDGET_BYTES"), NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) && bytes > 0 ? bytes : null;
@@ -90,12 +99,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public ScriptingService Scripting => scripting;
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
-    /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads
-    /// take one of 16 read slots.</summary>
+    /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads,
+    /// copies and exports take one of 16 result slots.</summary>
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" => RequestLane.Query,
-        "results.read" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "results.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
@@ -131,6 +140,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "query.session.close" => CloseSession(Read<SessionArgs>(parameters, json)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
+        "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
         "scripting.script" => await scripting.ScriptAsync(Read<ScriptArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
@@ -187,7 +198,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
-        store.ReleaseConnection(args.ConnectionId);
+        // Results stay readable, copyable and saveable after a disconnect, as in SSMS.
         // Each initial catalog has its own pool; clear every one this connection used.
         if (removed && pools.TryRemove(args.ConnectionId, out var used))
             foreach (var pooled in used.Keys)
@@ -328,15 +339,19 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         QueryFailure? failure = null;
         var status = "completed";
         var database = args.Database;
-        // Only the first errors are reported; a looping statement can raise millions while its batch keeps running.
+        // Only the first errors are reported in the summary; a looping statement can raise millions while its batch keeps
+        // running. Messages keep them all, in order, up to their own caps.
         var errors = new List<string>();
         var suppressedErrors = 0;
+        // Errors InfoMessage delivered, so the exception that may carry them again does not repeat them in Messages.
+        var delivered = new Queue<(int Number, byte State, int Line, string Message)>();
+        // SSMS's two-line form: the line is absolute within the script (or the selection), or the procedure's own.
         string Describe(SqlError item)
         {
-            var location = string.IsNullOrEmpty(item.Procedure) && batchNumber > 0 && item.LineNumber > 0
-                ? "Line " + (args.StartLine + batches[batchNumber - 1].StartLine + item.LineNumber - 2)
-                : string.IsNullOrEmpty(item.Procedure) ? "Connection" : "Procedure " + item.Procedure + ", line " + item.LineNumber;
-            return "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + ", " + location + ": " + item.Message;
+            var location = !string.IsNullOrEmpty(item.Procedure) ? "Procedure " + item.Procedure + ", Line " + item.LineNumber
+                : batchNumber > 0 && item.LineNumber > 0 ? "Line " + (args.StartLine + batches[batchNumber - 1].StartLine + item.LineNumber - 2)
+                : "Line " + item.LineNumber;
+            return "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + ", " + location + "\n" + item.Message;
         }
         Microsoft.Data.SqlClient.SqlInfoMessageEventHandler onInfo = (_, e) =>
         {
@@ -344,12 +359,23 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // so SQL Server (not the client) decides whether the rest of the batch runs, as in SSMS.
             foreach (SqlError error in e.Errors)
             {
-                if (error.Class <= 10) { messages.Add(error.Message); continue; }
+                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message); continue; }
                 // An error while rows stream means the statement producing the current result set stopped early.
                 if (currentSet is not null) currentSet.Incomplete = true;
-                lock (errors) { if (errors.Count < 20) errors.Add(Describe(error)); else suppressedErrors++; }
+                var text = Describe(error);
+                messages.Add(text, MessageKind.Error);
+                lock (errors)
+                {
+                    delivered.Enqueue((error.Number, error.State, error.LineNumber, error.Message));
+                    if (delivered.Count > 20) delivered.Dequeue();
+                    if (errors.Count < 20) errors.Add(text); else suppressedErrors++;
+                }
             }
         };
+        bool Delivered(SqlError item)
+        {
+            lock (errors) return delivered.Contains((item.Number, item.State, item.LineNumber, item.Message));
+        }
         // The error that stopped execution comes first, then those SQL Server reported while the script continued.
         string ErrorText(IEnumerable<string> terminating)
         {
@@ -367,7 +393,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             entered = session.TryEnter();
             if (!entered) throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
             // This query now owns the session, so the session's earlier results are released before any new row is stored.
-            budget = store.BeginQuery(args.SessionId, args.ConnectionId);
+            budget = store.BeginQuery(args.SessionId);
             var connection = session.Connection;
             connection.FireInfoMessageEventOnUserErrors = false;
             connection.InfoMessage += onInfo;
@@ -398,7 +424,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     // reads (ColumnPlan) that only check the token between chunks.
                     command.CommandTimeout = 0;
                     using var stop = token.Register(Attention, command);
-                    command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add("(" + e.RecordCount + " rows affected)"); };
+                    command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
                     try
                     {
@@ -425,7 +451,27 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                 }
                                 else { budgetSets++; plan = null; }
                             }
-                            while (true)
+                            if (plan?.ForXml is not null && currentSet is not null)
+                            {
+                                // FOR XML and FOR JSON output: every row is a chunk of one value, stored as the set's one row.
+                                using var collector = new ForXmlCollector(store, budget!);
+                                while (await reader.ReadAsync(token)) collector.AppendRow(reader, token);
+                                if (collector.Rows > 0)
+                                {
+                                    currentSet.CountRow();
+                                    events.RowsChanged();
+                                    if (args.MaxRows > 0 && storedRows >= args.MaxRows) currentSet.Skip(TruncationReason.RowLimit);
+                                    else if (collector.Stopped is not TruncationReason.None and var refused) { currentSet.Skip(refused); budget!.Stop(refused); }
+                                    else if (currentSet.BeginRow() is { } row)
+                                    {
+                                        bool cut;
+                                        try { cut = collector.Write(row); }
+                                        catch { currentSet.AbortRow(); throw; }
+                                        if (currentSet.TryCommitRow(cut ? 1 : 0)) storedRows++;
+                                    }
+                                }
+                            }
+                            else while (true)
                             {
                                 // A row is not stored only for reasons that last for the rest of the set, so once one has been
                                 // skipped the rest of a set with a long column is read past in one go; rows already stored
@@ -435,7 +481,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                     if (currentSet?.SealDelay is not null)
                                     {
                                         currentSet.Seal();
-                                        events.Sealed();
+                                        events.Sealed(currentSet);
                                     }
                                     await SkipRowsAsync(reader, command, currentSet, events, token);
                                     break;
@@ -447,7 +493,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                     && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
                                 {
                                     currentSet.Seal();
-                                    events.Sealed();
+                                    events.Sealed(currentSet);
                                 }
                                 if (!await read) break;
                                 // The reader has let go of the previous row, so a large xml value read whole is garbage now.
@@ -462,12 +508,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                 if (builder is null) continue;
                                 skipped = false;
                                 int truncatedCells;
-                                try { truncatedCells = plan!.ReadRow(reader, builder, messages.Add, token); }
+                                try { truncatedCells = plan!.ReadRow(reader, builder, text => messages.Add(text), token); }
                                 catch { currentSet.AbortRow(); throw; }
                                 transient = plan.TransientBytes;
                                 var sealedBefore = currentSet.SealedPages;
                                 if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
-                                if (currentSet.SealedPages != sealedBefore) events.Sealed();
+                                if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                             }
                             store.Discarded(transient);
                             if (currentSet is not null)
@@ -499,28 +545,35 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             if (currentSet is not null) currentSet.Incomplete = true;
             // Before the first batch, -2 is a connect timeout while opening the session, not the script deadline.
             status = running.UserCancelled ? "cancelled" : cancellation.IsCancellationRequested || error.Number == -2 && batchNumber > 0 ? "timedOut" : "failed";
-            // Informational messages delivered with the exception (e.g. PRINT before a severe error) belong in Messages.
-            foreach (SqlError item in error.Errors) if (item.Class <= 10) messages.Add(item.Message);
+            // Messages delivered with the exception (e.g. PRINT before a severe error, or the error itself) belong in Messages,
+            // in order, except errors InfoMessage already reported.
+            foreach (SqlError item in error.Errors)
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                else if (status == "failed" && !Delivered(item)) messages.Add(Describe(item), MessageKind.Error);
             var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
-            if (details.Count == 0) details.Add(error.Message);
-            var text = status == "cancelled" ? Stopped("The script was cancelled. Remaining batches were not executed.")
-                : status == "timedOut" ? Stopped("The script exceeded its execution timeout. Remaining batches were not executed.")
-                : ErrorText(details);
+            if (details.Count == 0)
+            {
+                details.Add(error.Message);
+                if (status == "failed") messages.Add(error.Message, MessageKind.Error);
+            }
+            if (status != "failed") messages.Add(status == "cancelled" ? CancelledSentence : TimedOutSentence, MessageKind.Error);
+            var text = status == "cancelled" ? Stopped(CancelledSentence) : status == "timedOut" ? Stopped(TimedOutSentence) : ErrorText(details);
             failure = new(status == "failed" ? "SQL_ERROR" : status == "cancelled" ? "CANCELLED" : "TIMEOUT", text, batchNumber, iteration);
         }
         catch (OperationCanceledException)
         {
             if (currentSet is not null) currentSet.Incomplete = true;
             status = running.UserCancelled ? "cancelled" : "timedOut";
-            failure = new(running.UserCancelled ? "CANCELLED" : "TIMEOUT", Stopped(running.UserCancelled
-                ? "The script was cancelled. Remaining batches were not executed."
-                : "The script exceeded its execution timeout. Remaining batches were not executed."), batchNumber, iteration);
+            var sentence = running.UserCancelled ? CancelledSentence : TimedOutSentence;
+            messages.Add(sentence, MessageKind.Error);
+            failure = new(running.UserCancelled ? "CANCELLED" : "TIMEOUT", Stopped(sentence), batchNumber, iteration);
         }
         catch (Exception error) when (error is not RequestException)
         {
             // Keep earlier result sets and messages when the provider fails outside SQL Server error handling.
             if (currentSet is not null) currentSet.Incomplete = true;
             status = "failed";
+            messages.Add("Execution stopped unexpectedly: " + error.Message, MessageKind.Error);
             failure = new("BACKEND_ERROR", ErrorText(["Execution stopped unexpectedly: " + error.Message]), batchNumber, iteration);
         }
         finally
@@ -547,20 +600,29 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             }
         }
         var output = messages.Snapshot();
+        void Note(string text) => output.Add(new(text, QueryMessages.Info));
         var descriptors = sets.Select(set => set.Describe()).ToList();
         var reasons = descriptors.Select(set => set.Truncated).ToHashSet();
         if (budget?.Stopped is { } stopped and not TruncationReason.None) reasons.Add(ResultSetBuffer.Name(stopped));
-        if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) output.Add("Results were truncated by display limits. Display limits do not stop script execution.");
+        if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) Note("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
-            output.Add("Results were truncated because the result memory budget (" + (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes) / (1024 * 1024)
+            Note("Results were truncated because the result memory budget (" + (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
-        if (reasons.Contains("systemMemory")) output.Add("Results were truncated because the computer is low on memory. Execution continued.");
-        if (overflowSets > 0) output.Add("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString(CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
-        if (oversizeSets > 0) output.Add(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
-        if (failure is not null && batchNumber > 0) output.Add("Stopped at batch " + batchNumber + ", repetition " + iteration + "; " + completed + " of " + totalBatches + " batch executions completed.");
+        if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
+        if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString("N0", CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
+        if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
+        // Only when something was skipped: an error ends its batch's script, not the batch, which SQL Server may run on.
+        if (failure is not null && batchNumber > 0 && completed + 1 < totalBatches)
+        {
+            var repeated = batches[batchNumber - 1].RepeatCount > 1;
+            Note(status == "failed"
+                ? "Batch " + batchNumber + (repeated ? ", repetition " + iteration + "," : "") + " raised an error; later batches were not executed."
+                : "Stopped at batch " + batchNumber + (repeated ? ", repetition " + iteration : "") + "; " + completed + " of " + totalBatches + " batch executions completed.");
+        }
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
+        var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, new ResultBudget(store.UsedBytes, store.GlobalBytes, store.QueryBytes));
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt);
     }
 
     /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows
@@ -594,16 +656,19 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         if (args.ResultIds is not { Length: >= 1 and <= 1024 } || args.ResultIds.Contains(0u)) throw new RequestException("INVALID_PARAMS", "Between 1 and 1024 result IDs are required.");
         var closed = store.Release(args.ResultIds);
+        // The fall goes out as an event before this answer, in order with the other results.memory events; the status bar
+        // follows only those, so an answer overtaken by a newer event cannot show stale usage.
+        if (closed > 0) ReportMemory();
         return new ResultsCloseResult(closed, store.UsedBytes);
     }
 
-    /// <summary>Stores synthetic rows (tests/fixtures shapes W1, B1, N1) through the same budgeted path as a query.</summary>
+    /// <summary>Stores synthetic rows (SyntheticRows shapes) through the same budgeted path as a query.</summary>
     private ResultDescriptor Synthesize(SynthesizeArgs args, CancellationToken token)
     {
-        if (!SyntheticRows.Shapes.Contains(args.Shape) || args.Rows is < 1 or > 5_000_000) throw new RequestException("INVALID_PARAMS", "Shape must be W1, B1, or N1 with 1 to 5,000,000 rows.");
+        if (!SyntheticRows.Shapes.Contains(args.Shape) || args.Rows is < 1 or > 5_000_000) throw new RequestException("INVALID_PARAMS", "Shape must be W1, B1, N1, X1, L1 or M1 with 1 to 5,000,000 rows.");
         var columns = SyntheticRows.Columns(args.Shape);
-        var set = store.Open(store.BeginQuery("debug:" + Guid.NewGuid(), "debug"), 0, 1, 1, "rows",
-            [.. columns.Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))], [.. columns.Select(column => column.Wire)])
+        var set = store.Open(store.BeginQuery("debug:" + Guid.NewGuid()), 0, 1, 1, "rows",
+            [.. columns.Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary", column.Role))], [.. columns.Select(column => column.Wire)])
             ?? throw new RequestException("BACKEND_ERROR", "The result memory budget is full.");
         try
         {
@@ -625,19 +690,46 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
     }
 
-    /// <summary>A global results.memory EVENT at most once a second, when usage crosses 50, 75, 90 or 100 % of the budget
-    /// or moves by 64 MiB.</summary>
-    private void ReportMemory()
+    /// <summary>"Changed database context to 'x'." (5701) and "Changed language setting to x." (5703): SQL Server sends
+    /// them for USE, a session's login, and the toolbar's database change, and SSMS leaves them out of Messages.</summary>
+    private static bool IsContextChange(SqlError error) => error.Number is 5701 or 5703;
+
+    /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
+    /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below what the status bar was last shown (results were
+    /// closed, or a copy or save that leased them ended). An event the full control lane refused does not count as
+    /// reported, so the next check sends it again.</summary>
+    internal void ReportMemory()
     {
-        var used = store.UsedBytes;
-        var global = store.GlobalBytes;
-        var band = used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
-        var previous = Interlocked.Read(ref reportedBytes);
-        if (previous < 0 ? used == 0 : band == reportedBand && Math.Abs(used - previous) < MemoryReportStep) return;
-        Interlocked.Exchange(ref reportedBytes, used);
-        reportedBand = band;
-        publish?.Invoke(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global });
+        lock (memoryGate)
+        {
+            var used = store.UsedBytes;
+            var global = store.GlobalBytes;
+            var band = Band(used, global);
+            if (publish is null || (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep)) return;
+            if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
+            memorySeq++;
+            reportedBytes = used;
+            reportedBand = band;
+        }
     }
+
+    /// <summary>A summary's budget. The status bar shows it as it shows an event, so it counts as reported: otherwise a run
+    /// that grew by less than a report step, then closed, would leave the status bar showing memory already freed. The
+    /// summary is written only after this returns, so an event published meanwhile (a close in another tab) can reach main
+    /// first; both take their sequence number under this lock with the usage they carry, and the status bar ignores a
+    /// figure older than the one it shows.</summary>
+    internal ResultBudget SummaryBudget()
+    {
+        lock (memoryGate)
+        {
+            var used = store.UsedBytes;
+            reportedBytes = used;
+            reportedBand = Band(used, store.GlobalBytes);
+            return new ResultBudget(used, store.GlobalBytes, store.QueryBytes, ++memorySeq);
+        }
+    }
+
+    private static int Band(long used, long global) => used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
 
     /// <summary>Reads past the rest of a result set that stores no more rows and has a long column, counting its rows.
     /// ReadAsync would skip each long value by buffering all of it, in time quadratic in its size and deaf to the token; a
@@ -685,7 +777,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         foreach (var query in queries.Values.Where(query => query.SessionId == args.SessionId)) query.Cancel();
         var removed = sessions.TryRemove(args.SessionId, out var session);
         session?.Close();
-        store.ReleaseSession(args.SessionId);
+        // The session's results stay until the renderer closes them (results.close) or its next query replaces them.
         return new { Closed = removed };
     }
 

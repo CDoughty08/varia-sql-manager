@@ -4,12 +4,11 @@ namespace Varia.Backend.Results;
 internal enum TruncationReason { None, RowLimit, QueryBudget, GlobalBudget, SystemMemory }
 
 /// <summary>One query's share of the result budget, and the reason it stopped storing rows, if it did.</summary>
-internal sealed class QueryBudget(string sessionId, string connectionId)
+internal sealed class QueryBudget(string sessionId)
 {
     internal long used;
     private int stopped;
     public string SessionId { get; } = sessionId;
-    public string ConnectionId { get; } = connectionId;
     public long UsedBytes => Interlocked.Read(ref used);
     /// <summary>Set by the first failed reservation: later rows and later result sets of the query store nothing.</summary>
     public TruncationReason Stopped => (TruncationReason)Volatile.Read(ref stopped);
@@ -18,7 +17,8 @@ internal sealed class QueryBudget(string sessionId, string connectionId)
 
 /// <summary>Query results kept in backend memory (never on disk) under a byte budget: a global one, at most half of it per
 /// query, and nothing more while the operating system reports high memory load. Reading from SQL Server never waits for
-/// the UI; a full budget truncates what is stored, with the reason.</summary>
+/// the UI; a full budget truncates what is stored, with the reason. Results are released only by results.close, the next
+/// query on the same session (tab), or the process ending: closing a session or disconnecting keeps them, as SSMS does.</summary>
 internal sealed class ResultStore
 {
     /// <summary>Bookkeeping charged per sealed page on top of its bytes.</summary>
@@ -64,11 +64,11 @@ internal sealed class ResultStore
     public long UsedBytes => Interlocked.Read(ref used);
     public int Count { get { lock (gate) return sets.Count; } }
 
-    /// <summary>A new query on a session replaces that session's earlier results.</summary>
-    public QueryBudget BeginQuery(string sessionId, string connectionId)
+    /// <summary>A new query on a session replaces that session's earlier results, whatever connection produced them.</summary>
+    public QueryBudget BeginQuery(string sessionId)
     {
         ReleaseSession(sessionId);
-        return new QueryBudget(sessionId, connectionId);
+        return new QueryBudget(sessionId);
     }
 
     /// <summary>Opens a result set, reserving its column metadata (512 bytes plus 2 per name character and 64 per column)
@@ -169,7 +169,6 @@ internal sealed class ResultStore
     }
 
     public int ReleaseSession(string sessionId) => Release(set => set.Budget.SessionId == sessionId);
-    public int ReleaseConnection(string connectionId) => Release(set => set.Budget.ConnectionId == connectionId);
     public int ReleaseAll() => Release(_ => true);
 
     private int Release(Func<ResultSetBuffer, bool> match)
@@ -187,12 +186,18 @@ internal sealed class ResultStore
     {
         long freed = 0;
         foreach (var set in released) freed += set.Release();
-        if (freed == 0) return released.Count;
+        Freed(freed);
+        return released.Count;
+    }
+
+    /// <summary>Memory a release returned, now or when a leased set's last job ended.</summary>
+    internal void Freed(long freed)
+    {
+        if (freed == 0) return;
         // Counted across calls: closing many small results, together or one at a time, frees as much as one large release.
         var sinceCollect = Interlocked.Add(ref freedSinceCollect, freed);
         var sinceCompact = Interlocked.Add(ref freedSinceCompact, freed);
         if (sinceCollect > CollectAfterRelease || UsedBytes == 0 && sinceCompact > CompactWhenEmpty) Collect();
-        return released.Count;
     }
 
     /// <summary>Pages are large arrays, which only a gen2 collection frees, and nothing else in the backend allocates enough

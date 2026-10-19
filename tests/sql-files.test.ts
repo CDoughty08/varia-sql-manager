@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
-import { SqlFileStore } from '../src/main/sql-files'
+import { fileKinds, saveFileSchema, SqlFileStore } from '../src/main/sql-files'
 
 let directory: string
 beforeEach(async () => {
@@ -64,5 +64,25 @@ describe('SQL documents', () => {
     store.release(file.id)
     await expect(store.save('SELECT 2', file.id)).rejects.toThrow('Unknown SQL file')
     expect(await readFile(file.path, 'utf8')).toBe('SELECT 1')
+  })
+  it('saves a value opened from the results with its kind\'s filters and limits', async () => {
+    expect(fileKinds.xml.filters).toEqual([{ name: 'XML files', extensions: ['xml'] }])
+    expect(fileKinds.json.filters).toEqual([{ name: 'JSON files', extensions: ['json'] }])
+    expect(fileKinds.sqlplan.filters.map(filter => filter.extensions)).toEqual([['sqlplan'], ['xml']])
+    expect(fileKinds.sql).toMatchObject({ title: 'Save SQL query', maxChars: 5_000_000, maxBytes: 5_000_000 })
+    const request = (content: string, kind?: string) => saveFileSchema.safeParse({ name: 'v.xml', content, saveAs: true, ...kind ? { kind } : {} }).success
+    expect(request('x'.repeat(4_194_304), 'xml')).toBe(true)
+    expect(request('x'.repeat(4_194_305), 'json')).toBe(false)
+    expect(request('x'.repeat(4_194_305))).toBe(true)
+    expect(request('x'.repeat(5_000_001))).toBe(false)
+    expect(request('x', 'text')).toBe(false)
+    expect(saveFileSchema.safeParse({ name: 'v.xml', content: 'x', saveAs: true, kind: 'xml', path: '/tmp/x' }).success).toBe(false)
+    // A value may take more than a query's 5 MB on disk (up to 16 MiB), never more.
+    const store = new SqlFileStore()
+    const wide = '日'.repeat(2_000_000)
+    await expect(store.save(wide, undefined, join(directory, 'wide.sql'))).rejects.toThrow('SQL files must be smaller than 5 MB.')
+    const saved = await store.save(wide, undefined, join(directory, 'wide.xml'), 'xml')
+    expect((await readFile(saved.path, 'utf8')).length).toBe(2_000_000)
+    await expect(store.save('日'.repeat(5_600_000), undefined, join(directory, 'huge.xml'), 'xml')).rejects.toThrow('Files must be smaller than 16 MB.')
   })
 })

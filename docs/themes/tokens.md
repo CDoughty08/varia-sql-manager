@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (191)
+## Color keys (196)
 
 ### Base
 
@@ -90,7 +90,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `icon.foreground` | VS Code | `$icon` | `#8aa9d4` | `#3e6696` | Default glyph color. |
 | `widget.shadow` | VS Code | `$shadow` | `#00000099` | `#0000002e` | Shadow of dialogs, floating dock groups, and editor widgets. |
 | `widget.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Border of floating dock groups and widgets. |
-| `textPreformat.foreground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Preformatted text such as execution plan XML. |
+| `textPreformat.foreground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Preformatted text in the editor. |
 | `sash.hoverBorder` | VS Code | `$focus` | `#76acff` | `#005fb8` | Dock splitter while it is hovered or dragged. |
 | `scrollbarSlider.background` | VS Code | `$textMuted/40` | `#8a9cb366` | `#525e7266` | Scrollbar thumb. |
 | `scrollbarSlider.hoverBackground` | VS Code | `$textMuted/55` | `#8a9cb38c` | `#525e728c` | Scrollbar thumb when hovered. |
@@ -248,21 +248,26 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `panelTitle.activeBorder` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Underline of the active output tab. |
 | `badge.background` | VS Code | `$active` | `#2e3c51` | `#ccd6e3` | Count badges on output tabs. |
 | `badge.foreground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Count badge text. |
-| `resultsGrid.background` | Varia | `@panel.background` | `#141a23` | `#fafbfc` | Results grid. Not used yet; reserved for the results grid. |
-| `resultsGrid.foreground` | Varia | `@foreground` | `#d9e1ec` | `#1f2733` | Results grid cells. Not used yet; reserved for the results grid. |
+| `resultsGrid.background` | Varia | `@panel.background` | `#141a23` | `#fafbfc` | Results grid. |
+| `resultsGrid.foreground` | Varia | `@foreground` | `#d9e1ec` | `#1f2733` | Results grid cells. |
 | `resultsGrid.headerBackground` | Varia | `$raised` | `#202a39` | `#e1e7ee` | Column headers. |
 | `resultsGrid.headerForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Column names. |
-| `resultsGrid.headerDescriptionForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Column data types below the names. |
+| `resultsGrid.headerDescriptionForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | The (No column name) placeholder. |
 | `resultsGrid.gridlines` | Varia | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Cell borders. |
 | `resultsGrid.alternateRowBackground` | Varia | `$text/3` | `#d9e1ec08` | `#1f273308` | Tint of every other row. |
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | Dark `$warning/70`, Light `$warning` | `#dfbd82b3` | `#8a5300` | NULL values. |
-| `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#dfbd82` | `#8a5300` | Notice that results were truncated. |
+| `resultsGrid.nullBackground` | Varia | Dark `$warning/8`, Light `$warning/12` | `#dfbd8214` | `#8a53001f` | NULL cells, tinted as in SSMS. |
+| `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#dfbd82` | `#8a5300` | Truncation notices and the marker on truncated values. |
 | `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Selected cells. |
 | `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of selected cells. |
 | `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#24324a` | `#d6e3f3` | Selected cells while the grid is not focused; their text keeps its color. |
 | `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the active cell while the grid is focused. |
-| `resultsGrid.hoverBackground` | Varia | `@list.hoverBackground` | `#263041` | `#d0d8e3` | Hovered row. Not used yet; reserved for the results grid. |
+| `resultsGrid.hoverBackground` | Varia | `@list.hoverBackground` | `#263041` | `#d0d8e3` | Hovered column or row header. |
+| `resultsGrid.headerSelectionBackground` | Varia | `$selection` | `#24324a` | `#d6e3f3` | Column and row headers of selected cells. |
+| `resultsGrid.headerSelectionForeground` | Varia | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the headers of selected cells. |
+| `resultsGrid.linkForeground` | Varia | `$accent` | `#8fb7ff` | `#005fb8` | XML, JSON and plan values that open in a new tab. |
+| `resultsGrid.splitterBackground` | Varia | Dark `$textMuted/60`, Light `$controlBorder` | `#8a9cb399` | `#8792a2` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
 | `resultsMessages.foreground` | Varia | Dark `$accentMuted`, Light `$text` | `#a3bbdc` | `#1f2733` | Text of the Messages tab. |
 
 ### Status bar

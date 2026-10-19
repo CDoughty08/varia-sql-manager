@@ -2,6 +2,8 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
 import 'monaco-editor/languages/definitions/sql/register.js'
+// XML, JSON and plan values open from the results grid in their own tabs.
+import 'monaco-editor/languages/definitions/xml/register.js'
 import 'monaco-editor/editor/contrib/find/browser/findController.js'
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js'
@@ -14,6 +16,7 @@ import 'monaco-editor/features/codicon/register.js'
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
 import App from './App'
 import { createWorkbench } from './core/workbench'
+import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
 import 'dockview-react/dist/styles/dockview.css'
@@ -21,12 +24,24 @@ import './styles.css'
 
 // Bundle Monaco locally; the editor never downloads scripts from a CDN.
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
+registerJson(monaco)
 async function start() {
   // React renders only after a theme is applied, so the first frame already has its colors.
   const theme = await ThemeService.create(window.varia, domThemeTarget(monaco))
   const workbench = createWorkbench(window.varia, monaco, theme)
-  // Smoke tests drive the results API directly (backend-smoke.mjs); main enables test mode only in unpackaged smoke runs.
-  if (window.varia.testMode) Object.assign(window, { __variaResults: workbench.results })
+  // Smoke tests drive the results API directly (backend-smoke.mjs) and read the grids' counters (results-smoke.mjs); main
+  // enables test mode only in unpackaged smoke runs.
+  if (window.varia.testMode) {
+    const stats = workbench.gridStats
+    Object.assign(window, {
+      __variaResults: workbench.resultClient,
+      __variaGrid: {
+        stats: async () => ({ ...stats?.snapshot(), client: await workbench.resultClient.stats() }),
+        reset: () => stats?.reset(),
+        setScrollCap: (px?: number) => stats?.setScrollCap(px)
+      }
+    })
+  }
   const root = createRoot(document.getElementById('root')!)
   root.render(<React.StrictMode><WorkbenchProvider workbench={workbench}><App /></WorkbenchProvider></React.StrictMode>)
   // Workbench lifetime is outside React effects, including StrictMode's effect replay.

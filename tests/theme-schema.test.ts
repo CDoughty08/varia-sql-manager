@@ -22,8 +22,8 @@ describe('generated theme documentation', () => {
     }
     expect(colors.properties['focusBorder'].markdownDescription).toBe('(VS Code) Focus ring around the focused control. Default `$focus` (Dark `#76acff`, Light `#005fb8`).')
     expect(colors.properties['statusBar.executingBackground'].markdownDescription).toContain('(Varia)')
-    expect(colors.properties['resultsGrid.hoverBackground'].markdownDescription).toContain('Not used yet; reserved for the results grid.')
-    expect(colors.properties['resultsGrid.selectionBackground'].markdownDescription).not.toContain('Not used yet')
+    expect(colors.properties['notifications.background'].markdownDescription).toContain('Not used yet; reserved for notifications.')
+    expect(colors.properties['resultsGrid.hoverBackground'].markdownDescription).not.toContain('Not used yet')
     const docs = renderTokenDocs()
     for (const name of [...paletteSlots, ...colorKeys, ...sqlScopes, ...scopeAliases.keys()]) expect(docs).toContain('| `' + name + '` |')
   })

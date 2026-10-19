@@ -57,13 +57,21 @@ internal sealed class ColumnPlan
         Wires = [.. columns.Select(column => column.Wire)];
         IsPlan = isPlan;
         HasLong = hasLong;
+        DescriptorBytes = DescriptorBytesOf(descriptors);
     }
 
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }
-    /// <summary>An upper bound on this set's descriptor in the query.execute summary (MessagePack), which must stay under
-    /// the 16 MiB response limit: its names and types, plus 96 bytes of keys and values per column and 512 per set.</summary>
-    public long DescriptorBytes => 512 + Columns.Sum(column => Encoding.UTF8.GetByteCount(column.Name) + Encoding.UTF8.GetByteCount(column.DataType) + 96L);
+    /// <summary>An upper bound on this set's descriptor in the query.execute summary and its resultSet events (MessagePack):
+    /// its names and types, plus 96 bytes of keys and values per column and 512 per set.</summary>
+    public long DescriptorBytes { get; }
+
+    public static long DescriptorBytesOf(IEnumerable<ResultColumn> columns) =>
+        512 + columns.Sum(column => Encoding.UTF8.GetByteCount(column.Name) + Encoding.UTF8.GetByteCount(column.DataType) + 96L);
+
+    /// <summary>"xml" or "json" when the set is FOR XML or FOR JSON output, which <see cref="ForXmlCollector"/> joins into
+    /// one value; otherwise null.</summary>
+    public string? ForXml { get; private init; }
     /// <summary>Today's rule: a single column named "Microsoft SQL Server 2005 XML Showplan" is an execution plan.</summary>
     public bool IsPlan { get; }
     /// <summary>Whether the set has a long column (max types, text, ntext, image, xml, CLR types), whose values can reach
@@ -83,6 +91,7 @@ internal sealed class ColumnPlan
         var count = reader.FieldCount;
         var schema = reader.GetSchemaTable() ?? throw new InvalidOperationException("The result set has no schema.");
         var isPlan = count == 1 && reader.GetName(0).Equals(ShowplanColumn, StringComparison.OrdinalIgnoreCase);
+        string? forXml = null;
         var columns = new Column[count];
         var descriptors = new ResultColumn[count];
         var hasLong = false;
@@ -102,6 +111,7 @@ internal sealed class ColumnPlan
             var nullable = row["AllowDBNull"] is not false;
             var clrType = row["DataType"] as Type;
             var (codec, wire, role, cap) = Choose(provider, precision, isLong, clrType, isPlan);
+            if (count == 1 && ForXmlCollector.RoleOf(name, provider) is { } documentRole) role = forXml = documentRole;
             columns[i] = new Column(name, type, codec, wire, scale is >= 0 and <= 7 ? scale.Value : 7, cap);
             var exact = codec is CellCodec.Decimal or CellCodec.SqlDecimal;
             var scaled = codec is CellCodec.Time or CellCodec.DateTime2 or CellCodec.DateTimeOffset;
@@ -109,7 +119,7 @@ internal sealed class ColumnPlan
                 MaxLength: !isLong && size is > 0 and < int.MaxValue && codec is CellCodec.Chars or CellCodec.Bytes ? size : null,
                 Precision: exact ? precision : null, Scale: exact || scaled ? scale : null, Nullable: nullable);
         }
-        return new ColumnPlan(columns, descriptors, isPlan, hasLong);
+        return new ColumnPlan(columns, descriptors, isPlan, hasLong) { ForXml = forXml };
     }
 
     private static int? Int(DataRow row, string column) => row.Table.Columns.Contains(column) && row[column] is not DBNull and var value ? Convert.ToInt32(value, Invariant) : null;

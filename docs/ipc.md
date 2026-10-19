@@ -16,7 +16,8 @@ The code is the reference implementation; this document describes it.
 | One backend process | `src/main/backend/connection.ts` | `Protocol/ProtocolHost.cs`, `RequestContext.cs` |
 | Generations and restarts | `src/main/backend/supervisor.ts` | — |
 | Results port | `src/main/backend/results-port.ts`, `src/shared/ipc/port-messages.ts` | — |
-| Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs` |
+| Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
+| Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
 
 ## Contents
@@ -31,6 +32,8 @@ The code is the reference implementation; this document describes it.
 - [Query events](#query-events)
 - [Result pages](#result-pages)
 - [Result store and memory budget](#result-store-and-memory-budget)
+- [Messages](#messages)
+- [Copy and Save Results As](#copy-and-save-results-as)
 - [Results port and results worker](#results-port-and-results-worker)
 - [Malformed input](#malformed-input)
 - [Backend threads and exit codes](#backend-threads-and-exit-codes)
@@ -85,7 +88,7 @@ Every frame is a 16-byte little-endian header followed immediately by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384 } }`; exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory', usedBytes, globalBytes }` |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory', usedBytes, globalBytes, seq }` |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -198,8 +201,13 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
+| `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
+| `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
+
+`mainOnlyMethods` (`results.copy`, `results.export`, `debug.results.synthesize`) are sent only by main on its own
+behalf: they are in no renderer schema (`requestSchemas`) and no port schema (`portRequestSchema`).
 
 **A backend method is added in five places:** `RpcMethods` (`src/shared/contracts.ts`); `requestSchemas`
 (`src/main/validation.ts`) for invoke or `portRequestSchema` for the port; a `methodPolicies` entry (a new unary method
@@ -247,13 +255,15 @@ when no port is open).
 | type | Emitted |
 | --- | --- |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
-| `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, so the first rows are readable without waiting for a tick |
-| `messages` | Every 100 ms or 64 KiB, only messages stored under the message caps |
+| `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
+| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
-| `results.memory` (id 0) | At most once a second, when usage crosses 50, 75, 90 or 100 % of the budget or changes by 64 MiB |
+| `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event; a summary's `budget` counts as a report, so closing results that only a summary showed still sends the fall. Events and summary budgets take their `seq` from one counter of the backend process, under the same lock as the usage they carry, and main pairs it with the generation: a summary is serialized after its figure is taken, so a close in another tab can send its fall first, and the status bar ignores any report older than the one it shows. Like any droppable event it is refused while the control lane is full (main not reading); a refused report does not count as sent and takes no `seq`, so the next check sends it once the lane drains |
 
-Events are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new events are refused, and any event
-over 256 KiB is dropped. RESPONSE, PONG and GOAWAY are never dropped. The UI treats the summary as authoritative and
+Progress and messages are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new ones are refused,
+and one over 256 KiB is dropped. `resultSet.opened` and `resultSet.closed` are essential: never refused, and up to
+4 MiB, enough for a descriptor of 4,096 columns with 128-character names (about 3.5 MB). RESPONSE, PONG and GOAWAY are
+never dropped. The UI treats the summary as authoritative and
 ignores a query's events once its summary has arrived.
 
 ## Result pages
@@ -308,16 +318,27 @@ Results stay in backend memory, never on disk (`ResultStore`).
   in `discardedResultSets`), and execution always continues.
 - **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the PR6 table
   sends 1,000). **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
-  summary must fit the 16 MiB response: kept sets' descriptors may take 12 MiB (messages the rest), so once a set's
-  column list would pass that, it and later sets are counted as discarded.
+  summary must fit the 16 MiB response: kept sets' descriptors may take 8 MiB, each bounded by `512 + Σ(UTF-8 name +
+  UTF-8 type + 96)` bytes (messages and the error text take the rest, with room to spare), so once a set's column list
+  would pass that, it and later sets are counted as discarded.
+- **FOR XML and FOR JSON.** A set whose only column is `XML_F52E2B61-18A1-11d1-B105-00805F49916B` or
+  `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` (ntext or nvarchar) arrives as rows of about 2,033 characters;
+  `ForXmlCollector` joins them into one pooled buffer of up to 2,097,152 + 1 characters (the excess marks the value
+  truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
+  (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`, as SSMS shows one link. `FOR XML … TYPE` already arrives
+  as one xml cell.
 - **Never unowned.** If a `query.execute` summary still cannot be encoded (`RESPONSE_TOO_LARGE`), its results are
   released at once rather than left without an owner.
 - **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan', columns,
   rowsRead, rowsStored, rowsAvailable (rows in sealed pages), bytesStored, truncatedCells, state: 'open' | 'complete' |
   'released', truncated?, incomplete }`. Result ids are u32 from 1 per generation and always paired with it.
-- **Released** by `results.close`, the next `query.execute` on the same session, `query.session.close`,
-  `connections.disconnect`, and process exit. A release fails the result's in-flight reads with `RESULT_RELEASED` after
-  the current page. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
+- **Released** by `results.close`, the next `query.execute` on the same session (whatever its connection), and process
+  exit. Closing a session (`query.session.close`) and disconnecting keep results readable, copyable and saveable, as in
+  SSMS; the renderer closes them when their tab closes. A release fails the result's in-flight reads with
+  `RESULT_RELEASED` after the current page and stops storing at once.
+- **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
+  (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
+  closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
   or one at a time), triggers one gen2 collection shortly after (pages are large arrays that nothing else would
   collect), and so does a release that empties the store once 16 MiB were released since the last aggressive one. The
   collection is aggressive (compacting, so it returns memory to the operating system) when what remains is no more than
@@ -333,10 +354,108 @@ Notes appended to the summary's messages:
 | `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n} MB) is full. Execution continued; close other query results to free memory." |
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
-| column lists past the summary's 12 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
+| column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
+| a batch's error skipped later batches or repetitions | "Batch {b} raised an error; later batches were not executed." ("Batch {b}, repetition {k}, raised …" for `GO n`); nothing when no later batch was skipped, since SQL Server may have run the batch to its end |
+| a cancel or timeout skipped later batches | "Stopped at batch {b}; {c} of {t} batch executions completed." (", repetition {k}" for `GO n`) |
 
 A cell whose typed read fails becomes NULL with the error flag; that column switches to its fallback reader and the
 messages get "Column ‘{name}’ ({type}): some values could not be read and are shown as NULL."
+
+## Messages
+
+The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'error' }`, in order, under
+the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, since events may be dropped. Past the caps,
+"Messages were truncated by the display limit; …" marks where entries stopped, and up to 20 more error entries (each cut
+at 16,384 characters) are still kept, so the error that stopped a script, or its cancellation or timeout, is in Messages
+after a flood of PRINT output or row counts. An event carries at most 1,000 entries; a summary at most 1,028 (the
+stored entries, the late errors, and up to 8 notes). Should a failed run's summary still hold no error entry, the
+renderer adds its `error` as one.
+
+- **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
+  affected)", no digit grouping), the notes above, and "The SQL session closed. …". As in SSMS, "Changed database
+  context to …" (5701) and "Changed language setting to …" (5703) are left out, whether from USE, a session's login, or
+  the toolbar's database.
+- **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within
+  the whole script or selection) or `Msg …, Procedure {p}, Line {k}` (the procedure's own line), then a line feed and the
+  message. Errors that arrive with an exception are added unless InfoMessage already delivered them (matched by number,
+  state, line and text over the last 20). A cancel adds "The script was cancelled. Remaining batches were not executed."
+  and a timeout "The script exceeded its execution timeout. Remaining batches were not executed."; an unexpected stop adds
+  "Execution stopped unexpectedly: …". The summary's `error` keeps the first 20 errors (16,384 characters) as before.
+- **`completedAt`** is the backend's local time, `yyyy-MM-ddTHH:mm:ss.fffffffzzz`, for SSMS's "Completion time:" line.
+- **`budget`** is `{ usedBytes, globalBytes, queryBytes, seq }` when the summary was built; main adds `generation`. `seq`
+  orders it with the `results.memory` events (see [Query events](#query-events)).
+
+## Copy and Save Results As
+
+All Copy and Save text comes from one formatter, `ResultTextWriter` (C#), which reads stored pages in place through
+`PageView` (a production reader of trusted pages, parsed in O(columns); `Varia.Backend.Tests/PageReader.cs` stays the
+independent oracle). It works on UTF-8 bytes; CSV quoting, TSV replacement and JSON escaping are safe at byte level
+because every byte that needs attention is ASCII (and U+2028/U+2029, matched as their three bytes).
+
+| | Copy (TSV) | Save TSV (`.txt`, `.tsv`, `.tab`) | Save CSV (`.csv`) | Save JSON (`.json`) |
+| --- | --- | --- | --- | --- |
+| Encoding | UTF-8 to main, then the clipboard | UTF-8 with BOM | UTF-8 with BOM | UTF-8, no BOM |
+| Separator, end of line | TAB; CRLF on Windows, LF elsewhere; none after the last line | TAB; CRLF after every line | `,`; CRLF after every line | `[` LF, one compact object per line joined by `,` LF, then LF `]` LF; an empty result is `[]` LF |
+| Header | Copy with Headers only; one header line per part | on | on | object keys |
+| NULL and read errors | `NULL` | `NULL` | empty field | `null` |
+| Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
+| Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number, otherwise a string; bit as `true`/`false`; everything else a string |
+| Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
+| Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
+
+`exportDefaults` (`src/main/results-jobs.ts`, owner decision 1) sets the saves' header row and NULL text; the backend
+takes `headers` and `nullText` as parameters. `tests/fixtures/results-text/cases.json` holds the golden bytes, checked
+against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (`tests/results-text.test.ts`).
+
+- **`results.copy { resultId, parts, headers, eol: 'crlf' | 'lf', maxBytes: 1 … 67,108,864 }`** (stream). A part is 1 –
+  64 ascending, disjoint inclusive row ranges (a last row of 2⁵³ − 1 runs to the end) by 1 – 64 column ranges; up to 64
+  parts, written in order. Open-ended rows end at the rows available when the copy starts, and `partial` says the set was
+  still open. Before any work, `EstimateBytes` (O(pages × columns): the stored text spans, `2 × bytes + 2` per binary
+  cell, 4 per NULL, separators and headers; replacements never lengthen text, so it is an upper bound) over `maxBytes`
+  answers `TOO_LARGE` ("The selection is too large to copy ({n} MB; the limit is {m} MB). Use Save Results As
+  instead.") with no DATA. Otherwise the text streams as DATA bodies of at most 1 MiB under the usual credit rules,
+  checked for cancellation per page, then the RESPONSE `{ rows, bytes, truncatedCells, partial }`.
+- **`results.export { resultId, path, format: 'csv' | 'tsv' | 'json', headers, nullText: 'empty' | 'NULL', temporaryId }`**
+  (unary). The path must be fully qualified, without NUL and without a `\\.\` or `\\?\` prefix, and `temporaryId` 32
+  hex digits that main chose (`INVALID_PARAMS`); the set must be complete (`RESULT_OPEN`). It writes
+  `{folder}/.varia-{temporaryId}.tmp` (`CreateNew`, `FileShare.None`, 1 MiB chunks), checking cancellation per page,
+  flushes it to disk and renames it over the target (a symlink there is replaced, not followed). A regular file it
+  replaces keeps its permissions: on Linux and macOS the temporary file is created with the target's mode (never wider)
+  and set to it exactly, and one replacing a symlink to a file gets that file's read and write bits, narrowed by the
+  umask; on Windows `File.Replace` keeps its attributes and, where the user may set them, its ACLs (merge errors are
+  ignored, so a share granted Change rather than Full Control still saves), keeping the replaced file as
+  `.varia-{temporaryId}.bak` until it succeeds, so a replace that fails partway leaves the old file, or puts the new one
+  in place, never neither. Any failure or cancel deletes the temporary file; the target is never touched before the
+  rename. When the backend stops before it could (a crash, a kill, a restart), the export fails with `BACKEND_LOST` and
+  main removes the temporary file itself, at once and again after the stop grace period, and the backup once the target
+  exists. Failures are `EXPORT_FAILED` whose message is one token, never a path or an OS message: `ACCESS`
+  (`UnauthorizedAccessException`, HRESULT 0x80070005), `IN_USE` (0x80070020, 0x80070021, and
+  0x80070497 when `File.Replace` cannot remove a file another program holds), `DISK_FULL` (0x80070070,
+  0x80070027, errno 28), `NOT_FOUND` (a missing folder), `IS_DIRECTORY`, otherwise `IO`.
+- **Progress.** Both send droppable `{ type: 'job.progress', rowsDone, rowsTotal, bytes }` EVENTs at most every 250 ms;
+  main validates them (`jobProgressSchema`) and pushes `varia:results-job { jobId, kind, rowsDone, rowsTotal, bytes }`
+  at most 4 times a second. A save's pushes also carry `fileName` (the chosen file's name, never its path), and main
+  pushes one as soon as the dialog closes, so the renderer's strip ("Saving {fileName}…") starts from the export, not
+  from the dialog.
+- **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts }` and
+  `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128 }` are `trusted()`, strictly
+  validated, and checked against `ResultsPortHost.owns(generation, resultId)` and the ready generation
+  (`RESULT_UNAVAILABLE`). A copy decodes the chunks with a streaming `TextDecoder` (so a character split across chunks
+  survives), regrants their credit, cancels with `TOO_LARGE` past 64 MiB + 1 MiB received, and writes the clipboard once,
+  on the RESPONSE, unless the copy was cancelled (its chunks after the cancel are dropped, so a RESPONSE the backend sends
+  anyway ends it with `CANCELLED` and leaves the clipboard alone); a new copy cancels the running one. A save runs one at
+  a time (`JOB_BUSY`), shows the native dialog
+  ("Save Grid Results", the requested format's filter first, then CSV, Text, JSON and All Files) with the suggested name
+  and extension sanitised as Script As's File… names are (`src/main/file-names.ts`; a name too long is cut in the tab's
+  name, never in its `-Result{n}`), takes the format from the chosen
+  extension (any other extension keeps the requested format, and none is appended, so the dialog's overwrite
+  confirmation stays valid), checks ownership again, and returns only the file's
+  name; `EXPORT_FAILED` tokens become sentences naming only that name. `varia:results-job-cancel` sends CANCEL reason 1;
+  a page reload or closed window cancels with reason 3. Main shows the page's file dialogs and prompts one at a time
+  (`src/main/dialog-queue.ts`): a Script As File… dialog asked for while Save Grid Results is open waits for it, where
+  Windows and Linux would show it over the first. Paths come only from the dialog, never from the renderer, and
+  reach only the backend.
 
 ## Results port and results worker
 
@@ -361,7 +480,8 @@ A read or close must name the current generation and a result the renderer owns 
 100,000 per generation), or it ends `RESULT_UNAVAILABLE`; at most 64 requests may be outstanding.
 
 **Main → worker:** `backend { generation, status }` on every change, `page { rid, seq, body: ArrayBuffer }`,
-`end { rid, ok, result | code, message }`, `query { queryId, event }`, and `memory { usedBytes, globalBytes }`.
+`end { rid, ok, result | code, message }`, `query { queryId, event }`, and `memory { usedBytes, globalBytes, generation, seq }`
+(the generation of the backend that sent the event, which may be one being replaced).
 
 **The worker** (`worker-core.ts`) keeps an LRU of decoded pages keyed by generation, result and first row (64 MiB or 512
 pages; pages a pending window needs are never evicted, so once those alone pass 64 MiB, windows that already have rows
@@ -374,15 +494,19 @@ fails pending work with `RESULT_UNAVAILABLE` and drops older pages.
 **`ResultClient`** (`ResultClient.ts`) is the renderer's API, the contract the PR7 grid builds on: `open(descriptor)`
 returns a `ResultHandle` with `getSnapshot`, `subscribe` (coalesced per animation frame), `getWindow(first, count, o)`
 (at most 4,096 rows, 262,144 cells and 4,000,000 characters; 1,024 characters per cell by default, at most 2,097,152;
-flags 1 NULL, 2 truncated, 4 read error, 8 over the text budget), `peekWindow`, `prefetch`, `getCell` and `close`, plus
-`onQueryEvent`, `onMemory` and `applySummary`. It forgets a result once it is released or its generation is gone
-(handles keep reporting `released` or `lost`), and remembers at most 64 windows and 4,000,000 characters per result. A
-worker that fails is recreated and reattached at most 3 times a minute; after that, results show "Results cannot be
-displayed; reload the workbench."
+flags 1 NULL, 2 truncated, 4 read error, 8 over the text budget), `peekWindow`, `prefetch`, `getCell` (a cell's whole stored
+value; with `format: 'xml' | 'json'` the worker pretty-prints it with `doc-format.ts`, unless the backend stored only a
+prefix, and reports `formatted`) and `close`, plus
+`onQueryEvent`, `onMemory`, `onGeneration` and `applySummary`. It forgets a result once it is released or its
+generation is gone (handles keep reporting `released` or `lost`). The grid reads tiles of 128 rows × 32 columns, at most
+512 characters per displayed cell, and every grid shares one window cache of 256 windows and 16,777,216 UTF-16 units
+(least recently used first, indexed by result so a result's windows go without a scan). `release(keys)` closes many
+results at once, 1,024 ids a request: a run's sets close with one call when its tab runs again or closes, or Close
+Results runs, since one request each would run into the port's 64 outstanding requests. Ids wait while the port is
+down, and ones main refused as busy (`TOO_MANY_REQUESTS`) are sent again 250 ms later. A worker that fails is recreated
+and reattached at most 3 times a minute; after that, results show "Results cannot be displayed; reload the
+workbench."
 
-**The PR6 results table** (`legacy.ts`) still shows at most 1,000 rows across the first ten result sets, 100,000 cells,
-4,000,000 characters and 16,384 characters per cell (XML plans 2,097,152), reading them through `getWindow` (windows
-sized from the set's bytes per row to fit half the worker's cache) and closing them afterwards. A failed read keeps the rows already read and adds "Some rows could not be loaded: {message}".
 
 ## Malformed input
 
@@ -465,7 +589,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | --- | --- | --- |
 | Request body (main → backend) | 4 MiB; a 1,000,000-character script is at most 3,000,000 UTF-8 bytes | main before writing (`TOO_LARGE`); the backend skips larger bodies |
 | Response body (backend → main) | 16 MiB | backend (`RESPONSE_TOO_LARGE`); main skips larger bodies |
-| Event body | 256 KiB | backend |
+| Event body | 256 KiB; `resultSet.*` 4 MiB | backend |
 | Control decoding | depth 16; 4,096 map entries; 1,048,576 array items; 128-byte keys; integers within ±(2⁵³ − 1) | both |
 | Page | 1 – 4,096 rows and columns; sealed at 256 KiB or 4,096 rows; first page at 64 rows or 20 ms; idle seal 200 ms | backend; checked by the worker |
 | Encoded row | 8 MiB; later cells become truncated prefixes | backend |
@@ -473,13 +597,18 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Result sets kept per query | 1 – 1,000 (default 10) | zod and backend |
 | Rows stored per query | 0 – 2,147,483,647 (0 = budget only) | zod and backend |
 | Result budget | `clamp(available memory / 4, 256 MiB, 2 GiB)`; 50 % per query; none under high system memory load | backend |
-| Messages | 1,000 messages / 1,000,000 characters; error text 16,384 characters | backend |
+| Messages | 1,000 entries / 1,000,000 characters, then up to 20 more errors; error text 16,384 characters | backend |
+| Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
+| FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
+| Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
+| Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
+| Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 32 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
-| PR6 results table | 1,000 rows, 100,000 cells, 4,000,000 characters, 16,384 per cell (plans 2,097,152) | renderer |
+| Results grid | tiles of 128 rows × 32 columns; 512 characters per displayed cell; one window cache of 256 windows / 16,777,216 UTF-16 units; at most 12 grids mounted, 2 a frame | renderer |
 | Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s; backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |
 | Restarts | after 0 s, 1 s, 2 s; breaker at 3 unexpected losses in 120 s; reset after 300 s ready | main |
 | Registries | 1,024 lost connection ids; 4,096 abandoned request ids; 100,000 owned results per generation; stderr 32 lines × 512 characters | main |
@@ -490,9 +619,9 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads); an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |
@@ -509,6 +638,11 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 | `TOO_MANY_REQUESTS` | "Too many pending backend requests." |
 | `STREAM_PROTOCOL` | "The SQL backend sent an invalid response. The request was cancelled." |
 | `RESPONSE_TOO_LARGE` | "The backend result is too large to return (limit 16 MB)." |
+| `TOO_LARGE` (copy, main's cap) | "The selection is too large to copy (more than 64 MB). Use Save Results As instead." |
+| `JOB_BUSY` | "Another Save Results As is in progress. Wait for it to finish or cancel it." |
+| `RESULT_UNAVAILABLE` (closed during the save dialog) | "These results were closed before they could be saved." |
+| `RESULT_OPEN` | "Save the results after this result set finishes loading." |
+| `EXPORT_FAILED` | "Could not save the results: " + `ACCESS` "access to {file} is denied.", `DISK_FULL` "the disk is full.", `IN_USE` "{file} is open in another program.", `NOT_FOUND` "the folder no longer exists.", `IS_DIRECTORY` "{file} is a folder.", otherwise "{file} could not be written." |
 
 | Surface | Text |
 | --- | --- |
@@ -599,24 +733,37 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   stripping, with modes for each misbehaviour (`silent`, `exit`, `crash-after`, `bad-magic`, `oversize`, `truncated`,
   `no-hello`, `v1`, `wrong-version`, `missing-method`, `late`, `credit-overrun`, `seq-gap`, `unknown-id`, `contained`,
   `unresponsive`, and others) and a `workbench` mode for the Electron smoke tests, controlled through
-  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `silent-<generation>`).
+  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `silent-<generation>`). A
+  script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92
+  hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`; `@rate` is rows a second, `M1*n` is n one-row sets)
+  with progress, message entries and a memory event, pages encoded per block on first read; `results.copy` and
+  `results.export` use `text-writer.mjs`, and `hold/results.export` pauses an export after each page so a test can
+  cancel it mid-save.
+- **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets (every edge the formats
+  treat specially) with the exact Copy, CSV, TSV and JSON bytes; the C# writer and the JavaScript twin are both checked
+  against them, through the real copy and export jobs on the C# side.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`, including
   malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation and the budget.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
-  backend, and UI responsiveness while a million stored rows are read.
+  backend, and UI responsiveness while a million stored rows are read. `scripts/results-smoke.mjs` drives the grid on
+  the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
+  the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
+  the query produces, a FOR XML PATH value, and an error reported between the messages around it.
 
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, and main ↔ Release backend ↔ results worker
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
+npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
 ```
 
-Both harnesses need the Release backend and, for `bench:e2e`, the built app (`npm run check`). They write
-`artifacts/bench/node.json` and `artifacts/bench/e2e.json`; they are not part of `npm run check`. The benchmarks only
+The harnesses need the Release backend and, for `bench:e2e` and `bench:grid`, the built app (`npm run check`). They
+write `artifacts/bench/node.json`, `e2e.json` and `grid.json`; they are not part of `npm run check`. The benchmarks only
 measure (and check that every row and cell arrived); `check-bench.mjs --enforce` fails when a value is worse than its
-floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS report only.
+floor, or when a metric with a floor was not measured (a live one only when its harness ran `--live`). CI enforces
+floors on Linux (with live SQL Server); Windows and macOS report only.
 
 - **W1** is a typical wide row: int, nvarchar(50), datetime2(7), decimal(18,2), uniqueidentifier, nvarchar(200) of 80
   characters, bit, and an int that is NULL in every fifth row (about 220 bytes encoded). **B1** is two nvarchar(max)
@@ -624,9 +771,21 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
 - **The node pipeline** runs main's real classes: `BackendSupervisor` and `BackendConnection` over stdio to the Release
   backend, `ResultsPortHost` over a `MessageChannel`, and `ResultsWorkerCore` in a worker thread reading windows of
   every row with every cell decoded (four windows in flight).
+- **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
+  1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
+  planning, and the shared window cache (full, so every insert evicts).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
   `maxRows: 0`.
+- **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
+  on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
+  while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
+  and while scroll bar jumps cross 300 columns, each such jump's main-thread task time from the DevTools protocol (with
+  300 bit columns too, the narrowest cells), the animation-frame intervals while 300 columns and 300 bit columns scroll
+  down 400 px every frame for 3 s (natively, and past a lowered scroll cap), the DOM elements of a grid, scroll bar jumps to random rows of a million
+  (each a cache miss), the window and page caches after a sweep and 300 jumps, heap growth after a collection, and long
+  tasks. `--live` copies 100,000 rows and saves a million rows as CSV from SQL Server, comparing the text with the rows
+  the query produces.
 
 | Metric | Target | Floor (Linux CI) | Measured, 4 CPUs | Measured, 2 CPUs |
 | --- | --- | --- | --- | --- |
@@ -640,6 +799,10 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
 | Main event-loop delay during W1, p99 | ≤ 20 ms | ≤ 100 ms | 12 – 14 ms | 17 ms |
 | Page bytes sent ÷ distinct page bytes, W1 | ≤ 1.05 | reported only | 1.29 | 1.29 |
 | Budget charged ÷ page bytes | ≤ 1.15 | ≤ 1.5 | 1.00 | 1.00 |
+| Grid frame: 64 selection blocks clipped, 1,800 cells tested | ≥ 5,000 ops/s | ≥ 1,000 ops/s | 4,500 – 4,900 ops/s | 5,300 – 5,700 ops/s |
+| Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
+| Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
+| Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |
 | B1 into the worker | ≥ 200 MB/s | ≥ 40 MB/s | 90 – 143 MB/s | 90 MB/s |
@@ -648,6 +811,25 @@ floor. CI enforces floors on Linux (with live SQL Server); Windows and macOS rep
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
+| Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 56 ms | 57 ms |
+| Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 8 % | 9 % |
+| Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |
+| Grid: animation-frame interval during that scroll, p95 / largest gap | ≤ 17.5 / 50 ms | gap ≤ 150 ms | 16.7 / 16.8 ms | 16.8 / 16.8 ms |
+| Grid: scroll bar jump to a random row of 1,000,000 → painted, p95 | ≤ 50 ms | ≤ 250 ms | 64 – 71 ms | 66 – 67 ms |
+| Grid: `frame()` after a scroll bar jump, 300 columns, p95 | ≤ 8 ms | ≤ 16 ms | 2.3 – 3.1 ms | 2.5 – 3.3 ms |
+| Grid: main-thread task time per scroll bar jump, 300 columns / 300 bit columns, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 73 – 85 / 102 – 128 ms | 75 – 76 / 99 – 129 ms |
+| Grid: UI long tasks over 50 ms in those two jump segments (one retry each) | 0 | ≤ 50 | 7 – 23 | 4 – 16 |
+| Grid: `frame()` scrolling across 300 columns, p95 | ≤ 6 ms | ≤ 12 ms | 0.5 – 0.8 ms | 0.7 ms |
+| Grid: animation-frame interval, 300 columns scrolled 400 px a frame for 3 s, natively / past the cap, p95 | ≤ 17.5 / 17.5 ms | ≤ 60 / 60 ms | 18.4 / 18.9 ms | 21.4 / 22.7 ms |
+| Grid: the same over 300 bit columns, p95 | ≤ 17.5 / 17.5 ms | ≤ 80 / 80 ms | 23.1 / 25.3 ms | 30.2 / 32.7 ms |
+| Grid: UI long tasks over 50 ms in those four wheel segments | 0 | ≤ 20 | 0 | 0 |
+| Grid: DOM elements, 8 / 300 / 300 bit columns | ≤ 1,500 / 4,000 / 4,000 | same | 535 / 931 / 1,811 | 535 / 931 / 1,811 |
+| Grid: UI window cache after a sweep and 300 jumps, windows / text | ≤ 256 / 16 Mi units | same | 256 / 5.8 Mi | 256 / 5.8 Mi |
+| Grid: worker page cache after the same | ≤ 64 MiB | same | 64 MiB | 64 MiB |
+| Grid: renderer heap growth, Ctrl+End then Ctrl+Home over 1,000,000 rows | ≤ 80 MB | ≤ 150 MB | 0.1 MB | 0.1 MB |
+| Grid: UI long tasks over 50 ms in the measured segments / the longest | 0 / ≤ 50 ms | reported / ≤ 250 ms | 32 / 101 ms | 18 / 70 ms |
+| Grid, live: Ctrl+A, Ctrl+C of 100,000 × 8 rows → clipboard (16.7 MB) | ≤ 1.5 s | ≤ 6 s | 0.57 – 0.81 s | 0.61 s |
+| Grid, live: Save Results As CSV, 1,000,000 × 8 rows (172 MB) | ≤ 3 s | ≤ 15 s | 1.5 – 2.0 s | 1.5 s |
 
 Measured in a shared Linux container (Xeon at 2.1 GHz, Node 24, .NET 10, SQL Server 2022 in Docker on the same machine)
 while another build was running, once with its 4 CPUs and once with the app and benchmarks pinned to 2 (`taskset`), as
@@ -659,3 +841,22 @@ announced at once; the live first window needs 100 rows, from the second page, w
 of them comes once with each read (it is decoded once); that is the extra page bytes sent. The budget charge is the
 pages, their bookkeeping and the column metadata, against the distinct page bytes main forwarded. The end-to-end W1 rate
 includes copying each page from main into the renderer and cloning every window's text to the UI thread.
+
+A single scroll bar jump reads its tiles at once; the grid waits for scrolling to settle (50 ms) only while it stays
+faster than three views a frame. The grid's cache and element rows are bounds rather than speeds, so their floors are
+the bounds themselves. Long tasks over the whole run are counted only for the report: `results-smoke.mjs` holds each of
+its measured segments to no task with 50 ms of CPU time on Linux (100 ms elsewhere) and none of 250 ms by the clock (one
+retry), read from a trace of the renderer's main thread, since a shared machine stretches short tasks by the clock;
+over the whole run here only the longest task has a floor, which a freeze would break; opening the 2 MB value is one task of about 70 ms. Jumps across many columns miss
+their 50 ms target: each rewrites every cell in view, and styling, laying out and painting that many cells (most of a
+300 bit-column grid's 1,811 elements) takes 40 to 90 ms on these CPUs. Row numbers are one sticky column beside the
+rows, because a sticky header inside each pooled row made every row a composited layer and every narrow-column jump a
+long task (151 ms p95 before). `results-smoke.mjs` checks that nothing inside a row is sticky, and the jump segments'
+long tasks have a floor of half their 100 jumps. Scrolling wide results continuously misses 60 frames a second: every
+frame writes the cells of the rows that scrolled in, and 300 bit columns put about 1,800 elements in view, whose
+styling, layout and painting take most of a frame on these CPUs. Rows are moved in the DOM (so browse-mode screen
+readers read them in order) only in the first frame after scrolling stops, which took the 300 bit columns from 124 to
+163 frames in those 3 s (p95 34.4 → 23.1 ms). The first data cell paints after two animation frames (the pane's update
+and the tile's arrival) plus the tile's read: the stack mounts its first grids and draws their first frame before the
+pane paints, which took the first paint from 80 to 56 ms; the two frames alone are 33 ms at 60 Hz, so the 50 ms target
+is missed by the read.

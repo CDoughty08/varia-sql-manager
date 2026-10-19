@@ -119,6 +119,18 @@ describe('keybinding dispatch', () => {
       expect(ran(), platform).toEqual(['query.execute', 'explorer.refresh'])
     }
   })
+  it('runs Ctrl+S as Save Results As in a results grid and as Save everywhere else, consuming it on every platform', () => {
+    for (const platform of platforms) {
+      const { press, ran, state } = service(platform, { values: editorText })
+      expect(press(letter('s', platform)).consumed, platform).toBe(true)
+      state.values = { activePanel: 'output', outputGridFocus: true }
+      expect(press(letter('s', platform)).consumed, platform).toBe(true)
+      // Messages are not a grid: Save saves the query.
+      state.values = { activePanel: 'output' }
+      expect(press(letter('s', platform)).consumed, platform).toBe(true)
+      expect(ran(), platform).toEqual(['file.save', 'output.saveResultsAs', 'file.save'])
+    }
+  })
   it('consumes a macOS menu key equivalent where its rule does not apply, so the menu cannot run it there', () => {
     const rules = (platform: Platform) => [resolveKeybinding('query.execute', { key: 'mod+j', when: 'editorFocus' }, platform)!, resolveKeybinding('window.output', { key: 'f6', when: 'editorFocus' }, platform)!]
     for (const platform of platforms) {

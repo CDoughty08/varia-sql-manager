@@ -14,6 +14,7 @@ const monacoRoot = join('node_modules', 'monaco-editor', 'esm', 'vs')
 const reviewedImports = [
   'monaco-editor/editor/editor.api.js',
   'monaco-editor/languages/definitions/sql/register.js',
+  'monaco-editor/languages/definitions/xml/register.js',
   'monaco-editor/editor/contrib/find/browser/findController.js',
   'monaco-editor/editor/contrib/clipboard/browser/clipboard.js',
   'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js',

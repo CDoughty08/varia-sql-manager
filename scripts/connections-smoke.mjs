@@ -177,7 +177,7 @@ try {
         const nodes = (node.type === 'object' ? statics.objects[node.object.kind] : statics.folders[node.folder]).map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
         return { ok: true, value: { nodes, total: nodes.length, elapsedMs: 1 } }
       }
-      if (method === 'query.execute') return { ok: true, value: { resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1 } } }
+      if (method === 'query.execute') return { ok: true, value: { resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }, completedAt: '2026-10-09T12:00:00.0000000+00:00' } }
       return { ok: false, error: 'Unsupported fixture method.' }
     })
   }, explorerStatics())
