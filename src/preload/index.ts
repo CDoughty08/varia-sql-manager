@@ -86,6 +86,10 @@ const api: VariaApi = {
     ipcRenderer.on('varia:recent-files-changed', listener)
     return () => { ipcRenderer.removeListener('varia:recent-files-changed', listener) }
   },
+  writeRecovery: record => ipcRenderer.invoke('varia:recovery-write', record),
+  discardRecovery: ids => ipcRenderer.invoke('varia:recovery-discard', { ids }),
+  listRecovery: () => ipcRenderer.invoke('varia:recovery-list'),
+  takeRecovery: id => ipcRenderer.invoke('varia:recovery-take', { id }),
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),

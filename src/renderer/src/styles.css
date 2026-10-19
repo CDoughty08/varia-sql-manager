@@ -187,6 +187,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .filter-problem { margin-top: 4px; font-size: 11px; color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
 .filter-dialog .field-note { margin-top: 12px; }
 .filter-dialog .connect-error { margin: 12px 0 0; }
+/* Recover Unsaved Queries: a row a query, long names and paths cut with an ellipsis (whole in their tooltips). */
+.recovery-dialog { width: min(820px, calc(100vw - 40px)); }
+.recovery-dialog .field-note { margin-bottom: 10px; font-size: 12px; color: var(--varia-editorWidget-foreground); }
+.recovery-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.recovery-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 0 8px 6px 0; }
+.recovery-grid td { padding: 5px 8px 5px 0; border-top: 1px solid var(--varia-dialog-separatorBackground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+.recovery-grid th:first-child { width: 28px; }
+.recovery-grid th:nth-child(2) { width: 22%; }
+.recovery-grid th:nth-child(4) { width: 22%; }
+.recovery-grid th:last-child { width: 96px; }
+.recovery-grid input { width: 16px; height: 16px; margin: 0; vertical-align: middle; accent-color: var(--varia-button-background); }
+.recovery-confirm { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 10px; border-radius: 5px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.recovery-confirm > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.recovery-confirm > button { border: 1px solid var(--varia-button-border); }
+.recovery-dialog .connect-error { margin: 12px 0 0; }
 /* Tools › Options: SSMS's search box and page tree beside the page, dense rows (22 px), the focused row's description below. */
 /* Two classes: .connection-modal, later in this file, would otherwise set its own width. */
 .connection-modal.options-dialog { width: min(820px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px)); max-height: none; }

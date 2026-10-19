@@ -12,6 +12,7 @@ from Microsoft's documentation, so Varia keeps its own.
 
 - Environment
   - General (`environment.general`)
+  - AutoRecover (`environment.autoRecover`)
   - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
   - Keyboard (`environment.keyboard`)
@@ -44,6 +45,16 @@ Its first row is a note: Color theme: View › Theme (stored in `appearance.json
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
+
+### Environment › AutoRecover
+
+Copies of queries with unsaved changes, offered after Varia SQL Manager closes unexpectedly.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.autoRecover.enabled` | Save AutoRecover information | Boolean | True |  | All | At once | Keeps a copy of each query with unsaved changes in Varia SQL Manager's profile folder, readable only by you, so a crash, a forced close or a power loss loses at most the last few minutes. The next start offers the copies in Recover Unsaved Queries. Turning it off deletes this window's copies; copies left by earlier runs are still offered. |
+| `environment.autoRecover.intervalMinutes` | Save AutoRecover information every | Integer 1–60 minutes | 5 minutes |  | All | At once | How often AutoRecover saves the queries whose text changed since it last saved them. Greyed while `environment.autoRecover.enabled` is False. |
+| `environment.autoRecover.keepDays` | Keep AutoRecover information for | Integer 1–90 days | 7 days |  | All | At once | How long a copy that was not recovered is kept. Older copies are deleted when Varia SQL Manager starts. Greyed while `environment.autoRecover.enabled` is False. |
 
 ### Environment › Documents
 
@@ -204,4 +215,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (61 today).
+A patch holds at most one entry per setting (64 today).

@@ -1,11 +1,13 @@
 // Files and status bars on the fake backend: encodings and line endings kept on save, the Save as Unicode and Save of
 // Read-Only File prompts, Save files with a specific encoding, Save All, the IDE status bar's Ln/Col/Ch, INS/OVR, line ending and encoding, and the query
 // status bar with its Options; then files from the command line and a second instance, File › Recent Files, changes
-// made outside, and drops. Native dialogs are stubbed in main, as electron-smoke does; files live under artifacts/.
+// made outside, drops, and AutoRecover across a renderer crash, a reload and a killed app. Native dialogs are stubbed in main, as
+// electron-smoke does; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { access, chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
@@ -21,8 +23,10 @@ const windows = process.platform === 'win32', mac = process.platform === 'darwin
 // A file named on the command line opens once the workbench is ready.
 const launched = join(folder, 'launched.sql')
 await writeFile(launched, 'SELECT 42')
-const application = await electron.launch({ args: ['.', launched], env, chromiumSandbox: process.getuid?.() !== 0 })
-const watchdog = setTimeout(() => { console.error('Files suite exceeded its time limit.'); application.process()?.kill(); process.exit(1) }, 300_000)
+const chromiumSandbox = process.getuid?.() !== 0
+// Replaced by a new launch on the same profile when AutoRecover's step kills the app.
+let application = await electron.launch({ args: ['.', launched], env, chromiumSandbox })
+const watchdog = setTimeout(() => { console.error('Files suite exceeded its time limit.'); application.process()?.kill(); process.exit(1) }, 420_000)
 const failures = []
 let page
 
@@ -442,6 +446,103 @@ try {
   await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'dropped.sql')
   await cdp.detach()
   console.log('Files checks: a dropped file opens, and a drop page script makes opens nothing.')
+
+  // 15. AutoRecover: a copy of a query with unsaved changes (saved now, not in five minutes) survives a renderer crash,
+  // whose prompt says so, and the reloaded workbench offers it; Recover Selected opens it with its text, unsaved. Saved
+  // again and then killed, the app offers it at the next start, and Discard Selected deletes every copy.
+  const recoveryFolder = join(profile, 'AutoRecover')
+  const recoverDialog = () => page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
+  /** Runs script in the page through main: Playwright's page for a crashed renderer cannot be used after its reload. */
+  const js = source => application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code).catch(error => 'error: ' + error.message), source)
+  const checkedRows = () => js("[...document.querySelectorAll('.recovery-grid tbody input')].filter(box => box.checked).length")
+  /** How many of the kept copies hold `text`. */
+  const keptWith = async text => (await Promise.all((await readdir(recoveryFolder)).map(name => readFile(join(recoveryFolder, name), 'utf8')))).filter(content => content.includes(text)).length
+  await page.getByRole('button', { name: 'New query', exact: true }).click()
+  await textbox().focus()
+  await page.keyboard.insertText('SELECT 15 AS recovered')
+  await expect(activeTab().locator('.dirty-dot')).toHaveCount(1)
+  const recovered = await activeTab().getByRole('tab').getAttribute('aria-label')
+  await page.evaluate(() => window.__variaRecovery.flush())
+  const kept = (await readdir(recoveryFolder)).length
+  expect((await readdir(recoveryFolder)).every(name => /^[0-9a-f-]{36}\.json$/.test(name))).toBe(true)
+  expect(await keptWith('SELECT 15 AS recovered')).toBe(1)
+  await prompts()
+  await queue('answers', 0)
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+  await expect.poll(prompts, { timeout: 15000 }).toEqual([{
+    title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', buttons: ['Reload', 'Close'],
+    detail: 'Queries saved by AutoRecover can be recovered after reloading; changes from the last 5 minutes may be lost. Connections were closed and uncommitted transactions were rolled back.'
+  }])
+  await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('[role=\"dialog\"] .recovery-grid')"), { timeout: 30000 }).toBe(true)
+  const rows = await js("[...document.querySelectorAll('.recovery-grid tbody tr')].map(row => [...row.cells].slice(1).map(cell => cell.textContent))")
+  expect(rows).toHaveLength(kept)
+  const row = rows.find(cells => cells[0] === recovered)
+  expect([row[0], row[1], row[3]]).toEqual([recovered, 'Not saved to a file', 'just now'])
+  // Only this query: the others stay offered.
+  await js("document.querySelector('[aria-label=\"Select all queries\"]').click()")
+  await expect.poll(checkedRows).toBe(0)
+  await js(`document.querySelector(${JSON.stringify(`[aria-label="Recover ${recovered}"]`)}).click()`)
+  await expect.poll(checkedRows).toBe(1)
+  await js("[...document.querySelectorAll('[role=\"dialog\"] button')].find(button => button.textContent === 'Recover Selected').click()")
+  await expect.poll(() => js("!document.querySelector('.recovery-grid') && document.querySelector('.query-tab.active .tab-select')?.getAttribute('aria-label')")).toBe(recovered)
+  expect(await js("!!document.querySelector('.query-tab.active .dirty-dot')")).toBe(true)
+  // Monaco draws spaces as no-break spaces.
+  const editorText = () => js("document.querySelector('.monaco-editor .view-lines').textContent.replaceAll(String.fromCharCode(160), ' ')")
+  await expect.poll(editorText).toContain('SELECT 15 AS recovered')
+  console.log('Files checks: after a renderer crash, Workbench stopped mentions AutoRecover, and Recover Selected opens the kept query unsaved.')
+
+  // Changed and saved again by AutoRecover (the copy it took is the reopened query's now), then the app is killed.
+  // Typed through main, as Chromium delivers keys to the editor's input element.
+  await js("document.querySelector('.monaco-editor [role=\"textbox\"]').focus()")
+  await application.evaluate(({ BrowserWindow }) => { const contents = BrowserWindow.getAllWindows()[0].webContents; contents.focus(); for (const keyCode of '-- again ') contents.sendInputEvent({ type: 'char', keyCode }) })
+  await expect.poll(editorText).toContain('-- again')
+  expect(await js('window.__variaRecovery.flush().then(() => true)')).toBe(true)
+  expect(await keptWith('-- again')).toBe(1)
+  expect((await readdir(recoveryFolder)).length).toBe(kept)
+  const closed = new Promise(done => application.once('close', done))
+  application.process().kill('SIGKILL')
+  await closed
+  application = await electron.launch({ args: ['.'], env, chromiumSandbox })
+  page = await application.firstWindow()
+  page.setDefaultTimeout(15000)
+  page.on('pageerror', error => failures.push(error.message))
+  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await stubDialogs()
+  await expect(recoverDialog()).toBeVisible({ timeout: 30000 })
+  await expect(recoverDialog().locator('.recovery-grid tbody tr')).toHaveCount(kept)
+  await expect(recoverDialog().locator('.recovery-grid tbody tr').filter({ hasText: recovered })).toHaveCount(1)
+  await recoverDialog().screenshot({ path: resolve('artifacts', 'files-recover-dialog.png') })
+  await recoverDialog().getByRole('button', { name: 'Discard Selected', exact: true }).click()
+  await expect(recoverDialog().getByRole('alert')).toContainText(`Discard ${kept === 1 ? '1 query' : `${kept} queries`}? This cannot be undone.`)
+  await recoverDialog().getByRole('button', { name: 'Discard', exact: true }).click()
+  await expect(recoverDialog()).toHaveCount(0)
+  expect(await readdir(recoveryFolder)).toEqual([])
+  console.log('Files checks: a killed app offers AutoRecover\'s copies at the next start, and Discard Selected deletes them.')
+  // A copy the page writes while a reload replaces it (the next query of a flush under way) is that page's: the reloaded
+  // workbench offers it. The page's pagehide stands in for the flush, as it runs after the navigation started.
+  const late = randomUUID()
+  await page.evaluate(id => { addEventListener('pagehide', () => { void window.varia.writeRecovery({ id, name: 'late.sql', kind: 'sql', eol: 'lf', text: 'SELECT 17 AS late' }) }) }, late)
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())
+  await expect(recoverDialog()).toBeVisible({ timeout: 30000 })
+  await expect(recoverDialog().locator('.recovery-grid tbody tr')).toHaveCount(1)
+  await expect(recoverDialog().locator('.recovery-grid tbody tr').filter({ hasText: 'late.sql' })).toHaveCount(1)
+  expect(await readdir(recoveryFolder)).toEqual([late + '.json'])
+  expect(await prompts()).toEqual([])
+  await recoverDialog().getByRole('button', { name: 'Discard Selected', exact: true }).click()
+  await recoverDialog().getByRole('button', { name: 'Discard', exact: true }).click()
+  await expect(recoverDialog()).toHaveCount(0)
+  expect(await readdir(recoveryFolder)).toEqual([])
+  console.log('Files checks: a copy written as a reload replaces the page is offered by the reloaded workbench.')
+  // A normal exit (Don't Save) deletes the window's copies before the app quits.
+  await page.getByRole('button', { name: 'New query', exact: true }).click()
+  await textbox().focus()
+  await page.keyboard.insertText('SELECT 16')
+  await page.evaluate(() => window.__variaRecovery.flush())
+  expect(await readdir(recoveryFolder)).toHaveLength(1)
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+  await application.close()
+  expect(await readdir(recoveryFolder)).toEqual([])
+  console.log('Files checks: a normal exit deletes AutoRecover\'s copies.')
 
   expect(failures).toEqual([])
   console.log('Files suite passed.')

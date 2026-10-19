@@ -11,6 +11,7 @@ import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
+import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -312,6 +313,7 @@ export interface FileChange { fileId: string; change: 'modified' | 'deleted' }
 export type ReloadAnswer = 'yes' | 'yesToAll' | 'no' | 'noToAll'
 export interface ReloadPrompt { fileId: string; dirty: boolean; more: boolean }
 export type { RecentFile }
+export type { RecoveredDocument, RecoveryEntry, RecoveryWrite }
 /** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
@@ -399,6 +401,14 @@ export interface VariaApi {
   openRecentFile(id: string): Promise<ApiResult<OpenedFiles>>
   clearRecentFiles(): Promise<ApiResult<void>>
   onRecentFiles(callback: (files: RecentFile[]) => void): () => void
+  /** AutoRecover: keeps a copy of a query with unsaved changes (main adds its file's path), replacing its earlier copy. */
+  writeRecovery(record: RecoveryWrite): Promise<ApiResult<void>>
+  /** Deletes copies this page kept or was offered (1–256 ids). */
+  discardRecovery(ids: readonly string[]): Promise<ApiResult<void>>
+  /** The copies an earlier run or an earlier page left, newest first, without their text. */
+  listRecovery(): Promise<ApiResult<RecoveryEntry[]>>
+  /** One offered copy with its text, now this page's; its original file is registered again when it still exists. */
+  takeRecovery(id: string): Promise<ApiResult<RecoveredDocument>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>

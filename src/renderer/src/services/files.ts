@@ -104,11 +104,20 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
    * They arrive whenever main has read them, so behind another file task they wait their turn.
    */
   async adopt(opened: OpenedFiles): Promise<void> {
+    await this.later(target => this.openFiles(opened, target))
+  }
+  /**
+   * Runs `action` as a file task once no other one runs (an open or save dialog, a close prompt), with the query active
+   * then; a failure goes to the file banner. AutoRecover's Recover opens its queries this way.
+   */
+  async later(action: (target: QueryDocument | undefined) => Promise<void>): Promise<void> {
     while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
     if (this.disposed) return
     const target = this.documents.active
-    await this.perform(async () => { await this.openFiles(opened, target) })
+    await this.perform(() => action(target))
   }
+  /** Releases main's registrations of `files` that no tab holds. */
+  release(files: readonly SqlFile[]): Promise<void> { return this.releaseUnclaimed(files) }
   /**
    * Visual Studio's check for files changed outside the environment, run when the window gets focus while Tools ›
    * Options says to. In tab order: a changed file asks whether to reload it (Yes to All and No to All answer for the

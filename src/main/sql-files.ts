@@ -111,6 +111,19 @@ export class SqlFileStore {
     return { ...file, content: decoded.text, eol, mixedEol: mixed }
   }
 
+  /**
+   * Registers the file at `path` again for a query AutoRecover kept, so its Save goes to that file: read as Open reads
+   * it (its encoding, and a stamp of what is there now), without its text. Undefined when a tab already has the file
+   * (one file, one tab) or it cannot be read; the query then opens without a file.
+   */
+  async register(path: string): Promise<SqlFile | undefined> {
+    if (await this.owner(resolve(path))) return undefined
+    try {
+      const { id, name, path: registered, encoding, codePage, readOnly } = await this.read(path)
+      return { id, name, path: registered, encoding, ...codePage ? { codePage } : {}, readOnly }
+    } catch { return undefined }
+  }
+
   get(fileId: string): SqlFile {
     const entry = this.files.get(fileId)
     if (!entry) throw new Error('This SQL file is no longer open. Use Save As to select a file.')
