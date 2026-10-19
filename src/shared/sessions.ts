@@ -2,14 +2,15 @@ import { z } from 'zod'
 
 /**
  * What ends query sessions, and so asks first about their open transactions and running queries: closing a query (or
- * several), moving it to another server or to Disconnected, disconnecting a server or every query, and closing the window
- * or quitting.
+ * several), moving it to another server, disconnecting it (Disconnect, or Change Connection to Disconnected), disconnecting
+ * a server or every query, and closing the window or quitting.
  */
-export const sessionActions = ['close', 'closeAll', 'changeConnection', 'disconnect', 'disconnectAll', 'exit'] as const
+export const sessionActions = ['close', 'closeAll', 'changeConnection', 'disconnectQuery', 'disconnect', 'disconnectAll', 'exit'] as const
 export type SessionAction = typeof sessionActions[number]
-/** A query whose session ends: its last known open-transaction count (@@TRANCOUNT after its last execution), and whether
- *  a query is still executing in it. Only queries with one or the other are sent. */
-export interface SessionTab { readonly name: string; readonly transactions: number; readonly running: boolean }
+/** A query whose session ends: its last known open-transaction count (@@TRANCOUNT after its last execution), whether its
+ *  last execution could not check that count (`unchecked`: SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON, or a probe
+ *  that timed out), and whether a query is still executing in it. Only queries with one of these are sent. */
+export interface SessionTab { readonly name: string; readonly transactions: number; readonly running: boolean; readonly unchecked?: true }
 export interface SessionPromptRequest { readonly action: SessionAction; readonly tabs: readonly SessionTab[] }
 /** `commit` and `rollback` end the listed transactions that way; `proceed` cancels the executing queries (the prompt had
  *  no transactions to ask about); `cancel` keeps everything as it is. */
@@ -27,19 +28,22 @@ export interface SessionPrompt {
 
 /** At most this many queries per prompt; the dialog names the first `listed` of each kind and counts the rest. */
 export const sessionPromptLimits = { tabs: 1024, name: 512, listed: 10 } as const
-const tabSchema = z.object({ name: z.string().min(1).max(sessionPromptLimits.name), transactions: z.number().int().min(0).max(2 ** 31 - 1), running: z.boolean() }).strict()
-  .refine(tab => tab.running || tab.transactions > 0, 'Only queries with an open transaction or a running query are asked about.')
+const tabSchema = z.object({ name: z.string().min(1).max(sessionPromptLimits.name), transactions: z.number().int().min(0).max(2 ** 31 - 1), running: z.boolean(), unchecked: z.literal(true).optional() }).strict()
+  .refine(tab => tab.running || tab.transactions > 0 || tab.unchecked, 'Only queries with an open (or unchecked) transaction or a running query are asked about.')
 /** varia:confirm-sessions, from the renderer: main composes the dialog's text itself. */
 export const sessionPromptRequestSchema = z.object({ action: z.enum(sessionActions), tabs: z.array(tabSchema).min(1).max(sessionPromptLimits.tabs) }).strict()
 
 /** Whether ending these sessions needs the user's answer first. */
-export const needsSessionPrompt = (tabs: readonly SessionTab[]): boolean => tabs.some(tab => tab.running || tab.transactions > 0)
+export const needsSessionPrompt = (tabs: readonly SessionTab[]): boolean => tabs.some(tab => tab.running || tab.transactions > 0 || !!tab.unchecked)
+/** Whether a session may hold a transaction to commit or roll back. */
+const mayBeOpen = (tab: SessionTab): boolean => tab.transactions > 0 || !!tab.unchecked
 
 // What happens, as the end of "… before <phrase>": one query, or several.
 const phrases: Readonly<Record<SessionAction, readonly [one: string, many: string]>> = {
   close: ['the query closes', 'the queries close'],
   closeAll: ['the query closes', 'the queries close'],
   changeConnection: ['the query changes connection', 'the queries change connection'],
+  disconnectQuery: ['the query disconnects', 'the queries disconnect'],
   disconnect: ['the server disconnects', 'the server disconnects'],
   disconnectAll: ['the query disconnects', 'the queries disconnect'],
   exit: ['Varia SQL Manager closes', 'Varia SQL Manager closes']
@@ -51,7 +55,8 @@ function listed(tabs: readonly SessionTab[], note: (tab: SessionTab) => string):
   if (tabs.length > shown.length) shown.push(`… and ${tabs.length - shown.length} more`)
   return shown.join('\n')
 }
-const nested = (tab: SessionTab) => tab.transactions > 1 ? ` (${tab.transactions} nested levels)` : ''
+const nested = (tab: SessionTab) => tab.unchecked ? ' (not checked)' : tab.transactions > 1 ? ` (${tab.transactions} nested levels)` : ''
+const notChecked = 'Its last execution could not check for one (SET SHOWPLAN, NOEXEC, PARSEONLY or FMTONLY may be ON). '
 const queries = (count: number) => count === 1 ? '1 query' : `${count} queries`
 
 /**
@@ -62,15 +67,17 @@ const queries = (count: number) => count === 1 ? '1 query' : `${count} queries`
  * never commits or discards work.
  */
 export function sessionPrompt({ action, tabs }: SessionPromptRequest): SessionPrompt | undefined {
-  const open = tabs.filter(tab => !tab.running && tab.transactions > 0), running = tabs.filter(tab => tab.running)
+  const open = tabs.filter(tab => !tab.running && mayBeOpen(tab)), running = tabs.filter(tab => tab.running)
   if (!open.length && !running.length) return undefined
   const runningNote = running.length === 1 ? 'The executing query is cancelled, and anything it left uncommitted is rolled back.'
     : running.length ? 'The executing queries are cancelled, and anything they left uncommitted is rolled back.' : ''
   if (open.length) {
     const one = open.length === 1, phrase = phrases[action][one ? 0 : 1]
-    const message = one ? `${open[0].name} has an uncommitted transaction.` : `${open.length} queries have uncommitted transactions.`
+    // A session whose last execution could not be checked may have one: asking costs a click, not asking could lose work.
+    const unsure = open.some(tab => tab.unchecked)
+    const message = one ? `${open[0].name} ${unsure ? 'may have' : 'has'} an uncommitted transaction.` : `${open.length} queries ${unsure ? 'may have' : 'have'} uncommitted transactions.`
     const detail = [
-      one ? (open[0].transactions > 1 ? `Its transaction is nested ${open[0].transactions} levels deep; Commit commits every level. ` : '') + `Commit it before ${phrase}, or roll it back.`
+      one ? (unsure ? notChecked : open[0].transactions > 1 ? `Its transaction is nested ${open[0].transactions} levels deep; Commit commits every level. ` : '') + `Commit it before ${phrase}, or roll it back.`
         : `${listed(open, nested)}\n\nCommit them before ${phrase}, or roll them all back.`,
       running.length ? `Still executing:\n${listed(running, () => '')}\n${runningNote}` : ''
     ].filter(Boolean).join('\n\n')

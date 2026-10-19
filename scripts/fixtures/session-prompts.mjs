@@ -1,8 +1,8 @@
 // Main's prompts about open transactions and running queries (menus-smoke.mjs step 17), in fresh apps on the fake
 // backend, which counts each session's BEGIN TRAN, COMMIT and ROLLBACK and probes it after every script
 // (tests/fixtures/backend.mjs): F5 on a disconnected query opens Connect and runs the query once connected; closing a
-// query with an open transaction asks Commit, Roll Back or Cancel, and a commit that fails keeps it open; Change
-// Connection and disconnecting the server ask too; an executing query is cancelled only on Cancel Query and Close; a quit asks once for every query
+// query with an open transaction asks Commit, Roll Back or Cancel, and a commit that fails keeps it open; disconnecting
+// the query and disconnecting the server ask too; an executing query is cancelled only on Cancel Query and Close; a quit asks once for every query
 // and commits each before the app exits; and a crash closes the open prompt, so a dead page cannot hold it.
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -123,7 +123,8 @@ export async function sessionPrompts(launchOptions) {
     expect(await sessionCloses()).toEqual(['commit', 'commit'])
     console.log('Session checks: closing a query with an open transaction asks first; Cancel keeps it, a failed commit keeps it and says why, and Commit commits it.')
 
-    // 3. Change Connection asks too: Roll Back ends the transaction in its session before the query moves.
+    // 3. Disconnecting the query (the toolbar's Disconnected) asks too, saying the query disconnects: Roll Back ends the
+    // transaction in its session before the query moves.
     await newQuery()
     await server.selectOption({ label: 'server-a' })
     await run('BEGIN TRANSACTION; SELECT 2')
@@ -132,10 +133,10 @@ export async function sessionPrompts(launchOptions) {
     await answerNext(application, 'Roll Back')
     await server.selectOption('')
     await expect(server).toHaveValue('')
-    expect(await lastPrompt(application)).toMatchObject({ message: `${second} has an uncommitted transaction.`, detail: 'Commit it before the query changes connection, or roll it back.' })
+    expect(await lastPrompt(application)).toMatchObject({ message: `${second} has an uncommitted transaction.`, detail: 'Commit it before the query disconnects, or roll it back.' })
     expect(await sessionCloses()).toEqual(['commit', 'commit', 'rollback'])
     await expect(session).toHaveCount(0)
-    console.log('Session checks: Change Connection asks about the open transaction and rolls it back in its session.')
+    console.log('Session checks: disconnecting the query asks about the open transaction, says the query disconnects, and rolls it back in its session.')
 
     // 4. A query still executing: Keep Running keeps it; Cancel Query and Close cancels it, then rolls back and closes.
     await server.selectOption({ label: 'server-a' })

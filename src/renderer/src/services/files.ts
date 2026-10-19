@@ -7,6 +7,11 @@ import type { QueryService } from './queries'
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
 export interface FileSnapshot { readonly error: string }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
+/** Queries that were running when the prompt opened, and finished since with a transaction: they were not asked about,
+ *  so they stay (`open` or `connected`) rather than have it rolled back without asking. */
+export const unfinished = (count: number, stayed: 'open' | 'connected'): string => !count ? ''
+  : count === 1 ? `1 query finished with an open transaction while this ran and stayed ${stayed}; run it again to be asked about it.`
+    : `${count} queries finished with open transactions while this ran and stayed ${stayed}; run it again to be asked about them.`
 
 export class FileService extends SnapshotStore<FileSnapshot> implements Disposable {
   private disposed = false
@@ -14,7 +19,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private closing: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'confirmSessions'>, private api: FileApi) { super({ error: '' }) }
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>, private api: FileApi) { super({ error: '' }) }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
   canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
   /** A query still executing can close too: main asks to cancel it first. */
@@ -113,23 +118,27 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   /**
    * Closes the queries in tab order as one task, asking about each unsaved one; Cancel stops the rest, as in Visual
    * Studio. Open transactions are asked about once, first, and each is committed or rolled back as its query closes.
-   * Running queries stay open and are reported once the others are closed.
+   * Running queries stay open and are reported once the others are closed, and so does one that was running when the
+   * prompt opened and has finished since with a transaction nobody was asked about.
    */
   async closeMany(ids: readonly string[]): Promise<void> {
     const wanted = new Set(ids)
     await this.perform(async () => {
-      const plan = await this.queries.confirmSessions('closeAll', ids.filter(id => !this.queries.isRunning(id)))
+      const asked = new Set(ids.filter(id => !this.queries.isRunning(id)))
+      const plan = await this.queries.confirmSessions('closeAll', [...asked])
       if (!plan || this.disposed) return
-      let running = 0
+      let running = 0, unasked = 0
       for (const { id } of this.documents.getSnapshot().documents.filter(document => wanted.has(document.id))) {
         if (!this.documents.get(id)) continue
         if (this.queries.isRunning(id)) { running++; continue }
+        if (!asked.has(id) && this.queries.mayHaveTransaction(id)) { unasked++; continue }
         if (!await this.confirmClose(id) || this.disposed) return
         const file = this.documents.get(id)?.file
         await this.documents.close(id, plan.get(id))
         if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
       }
-      if (running) throw new Error(running === 1 ? '1 query is still running and stayed open.' : `${running} queries are still running and stayed open.`)
+      const kept = [running ? (running === 1 ? '1 query is still running and stayed open.' : `${running} queries are still running and stayed open.`) : '', unfinished(unasked, 'open')]
+      if (running || unasked) throw new Error(kept.filter(Boolean).join(' '))
     })
   }
   /**

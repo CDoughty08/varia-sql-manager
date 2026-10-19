@@ -73,12 +73,22 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing it would lose them
     /// silently. Only the live checks change it.</summary>
     internal int SessionLimit { get; set; } = 128;
-    /// <summary>The session probe that follows every script.</summary>
-    internal const string ProbeSql = "SELECT @@TRANCOUNT, @@SPID, SUSER_SNAME();";
-    /// <summary>What a query tab's session runs on the way out: every nesting level of its transaction committed, or the
-    /// transaction rolled back.</summary>
-    internal const string CommitSql = "WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION;";
-    internal const string RollbackSql = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;";
+    /// <summary>The session probe that follows every script. It is a statement in the user's session, so the next script
+    /// sees @@ROWCOUNT 1 and @@ERROR 0 rather than what its own last statement left, and the session's most recent SQL
+    /// (DBCC INPUTBUFFER, sys.dm_exec_input_buffer, sp_WhoIsActive) is this probe rather than the script. SqlClient keeps
+    /// no public record of a transaction begun in T-SQL, and a DMV read from another session needs VIEW SERVER STATE, so
+    /// this is the cost of knowing about an open transaction before the session ends.</summary>
+    internal const string ProbeSql = "SELECT @@TRANCOUNT, SUSER_SNAME();";
+    /// <summary>What a query tab's session runs before it closes with commit: every nesting level of its transaction
+    /// committed, then what is left. Only the live checks change it, to break the connection while it runs.</summary>
+    internal string CommitSql { get; set; } = DefaultCommitSql;
+    internal const string DefaultCommitSql = "WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION; SELECT @@TRANCOUNT;";
+    /// <summary>Read before the commit: a session found lost here never received it, and one with nothing open needs none.
+    /// It reads no row (or a plan) when SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY would keep the commit from executing.</summary>
+    internal const string TransactionCountSql = "SELECT @@TRANCOUNT;";
+    /// <summary>The options that compile a batch without executing it, turned off before a commit. Each SHOWPLAN option must
+    /// be alone in its batch, and one that is not ON is only shown, not run, under another.</summary>
+    internal static readonly string[] ExecuteAgainSql = ["SET SHOWPLAN_XML OFF", "SET SHOWPLAN_TEXT OFF", "SET SHOWPLAN_ALL OFF", "SET NOEXEC OFF; SET PARSEONLY OFF; SET FMTONLY OFF;"];
 
     /// <summary>What a tab's session runs when it opens: <see cref="SessionPrologue"/>. Only the live checks change it, to
     /// make it fail.</summary>
@@ -346,6 +356,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
         SessionProbe? probe = null;
+        int? spid = null;
         var completed = 0;
         var batchNumber = 0;
         var iteration = 0;
@@ -685,6 +696,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     database = session.Connection.Database;
                     // Still holding the session, so nothing else runs between the script and the probe.
                     probe = await ProbeAsync(session.Connection);
+                    // The session id needs no round trip, so a session the probe could not read is still known to be open.
+                    if (session.Connection.State == System.Data.ConnectionState.Open) spid = session.Connection.ServerProcessId;
                 }
                 if (session.Connection.State is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken)
                 {
@@ -720,7 +733,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, probe?.TransactionCount, probe?.Spid, probe?.Login);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, probe?.TransactionCount, spid, probe?.Login);
     }
 
     /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows
@@ -869,9 +882,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         try { source.Cancel(); } catch (ObjectDisposedException) { /* Query completed concurrently. */ }
     }
 
-    /// <summary>The open transaction (@@TRANCOUNT), the session id and the login, read on the session after its script. It
-    /// has its own short timeout and no token: the script's token may already be cancelled, and a timeout ends only the
-    /// probe. A failure leaves the summary without them.</summary>
+    /// <summary>The open transaction (@@TRANCOUNT) and the login, read on the session after its script. It has its own short
+    /// timeout and no token: the script's token may already be cancelled, and a timeout ends only the probe. It reads no
+    /// row under SET NOEXEC, PARSEONLY or FMTONLY ON, a plan under SET SHOWPLAN_* ON, and nothing on a timeout; the summary
+    /// then has the session's SPID without them, which the workbench takes as a transaction it could not check.</summary>
     private static async Task<SessionProbe?> ProbeAsync(SqlConnection connection)
     {
         try
@@ -881,7 +895,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             command.CommandTimeout = 5;
             await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SingleRow);
             if (!await reader.ReadAsync()) return null;
-            return new SessionProbe(reader.GetInt32(0), reader.GetInt16(1), reader.IsDBNull(2) ? null : reader.GetString(2));
+            return new SessionProbe(reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1));
         }
         catch (Exception error) when (error is SqlException or InvalidOperationException or InvalidCastException) { return null; }
     }
@@ -890,52 +904,80 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         if (!Guid.TryParse(args.SessionId, out _)) throw new RequestException("INVALID_PARAMS", "A valid session ID is required.");
         if (args.Transaction is not (null or "commit" or "rollback")) throw new RequestException("INVALID_PARAMS", "A transaction ends by commit or rollback.");
-        if (args.Transaction is not null && sessions.TryGetValue(args.SessionId, out var open)) await EndTransactionAsync(args.SessionId, open, args.Transaction == "commit", token);
+        // A rollback is the close itself: SQL Server rolls back what a closed session left open, on its own time. An explicit
+        // ROLLBACK would hold this request until the rollback finished, since an attention waits for it too.
+        if (args.Transaction == "commit" && sessions.TryGetValue(args.SessionId, out var open)) await CommitAsync(args.SessionId, open, token);
         return CloseSession(args.SessionId);
     }
 
-    /// <summary>Commits or rolls back the session's transaction before it closes. A commit that fails (an uncommittable
-    /// error, a script still running) throws and leaves the session open, so its tab stays open with its transaction for the
-    /// user to decide again; a session lost meanwhile (killed, or its connection broken) had its transaction rolled back by
-    /// SQL Server, which the error says, and is closed. A rollback cannot leave anything behind: closing the session rolls
-    /// back whatever is still open, so it is bounded to 5 seconds and its failures are ignored.</summary>
-    private async Task EndTransactionAsync(string sessionId, QuerySession session, bool commit, CancellationToken token)
+    /// <summary>Commits the session's transaction before it closes. A commit that fails (an uncommittable error, a script
+    /// still running, SET options that keep it from executing even after they are turned off) throws and leaves the session
+    /// open, so its tab stays open with its transaction for the user to decide again. A session found lost before the
+    /// commit was sent had its transaction rolled back by SQL Server; for one lost while the commit ran, the outcome is
+    /// unknown, and the error says so. Either way the lost session is closed.</summary>
+    private async Task CommitAsync(string sessionId, QuerySession session, CancellationToken token)
     {
-        if (!session.TryEnter())
-        {
-            if (commit) throw new RequestException("SESSION_BUSY", "A query is running in this tab. Cancel it before committing its transaction.");
-            return;
-        }
+        if (!session.TryEnter()) throw new RequestException("SESSION_BUSY", "A query is running in this tab. Cancel it before committing its transaction.");
         try
         {
             var connection = session.Connection;
+            var committing = false;
             RequestException Lost()
             {
                 ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(sessionId, session));
                 session.Close();
-                return new RequestException("SESSION_LOST", "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.");
+                return new RequestException("SESSION_LOST", committing
+                    ? "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again."
+                    : "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.");
             }
             if (connection.State != System.Data.ConnectionState.Open)
             {
-                if (!commit || !session.HasOpened) return;
+                if (!session.HasOpened) return;
                 throw Lost();
             }
-            using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
-            if (!commit) bound.CancelAfter(TimeSpan.FromSeconds(5));
-            await using var command = connection.CreateCommand();
-            command.CommandText = commit ? CommitSql : RollbackSql;
             // The token alone carries the deadline (see ExecuteAsync).
-            command.CommandTimeout = 0;
-            using var stop = bound.Token.Register(Attention, command);
-            try { await command.ExecuteNonQueryAsync(bound.Token); }
-            catch (SqlException error) when (commit && !token.IsCancellationRequested)
+            async Task Run(string sql)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = sql;
+                command.CommandTimeout = 0;
+                using var stop = token.Register(Attention, command);
+                await command.ExecuteNonQueryAsync(token);
+            }
+            // @@TRANCOUNT after the batch, or null when the batch compiled without executing.
+            async Task<int?> Count(string sql)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = sql;
+                command.CommandTimeout = 0;
+                using var stop = token.Register(Attention, command);
+                await using var reader = await command.ExecuteReaderAsync(token);
+                return await reader.ReadAsync(token) && reader.FieldCount == 1 && reader.GetFieldType(0) == typeof(int) ? reader.GetInt32(0) : null;
+            }
+            try
+            {
+                var open = await Count(TransactionCountSql);
+                if (open is null)
+                {
+                    // The session is about to close, so the options it would lose anyway are turned off now.
+                    foreach (var sql in ExecuteAgainSql) await Run(sql);
+                    open = await Count(TransactionCountSql);
+                }
+                if (open is null) throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. The session's SET options keep a COMMIT from executing.");
+                if (open == 0) return;
+                committing = true;
+                var remaining = await Count(CommitSql);
+                committing = false;
+                if (remaining is not 0) throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. @@TRANCOUNT is " + (remaining?.ToString(CultureInfo.InvariantCulture) ?? "unknown") + " after COMMIT.");
+            }
+            catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested)
             {
                 if (connection.State != System.Data.ConnectionState.Open) throw Lost();
-                var details = string.Join(Environment.NewLine, error.Errors.Cast<SqlError>().Where(item => item.Class > 10)
+                if (error is not SqlException failed) throw;
+                var details = string.Join(Environment.NewLine, failed.Errors.Cast<SqlError>().Where(item => item.Class > 10)
                     .Select(item => "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + "\n" + item.Message));
-                throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. " + (details.Length == 0 ? error.Message : details));
+                throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. " + (details.Length == 0 ? failed.Message : details));
             }
-            catch (Exception error) when (!commit && error is SqlException or OperationCanceledException or InvalidOperationException) { }
         }
         finally { session.Exit(); }
     }

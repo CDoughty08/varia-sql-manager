@@ -133,6 +133,34 @@ describe('query targets', () => {
     expect(documents.get(tab.id)?.connectionId).toBe('server-b')
     expect(queries.getSnapshot()[tab.id]?.session).toBeUndefined()
   })
+  it('say the query disconnects when Disconnect or Change Connection to Disconnected ends its session', async () => {
+    const { targets, api, queries, tab } = await fixture()
+    api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, transactionCount: 1, spid: 61 } })
+    await queries.execute()
+    await targets.changeConnection(tab.id, undefined)
+    expect(api.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'disconnectQuery', tabs: [{ name: 'query.sql', transactions: 1, running: false }] })
+  })
+  it('leave connected a query that finished with a transaction while Disconnect All Queries asked about the others', async () => {
+    const { targets, documents, api, queries, tab } = await fixture()
+    api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, transactionCount: 1, spid: 61 } })
+    await queries.execute()
+    const busy = documents.create('busy.sql', 'BEGIN TRANSACTION; INSERT t VALUES (1)', 'master', 'server-a')
+    const pending = deferred<Awaited<ReturnType<typeof api.execute>>>()
+    api.execute.mockReturnValueOnce(pending.promise)
+    const running = queries.execute(busy.id)
+    api.closeQuerySession.mockClear()
+    // The running query finishes with an open transaction while the prompt about query.sql is open.
+    api.confirmSessions.mockImplementationOnce(async () => {
+      pending.resolve({ ok: true, value: { ...queryOutput, transactionCount: 1, spid: 62 } })
+      await running
+      return { ok: true, value: 'commit' }
+    })
+    await targets.disconnectAll()
+    expect(api.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'disconnectAll', tabs: [{ name: 'query.sql', transactions: 1, running: false }] })
+    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, 'commit']])
+    expect(documents.get(busy.id)?.connectionId).toBe('server-a')
+    expect(queries.transactions(busy.id)).toBe(1)
+  })
   it('ask once before disconnecting every query, and end each idle session as answered', async () => {
     const { targets, documents, api, queries, tab, startQuery } = await fixture()
     api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, transactionCount: 2 } })

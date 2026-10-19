@@ -188,6 +188,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  messages when they differ; events that arrive later are ignored. */
   finish(tabId: string, queryId: string, end: RunEnd): void {
     const run = this.runs.get(tabId)
+    // The tab closed before its run ended: nothing will show or close the sets the summary describes, so they go now.
+    if (!run && end.summary?.resultSets.length && !this.disposed) void this.client.release(end.summary.resultSets.map(set => ({ generation: set.generation, resultId: set.resultId }))).catch(() => {})
     if (!run || run.queryId !== queryId || run.status !== 'running') return
     run.subscription?.dispose()
     run.subscription = undefined

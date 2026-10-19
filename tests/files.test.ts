@@ -22,7 +22,7 @@ function fixture() {
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>()
   }
   // Nothing to ask about unless a test says otherwise: every session ends plainly.
-  const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false), confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map()) }
+  const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false), mayHaveTransaction: vi.fn<(id: string) => boolean>(() => false), confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map()) }
   const files = new FileService(doc.documents, queries, api), commands = new CommandService()
   // Focus is in Object Explorer when `explorer.panel` says so; its selection is `explorer.target`.
   const explorer: { panel: '' | 'explorer'; target?: { connectionId: string; database?: string } } = { panel: '' }
@@ -177,6 +177,24 @@ describe('file commands', () => {
     await files.closeMany(running.map(document => document.id))
     expect(files.getSnapshot().error).toBe('1 query is still running and stayed open.')
     expect(documents.getSnapshot().documents.map(document => document.name)).toEqual(['a.sql'])
+  })
+  it('keeps open a query that finished with a transaction while Close All asked about the others', async () => {
+    const { documents, queries, api, commands, files } = fixture()
+    const [first] = documents.getSnapshot().documents
+    const open = documents.create('open.sql', '', 'master'), late = documents.create('late.sql', '', 'master'), clean = documents.create('clean.sql', '', 'master')
+    const running = new Set([late.id, clean.id])
+    queries.isRunning.mockImplementation(id => running.has(id))
+    // Both finish while the prompt about open.sql is open: late.sql with a transaction nobody was asked about.
+    queries.confirmSessions.mockImplementationOnce(async () => {
+      running.clear()
+      queries.mayHaveTransaction.mockImplementation(id => id === late.id || id === open.id)
+      return new Map([[open.id, 'commit']])
+    })
+    await commands.run('file.closeAll')
+    expect(queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('closeAll', [first.id, open.id])
+    expect(api.closeQuerySession.mock.calls).toEqual([[first.id], [open.id, 'commit'], [clean.id]])
+    expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([late.id])
+    expect(files.getSnapshot().error).toBe('1 query finished with an open transaction while this ran and stayed open; run it again to be asked about it.')
   })
   it('saves a copy to a file the user picks without opening it, and saves nothing on Cancel', async () => {
     const { documents, api, files } = fixture()

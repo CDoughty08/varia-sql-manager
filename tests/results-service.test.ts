@@ -184,6 +184,20 @@ describe('results service', () => {
     expect(tab()).toBeUndefined()
     service.release('missing')
   })
+  it('releases the sets of a run that ends after its tab closed, since nothing else will', () => {
+    const { client, events, service, tab } = fixture()
+    service.begin('t1', 'q1')
+    events.emit({ type: 'documents.closed', tabId: 't1' })
+    expect(client.released()).toEqual([])
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1 })]) })
+    expect(client.released()).toEqual([1, 2])
+    expect(tab()).toBeUndefined()
+    // A failure has no sets, and a run that is still tracked releases nothing early.
+    service.finish('t2', 'q2', { error: 'The query failed.' })
+    service.begin('t3', 'q3')
+    service.finish('t3', 'q3', { summary: summaryOf([descriptor(3)]) })
+    expect(client.released()).toEqual([1, 2])
+  })
   it('copies a selection through main, shows its strip after 300 ms, and announces it', async () => {
     const { api, service, tab, timers, flush, progress } = fixture()
     service.begin('t1', 'q1')

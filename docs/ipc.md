@@ -287,22 +287,39 @@ Validation errors and a missing, busy or invalid session or connection use the e
 nothing runs.
 
 **Session probe.** After every script, in the same `finally` path and while it still holds the session, the backend runs
-`SELECT @@TRANCOUNT, @@SPID, SUSER_SNAME();` on the session (its own 5 s timeout, no token: the script's may already be
-cancelled) and returns `transactionCount`, `spid` and `login` (≤ 128 characters; an `EXECUTE AS LOGIN` in force shows
-the impersonated login) with the summary. They are absent when the session was lost or never opened, or the probe
-failed. `elapsedMs` stops before the probe. A cancel does not roll back, so a cancelled script's open transaction is
-still reported; an error that dooms a transaction (`XACT_ABORT`) ends it by the batch's end (3998), and the probe says 0.
-The renderer keeps the count per tab for the connection it ran on; moving the query, a lost connection, or a session that
-ended (or was found lost) clears it. The status bar shows `login (spid)`, as SSMS does.
+`SELECT @@TRANCOUNT, SUSER_SNAME();` on the session (its own 5 s timeout, no token: the script's may already be
+cancelled) and returns `transactionCount` and `login` (≤ 128 characters; an `EXECUTE AS LOGIN` in force shows the
+impersonated login) with the summary, and `spid` (`SqlConnection.ServerProcessId`, no round trip) whenever the session
+is still open. All three are absent when the session was lost or never opened. A probe that reads nothing (no row under
+`SET NOEXEC`, `PARSEONLY` or `FMTONLY ON`, a plan under `SET SHOWPLAN_XML`, `_TEXT` or `_ALL ON`, or its timeout)
+leaves `spid` alone: the renderer then keeps what it knew of that session (same SPID) and marks it `unchecked`, so its
+query is asked about as one that may hold a transaction. `elapsedMs` stops before the probe. A cancel does not roll
+back, so a cancelled script's open transaction is still reported; an error that dooms a transaction (`XACT_ABORT`) ends
+it by the batch's end (3998), and the probe says 0. The renderer keeps the count per tab for the connection it ran on;
+moving the query, a lost connection, or a session that ended (or was found lost) clears it. The status bar shows
+`login (spid)`, as SSMS does.
+
+The probe is a statement in the user's session, and that is visible: the next script sees `@@ROWCOUNT` 1 and `@@ERROR` 0
+instead of what the previous script's last statement left, and the session's most recent SQL (`DBCC INPUTBUFFER`,
+`sys.dm_exec_input_buffer`, `most_recent_sql_handle`, sp_WhoIsActive) is the probe rather than the script. SqlClient
+does not expose the transaction ENVCHANGEs it receives, and `sys.dm_exec_sessions.open_transaction_count` read from
+another session needs VIEW SERVER STATE, so there is no side-effect-free way to learn `@@TRANCOUNT` for every login. The
+live checks pin both effects.
 
 **Ending a session.** `query.session.close` takes `{ sessionId, transaction? }`. Without `transaction` it cancels the tab's
-running script and closes the session (SQL Server rolls back what is open). With `'commit'` it first runs
-`WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION;` in the session, so every nesting level commits; a script still running
-(`SESSION_BUSY`), a commit SQL Server refuses (`SQL_ERROR`, "The transaction was not committed, and the query stays
-open. Msg …") or the deadline leaves the session open with its transaction, and a session lost meanwhile is closed and
-answers `SESSION_LOST` ("The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.").
-With `'rollback'` it runs `IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;` bounded to 5 s, ignores its failures (closing rolls
-back anyway), and closes. An unknown session answers `{ closed: false }`.
+running script and closes the session (SQL Server rolls back what is open). With `'commit'` it first reads
+`SELECT @@TRANCOUNT;` in the session: no row (or a plan) means `SET SHOWPLAN_XML`, `_TEXT`, `_ALL`, `NOEXEC`,
+`PARSEONLY` or `FMTONLY` would keep the commit from executing, so it turns them off (each SHOWPLAN option in its own
+batch; the session is about to close) and reads again. With a transaction open it runs
+`WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION; SELECT @@TRANCOUNT;`, so every nesting level commits, and checks that 0 is
+left. A script still running (`SESSION_BUSY`), a commit SQL Server refuses or that leaves a transaction (`SQL_ERROR`,
+"The transaction was not committed, and the query stays open. Msg …") or the deadline leaves the session open with its
+transaction. A session found lost before the commit was sent is closed and answers `SESSION_LOST` ("The SQL session was
+lost, so SQL Server rolled back its transaction. Nothing was committed."); one lost while the commit ran answers
+`SESSION_LOST` with "The SQL session was lost while committing, so it is not known whether its transaction was
+committed. Check the data before running the work again." `'rollback'` is a plain close: SQL Server rolls back what a
+closed session left open, and the close does not wait for it (an explicit `ROLLBACK`, or an attention sent during one,
+waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
 
 **Session limit.** The backend keeps at most 128 query sessions (each one unpooled connection), which leaves room within
 main's 256 pending requests for every session to run a script and still be cancelled. The next session is refused with
@@ -313,15 +330,20 @@ cannot be seen from outside (an empty temporary table allocates no pages, so tem
 it would lose them silently.
 
 **Prompts.** Before sessions end, the renderer sends main `varia:confirm-sessions` with `{ action, tabs }` (`action`:
-`close`, `closeAll`, `changeConnection`, `disconnect`, `disconnectAll` or `exit`; at most 1,024 tabs, each `{ name ≤ 512,
-transactions, running }` and only those with an open transaction or a running script). Main composes the message box
+`close`, `closeAll`, `changeConnection`, `disconnectQuery` (Disconnect, or Change Connection to Disconnected),
+`disconnect` (the server), `disconnectAll` or `exit`; at most 1,024 tabs, each `{ name ≤ 512, transactions, running,
+unchecked? }` and only those with an open or unchecked transaction or a running script). Main composes the message box
 from these facts (`src/shared/sessions.ts`) and shows it through its dialog queue, so a page that crashes or reloads
 while it is open gets Cancel and the box closes. One query with an open transaction asks **Commit**, **Roll Back** or
 **Cancel**; several ask once, **Commit All**, **Roll Back All** or **Cancel**, listing up to 10 by name; a query still
 executing is never committed: it is cancelled (the renderer waits up to 15 s for it to stop) and its session rolls back,
 and when only executing queries are involved the box asks **Cancel Query and Close** or **Keep Running**. Cancel (Keep
-Running) is the default and the Escape answer. The renderer then ends each session with `query.session.close` and the
-chosen `transaction`; a commit that fails is shown and the close, move, disconnect or quit stops there.
+Running) is the default and the Escape answer. An unchecked session asks the same buttons, worded "may have an
+uncommitted transaction". The renderer then ends each session with `query.session.close` and the chosen `transaction`; a
+commit that fails is shown and the close, move, disconnect or quit stops there. Close All and Disconnect All Queries
+leave running queries alone; one that was running when their prompt opened and has finished since with a transaction
+stays open (or connected) and is reported, rather than have that transaction rolled back without asking. A run that
+settles after its tab closed (its cancel took longer than 15 s) still has its result sets released (`results.close`).
 
 ## Query events
 
@@ -734,7 +756,7 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
 | `SESSION_LIMIT` | "This query was not executed: 128 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
-| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." |
+| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
 

@@ -145,8 +145,10 @@ export interface QueryResult {
   messagesTruncated: boolean
   budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
   completedAt: string
-  /** The session as probed after the script: @@TRANCOUNT, @@SPID and SUSER_SNAME() (≤ 128 characters). Absent when the
-   *  session was lost or never opened, or the probe failed. */
+  /** `spid` is the session's while it is still open after the script. `transactionCount` and `login` are the session as
+   *  probed after the script (@@TRANCOUNT, SUSER_SNAME() ≤ 128 characters): absent when the session was lost or never
+   *  opened, or the probe read nothing (SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON, or a timeout). A `spid` without
+   *  a `transactionCount` is an open session whose transaction could not be checked. */
   transactionCount?: number
   spid?: number
   login?: string
