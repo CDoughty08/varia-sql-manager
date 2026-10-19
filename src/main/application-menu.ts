@@ -5,7 +5,11 @@ import { applicationMenus, buildMenuModel, menuMayShowChords, pruneMenu, type Me
 import { themeMenuModel, type ThemeMenuItem } from '../shared/theme/menu'
 import type { ThemePreferencePatch, ThemeState } from '../shared/theme/types'
 
-export interface ApplicationMenuModel { theme: Pick<ThemeState, 'preference' | 'themes'> }
+export interface ApplicationMenuModel {
+  theme: Pick<ThemeState, 'preference' | 'themes'>
+  /** A command's title with its setting filled in (`commandTitle` over main's validated settings); the catalogue's otherwise. */
+  title?(id: CommandId, title: string): string
+}
 export interface ApplicationMenuActions {
   command(id: CommandId): void
   /** Whether the renderer last reported the command as checked. */
@@ -49,7 +53,7 @@ const extraAccelerators = (id: CommandId, platform: Platform): string[] => defau
   .filter(rule => rule.command === id && rule.chords.length === 1 && menuMayShowChords(rule.chords, platform)).slice(1)
   .flatMap(rule => toAccelerator(rule.chords, platform) ?? [])
 
-function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
+function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions, platform: NodeJS.Platform, title: string): MenuItemConstructorOptions[] {
   const { id, toggle, role } = entry
   const nativeAction = platform === 'darwin' ? macHandlerRoles[id] : undefined
   // Electron performs a role natively. Its accelerator is always the catalogue's, or none: Electron's own defaults would
@@ -57,11 +61,11 @@ function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: A
   if (role && !nativeAction) {
     const hidden = extraAccelerators(id, toPlatform(platform)).map((accelerator): MenuItemConstructorOptions =>
       ({ role, accelerator, visible: false, ...(platform === 'darwin' ? { acceleratorWorksWhenHidden: true } : {}) }))
-    return [{ id: entry.nativeId, label: entry.title, role, accelerator: entry.accelerator ?? '' }, ...hidden]
+    return [{ id: entry.nativeId, label: title, role, accelerator: entry.accelerator ?? '' }, ...hidden]
   }
   // Main never resolves keys (the renderer's dispatcher owns them), so the accelerator is only a label.
   return [{
-    id: entry.nativeId, label: entry.title, ...(entry.accelerator ? { accelerator: entry.accelerator } : {}), registerAccelerator: false, type: toggle ? 'checkbox' : 'normal',
+    id: entry.nativeId, label: title, ...(entry.accelerator ? { accelerator: entry.accelerator } : {}), registerAccelerator: false, type: toggle ? 'checkbox' : 'normal',
     // Electron flips a checkbox before calling click; the renderer owns the state, so the item keeps showing what it last sent.
     click: item => {
       if (toggle) item.checked = actions.isChecked(id)
@@ -77,7 +81,7 @@ function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: Applicati
   return pruneMenu(entries(menu), () => true, entries).flatMap((entry): MenuItemConstructorOptions[] => {
     if (entry.kind === 'separator') return [{ type: 'separator' }]
     if (entry.kind === 'role') return [{ role: entry.role }]
-    if (entry.kind === 'command') return commandItems(entry, actions, platform)
+    if (entry.kind === 'command') return commandItems(entry, actions, platform, model.title?.(entry.id, entry.title) ?? entry.title)
     const commands = menuItems(entry.id, model, actions, platform, packaged)
     const dynamic = entry.dynamic === 'theme' ? themeItems(themeMenuModel(model.theme), actions, platform) : []
     return [{ id: entry.nativeId, label: entry.title, submenu: [...commands, ...(commands.length && dynamic.length ? [{ type: 'separator' as const }] : []), ...dynamic] }]

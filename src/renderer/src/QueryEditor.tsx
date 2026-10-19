@@ -9,14 +9,13 @@ export default function QueryEditor() {
     const instance = workbench.monaco.editor.create(container.current!, {
       model: null,
       theme: 'varia',
-      fontSize: 14,
+      // Tools › Options: font size, word wrap, line numbers, drag and drop, current-line highlight. Indentation is the model's.
+      ...workbench.editorOptions.monacoOptions(),
       fontFamily: editorFontFamily,
       minimap: { enabled: false },
       automaticLayout: true,
       scrollBeyondLastLine: false,
       padding: { top: 16 },
-      tabSize: 4,
-      wordWrap: 'off',
       // The workbench's editor menu (MenuService) replaces Monaco's; right-click still moves the caret first.
       contextmenu: false
     })

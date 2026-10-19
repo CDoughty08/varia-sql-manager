@@ -19,6 +19,15 @@ export interface TextDocument { readonly name: string; readonly text: string; re
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
 type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
+/** A model's indentation, from Tools › Options › Text Editor › Transact-SQL › Tabs. */
+export interface ModelOptions { readonly tabSize: number; readonly indentSize: number; readonly insertSpaces: boolean }
+/** Options from settings; `refreshOptions` applies them again after they change. */
+export interface DocumentOptions {
+  /** Applied to every model when it is created, so Monaco's indentation detection never decides, as in SSMS. */
+  readonly modelOptions?: () => ModelOptions
+  /** Automatic delimiter highlighting; large values never match brackets, whatever it says. */
+  readonly matchBrackets?: () => boolean
+}
 
 export class DocumentService extends SnapshotStore<DocumentSnapshot> implements Disposable {
   private entries = new Map<string, DocumentEntry>()
@@ -27,7 +36,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   private queryCounter = 1
   private matchingBrackets = true
   /** `frame` schedules the next chunk of a large text document: an animation frame in the app. */
-  constructor(private createModel: ModelFactory, private api: DocumentApi, private events: EventBus, private frame: (callback: () => void) => void = callback => { requestAnimationFrame(() => callback()) }) {
+  constructor(private createModel: ModelFactory, private api: DocumentApi, private events: EventBus, private frame: (callback: () => void) => void = callback => { requestAnimationFrame(() => callback()) },
+    private readonly options: DocumentOptions = {}) {
     super({ documents: [], activeId: '', busy: false })
   }
   get(id: string): QueryDocument | undefined { return this.getSnapshot().documents.find(document => document.id === id) }
@@ -65,6 +75,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
+    if (this.options.modelOptions) model.updateOptions(this.options.modelOptions())
     if (plain) model.updateOptions({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } })
     const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {} }
     const subscription = model.onDidChangeContent(() => {
@@ -103,11 +114,15 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const entry = this.entries.get(this.getSnapshot().activeId)
     if (entry && this.editor?.getModel() === entry.model) entry.viewState = this.editor.saveViewState()
   }
+  /** Matching is an editor option: on while the setting is and the document is not a large value. It changes before the
+   *  model does, so it never runs over a large value. */
+  private matchBrackets(entry: DocumentEntry | undefined): void {
+    const matching = !entry?.plain && (this.options.matchBrackets?.() ?? true)
+    if (this.editor && matching !== this.matchingBrackets) { this.matchingBrackets = matching; this.editor.updateOptions({ matchBrackets: matching ? 'always' : 'never' }) }
+  }
   private showModel(id: string): void {
     const entry = this.entries.get(id)
-    // Matching is an editor option; it changes before the model does, so it never runs over a large value.
-    const matching = !entry?.plain
-    if (this.editor && matching !== this.matchingBrackets) { this.matchingBrackets = matching; this.editor.updateOptions({ matchBrackets: matching ? 'always' : 'never' }) }
+    this.matchBrackets(entry)
     this.editor?.setModel(entry?.model ?? null)
     if (entry?.viewState) this.editor?.restoreViewState(entry.viewState)
   }
@@ -121,6 +136,12 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.showModel(id)
     this.changed({ ...this.getSnapshot(), activeId: id })
     this.events.emit({ type: 'documents.activated', tabId: id })
+  }
+  /** Applies changed settings: indentation to every open model, and bracket matching to the editor. */
+  refreshOptions(): void {
+    const options = this.options.modelOptions?.()
+    if (options) for (const entry of this.entries.values()) entry.model.updateOptions(options)
+    this.matchBrackets(this.entries.get(this.getSnapshot().activeId))
   }
   bindEditor(instance: editor.IStandaloneCodeEditor): Disposable {
     if (this.editor) throw new Error('A query editor is already bound.')

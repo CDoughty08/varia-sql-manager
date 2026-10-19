@@ -34,9 +34,11 @@ import { shellContribution, type ShellHost } from '../../src/renderer/src/contri
 import { themeContribution, type ThemeController } from '../../src/renderer/src/contributions/theme'
 import { backendContribution } from '../../src/renderer/src/contributions/backend'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
-import { ScriptingOptionsService } from '../../src/renderer/src/scripting/ScriptingOptionsService'
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
-import { defaultScriptingOptions } from '../../src/shared/scripting/options'
+import { settingsContribution } from '../../src/renderer/src/contributions/settings'
+import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
+import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
+import type { SettingsState } from '../../src/shared/settings/schema'
 import { CommandHistory, type HistoryStorage } from '../../src/renderer/src/quickinput/history'
 import { QuickInputService, type FocusAdapter } from '../../src/renderer/src/quickinput/QuickInputService'
 import { defaultThemePreference } from '../../src/shared/theme/format'
@@ -83,6 +85,26 @@ export function explorerAnswer(params: ExplorerChildrenParams): ExplorerChildren
 }
 export const queryOutput: QueryResult = summaryOf([], { recordsAffected: 0, elapsedMs: 1 })
 
+/**
+ * Main's half of settings: `getSettings` answers the stored state, and `updateSettings` merges a patch (null resets),
+ * bumps the revision and pushes the new state to `onSettingsChanged` listeners, as main does.
+ */
+export function settingsApi(seed: Partial<SettingsValues> = {}) {
+  const listeners = new Set<(state: SettingsState) => void>()
+  let state: SettingsState = { revision: 1, values: { ...defaultSettings, ...seed } }
+  return {
+    getSettings: vi.fn<VariaApi['getSettings']>(async () => ({ ok: true, value: state })),
+    updateSettings: vi.fn<VariaApi['updateSettings']>(async patch => {
+      const values: Record<string, unknown> = { ...state.values }
+      for (const [key, value] of Object.entries(patch)) values[key] = value ?? defaultSettings[key as keyof SettingsValues]
+      state = { revision: state.revision + 1, values: values as SettingsValues }
+      listeners.forEach(listener => listener(state))
+      return { ok: true, value: state }
+    }),
+    onSettingsChanged: vi.fn<VariaApi['onSettingsChanged']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
+    get state() { return state }
+  }
+}
 /** Storage backed by a Map, for the command history. */
 export function memoryStorage(initial: Record<string, string> = {}): HistoryStorage & { readonly values: Map<string, string> } {
   const values = new Map(Object.entries(initial))
@@ -117,7 +139,7 @@ export function manualTimers() {
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; packaged?: boolean } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; packaged?: boolean; settings?: Partial<SettingsValues> } = {}) {
   const doc = documentFixture()
   const api = {
     ...doc.api,
@@ -151,18 +173,19 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       return { ok: true, value: { text: `-- ${params.verb} ${[object.schema, object.name].filter(Boolean).join('.')}`, database: object.database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 } }
     }),
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
-    getScriptingOptions: vi.fn<VariaApi['getScriptingOptions']>(async () => ({ ok: true, value: { options: defaultScriptingOptions } })),
-    setScriptingOptions: vi.fn<VariaApi['setScriptingOptions']>(async options => ({ ok: true, value: options })),
+    ...settingsApi(options.settings),
     ...backendApi()
   }
   const { documents, events } = doc
-  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService()
+  // Seeded values apply at once, as if main had answered before the workbench was created.
+  const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
+  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const resultClient = fakeResultClient()
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
-  const queries = new QueryService(documents, api, id => connections.get(id), events, results)
+  const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
@@ -171,7 +194,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focused = { panel: '' as '' | 'explorer' | 'editor' | 'output' }
   // The focused element is a stand-in whose pane is `focused.panel`, so tests can put focus in Object Explorer.
   const activeElement = () => focused.panel ? { matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => focused.panel } : null } as unknown as Element : null
-  const scriptingOptions = new ScriptingOptionsService(api, message => commands.reportError(message))
+  settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const context = new ContextKeyService({
@@ -202,7 +226,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
-  const menus = new MenuService({ platform, packaged: options.packaged, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const menus = new MenuService({ platform, packaged: options.packaged, commands, context, keybindings, theme, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const workbench = {
     platform,
     commands,
@@ -225,7 +249,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     menuTargets,
     resultSelection,
     results,
-    scriptingOptions,
+    settings,
     scripting
   }
   const contributions = [
@@ -241,7 +265,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers),
     backendContribution(workbench),
-    scriptingContribution(workbench)
+    scriptingContribution(workbench),
+    settingsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
@@ -265,7 +290,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     explorer.dispose()
     databaseList.dispose()
     scripting.dispose()
-    scriptingOptions.dispose()
+    settings.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -281,7 +306,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultSelection,
     results,
     resultClient,
-    scriptingOptions,
+    settings,
     scripting,
     focusEditor,
     queries,
@@ -303,3 +328,5 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     dispose
   }
 }
+/** The contract name sibling tests use: the workbench fixture, with `settings` seeding the stored values. */
+export const createTestWorkbench = workbenchFixture

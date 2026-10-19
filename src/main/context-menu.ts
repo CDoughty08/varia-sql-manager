@@ -7,12 +7,12 @@ import type { MenuStyle } from '../shared/menu-style'
 /**
  * A native context menu for a request the renderer resolved: the catalogue's menu with only the `visible` commands,
  * without submenus left empty or stray separators. Labels and keys are the catalogue's (the placement's title, else
- * the platform's, else the command's; the Script submenu's from its title key), never the renderer's. A submenu whose
- * items are all disabled is disabled. Role-backed commands are Electron's roles, which act on the focused element;
+ * the platform's, else the command's, with a setting filled in by `title`; the Script submenu's from its title key),
+ * never the renderer's. A submenu whose items are all disabled is disabled. Role-backed commands are Electron's roles, which act on the focused element;
  * every other item sends its command id back through `send`.
  */
 export function contextMenuTemplate(request: ContextMenuRequest, platform: NodeJS.Platform, send: (id: CommandId) => void,
-  model: (menu: MenuId) => readonly MenuEntry[] = menu => buildMenuModel(menu, toPlatform(platform))): MenuItemConstructorOptions[] {
+  model: (menu: MenuId) => readonly MenuEntry[] = menu => buildMenuModel(menu, toPlatform(platform)), title: (id: CommandId, title: string) => string = (_id, title) => title): MenuItemConstructorOptions[] {
   const visible = new Set<CommandId>(request.visible), disabled = new Set<CommandId>(request.disabled), checked = new Set<CommandId>(request.checked)
   // Windows and Linux read `&` as an access key; macOS shows labels as they are.
   const label = (title: string) => platform === 'darwin' ? title : title.replaceAll('&', '&&')
@@ -26,9 +26,9 @@ export function contextMenuTemplate(request: ContextMenuRequest, platform: NodeJ
     const { id } = entry, rule = primaryRule(id, toPlatform(platform)), accelerator = rule && toAccelerator(rule.chords, toPlatform(platform))
     // An open popup handles its own keys, so every key can show; nothing registers outside the menu.
     const keys = accelerator ? { accelerator, registerAccelerator: false } : {}
-    if (entry.role) return { id: entry.nativeId, label: label(entry.title), role: entry.role, enabled: !disabled.has(id), accelerator: accelerator ?? '', registerAccelerator: false }
+    if (entry.role) return { id: entry.nativeId, label: label(title(id, entry.title)), role: entry.role, enabled: !disabled.has(id), accelerator: accelerator ?? '', registerAccelerator: false }
     return {
-      id: entry.nativeId, label: label(entry.title), ...keys, enabled: !disabled.has(id), type: entry.toggle ? 'checkbox' : 'normal', ...(entry.toggle ? { checked: checked.has(id) } : {}),
+      id: entry.nativeId, label: label(title(id, entry.title)), ...keys, enabled: !disabled.has(id), type: entry.toggle ? 'checkbox' : 'normal', ...(entry.toggle ? { checked: checked.has(id) } : {}),
       click: () => send(id)
     }
   })
@@ -59,6 +59,8 @@ export class ContextMenuPopups<W extends PopupWindow> {
   private open: { readonly menu: PopupMenu<W>; readonly window: W } | null = null
   constructor(private readonly options: {
     readonly style: MenuStyle; readonly platform: NodeJS.Platform; userCanAct(): boolean; build(template: MenuItemConstructorOptions[]): PopupMenu<W>
+    /** A command's title with its setting filled in, from main's validated settings. */
+    title?(id: CommandId, title: string): string
   }) {}
 
   async show(value: unknown, window: W): Promise<void> {
@@ -68,7 +70,7 @@ export class ContextMenuPopups<W extends PopupWindow> {
     this.close()
     const menu = this.options.build(contextMenuTemplate(request, this.options.platform, id => {
       if (!window.isDestroyed()) window.webContents.send('varia:context-menu-command', { token: request.token, id })
-    }))
+    }, undefined, this.options.title))
     // Requests are in CSS pixels; the popup takes window pixels, inside the window.
     const bounds = window.getContentBounds(), zoom = window.webContents.getZoomFactor()
     const at = (value: number, size: number) => Math.max(0, Math.min(size - 1, Math.round(value * zoom)))

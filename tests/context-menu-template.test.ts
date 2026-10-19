@@ -4,6 +4,7 @@ import type { CommandId } from '../src/shared/commands/catalog'
 import { buildMenuModel, contextCommandIds, contextMenuIds, type ContextMenuId, type ContextMenuRequest, type MenuEntry, type MenuId } from '../src/shared/commands/menus'
 import { menuStyleArgument, menuStyleFor, menuStyleFromArgv } from '../src/shared/menu-style'
 import { ContextMenuPopups, contextMenuTemplate, type PopupMenu, type PopupWindow } from '../src/main/context-menu'
+import { commandTitle, defaultSettings } from '../src/shared/settings/catalog'
 
 const request = (menu: ContextMenuId, change: Partial<ContextMenuRequest> = {}): ContextMenuRequest =>
   ({ token: 1, menu, x: 0, y: 0, visible: [...contextCommandIds(menu)], disabled: [], checked: [], ...change })
@@ -58,6 +59,17 @@ describe('native context menu template', () => {
     expect(describeTemplate(contextMenuTemplate(request('editor.context', { visible: ['query.changeConnection', 'workbench.showCommands'] }), 'darwin', () => {}))).toEqual([
       'Connection >', '  Change Connection… (click)', '---', 'Command Palette… (click, Cmd+Shift+P)'
     ])
+  })
+  it('titles Select Top Rows from main\'s settings through the title hook', () => {
+    const title = (id: CommandId, fallback: string) => commandTitle(id, { ...defaultSettings, 'objectExplorer.selectTopRows': 50 }, fallback)
+    for (const platform of ['darwin', 'win32'] as const) {
+      const template = contextMenuTemplate(request('explorer.context', { visible: ['explorer.selectTopRows', 'explorer.copyName'] }), platform, () => {}, undefined, title)
+      expect(describeTemplate(template)).toEqual(['Select Top 50 Rows (click)', '---', 'Copy Name (click)'])
+    }
+    const built: MenuItemConstructorOptions[][] = []
+    const popups = new ContextMenuPopups<PopupWindow>({ style: 'native', platform: 'darwin', userCanAct: () => true, build: template => { built.push(template); return { popup: ({ callback }) => callback(), closePopup: () => {} } }, title })
+    const window: PopupWindow = { isDestroyed: () => false, getContentBounds: () => ({ width: 100, height: 100 }), webContents: { getZoomFactor: () => 1, send: () => {} } }
+    return popups.show(request('explorer.context', { visible: ['explorer.selectTopRows'] }), window).then(() => expect(built[0][0].label).toBe('Select Top 50 Rows'))
   })
   it('sends a chosen command\'s id, and keeps native item ids', () => {
     const send = vi.fn<(id: CommandId) => void>()

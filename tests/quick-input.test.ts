@@ -488,6 +488,14 @@ describe('command palette', () => {
     expect(history.ids).toEqual(['file.new'])
     expect(sources).toEqual(['workbench.showCommands keybinding focus grid', 'file.new palette focus grid'])
   })
+  it('titles Select Top Rows in the palette with the Options value, and in custom menus too', async () => {
+    const { key, quickInput, menus } = palette({ settings: { 'objectExplorer.selectTopRows': 50 } })
+    await key('workbench.showCommands')
+    quickInput.filter('>select top')
+    expect(quickInput.getSnapshot().rows[0].item.label).toBe('Object Explorer: Select Top 50 Rows')
+    const table = menus.resolve('explorer.context', { kind: 'explorer', node: { kind: 'table', id: 1, lost: false } } as never)
+    expect(table.flatMap(item => item.kind === 'command' && item.id === 'explorer.selectTopRows' ? [item.title] : [])).toEqual(['Select Top 50 Rows'])
+  })
   it('switches mode by prefix, keeping the value, and returns to Go to Query when the prefix is deleted', async () => {
     const { key, quickInput, view, labels, documents, focus } = palette()
     documents.create('a.sql', '', 'master')

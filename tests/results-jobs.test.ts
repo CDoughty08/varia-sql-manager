@@ -41,7 +41,7 @@ function host(patch: Partial<JobHostDeps> = {}) {
   const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: false, filePath: '/home/me/Documents/out.csv' }))
   const deps: JobHostDeps = {
     backend: fake.backend, owns: () => true, writeClipboard: text => { clipboard.push(text) }, showSaveDialog: dialog, documentsDir: () => '/home/me/Documents',
-    progress: value => { progress.push(value) }, platform: 'linux', now: () => now, ...patch
+    progress: value => { progress.push(value) }, platform: 'linux', now: () => now, exportHeaders: async () => true, ...patch
   }
   return { jobs: new ResultsJobHost(deps), ...fake, clipboard, progress, dialog, tick: (ms: number) => { now += ms } }
 }
@@ -150,6 +150,20 @@ describe('ResultsJobHost save', () => {
     expect(calls[0].params).toEqual({ resultId: 7, path: '/home/me/Documents/out.csv', format: 'csv', headers: true, nullText: 'empty', temporaryId: expect.stringMatching(/^[0-9a-f]{32}$/) })
     calls[0].resolve(done)
     expect(await saving).toEqual({ ...done, fileName: 'out.csv', format: 'csv' })
+  })
+  it('writes a header row only when Tools › Options says so, waiting for the stored settings', async () => {
+    let answer!: (value: boolean) => void
+    const exportHeaders = vi.fn(() => new Promise<boolean>(resolve => { answer = resolve }))
+    const { jobs, calls } = host({ exportHeaders })
+    const saving = jobs.save(saveRequest())
+    await settle()
+    expect(calls).toHaveLength(0)
+    answer(false)
+    await settle()
+    expect(calls[0].params).toMatchObject({ format: 'csv', headers: false })
+    calls[0].resolve(done)
+    await saving
+    expect(exportHeaders).toHaveBeenCalledTimes(1)
   })
   it('suggests a name with Script As\'s rules, whatever the tab name holds', async () => {
     // C1 controls, the BOM, separators, bidi controls and marks, a reserved Windows stem, and names too long in UTF-8
@@ -276,7 +290,7 @@ describe('ResultsJobHost over the fake backend', () => {
     const clipboard: string[] = [], progress: ResultsJobProgress[] = []
     let filePath = ''
     const jobs = new ResultsJobHost({ backend: supervisorJobs(supervisor), owns: () => true, writeClipboard: text => { clipboard.push(text) }, showSaveDialog: async () => ({ canceled: false, filePath }),
-      documentsDir: () => control, progress: value => { progress.push(value) }, platform: 'linux' })
+      documentsDir: () => control, progress: value => { progress.push(value) }, platform: 'linux', exportHeaders: async () => true })
     const connection = await supervisor.request('connections.connect', { server: 'fake', database: 'master', authentication: 'sql', username: 'sa', password: 'x', trustServerCertificate: true })
     const execute = (sql: string) => supervisor.request('query.execute', { connectionId: connection.id, sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql, maxRows: 0, timeoutSeconds: 0, maxResultSets: 1000 })
     return { control, supervisor, jobs, clipboard, progress, execute, choose: (path: string) => { filePath = path } }
