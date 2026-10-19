@@ -13,12 +13,37 @@ export type MenubarId = typeof applicationMenus[number]['id']
 /** Context menus, one per kind of target: the editor, an Object Explorer node, a query tab, Query Output, a panel tab, a text field. */
 export const contextMenuIds = ['editor.context', 'explorer.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
-export const submenuIds = ['theme', 'query.connection', ...scriptSubmenuIds] as const
+export const submenuIds = [
+  'theme',
+  'query.connection',
+  ...scriptSubmenuIds
+] as const
 export type SubmenuId = typeof submenuIds[number]
 export type MenuId = MenubarId | SubmenuId | ContextMenuId
-/** Every menu in native-id order: a submenu follows the menu it first appears in, and context menus come last. */
-export const menuIds: readonly MenuId[] = ['file', 'edit', 'view', 'theme', 'query', 'query.connection', 'tools', 'window', 'editor.context', 'explorer.context',
-  ...scriptSubmenuIds, 'documentTab.context', 'output.context', 'dockTab.context', 'input.context']
+/**
+ * Every menu in native-id order: a submenu follows the menu it first appears in, and context menus come last. One id a
+ * line, so menus added later merge line by line. The planned order, where each new menu goes: 'file', 'file.recent',
+ * 'edit', 'edit.findReplace', 'edit.advanced', 'edit.bookmarks', 'edit.intellisense', 'view', 'theme', 'query',
+ * 'query.connection', 'tools', 'window', 'editor.context', 'explorer.context', 'explorer.new', ...scriptSubmenuIds, then
+ * the remaining context menus.
+ */
+export const menuIds: readonly MenuId[] = [
+  'file',
+  'edit',
+  'view',
+  'theme',
+  'query',
+  'query.connection',
+  'tools',
+  'window',
+  'editor.context',
+  'explorer.context',
+  ...scriptSubmenuIds,
+  'documentTab.context',
+  'output.context',
+  'dockTab.context',
+  'input.context'
+]
 export const menubarIds: readonly MenubarId[] = applicationMenus.map(menu => menu.id)
 export const isContextMenuId = (menu: MenuId): menu is ContextMenuId => (contextMenuIds as readonly MenuId[]).includes(menu)
 

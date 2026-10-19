@@ -9,6 +9,9 @@ internal sealed class QuerySession(string connectionId, SqlConnection connection
     public string ConnectionId { get; } = connectionId;
     public SqlConnection Connection { get; } = connection;
     public bool HasOpened { get; set; }
+    /// <summary>The session's SPID and login, read once when it opened, as SSMS shows them from the connection.</summary>
+    public int? Spid { get; set; }
+    public string? Login { get; set; }
 
     public bool TryEnter()
     {

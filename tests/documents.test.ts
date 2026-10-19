@@ -203,4 +203,30 @@ describe('query documents', () => {
     documents.activate(query.id)
     expect(editor.options).toEqual([{ matchBrackets: 'never' }, { matchBrackets: 'always' }])
   })
+  it('gives every model the indentation settings when it is created and whenever they change', () => {
+    let indentation = { tabSize: 4, indentSize: 4, insertSpaces: false }
+    const { documents, model } = documentFixture({ modelOptions: () => indentation })
+    const first = documents.create('a.sql', '\tSELECT 1', 'master')
+    const value = documents.openText({ name: 'v.json', text: '[1]', kind: 'json' })
+    expect([model(first.id).options, model(value.id).options]).toEqual([indentation, indentation])
+    indentation = { tabSize: 2, indentSize: 2, insertSpaces: true }
+    documents.refreshOptions()
+    expect([model(first.id).options, model(value.id).options]).toEqual([indentation, indentation])
+  })
+  it('matches brackets only while delimiter highlighting is on, and never in a large value', () => {
+    let highlighting = false
+    const { documents } = documentFixture({ matchBrackets: () => highlighting })
+    const query = documents.create('query.sql', 'SELECT (1)', 'master')
+    const editor = new TestEditor()
+    documents.bindEditor(editor.asEditor())
+    expect(editor.options).toEqual([{ matchBrackets: 'never' }])
+    highlighting = true
+    documents.refreshOptions()
+    expect(editor.options.at(-1)).toEqual({ matchBrackets: 'always' })
+    documents.openText({ name: 'large.xml', text: '<a>' + 'x'.repeat(gridLimits.documentBracketChars) + '</a>', kind: 'xml' })
+    documents.refreshOptions()
+    expect(editor.options.at(-1)).toEqual({ matchBrackets: 'never' })
+    documents.activate(query.id)
+    expect(editor.options.at(-1)).toEqual({ matchBrackets: 'always' })
+  })
 })

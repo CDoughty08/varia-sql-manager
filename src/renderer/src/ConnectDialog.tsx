@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
-import { advancedDefaults, connectionDefaults, connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../../shared/connections'
+import { advancedDefaults, advancedToStore, connectionDefaults, connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../../shared/connections'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
 import { trapFocus } from './trap-focus'
@@ -31,23 +31,30 @@ function FailureDetails({ details }: { details: ErrorDetails }) {
 }
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
-function AdvancedProperties({ value, onSave, onClose }: { value: Partial<AdvancedConnectionOptions>; onSave(value: AdvancedConnectionOptions): void; onClose(): void }) {
-  const [draft, setDraft] = useState({ ...advancedDefaults, ...value })
+/** Advanced Properties. A command timeout the profile does not set is left empty, showing Tools › Options' Execution time-out. */
+function AdvancedProperties({ value, onSave, onClose }: { value: Partial<AdvancedConnectionOptions>; onSave(value: Partial<AdvancedConnectionOptions>): void; onClose(): void }) {
+  const { settings } = useWorkbench()
+  const executionTimeout = settings.get('queryExecution.executionTimeout')
+  const [draft, setDraft] = useState(() => ({ ...advancedDefaults, ...value.commandTimeout === undefined ? { commandTimeout: '' as unknown as number } : {}, ...value }))
+  const [previous, setPrevious] = useState(value)
+  const edited = useRef(new Set<string>())
+  const edit = (key: string, next: (current: AdvancedConnectionOptions) => AdvancedConnectionOptions) => { edited.current.add(key); setDraft(next) }
   const form = useRef<HTMLFormElement>(null)
   useEffect(() => { form.current?.querySelector<HTMLInputElement>('input')?.focus() }, [])
-  return <div className="modal-backdrop advanced-backdrop"><form ref={form} className="connection-modal advanced-dialog" role="dialog" aria-modal="true" aria-labelledby="advanced-title" onSubmit={event => { event.preventDefault(); onSave(draft) }} onKeyDown={event => { trapFocus(event); if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }}>
+  return <div className="modal-backdrop advanced-backdrop"><form ref={form} className="connection-modal advanced-dialog" role="dialog" aria-modal="true" aria-labelledby="advanced-title" onSubmit={event => { event.preventDefault(); onSave(advancedToStore(draft, edited.current, previous)) }} onKeyDown={event => { trapFocus(event); if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }}>
     <div className="connection-heading"><h2 id="advanced-title">Advanced Properties</h2><button type="button" className="icon-button" aria-label="Close advanced properties" onClick={onClose}><Icon name="close" /></button></div>
     <div className="connection-scroll">
       {sections.map(section => <fieldset className="property-section" key={section.title}><legend>{section.title}</legend><div className="property-grid">{section.fields.map(field => {
         const id = 'advanced-' + field.key
         const disabled = field.key === 'secureEnclaves' && !draft.columnEncryption || ['attestationProtocol', 'enclaveAttestationUrl'].includes(field.key) && (!draft.columnEncryption || !draft.secureEnclaves) || field.key === 'enclaveAttestationUrl' && draft.attestationProtocol === 'None'
         return <div className="property-row" key={id}><label htmlFor={id}>{field.label}</label>{field.boolean || field.choices
-          ? <select id={id} disabled={disabled} value={String(draft[field.key])} onChange={event => setDraft(current => ({ ...current, [field.key]: field.boolean ? event.target.value === 'true' : event.target.value, ...(field.key === 'columnEncryption' && event.target.value === 'false' ? { secureEnclaves: false } : {}) }))}>{(field.boolean ? ['false', 'true'] : field.choices!).map(choice => <option key={choice} value={choice}>{field.boolean ? choice === 'true' ? 'True' : 'False' : choiceLabels[choice] ?? choice}</option>)}</select>
-          : <input id={id} disabled={disabled} type={field.min !== undefined ? 'number' : 'text'} required={field.min !== undefined} min={field.min} max={field.max} step={field.min !== undefined ? 1 : undefined} maxLength={field.maxLength ?? 128} value={draft[field.key] as string | number} onChange={event => setDraft(current => ({ ...current, [field.key]: field.min !== undefined ? event.target.value === '' ? '' : Number(event.target.value) : event.target.value }) as AdvancedConnectionOptions)} />}</div>
+          ? <select id={id} disabled={disabled} value={String(draft[field.key])} onChange={event => edit(field.key, current => ({ ...current, [field.key]: field.boolean ? event.target.value === 'true' : event.target.value, ...(field.key === 'columnEncryption' && event.target.value === 'false' ? { secureEnclaves: false } : {}) }))}>{(field.boolean ? ['false', 'true'] : field.choices!).map(choice => <option key={choice} value={choice}>{field.boolean ? choice === 'true' ? 'True' : 'False' : choiceLabels[choice] ?? choice}</option>)}</select>
+          : <input id={id} disabled={disabled} type={field.min !== undefined ? 'number' : 'text'} required={field.min !== undefined && field.key !== 'commandTimeout'} min={field.min}
+            {...field.key === 'commandTimeout' ? { placeholder: `${executionTimeout} (Tools › Options)`, 'aria-describedby': 'advanced-timeout-note' } : {}} max={field.max} step={field.min !== undefined ? 1 : undefined} maxLength={field.maxLength ?? 128} value={draft[field.key] as string | number} onChange={event => edit(field.key, current => ({ ...current, [field.key]: field.min !== undefined ? event.target.value === '' ? '' : Number(event.target.value) : event.target.value }) as AdvancedConnectionOptions)} />}</div>
       })}</div></fieldset>)}
-      <p className="field-note">Timeout 0 means no timeout. Query tabs require an explicit reconnect after a lost session; automatic connection recovery retries apply to metadata connections.</p>
+      <p className="field-note" id="advanced-timeout-note">Leave the command timeout empty to use Tools › Options › Query Execution › SQL Server › General. Timeout 0 means no timeout. Query tabs require an explicit reconnect after a lost session; automatic connection recovery retries apply to metadata connections.</p>
     </div>
-    <div className="connection-footer"><button type="button" onClick={() => setDraft({ ...advancedDefaults })}>Reset</button><span /><button className="primary" type="submit">OK</button><button type="button" onClick={onClose}>Cancel</button></div>
+    <div className="connection-footer"><button type="button" onClick={() => { edited.current.clear(); setPrevious({}); setDraft({ ...advancedDefaults, commandTimeout: '' as unknown as number }) }}>Reset</button><span /><button className="primary" type="submit">OK</button><button type="button" onClick={onClose}>Cancel</button></div>
   </form></div>
 }
 

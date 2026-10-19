@@ -4,6 +4,7 @@ import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
+import type { SettingsState } from '../shared/settings/schema'
 
 const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params)
 
@@ -35,11 +36,17 @@ const api: VariaApi = {
   explorerCancel: requestIds => ipcRenderer.invoke('varia:explorer-cancel', { requestIds }),
   scriptObjects: params => request('scripting.script', params),
   cancelScripting: requestIds => ipcRenderer.invoke('varia:scripting-cancel', { requestIds }),
-  getScriptingOptions: () => ipcRenderer.invoke('varia:scripting-options-get'),
-  setScriptingOptions: options => ipcRenderer.invoke('varia:scripting-options-set', options),
+  getSettings: () => ipcRenderer.invoke('varia:settings-get'),
+  updateSettings: patch => ipcRenderer.invoke('varia:settings-update', patch),
+  onSettingsChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: SettingsState) => callback(state)
+    ipcRenderer.on('varia:settings-changed', listener)
+    return () => { ipcRenderer.removeListener('varia:settings-changed', listener) }
+  },
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
   closeQuerySession: (sessionId, transaction) => request('query.session.close', transaction ? { sessionId, transaction } : { sessionId }),
+  querySessionState: sessionId => request('query.session.state', { sessionId }),
   getBackendState: () => ipcRenderer.invoke('varia:backend-state-get'),
   onBackendState: callback => {
     const listener = (_event: Electron.IpcRendererEvent, state: BackendState) => callback(state)

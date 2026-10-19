@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConnectionStore } from '../src/main/connection-store'
-import { connectionDefaults, connectionKey, defaultAuthentication, connectionLibrarySchema, connectionOptionsSchema, savedConnection } from '../src/shared/connections'
+import { advancedDefaults, advancedToStore, connectionDefaults, connectionKey, defaultAuthentication, connectionLibrarySchema, connectionOptionsSchema, savedConnection } from '../src/shared/connections'
 import { validateRequest, validateResult } from '../src/main/validation'
 
 const directories: string[] = []
@@ -104,5 +104,21 @@ describe('saved connection library', () => {
     await writeFile(path, '{ broken')
     expect(await library.load()).toMatchObject({ library: { version: 1, profiles: [] }, warning: expect.any(String) })
     expect((await readdir(directory)).some(name => name.includes('.invalid-'))).toBe(true)
+  })
+})
+
+describe('Advanced Properties OK', () => {
+  const draft = (patch: Record<string, unknown> = {}) => ({ ...advancedDefaults, commandTimeout: '', ...patch }) as Parameters<typeof advancedToStore>[0]
+  it('stores only the fields that differ from their defaults or that were edited, so an empty command timeout follows Tools › Options', () => {
+    expect(advancedToStore(draft(), new Set())).toEqual({})
+    expect(advancedToStore(draft({ packetSize: 4096, applicationName: 'Varia SQL Manager' }), new Set(['applicationName']))).toEqual({ packetSize: 4096, applicationName: 'Varia SQL Manager' })
+    // An explicit 0 typed into Command timeout means no timeout, whatever Options says; left empty, it is not stored.
+    expect(advancedToStore(draft({ commandTimeout: 0 }), new Set(['commandTimeout']))).toEqual({ commandTimeout: 0 })
+    expect(advancedToStore(draft(), new Set(['commandTimeout']))).toEqual({})
+  })
+  it('keeps a command timeout the profile already stored, and the profile\'s identity', () => {
+    expect(advancedToStore(draft({ commandTimeout: 0 }), new Set(), { commandTimeout: 0 })).toEqual({ commandTimeout: 0 })
+    const options = { ...connectionDefaults('win32'), server: 'db' }
+    expect(connectionKey({ ...options, advanced: advancedToStore(draft(), new Set()) })).toBe(connectionKey({ ...options, advanced: advancedDefaults }))
   })
 })

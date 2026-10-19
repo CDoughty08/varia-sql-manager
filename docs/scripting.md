@@ -116,10 +116,10 @@ Tools › Options › SQL Server Object Explorer › Scripting, with the docs pa
 SSMS's Script As produces; where the docs page states another default, it is shown in parentheses. Every request
 carries all of them.
 
-Main stores them in `scripting-options.json` in the user data folder, replacing the file atomically on OK. Options a
-newer version added are dropped and missing ones take their defaults; a file that is too large, not UTF-8, not JSON,
-or holds a value of the wrong type is renamed to `scripting-options.json.invalid-<uuid>.json`, and the defaults are
-used with a warning.
+They are settings like any other (`objectExplorer.scripting.<key>`; see [settings.md](settings.md)): main stores the
+ones that differ from their defaults in `settings.json` in the user data folder. Earlier versions kept them in
+`scripting-options.json`, which is imported once when `settings.json` does not exist yet and then left as it was; an
+invalid one is renamed to `scripting-options.json.invalid-<uuid>.json`, and the defaults are used with a warning.
 
 ### General scripting options
 
@@ -226,5 +226,5 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `warnings` | 8 | Warnings per result |
 | `warningChars` | 512 | Characters in a warning |
 | `messageChars` | 2,048 | Characters in an error message |
-| `prefsBytes` | 16,384 | Bytes in `scripting-options.json` |
+| `prefsBytes` | 16,384 | Bytes read from a legacy `scripting-options.json` when migrating to settings.json |
 | `fileNameChars` | 200 | UTF-16 code units in a suggested file name |

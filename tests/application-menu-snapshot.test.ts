@@ -51,6 +51,11 @@ describe('native application menu template', () => {
     const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, menuActions, platform)
     return template.find(item => item.id === 'menu.' + menu)!.submenu as MenuItemConstructorOptions[]
   }
+  it.each(platforms)('labels command items, role items included, through the settings title hook on %s', platform => {
+    const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes }, title: (id, title) => id === 'file.new' || id === 'edit.copy' ? title + ' (50)' : title }, actions, platform)
+    const file = template.find(item => item.id === 'menu.file')!.submenu as MenuItemConstructorOptions[], edit = template.find(item => item.id === 'menu.edit')!.submenu as MenuItemConstructorOptions[]
+    expect([file.find(item => item.id === 'file.new')?.label, edit.find(item => item.id === 'edit.copy')?.label, edit.find(item => item.id === 'edit.cut')?.label]).toEqual(['New Query (50)', 'Copy (50)', 'Cut'])
+  })
   it.each(platforms)('has Toggle Developer Tools, with its role and key, in View on %s, as every build does', platform => {
     // The template takes no build flag: a packaged build's menu is this one.
     expect(applicationMenuTemplate.length).toBe(3)

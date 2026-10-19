@@ -26,10 +26,10 @@ internal static partial class ScriptingLiveChecks
     [GeneratedRegex(@"\n+GO\n+")]
     private static partial Regex BlankLines();
 
-    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8})_(ls|cred|role|dev|audit|sas|trg)$")]
+    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8})_(ls|cred|role|iso|dev|audit|sas|trg)$")]
     private static partial Regex ServerObjectName();
 
-    /// <summary>Drops a scratch run's server objects (spec G4's fixture), whichever of them exist.</summary>
+    /// <summary>Drops a scratch run's server objects (spec G4's fixture, and the injection matrix's _iso role), whichever of them exist.</summary>
     private static async Task DropServerObjectsAsync(Func<string, string, Task<SqlRun>> sql, string scratch)
     {
         string N(string suffix) => "N'" + scratch + "_" + suffix + "'";
@@ -42,7 +42,8 @@ internal static partial class ScriptingLiveChecks
             + "IF EXISTS (SELECT 1 FROM sys.backup_devices WHERE name = " + N("dev") + ") EXEC master.dbo.sp_dropdevice @logicalname = " + N("dev") + ";\n"
             + "IF EXISTS (SELECT 1 FROM sys.servers WHERE name = " + N("ls") + ") EXEC master.dbo.sp_dropserver @server = " + N("ls") + ", @droplogins = 'droplogins';\n"
             + "IF EXISTS (SELECT 1 FROM sys.credentials WHERE name = " + N("cred") + ") DROP CREDENTIAL " + Q("cred") + ";\n"
-            + "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + N("role") + " AND type = 'R') DROP SERVER ROLE " + Q("role") + ";", "master");
+            + "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + N("role") + " AND type = 'R') DROP SERVER ROLE " + Q("role") + ";\n"
+            + "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + N("iso") + " AND type = 'R') DROP SERVER ROLE " + Q("iso") + ";", "master");
     }
 
     /// <summary>Server objects a crashed run left behind: their scratch database is gone.</summary>

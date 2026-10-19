@@ -174,6 +174,11 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'query.session.close', { sessionId: crypto.randomUUID() })).resolves.toEqual({ closed: false })
     await expect(call(connection, 'query.session.close', { sessionId: 'invalid' })).rejects.toThrow('A valid session ID is required.')
   })
+  it('answers an unknown session\'s transaction state as an error value, at once', async () => {
+    const connection = backend()
+    await expect(call(connection, 'query.session.state', { sessionId: crypto.randomUUID() })).rejects.toMatchObject({ code: 'SESSION_CLOSED', message: 'This query has no open SQL session.' })
+    await expect(call(connection, 'query.session.state', { sessionId: 'invalid' })).rejects.toThrow('A valid session ID is required.')
+  })
   it('rejects malformed GO with the selected source line before connection lookup', async () => {
     await expect(call(backend(), 'query.execute', { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1;\nGO 0', startLine: 20, queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 30 })).rejects.toThrow('Line 21:')
   })

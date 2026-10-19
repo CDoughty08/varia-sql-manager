@@ -20,8 +20,10 @@ export class TargetService {
     if (current && Object.entries(patch).every(([key, value]) => current[key as keyof TargetPatch] === value)) return
     // A value opened from the results (XML, JSON, plan) never has a server or database.
     if (current && !isQueryDocument(current)) return
-    // The query's results stay, as in SSMS: they live until it runs again, closes, or the user closes them.
-    this.documents.update(tabId, patch)
+    // The query's results stay, as in SSMS: they live until it runs again, closes, or the user closes them. A query moved
+    // to another connection (or disconnected) starts afresh, so a notice about its old session no longer applies.
+    const moved = current && 'connectionId' in patch && patch.connectionId !== current.connectionId
+    this.documents.update(tabId, moved ? { ...patch, sessionNotice: undefined } : patch)
   }
   /**
    * Moves a query to another server (or disconnects it), ending its session first so no transaction follows it: an open
@@ -45,7 +47,7 @@ export class TargetService {
   /** After an explicit Reconnect, the lost connection's queries move to the new one (keeping their results), and the
    *  next execution of each says that it runs in a new session. Nothing else ever retargets a query this way. */
   retarget(oldId: string, newId: string): void {
-    for (const document of this.documents.getSnapshot().documents) if (document.connectionId === oldId) this.documents.update(document.id, { connectionId: newId, sessionNotice: true })
+    for (const document of this.documents.getSnapshot().documents) if (document.connectionId === oldId) this.documents.update(document.id, { connectionId: newId, sessionNotice: 'restarted' })
   }
   /** Disconnects every query that is not running, ending its session (open transactions are asked about once, first);
    *  the running ones stay connected and are reported, and so does one that finished during the prompt with a transaction
@@ -59,7 +61,7 @@ export class TargetService {
       for (const { id, connectionId } of this.documents.getSnapshot().documents) {
         if (connectionId === undefined) continue
         if (this.queries.isRunning(id)) { running++; continue }
-        if (!asked.has(id) && this.queries.mayHaveTransaction(id)) { unasked++; continue }
+        if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         await this.documents.endSession(id, plan.get(id))
         this.update(id, { connectionId: undefined })
       }

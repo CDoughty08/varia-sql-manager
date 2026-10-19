@@ -1,7 +1,7 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
-import { DocumentService } from '../services/documents'
+import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
@@ -30,7 +30,9 @@ import { menusContribution } from '../contributions/menus'
 import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
 import { scriptingContribution } from '../contributions/scripting'
-import { ScriptingOptionsService } from '../scripting/ScriptingOptionsService'
+import { settingsContribution } from '../contributions/settings'
+import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
+import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -80,8 +82,8 @@ export interface Workbench extends Disposable {
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
   readonly resultSelection: ResultSelectionService
-  /** Tools › Options › Scripting: the options every Script As request carries, and the Options dialog. */
-  readonly scriptingOptions: ScriptingOptionsService
+  /** Tools › Options: the settings main stores, which the services apply, and the Options dialog. */
+  readonly settings: SettingsService
   /** Script As requests: their status, cancellation, and destinations. */
   readonly scripting: ScriptingService
   readonly theme: ThemeService
@@ -107,33 +109,49 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
   const left = box.left + caret.left, top = box.top + caret.top
   return { left, top, right: left, bottom: top + caret.height }
 }
-export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService): Workbench {
+export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService, settings: SettingsService): Workbench {
   const platform = toPlatform(api.platform)
-  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(), panes = new PaneService()
+  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
-  const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) })
+  const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
+    settingsDocumentOptions(() => settings.getSnapshot().values))
+  const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
   const gridStats = api.testMode ? new GridStats() : undefined
-  const queries = new QueryService(documents, api, id => connections.get(id), events, results)
+  const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
-  const scriptingOptions = new ScriptingOptionsService(api, (message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  // Every Script As request carries the Scripting page's options.
+  const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, scripting: scripting.running, editor: () => documents.boundEditor })
+  const context = new ContextKeyService({
+    platform,
+    documents,
+    queries,
+    connections,
+    backend,
+    editorOptions,
+    panes,
+    quickInput: quickInput.visibility,
+    explorer: explorer.context,
+    results: results.context,
+    scripting: scripting.running,
+    editor: () => documents.boundEditor
+  })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
     return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
-  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, focus, modalOpen,
+  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, settings: () => settings.getSnapshot().values, focus, modalOpen,
     findWidgetFocused: () => !!document.activeElement?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
@@ -142,20 +160,84 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, resultClient, results, resultMemory, ...gridStats ? { gridStats } : {}, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, scripting, theme, dispose: () => {
-    if (disposed) return
-    disposed = true
-    // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
-    listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
-    contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); resultMemory.dispose(); resultClient.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); scripting.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); scriptingOptions.dispose(); theme.dispose(); events.dispose()
-  } }
-  const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench), scriptingContribution(workbench)]
+  const workbench: Workbench = {
+    platform,
+    monaco,
+    events,
+    commands,
+    context,
+    keybindings,
+    menuState,
+    menus,
+    menuTargets,
+    quickInput,
+    documents,
+    queries,
+    connections,
+    backend,
+    resultClient,
+    results,
+    resultMemory,
+    ...gridStats ? { gridStats } : {},
+    files,
+    targets,
+    editorOptions,
+    panes,
+    explorer,
+    databaseList,
+    resultSelection,
+    settings,
+    scripting,
+    theme,
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
+      listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
+      contributions.forEach(contribution => contribution.dispose())
+      cleanup.dispose()
+      refreshDocuments()
+      commands.dispose()
+      context.dispose()
+      files.dispose()
+      queries.dispose()
+      results.dispose()
+      resultMemory.dispose()
+      resultClient.dispose()
+      documents.dispose()
+      backend.dispose()
+      explorer.dispose()
+      databaseList.dispose()
+      scripting.dispose()
+      connections.dispose()
+      editorOptions.dispose()
+      panes.dispose()
+      resultSelection.dispose()
+      settings.dispose()
+      theme.dispose()
+      events.dispose()
+    }
+  }
+  const contributions = [
+    queryContribution(workbench, api),
+    filesContribution(workbench, api),
+    editorContribution(workbench),
+    editContribution(workbench, api),
+    windowContribution(workbench, api),
+    menusContribution(workbench),
+    explorerContribution(workbench, api),
+    outputContribution(workbench, api),
+    paletteContribution(workbench),
+    themeContribution(workbench, api),
+    backendContribution(workbench),
+    scriptingContribution(workbench),
+    settingsContribution(workbench)
+  ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
-  // Requests carry the defaults until main's stored options arrive; a warning about the file shows in the command banner.
-  void scriptingOptions.load()
+  // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the
+  // file, or a failed load, shows in the command banner, including one from before the workbench existed.
+  settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')
   return workbench
 }

@@ -7,9 +7,9 @@ import { z } from 'zod'
  */
 export const sessionActions = ['close', 'closeAll', 'changeConnection', 'disconnectQuery', 'disconnect', 'disconnectAll', 'exit'] as const
 export type SessionAction = typeof sessionActions[number]
-/** A query whose session ends: its last known open-transaction count (@@TRANCOUNT after its last execution), whether its
- *  last execution could not check that count (`unchecked`: SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON, or a probe
- *  that timed out), and whether a query is still executing in it. Only queries with one of these are sent. */
+/** A query whose session ends: its open-transaction count (@@TRANCOUNT, read from its idle session just before the
+ *  prompt), whether that read could not tell (`unchecked`: SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON, or a session
+ *  that did not answer), and whether a query is still executing in it. Only queries with one of these are sent. */
 export interface SessionTab { readonly name: string; readonly transactions: number; readonly running: boolean; readonly unchecked?: true }
 export interface SessionPromptRequest { readonly action: SessionAction; readonly tabs: readonly SessionTab[] }
 /** `commit` and `rollback` end the listed transactions that way; `proceed` cancels the executing queries (the prompt had
@@ -38,15 +38,15 @@ export const needsSessionPrompt = (tabs: readonly SessionTab[]): boolean => tabs
 /** Whether a session may hold a transaction to commit or roll back. */
 const mayBeOpen = (tab: SessionTab): boolean => tab.transactions > 0 || !!tab.unchecked
 
-// What happens, as the end of "… before <phrase>": one query, or several.
+// What happens, as the end of SSMS's "… before <phrase>?": one query, or several.
 const phrases: Readonly<Record<SessionAction, readonly [one: string, many: string]>> = {
-  close: ['the query closes', 'the queries close'],
-  closeAll: ['the query closes', 'the queries close'],
-  changeConnection: ['the query changes connection', 'the queries change connection'],
-  disconnectQuery: ['the query disconnects', 'the queries disconnect'],
-  disconnect: ['the server disconnects', 'the server disconnects'],
-  disconnectAll: ['the query disconnects', 'the queries disconnect'],
-  exit: ['Varia SQL Manager closes', 'Varia SQL Manager closes']
+  close: ['closing the window', 'closing the windows'],
+  closeAll: ['closing the window', 'closing the windows'],
+  changeConnection: ['changing the connection', 'changing the connections'],
+  disconnectQuery: ['disconnecting', 'disconnecting'],
+  disconnect: ['disconnecting the server', 'disconnecting the server'],
+  disconnectAll: ['disconnecting', 'disconnecting'],
+  exit: ['closing Varia SQL Manager', 'closing Varia SQL Manager']
 }
 const closes = (action: SessionAction) => action === 'exit' ? 'Varia SQL Manager' : 'the query'
 
@@ -56,15 +56,17 @@ function listed(tabs: readonly SessionTab[], note: (tab: SessionTab) => string):
   return shown.join('\n')
 }
 const nested = (tab: SessionTab) => tab.unchecked ? ' (not checked)' : tab.transactions > 1 ? ` (${tab.transactions} nested levels)` : ''
-const notChecked = 'Its last execution could not check for one (SET SHOWPLAN, NOEXEC, PARSEONLY or FMTONLY may be ON). '
+const notChecked = 'A query marked "not checked" could not be checked: SET SHOWPLAN, NOEXEC, PARSEONLY or FMTONLY may be ON in its session, or it did not answer.'
 const queries = (count: number) => count === 1 ? '1 query' : `${count} queries`
 
 /**
- * The prompt for ending these sessions, or undefined when nothing needs asking. Open transactions ask Commit, Roll Back,
- * or Cancel (one decision for every listed query when there are several, as SSMS asks once on exit). A query still
- * executing is cancelled, never committed: what it left uncommitted rolls back when its session closes, so a query that
- * is only executing asks to cancel it or keep it running. Cancel is the default and the Escape answer, so Enter alone
- * never commits or discards work.
+ * The prompt for ending these sessions, or undefined when nothing needs asking. Open transactions ask SSMS's question,
+ * "There are uncommitted transactions. Do you wish to commit these transactions before closing the window?", with Yes
+ * (commit), No (roll back) and Cancel, and Yes as the default, as in SSMS; Escape is Cancel. Several queries are asked
+ * about once (SSMS asks per window). A query still executing is cancelled, never committed: what it left uncommitted
+ * rolls back when its session closes, so a query that is only executing asks to cancel it or keep it running, and Keep
+ * Running is the default. The renderer asks about executing queries and open transactions in separate prompts, as SSMS
+ * asks each window; a request that mixes them defaults to Cancel, so Enter never cancels a running query.
  */
 export function sessionPrompt({ action, tabs }: SessionPromptRequest): SessionPrompt | undefined {
   const open = tabs.filter(tab => !tab.running && mayBeOpen(tab)), running = tabs.filter(tab => tab.running)
@@ -73,17 +75,18 @@ export function sessionPrompt({ action, tabs }: SessionPromptRequest): SessionPr
     : running.length ? 'The executing queries are cancelled, and anything they left uncommitted is rolled back.' : ''
   if (open.length) {
     const one = open.length === 1, phrase = phrases[action][one ? 0 : 1]
-    // A session whose last execution could not be checked may have one: asking costs a click, not asking could lose work.
+    // A session that could not be checked may have one: asking costs a click, not asking could lose work.
     const unsure = open.some(tab => tab.unchecked)
-    const message = one ? `${open[0].name} ${unsure ? 'may have' : 'has'} an uncommitted transaction.` : `${open.length} queries ${unsure ? 'may have' : 'have'} uncommitted transactions.`
+    const message = `There ${unsure ? 'may be' : 'are'} uncommitted transactions${one ? '' : ` in ${open.length} queries`}. Do you wish to commit these transactions before ${phrase}?`
     const detail = [
-      one ? (unsure ? notChecked : open[0].transactions > 1 ? `Its transaction is nested ${open[0].transactions} levels deep; Commit commits every level. ` : '') + `Commit it before ${phrase}, or roll it back.`
-        : `${listed(open, nested)}\n\nCommit them before ${phrase}, or roll them all back.`,
+      listed(open, nested),
+      unsure ? notChecked : '',
+      'Yes commits every nesting level; No rolls back.',
       running.length ? `Still executing:\n${listed(running, () => '')}\n${runningNote}` : ''
     ].filter(Boolean).join('\n\n')
     return {
-      title: 'Uncommitted transactions', message, detail, defaultId: 2, cancelId: 2,
-      buttons: [{ label: one ? 'Commit' : 'Commit All', answer: 'commit' }, { label: one ? 'Roll Back' : 'Roll Back All', answer: 'rollback' }, { label: 'Cancel', answer: 'cancel' }]
+      title: 'Uncommitted transactions', message, detail, defaultId: running.length ? 2 : 0, cancelId: 2,
+      buttons: [{ label: 'Yes', answer: 'commit' }, { label: 'No', answer: 'rollback' }, { label: 'Cancel', answer: 'cancel' }]
     }
   }
   const one = running.length === 1

@@ -8,10 +8,9 @@ import { scriptTarget } from '../scripting/ScriptingService'
 
 /**
  * Scripting's commands. Script as › <verb> To › <destination> acts on the node its menu was opened for, otherwise on
- * the selected node (the palette's Script As… and Modify). Tools › Options… opens once main's stored options are in,
- * so OK never writes a draft that started from the defaults over options the user saved before.
+ * the selected node (the palette's Script As… and Modify).
  */
-export function scriptingContribution({ commands, scriptingOptions, scripting, explorer, quickInput, context }: Pick<Workbench, 'commands' | 'scriptingOptions' | 'scripting' | 'explorer' | 'quickInput' | 'context'>): Disposable {
+export function scriptingContribution({ commands, scripting, explorer, quickInput, context }: Pick<Workbench, 'commands' | 'scripting' | 'explorer' | 'quickInput' | 'context'>): Disposable {
   const nodeOf = (args?: CommandArgs) => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const scriptCommands = scriptVerbs.flatMap(verb => scriptDestinations.map(destination => commands.register(scriptCommandId(verb, destination), {
     when: args => scripting.canRun(verb, nodeOf(args)),
@@ -37,9 +36,7 @@ export function scriptingContribution({ commands, scriptingOptions, scripting, e
       when: args => { const node = nodeOf(args); return !!node && scriptMenuState(scriptTarget(node)).modifiable && scripting.canRun('alter', node) },
       run: args => scripting.run('alter', 'newQuery', nodeOf(args))
     }),
-    commands.register('explorer.cancelScripting', { run: () => scripting.cancelAll() }),
-    // A draft started from the defaults would replace the user's options on OK, so a failed read opens nothing.
-    commands.register('preferences.options', { run: async () => { if (await scriptingOptions.load()) scriptingOptions.openDialog() } })
+    commands.register('explorer.cancelScripting', { run: () => scripting.cancelAll() })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

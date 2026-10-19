@@ -29,6 +29,7 @@ export const requestSchemas = {
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),
+  'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   'explorer.children': explorerChildrenParamsSchema,
   'scripting.script': scriptRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>

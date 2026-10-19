@@ -27,7 +27,7 @@
     "e2e.w1.maxFrameGapMs": { "title": "Largest animation-frame gap during W1", "unit": "ms", "better": "lower", "target": 50, "floor": 300 },
     "e2e.live.rowsPerSecond": { "title": "Live: 1,000,000 W1-like rows ingested and stored (maxRows 0)", "unit": "rows/s", "better": "higher", "target": 300000, "floor": 75000, "live": true },
     "e2e.live.firstWindowMs": { "title": "Live: first 100-row window after resultSet.opened", "unit": "ms", "better": "lower", "target": 50, "floor": 250, "live": true },
-    "e2e.live.smallExecuteP50Ms": { "title": "Live: SELECT 1 in a warm tab, with its session probe, end to end, p50", "unit": "ms", "better": "lower", "target": 5, "floor": 50, "live": true },
+    "e2e.live.smallExecuteP50Ms": { "title": "Live: SELECT 1 in a warm tab, end to end, p50", "unit": "ms", "better": "lower", "target": 5, "floor": 50, "live": true },
     "grid.firstPaintMs": { "title": "Grid: resultSet.opened → first data cell painted, median of 5", "unit": "ms", "better": "lower", "target": 50, "floor": 250 },
     "grid.stream.busyPercent": { "title": "Grid: UI thread busy while 1,000,000 W1 rows stream", "unit": "%", "better": "lower", "target": 10, "floor": 25 },
     "grid.wheel.frameP95Ms": { "title": "Grid: frame() during a 3 s wheel scroll over 1,000,000 rows, p95", "unit": "ms", "better": "lower", "target": 3, "floor": 8 },

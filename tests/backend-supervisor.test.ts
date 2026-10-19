@@ -182,6 +182,7 @@ describe('BackendSupervisor restarts', () => {
     expect(await failure(value.request('system.health', {}))).toMatchObject({ code: 'BACKEND_UNAVAILABLE', message: sentences.unavailable })
     await expect(value.request('connections.disconnect', { connectionId: 'any' })).resolves.toEqual({ disconnected: false })
     await expect(value.request('query.session.close', { sessionId: 'any' })).resolves.toEqual({ closed: false })
+    expect(await failure(value.request('query.session.state', { sessionId: 'any' }))).toMatchObject({ code: 'SESSION_LOST', message: sentences.sessionEnded })
     await value.restart('reload')
     expect(value.state.status).toBe('failed')
     await value.restart('manual')
@@ -238,6 +239,8 @@ describe('BackendSupervisor restarts', () => {
     expect(states.find(state => state.status === 'restarting')).toEqual({ status: 'restarting', generation: 1, retryInMs: 0, lost: { generation: 1, reason: 'manual', connections: 1, queries: 0 } })
     await advance(0)
     expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
+    // Its transaction ended with it: reading its state answers locally that the session was lost.
+    expect(await failure(value.request('query.session.state', { sessionId: 'tab-1' }))).toMatchObject({ code: 'SESSION_LOST', message: sentences.sessionEnded })
     await expect(value.request('query.session.close', { sessionId: 'tab-1' })).resolves.toEqual({ closed: false })
     await value.request('query.execute', { ...query('tab-1'), connectionId: 'new' })
     await value.request('query.session.close', { sessionId: 'tab-1' })

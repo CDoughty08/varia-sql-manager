@@ -8,7 +8,7 @@ import type { ErrorCode } from './ipc/wire/protocol'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
-import type { ScriptingOptions } from './scripting/options.ts'
+import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 
 export interface AdvancedConnectionOptions {
@@ -145,14 +145,14 @@ export interface QueryResult {
   messagesTruncated: boolean
   budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
   completedAt: string
-  /** `spid` is the session's while it is still open after the script. `transactionCount` and `login` are the session as
-   *  probed after the script (@@TRANCOUNT, SUSER_SNAME() ≤ 128 characters): absent when the session was lost or never
-   *  opened, or the probe read nothing (SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON, or a timeout). A `spid` without
-   *  a `transactionCount` is an open session whose transaction could not be checked. */
-  transactionCount?: number
+  /** The session's SPID and login (SUSER_SNAME(), ≤ 128 characters), read once when it opened; both are present while it
+   *  is still open after the script. Its open transaction is read only when it is about to end (`query.session.state`). */
   spid?: number
   login?: string
 }
+/** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
+ *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */
+export interface SessionState { transactionCount: number; checked: boolean }
 /** Orders what the backend reports about result memory (results.memory events and summaries): `seq` counts within the
  *  backend process that main numbered `generation`, so a figure overtaken by a newer one is never shown after it. */
 export interface MemoryOrder { generation: number; seq: number }
@@ -242,6 +242,8 @@ export interface RpcMethods {
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
   /** `transaction` ends the session's open transaction first; a failed commit leaves the session open. */
   'query.session.close': { params: { sessionId: string; transaction?: SessionEnd }; result: { closed: boolean } }
+  /** An idle session's @@TRANCOUNT, read before it ends; see SessionState. */
+  'query.session.state': { params: { sessionId: string }; result: SessionState }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
 }
@@ -330,15 +332,19 @@ export interface VariaApi {
   /** Cancels scripting requests by their `requestId`s (1–64); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelScripting(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
-  /** Tools › Options › Scripting as main stored it; `warning` reports a file that was invalid and was reset. */
-  getScriptingOptions(): Promise<ApiResult<{ options: ScriptingOptions; warning?: string }>>
-  /** Stores a complete set of scripting options; main validates it strictly and resolves to what it stored. */
-  setScriptingOptions(options: ScriptingOptions): Promise<ApiResult<ScriptingOptions>>
+  /** Tools › Options as main stored it, complete; `warning` reports a file that was reset or salvaged (once). */
+  getSettings(): Promise<ApiResult<SettingsLoad>>
+  /** Changes settings: known keys only, `null` resets one. Main validates strictly and resolves to the new state. */
+  updateSettings(patch: SettingsPatch): Promise<ApiResult<SettingsState>>
+  /** Main's state after every change, complete and validated. */
+  onSettingsChanged(callback: (state: SettingsState) => void): () => void
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
    *  the session open, with its transaction. */
   closeQuerySession(sessionId: string, transaction?: SessionEnd): Promise<ApiResult<{ closed: boolean }>>
+  /** Reads an idle query session's open transaction before it ends. A busy, lost or unknown session is an error value. */
+  querySessionState(sessionId: string): Promise<ApiResult<SessionState>>
   getBackendState(): Promise<ApiResult<BackendState>>
   onBackendState(callback: (state: BackendState) => void): () => void
   /** Ends the current backend generation and starts the next one; main asks first when servers are connected.

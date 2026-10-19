@@ -828,24 +828,51 @@ internal static partial class ScriptingLiveChecks
                 await command.ExecuteNonQueryAsync();
             }
         }
+        // Other runs on the same server create and drop their scratch logins and server roles while scripts run. A server
+        // role of this run's stands in for theirs, each change in a connection of its own: it exists when the first
+        // script's inventory is read and goes before that script runs, comes back during the second and goes during the third.
+        var role = scratch.Name + "_iso";
+        var master = new SqlConnectionStringBuilder(ConnectionSettings.Build(live("master")).ConnectionString) { Pooling = false }.ConnectionString;
+        async Task Role(bool create)
+        {
+            await using var connection = new SqlConnection(master);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(create ? "CREATE SERVER ROLE [" + role + "];"
+                : "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'" + role + "' AND type = 'R') DROP SERVER ROLE [" + role + "];", connection) { CommandTimeout = 30 };
+            await command.ExecuteNonQueryAsync();
+        }
+        var toggles = 0;
         var other = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live("master"), json), json);
         try
         {
+            await Role(true);
             var connections = new[] { client.ConnectionId, other.Id };
             var report = await InjectionMatrix.RunAsync(database, connectionString, 4,
-                (worker, target, verb, options) => client.Script(target, verb, options, connectionId: connections[worker % 2]), client.Options);
+                (worker, target, verb, options) => client.Script(target, verb, options, connectionId: connections[worker % 2]), client.Options, async () =>
+                {
+                    if (toggles >= 3) return;
+                    await Role(toggles % 2 == 1);
+                    toggles++;
+                });
             var refusals = string.Join(", ", report.Refusals.Select(item => item.Value + " " + item.Key));
             Console.WriteLine("Script As injection matrix: " + report.Cases + " cases, " + report.Scripted + " scripts, refused: " + (refusals.Length > 0 ? refusals : "none") + ", "
                 + report.Retried + " retried; " + report.Executed + " scripts run (" + report.Batches + " batches); scripting " + report.ScriptMs + " ms, running " + report.ExecuteMs
                 + " ms, " + watch.ElapsedMilliseconds + " ms in all");
             foreach (var failure in report.Failures.Take(20)) Console.Error.WriteLine("Script As injection: " + failure);
+            var isolation = report.Failures.Where(failure => failure.Contains(role, StringComparison.Ordinal)).ToList();
+            check(toggles == 3 && isolation.Count == 0, "the matrix inventory ignores other runs' scratch principals (a server role dropped, created and dropped again "
+                + "while " + toggles + " scripts ran): " + isolation.Count + " failures, first " + isolation.FirstOrDefault());
             // The time bound only catches a matrix that hangs or balloons: CI's 2-vCPU runners take about 80 s, a desktop 45.
             check(report.Failures.Count == 0 && report.Cases == 240 && report.Executed >= 220 && watch.ElapsedMilliseconds < 240_000,
                 "names built to break out of SMO's comments, headers, banners, brackets, strings, lines and batches script with every DDL verb and header, dependent-object "
                 + "and existence option, and each script run in a rolled-back transaction does only what its verb implies, canary intact (" + report.Cases + " cases, "
                 + report.Executed + " scripts run, " + watch.ElapsedMilliseconds + " ms): " + report.Failures.Count + " failures, first " + report.Failures.FirstOrDefault());
         }
-        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(other.Id), json), json); }
+        finally
+        {
+            await Role(false);
+            await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(other.Id), json), json);
+        }
     }
 
     /// <summary>Definitions that keep an old SSMS header in their own text, in any shape (spec C7): the guard cannot tell

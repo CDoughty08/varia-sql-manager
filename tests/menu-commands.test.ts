@@ -14,8 +14,8 @@ import { fakeDocument, FakeElement } from './fixtures/elements'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
-function setup() {
-  const fixture = workbenchFixture()
+function setup(options: Parameters<typeof workbenchFixture>[0] = {}) {
+  const fixture = workbenchFixture(options)
   cleanups.push(fixture.dispose)
   return fixture
 }
@@ -258,8 +258,8 @@ describe('Object Explorer commands', () => {
   const appDataRef: ObjectRef = { kind: 'database', name: 'AppData' }
   const server = on({ kind: 'server' }), appData = on(appDataRef), orders = on({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   const tables = at({ type: 'folder', owner: appDataRef, folder: 'tables' }), background: CommandArgs = { target: { kind: 'explorer' } }
-  function connected() {
-    const fixture = setup()
+  function connected(options: Parameters<typeof workbenchFixture>[0] = {}) {
+    const fixture = setup(options)
     fixture.api.push(readyBackend())
     fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     return fixture
@@ -311,6 +311,11 @@ describe('Object Explorer commands', () => {
     expect(await commands.execute('explorer.copyName', undefined, 'palette')).toBe(true)
     expect(api.writeClipboardText.mock.calls).toEqual([['server-a.example'], ['-- create dbo.Orders'], ['[dbo].[Orders]']])
     expect(api.scriptObjects.mock.calls.map(([params]) => [params.connectionId, params.targets, params.verb])).toEqual([['server-a', [{ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }], 'create']])
+  })
+  it('select as many rows as Tools › Options says', async () => {
+    const { commands, documents, model } = connected({ settings: { 'objectExplorer.selectTopRows': 50 } })
+    expect(await commands.execute('explorer.selectTopRows', orders, 'menu')).toBe(true)
+    expect(model(documents.active!.id).getValue()).toContain('SELECT TOP (50) [Id]')
   })
   it('select the top 1000 rows of a table by its columns and run them on its database', async () => {
     const { commands, documents, api, model } = connected()
@@ -482,8 +487,8 @@ describe('Query Output commands', () => {
   const results: QueryResult = { ...queryOutput, messages: [{ text: 'hello', kind: 'info' }], resultSets: [descriptor(1), descriptor(2, { index: 1 })] }
   const block = (resultIndex = 0): GridSelection => ({ resultIndex, blocks: [{ kind: 'cells', anchor: { row: 0, column: 0 }, focus: { row: 1, column: 1 } }], active: { row: 1, column: 1 } })
   /** A query that has run and shows `value`, and targets for its views, each over an element of the fake document. */
-  async function ran(platform: Platform = 'win32', value: QueryResult = results) {
-    const fixture = workbenchFixture({ platform })
+  async function ran(platform: Platform = 'win32', value: QueryResult = results, settings: NonNullable<Parameters<typeof workbenchFixture>[0]>['settings'] = {}) {
+    const fixture = workbenchFixture({ platform, settings })
     cleanups.push(fixture.dispose)
     fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     const tab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
@@ -521,6 +526,12 @@ describe('Query Output commands', () => {
     all.resultSelection.set(all.tab.id, selectAll(0))
     expect(await all.commands.execute('output.copyWithHeaders', all.on('grid'), 'menu')).toBe(true)
     expect(all.api.copyResults.mock.calls[0][0]).toMatchObject({ headers: true, parts: [{ rows: [[0, Number.MAX_SAFE_INTEGER]], columns: [[0, 1]] }] })
+  })
+  it('copy with headers when Tools › Options › Results to Grid says so', async () => {
+    const { commands, api, resultSelection, tab, on } = await ran('win32', results, { 'queryResults.grid.includeColumnHeaders': true })
+    resultSelection.set(tab.id, block())
+    expect(await commands.execute('output.copy', on('grid'), 'menu')).toBe(true)
+    expect(api.copyResults.mock.calls[0][0]).toMatchObject({ headers: true })
   })
   it('copy nothing from results the backend lost, and report a copy the backend refused in the banner', async () => {
     const { commands, api, resultSelection, resultClient, tab, on } = await ran()
