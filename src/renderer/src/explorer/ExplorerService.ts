@@ -2,6 +2,7 @@ import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contrac
 import { cloudEngineEditions, explorerLimits, filterProperties, folderSpecs, kindSpecs, parentKinds, type FolderId, type NodeKind } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
+import { actionContextValues, actionMenuState, type ActionContextValues } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
 import type { EventBus } from '../core/events'
@@ -25,8 +26,11 @@ export interface ExplorerSnapshot {
   /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
   readonly reveal?: number
 }
-/** The Object Explorer context keys (state scope), from the selected node; the Script As keys come from `scriptMenuState`. */
-export interface ExplorerContextState extends ScriptContextValues {
+/**
+ * The Object Explorer context keys (state scope), from the selected node; the Script As keys come from `scriptMenuState`
+ * and the object action keys from `actionMenuState`.
+ */
+export interface ExplorerContextState extends ScriptContextValues, ActionContextValues {
   readonly explorerHasSelection: boolean
   readonly explorerSelectionKind: '' | 'folder' | NodeKind
   readonly explorerSelectionFolder: '' | FolderId
@@ -37,7 +41,7 @@ export interface ExplorerContextState extends ScriptContextValues {
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
-  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), explorerLoading: false
+  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), explorerLoading: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
 export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
@@ -122,6 +126,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private disposed = false
   private readonly contextStore = new (class extends SnapshotStore<ExplorerContextState> { set(value: ExplorerContextState) { this.publish(value) } clear() { this.clearListeners() } })(noExplorerContext)
   private readonly dialogStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
+  private readonly renameStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
+  /** The child refreshAndSelect selects when its folder's first page arrives. */
+  private pendingSelect?: { readonly folder: number; readonly key: string }
   private readonly unsubscribe: () => void
   /** The selected node's context keys; it publishes only when one changes, and synchronously on `select`. */
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
@@ -322,6 +329,39 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.dialogStore.set(folderNodeId)
   }
   closeFilter(): void { this.dialogStore.set(undefined) }
+
+  /** The node whose label is an inline Rename box. */
+  get renaming(): ExternalStore<number | undefined> { return this.renameStore }
+  /**
+   * Turns a node's label into the Rename box (F2, or Rename in its menu), selected and scrolled into view. Only an
+   * object on a live server whose kind and subtype offer Rename enabled; false otherwise.
+   */
+  beginRename(nodeId: number): boolean {
+    const node = this.nodes.get(nodeId)
+    if (!node || node.kind === 'folder' || node.lost || !this.attached(node) || actionMenuState({ kind: node.kind, subtype: node.subtype }).rename !== 'enabled') return false
+    if (!this.connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)) return false
+    this.select(nodeId, { reveal: true })
+    this.renameStore.set(nodeId)
+    return true
+  }
+  /** Ends the Rename box, whether it committed or not; the label shows the node's name again. */
+  endRename(): void { this.renameStore.set(undefined) }
+  /** The folder a node is listed in (a table's Tables folder, a database's Databases folder), which a rename or delete reloads. */
+  listingFolderOf(nodeId: number): number | undefined {
+    const node = this.nodes.get(nodeId), parent = node?.parent ? this.nodes.get(node.parent) : undefined
+    return parent?.kind === 'folder' && this.attached(parent) ? parent.id : undefined
+  }
+  /**
+   * Reloads a folder and selects the child whose identity is `ref` once its first page arrives (a renamed object under its
+   * new name); when it never appears, the folder stays selected.
+   */
+  refreshAndSelect(folderNodeId: number, ref: ExplorerNodeRef): void {
+    const folder = this.nodes.get(folderNodeId)
+    if (!folder || folder.kind !== 'folder' || !this.attached(folder)) return
+    this.pendingSelect = { folder: folderNodeId, key: refKey(folder.connectionId, ref) }
+    this.refresh(folderNodeId)
+    if (!folder.expanded) this.expand(folderNodeId)
+  }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
     const node = this.nodes.get(folderNodeId)
@@ -393,7 +433,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = []
     this.rootByConnection.clear()
     this.selected = undefined
+    this.pendingSelect = undefined
     this.dialogStore.set(undefined)
+    this.renameStore.set(undefined)
     this.syncConnections()
     // At once rather than next frame: the tree remounts right after this and must not show the old rows meanwhile.
     this.dirty = true
@@ -409,6 +451,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.clearListeners()
     this.contextStore.clear()
     this.dialogStore.clear()
+    this.renameStore.clear()
   }
 
   // Connections
@@ -560,6 +603,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none' })
     node.rev++
     if (selectedKey !== undefined) this.selected = node.children!.find(child => refKey(child.connectionId, child.ref) === selectedKey)?.id ?? node.id
+    if (this.pendingSelect?.folder === node.id) {
+      const { key } = this.pendingSelect
+      this.pendingSelect = undefined
+      this.selected = node.children!.find(child => refKey(child.connectionId, child.ref) === key)?.id ?? node.id
+      this.reveals++
+    }
     if (!node.children!.length) {
       node.hasChildren = false
       node.expanded = false
@@ -591,6 +640,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.error = error
     node.rev++
     this.announce(`Could not load ${node.label}: ${error.message}`)
+    if (this.pendingSelect?.folder === node.id && mode !== 'more') { this.pendingSelect = undefined; this.selected = node.id }
   }
 
   /** Replaces a node's children with a first page; `keep` reuses existing static folders with the same id. */
@@ -907,6 +957,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.dirty = false
     const previous = this.getSnapshot()
     const rows = flatten(this.nodes, this.roots, previous.rows.count + 64)
+    const renaming = this.renameStore.getSnapshot(), renamed = renaming === undefined ? undefined : this.nodes.get(renaming)
+    if (renaming !== undefined && (!renamed || renamed.lost || !this.attached(renamed) || this.rootOf(renamed)?.lost)) this.renameStore.set(undefined)
     // A synthetic row can disappear (a load finished); its owner is selected instead.
     if (this.selected !== undefined && this.selected < 0 && rowIndex(rows, this.selected) < 0) this.selected = rowOwner(this.selected)
     if (this.selected !== undefined && !this.nodes.has(rowOwner(this.selected))) this.selected = undefined
@@ -926,6 +978,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       explorerSelectionFiltered: !!node?.filtered,
       explorerSelectionInsertable: !!node && (node.kind === 'server' || this.insertable(node)),
       ...scriptContextValues(scriptMenuState(node && { kind: node.kind, subtype: node.subtype, parentKind: node.ref.type === 'object' ? node.ref.object.parent?.kind : undefined })),
+      ...actionContextValues(actionMenuState(node && { kind: node.kind, subtype: node.subtype })),
       explorerLoading: this.loader.pending > 0
     }
     const current = this.contextStore.getSnapshot()

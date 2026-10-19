@@ -34,6 +34,9 @@ import { settingsContribution } from '../contributions/settings'
 import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
+import { ObjectActionService } from '../actions/ObjectActionService'
+import { ObjectDialogService } from '../dialogs/ObjectDialogService'
+import { actionsContribution } from '../contributions/actions'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -86,6 +89,10 @@ export interface Workbench extends Disposable {
   readonly settings: SettingsService
   /** Script As requests: their status, cancellation, and destinations. */
   readonly scripting: ScriptingService
+  /** Object Explorer's Select Top, Rename and the other object actions. */
+  readonly actions: ObjectActionService
+  /** The object dialog that is open (Delete Object), its requests and its phase. */
+  readonly dialogs: ObjectDialogService
   readonly theme: ThemeService
 }
 /**
@@ -131,6 +138,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
+  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -158,6 +166,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
+  const actions = new ObjectActionService({
+    api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }
+  })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
   const workbench: Workbench = {
@@ -188,6 +200,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultSelection,
     settings,
     scripting,
+    actions,
+    dialogs,
     theme,
     dispose: () => {
       if (disposed) return
@@ -209,6 +223,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       explorer.dispose()
       databaseList.dispose()
       scripting.dispose()
+      actions.dispose()
+      dialogs.dispose()
       connections.dispose()
       editorOptions.dispose()
       panes.dispose()
@@ -231,6 +247,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     themeContribution(workbench, api),
     backendContribution(workbench),
     scriptingContribution(workbench),
+    actionsContribution(workbench),
     settingsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.

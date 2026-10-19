@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it, vi } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
-import { rowDescription, rowName, rowTooltip } from '../src/renderer/src/explorer/ExplorerRow'
+import ExplorerRow, { rowDescription, rowName, rowTooltip, type RowActions } from '../src/renderer/src/explorer/ExplorerRow'
+import { RowKind } from '../src/renderer/src/explorer/tree-model'
 import type { TreeNode } from '../src/renderer/src/explorer/tree-model'
 
 const tableRef: ExplorerNodeRef = { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } }
@@ -46,5 +49,20 @@ describe('Object Explorer rows', () => {
       .toBe('Database\nThe database is not available. Bring it online, then refresh Databases.')
     expect(rowDescription(node({ kind: 'folder', folder: 'tables', label: 'Tables' }))).toBeUndefined()
     expect(rowDescription(node({ detail: 'x'.repeat(2000) }))).toHaveLength(512)
+  })
+  it('render the inline Rename box in place of the label: the name without its schema, at most 128 units, named for the kind', () => {
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
+    const render = (renaming: boolean) => renderToStaticMarkup(createElement(ExplorerRow, {
+      rowId: 7, kind: RowKind.Node, index: 0, level: 5, posinset: 1, setsize: 1, node: node(), rev: 0, text: '', selected: true, draggable: true, active: false, color: undefined, actions, menuTarget: () => {}, renaming
+    }))
+    const editing = render(true)
+    expect(editing).toContain('<input class="explorer-rename" maxLength="128" aria-label="Rename Table"')
+    expect(editing).toContain('value="Orders"')
+    expect(editing).not.toContain('oe-label')
+    // While editing, the row cannot be dragged into a query, so selecting text in the box never starts a drag.
+    expect(editing).not.toContain('draggable')
+    const plain = render(false)
+    expect(plain).toContain('<bdi class="oe-label">dbo.Orders</bdi>')
+    expect(plain).not.toContain('explorer-rename')
   })
 })

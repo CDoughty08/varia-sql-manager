@@ -1,6 +1,7 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
+import { actionCommandEntries } from '../actions/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 
 export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer'
@@ -124,7 +125,6 @@ const openFirst = 'Open a query first.'
 const noServer = 'No server is connected.'
 const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
-const selectTable = 'Select a table in Object Explorer.'
 
 /**
  * Every command, with its keys, menu placements, and enablement. Main builds native menus from its own compiled copy,
@@ -296,10 +296,11 @@ export const commandCatalog = {
       { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' }
     ]
   },
-  // Takes a lost connection out of Object Explorer; its queries become disconnected.
+  // Takes a lost connection out of Object Explorer; its queries become disconnected. Its access key leaves M to Rename,
+  // which SSMS underlines there.
   'connection.removeLost': {
     title: 'Remove Lost Connection…', category: 'Connection', icon: 'close', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && !documentBusy',
-    unavailableHint: 'No connection was lost.', menus: [{ menu: 'explorer.context', group: '0_connect', order: 4, title: 'Remove', mnemonic: 'm', when: 'explorerServerLost' }]
+    unavailableHint: 'No connection was lost.', menus: [{ menu: 'explorer.context', group: '0_connect', order: 4, title: 'Remove', mnemonic: 'o', when: 'explorerServerLost' }]
   },
   // Always available: it is also the way out of an unresponsive or failed backend.
   'backend.restart': { title: 'Restart SQL Backend…', category: 'Connection', icon: 'debug-restart', keywords: ['backend', 'restart', 'sidecar'] },
@@ -325,11 +326,9 @@ export const commandCatalog = {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.',
     menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
   },
-  'explorer.selectTopRows': {
-    title: 'Select Top 1000 Rows', category: 'Object Explorer', icon: 'table', precondition: 'backendReady && !documentBusy', unavailableHint: selectTable,
-    titleSetting: { setting: 'objectExplorer.selectTopRows', template: 'Select Top {n} Rows' },
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'w', when: "explorerNode == 'table'" }]
-  },
+  // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
+  // else the selection; explorer.selectTopRows keeps PR4's id.
+  ...actionCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),

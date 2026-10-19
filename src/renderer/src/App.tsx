@@ -11,6 +11,7 @@ import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
+import ObjectDialog from './dialogs/ObjectDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
 import BackendBanner from './BackendBanner'
 import OutputPane from './results/OutputPane'
@@ -250,6 +251,7 @@ export default function App() {
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
+    <ObjectDialog />
     <QuickInput />
     <MenuLayer />
   </div>

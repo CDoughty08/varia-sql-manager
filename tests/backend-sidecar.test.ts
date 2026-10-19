@@ -166,6 +166,20 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'scripting.script', { ...valid, targets: [{ kind: 'login', name: 'sa' }] })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('scripting.script', valid)).toEqual({ deadlineMs: 60_000, backstopMs: 65_000 })
   })
+  it('offers the object actions in HELLO and checks them before the connection', async () => {
+    const hello = await raw().hello()
+    expect(hello.methods).toEqual(expect.arrayContaining(['actions.describe', 'actions.script', 'actions.execute']))
+    const connection = backend()
+    const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }, target = { kind: 'table', database: 'master', schema: 'dbo', name: 'Orders' } as const
+    for (const [method, params] of [
+      ['actions.execute', { action: 'rename', ...ids, target, newName: 'Orders' }], ['actions.execute', { action: 'rename', ...ids, target, newName: 'a\u0000b' }],
+      ['actions.execute', { action: 'delete', ...ids, target, closeConnections: true, deleteHistory: false }], ['actions.script', { action: 'delete', ...ids, target: { kind: 'login', name: 'sa' }, closeConnections: false, deleteHistory: false }],
+      ['actions.describe', { ...ids, dialog: 'databaseProperties', target }], ['actions.describe', { ...ids, dialog: 'deleteObject', target, extra: 1 }]
+    ] as const) await expect(call(connection, method, params as never), JSON.stringify(params)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(connection, 'actions.describe', { ...ids, dialog: 'deleteObject', target })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    await expect(call(connection, 'actions.execute', { action: 'delete', ...ids, requestId: crypto.randomUUID(), target, closeConnections: false, deleteHistory: false })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    expect(deadlineFor('actions.execute', { action: 'rename', ...ids, target, newName: 'x' })).toEqual({ deadlineMs: 0, backstopMs: 0 })
+  })
   it('handles cancellation of a completed or unknown query', async () => {
     await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
   })

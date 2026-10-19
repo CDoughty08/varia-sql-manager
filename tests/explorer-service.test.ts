@@ -9,6 +9,7 @@ import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { ExplorerService, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
+import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
 import { RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
@@ -817,7 +818,7 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(listener).toHaveBeenCalledTimes(1)
     expect(f.explorer.context.getSnapshot()).toEqual({
       explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
-      explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState({ kind: 'folder' })), explorerLoading: false
+      explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), explorerLoading: false
     })
     expect(f.explorer.getSnapshot().selected).toBe(databases)
     f.explorer.select(f.find('Database Snapshots'))
@@ -826,7 +827,8 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(listener).toHaveBeenCalledTimes(3)
     expect(f.explorer.context.getSnapshot()).toMatchObject({
       explorerSelectionKind: 'database', explorerSelectionFolder: '', explorerSelectionInsertable: true, explorerScriptTitle: 'database', explorerScriptCreate: 'enabled', explorerScriptAlter: 'enabled',
-      explorerScriptCreateOrAlter: '', explorerScriptSelect: '', explorerSelectionModifiable: false
+      explorerScriptCreateOrAlter: '', explorerScriptSelect: '', explorerSelectionModifiable: false,
+      explorerActionSelectTop: '', explorerActionRename: 'enabled', explorerActionDelete: 'enabled'
     })
     // A row with the same keys publishes nothing.
     f.explorer.select(f.find('Locked'))
@@ -837,7 +839,7 @@ describe('ExplorerService: selection, targets and context', () => {
     f.explorer.expand(f.find('System Databases'))
     await settle()
     f.explorer.select(f.find('master'))
-    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'database', explorerScriptTitle: 'database', explorerScriptDrop: 'enabled' })
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'database', explorerScriptTitle: 'database', explorerScriptDrop: 'enabled', explorerActionRename: 'disabled', explorerActionDelete: 'disabled' })
     // Synthetic rows are not nodes.
     f.explorer.select(syntheticId(1, RowKind.Error))
     expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerHasSelection: false, explorerSelectionKind: '' })

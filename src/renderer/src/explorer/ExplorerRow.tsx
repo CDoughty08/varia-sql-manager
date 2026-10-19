@@ -1,4 +1,4 @@
-import { memo, type DragEvent, type MouseEvent, type RefCallback } from 'react'
+import { memo, useEffect, useRef, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type RefCallback, type SyntheticEvent } from 'react'
 import { explorerLimits, kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { useConnectionAccent } from '../core/WorkbenchContext'
@@ -14,6 +14,10 @@ export interface RowActions {
   remove(rowId: number): void
   /** Fills a drag's data with the row's insert text; false cancels the drag. */
   dragStart(rowId: number, transfer: DataTransfer): boolean
+  /** The Rename box's Enter (`refocus`: focus returns to the tree) or blur; false keeps the box open (an invalid name). */
+  commitRename(rowId: number, text: string, refocus: boolean): Promise<boolean>
+  /** Escape in the Rename box, or the box going away: nothing is sent. */
+  cancelRename(refocus: boolean): void
 }
 export interface RowProps {
   readonly rowId: number
@@ -36,6 +40,8 @@ export interface RowProps {
   readonly color: string | undefined
   readonly actions: RowActions
   readonly menuTarget: RefCallback<HTMLDivElement>
+  /** The label is the inline Rename box. */
+  readonly renaming?: boolean
 }
 
 const statusWords = { disabled: ', disabled', unavailable: ', unavailable', noAccess: ', no access', readOnly: '' } as const
@@ -94,8 +100,39 @@ function Accent({ color }: { color: string | undefined }) {
   return accent ? <span className="oe-accent" style={{ background: accent }} /> : null
 }
 
+const stop = (event: SyntheticEvent) => event.stopPropagation()
+/**
+ * SSMS's inline Rename: the object's name without its schema, all selected. Enter commits, Escape cancels, and leaving
+ * the box commits. Its keys, presses and clipboard events stay in the box, so the tree neither navigates nor copies the
+ * node's name; a box whose row goes away (scrolled out, refreshed, removed) cancels without a request.
+ */
+function RenameBox({ rowId, name, title, actions }: { rowId: number; name: string; title: string; actions: RowActions }) {
+  const input = useRef<HTMLInputElement>(null), settled = useRef(false)
+  useEffect(() => {
+    const element = input.current
+    element?.focus()
+    element?.select()
+    // StrictMode replays this effect with the element still in the document; only a removed box cancels.
+    return () => queueMicrotask(() => { if (!settled.current && !element?.isConnected) { settled.current = true; actions.cancelRename(false) } })
+  }, [actions])
+  const commit = async (refocus: boolean) => {
+    if (settled.current) return
+    settled.current = true
+    if (!await actions.commitRename(rowId, input.current?.value ?? '', refocus)) { settled.current = false; input.current?.focus() }
+  }
+  // The box's own context menu (Cut, Paste…) takes focus without leaving the box; focus comes back when it closes.
+  const blur = (event: FocusEvent<HTMLInputElement>) => { if (!(event.relatedTarget instanceof Element && event.relatedTarget.closest('.menu-layer'))) void commit(false) }
+  const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    event.stopPropagation()
+    if (event.key === 'Enter') { event.preventDefault(); void commit(true) }
+    else if (event.key === 'Escape') { event.preventDefault(); settled.current = true; actions.cancelRename(true) }
+  }
+  return <input ref={input} className="explorer-rename" maxLength={128} aria-label={'Rename ' + title} defaultValue={name} spellCheck={false} autoComplete="off"
+    onKeyDown={keyDown} onBlur={blur} onMouseDown={stop} onDoubleClick={stop} onCopy={stop} onCut={stop} onPaste={stop} onDragStart={stop} />
+}
+
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text, selected, draggable, active, color, actions, menuTarget }: RowProps) {
+function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text, selected, draggable, active, color, actions, menuTarget, renaming }: RowProps) {
   const style = { transform: `translateY(${index * explorerLimits.rowHeight}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
@@ -115,14 +152,16 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} aria-description={rowDescription(node)} title={rowTooltip(node)} style={style} draggable={draggable || undefined}
+    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} aria-description={rowDescription(node)} title={rowTooltip(node)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
     {indent}
     <span className={`oe-twistie${expandable ? ` codicon codicon-chevron-${node.expanded ? 'down' : 'right'}` : ''}`} aria-hidden="true" onClick={toggle} />
     <ExplorerIcon name={folder && node.expanded ? 'folder-opened' : node.icon} folder={folder} badge={badgeOf(node)} />
-    <bdi className="oe-label">{displayText(node.label)}</bdi>
+    {renaming && node.ref.type === 'object' && node.kind !== 'folder'
+      ? <RenameBox rowId={rowId} name={node.ref.object.name ?? ''} title={kindSpecs[node.kind].title} actions={actions} />
+      : <bdi className="oe-label">{displayText(node.label)}</bdi>}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
     {node.lost ? <span className="oe-sublabel">(connection lost)</span> : node.sublabel && <span className="oe-sublabel">{displayText(node.sublabel)}</span>}
     {node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}

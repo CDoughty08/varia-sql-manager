@@ -36,6 +36,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string RoundTrip => Name + "_rt";
     /// <summary>Where the Script As injection matrix creates its objects and runs their scripts (created on demand).</summary>
     public string Injection => Name + "_inj";
+    /// <summary>Where the object-action checks rename and drop objects, then rename and drop the database (created on demand).</summary>
+    public string Actions => Name + "_act";
+    /// <summary>The name the object-action checks rename <see cref="Actions"/> to and back.</summary>
+    public string ActionsRenamed => Name + "_actr";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
     /// <summary>Held in memory only, never printed.</summary>
@@ -113,6 +117,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         + "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND source_database_id IS NULL AND state = 0) ALTER DATABASE " + Bracket(name) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n"
         + "IF DB_ID(" + Quote(name) + ") IS NOT NULL DROP DATABASE " + Bracket(name) + ";", "master");
 
+    /// <summary>A scratch name with none of the Object Explorer fixture, for checks that need only a database of their own.</summary>
+    public static ScratchDatabase Bare(Func<string, string, Task<SqlRun>> run) =>
+        new(run, DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture) + "_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant());
+
     public static async Task<ScratchDatabase> CreateAsync(Func<string, string, Task<SqlRun>> run, string fixtures)
     {
         var suffix = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture) + "_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
@@ -167,6 +175,13 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked injection-matrix database with the scratch database's collation.</summary>
     public Task<string> CreateInjectionAsync() => CreateMarkedAsync(Injection);
+
+    /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
+    public Task<string> CreateActionsAsync()
+    {
+        created.Add(ActionsRenamed);
+        return CreateMarkedAsync(Actions);
+    }
 
     private async Task<string> CreateMarkedAsync(string name)
     {

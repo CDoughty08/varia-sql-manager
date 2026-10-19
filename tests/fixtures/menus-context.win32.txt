@@ -100,7 +100,7 @@ explorer.context, for a server
 explorer.context, for a server whose connection was lost
   &Connect…  ++++
   &Reconnect…  ++++
-  Re&move  +++-
+  Rem&ove  +++-
 explorer.context, for the Databases folder
   F&ilter Settings…  -+++
   ---
@@ -127,6 +127,9 @@ explorer.context, for a database
       C&lipboard  -+++
   ---
   Copy &Name  -+++
+  ---
+  Rena&me  F2  -+++
+  D&elete  Delete  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a Tables folder
@@ -188,6 +191,9 @@ explorer.context, for a table
       C&lipboard  ----
   ---
   Copy &Name  -+++
+  ---
+  Rena&me  F2  -+++
+  D&elete  Delete  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a Columns folder still loading

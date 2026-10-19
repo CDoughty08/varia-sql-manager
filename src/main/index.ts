@@ -10,6 +10,7 @@ import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
+import { ActionRequests } from './backend/action-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest, validateResult } from './validation'
@@ -35,6 +36,7 @@ import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/co
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptCancelSchema } from '../shared/scripting/schema.ts'
+import { actionCancelSchema } from '../shared/actions/schema.ts'
 import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
@@ -454,6 +456,7 @@ app.whenReady().then(async () => {
     exportHeaders: async () => (await settings.load().catch(() => ({ values: settings.current() }))).values['queryResults.grid.includeColumnHeaders']
   })
   const scriptingRequests = new ScriptingRequests(backend)
+  const actionRequests = new ActionRequests(backend)
   backend.onState(state => {
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
@@ -531,9 +534,9 @@ app.whenReady().then(async () => {
       const validated = validateRequest(method, params)
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
-      // An Object Explorer load or a script is registered before it is sent, so its cancel channel can always find it.
-      const cancellable = method === 'explorer.children' ? explorerRequests : method === 'scripting.script' ? scriptingRequests : undefined
-      const load = cancellable?.begin((validated as RpcMethods['explorer.children' | 'scripting.script']['params']).requestId)
+      // An Object Explorer load, a script or an object action is registered before it is sent, so its cancel channel can always find it.
+      const cancellable = method === 'explorer.children' ? explorerRequests : method === 'scripting.script' ? scriptingRequests : method.startsWith('actions.') ? actionRequests : undefined
+      const load = cancellable?.begin((validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute']['params']).requestId)
       let result: unknown
       try {
         result = await backend.request(method as RpcMethod, validated as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
@@ -554,6 +557,8 @@ app.whenReady().then(async () => {
   handle('varia:results-save', value => jobs.save(value))
   handle('varia:results-job-cancel', value => jobs.cancel(value))
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
+  // Stop in an object dialog: the backend cancels the statement in SQL Server (an attention), so a DROP waiting on a lock ends.
+  handle('varia:actions-cancel', value => ({ cancelled: actionRequests.cancel(actionCancelSchema.parse(value).requestIds) }))
   handle('varia:files-open', async () => {
     const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return []

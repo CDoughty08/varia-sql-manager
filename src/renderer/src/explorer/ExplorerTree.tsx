@@ -18,10 +18,11 @@ const announceDelayMs = 500
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId }: { readonly activeConnectionId?: string }) {
-  const workbench = useWorkbench(), { explorer, commands, connections } = workbench
+  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions } = workbench
   const snapshot = useServiceSnapshot(explorer)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
+  const renaming = useServiceSnapshot(explorer.renaming)
   const element = useRef<HTMLDivElement | null>(null)
   const [view, setView] = useState({ top: 0, height: 0 })
   const [announcement, setAnnouncement] = useState<Announcement | undefined>(undefined)
@@ -94,8 +95,19 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       transfer.setData('text/plain', text)
       transfer.setData(explorerDragType, JSON.stringify({ v: 1, text }))
       return true
+    },
+    // Enter and Escape return focus to the tree; leaving the box for elsewhere does not take it back.
+    commitRename: async (rowId, text, refocus) => {
+      const node = explorer.menuNode(rowId)
+      if (!node) { objectActions.cancelRename(); return true }
+      if (refocus) element.current?.focus({ preventScroll: true })
+      return objectActions.commitRename(node, text)
+    },
+    cancelRename: refocus => {
+      objectActions.cancelRename()
+      if (refocus) element.current?.focus({ preventScroll: true })
     }
-  }), [explorer, run])
+  }), [explorer, run, objectActions])
   // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
@@ -168,7 +180,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
         return <ExplorerRow key={rowId} rowId={rowId} kind={kind} index={index} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
           node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
           active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined}
-          actions={actions} menuTarget={rowTarget} />
+          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} />
       })}
     </div>
   </div>

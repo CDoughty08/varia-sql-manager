@@ -145,6 +145,19 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 
 /// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
 /// the server that answered. Never the connection string or the password.</summary>
+/// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row).</summary>
+internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
+/// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options; Validate refuses the rest.</summary>
+internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null);
+internal sealed record ActionError(string Code, string Message, bool Retryable);
+internal sealed record ActionWarningDto(string Text, bool Blocking);
+internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null);
+internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null);
+internal sealed record ActionScriptResult(string? Text, string Database, List<string> Warnings, ActionError? Error = null);
+/// <summary>Status: done, failed, skipped or cancelled; Message: the step's title, or SQL Server's text for a failed one.</summary>
+internal sealed record ActionStepDto(string Status, string? Message = null);
+internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
+
 internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server);
 
 internal sealed class RequestException(string code, string message, ErrorDetails? details = null) : Exception(message)

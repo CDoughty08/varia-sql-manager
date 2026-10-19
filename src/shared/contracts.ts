@@ -8,6 +8,7 @@ import type { ErrorCode } from './ipc/wire/protocol'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
+import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 
@@ -246,6 +247,12 @@ export interface RpcMethods {
   'query.session.state': { params: { sessionId: string }; result: SessionState }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
+  /** What an object dialog shows (Delete Object's row and warnings), read in the action's own connection. */
+  'actions.describe': { params: ActionDescribeRequest; result: ActionDescribeResult }
+  /** An action's script, for the dialog's Script button; it runs nothing. */
+  'actions.script': { params: ActionRequest; result: ActionScriptResult }
+  /** Runs an action's DDL after a preflight; never re-sent, and only Stop (varia:actions-cancel) ends a lock wait. */
+  'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
@@ -332,6 +339,15 @@ export interface VariaApi {
   /** Cancels scripting requests by their `requestId`s (1–64); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelScripting(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Reads what an object dialog shows. Failures the user can act on come back as `result.error`. */
+  describeObject(params: ActionDescribeRequest): Promise<ApiResult<ActionDescribeResult>>
+  /** Scripts an object action (the dialog's Script button) without running it. */
+  scriptObjectAction(params: ActionRequest): Promise<ApiResult<ActionScriptResult>>
+  /** Runs an object action: Rename, or Delete Object's OK. Its steps report what ran; it is never re-sent. */
+  executeObjectAction(params: ActionRequest): Promise<ApiResult<ActionExecuteResult>>
+  /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
+   *  cancelled this way answers `CANCELLED`. */
+  cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Tools › Options as main stored it, complete; `warning` reports a file that was reset or salvaged (once). */
   getSettings(): Promise<ApiResult<SettingsLoad>>
   /** Changes settings: known keys only, `null` resets one. Main validates strictly and resolves to the new state. */

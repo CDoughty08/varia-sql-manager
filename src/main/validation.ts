@@ -4,6 +4,7 @@ import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
+import { actionDescribeSchema, actionRequestSchema } from '../shared/actions/schema.ts'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
 const name = z.string().min(1).max(128).refine(value => value.trim().length > 0)
@@ -31,7 +32,10 @@ export const requestSchemas = {
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   'explorer.children': explorerChildrenParamsSchema,
-  'scripting.script': scriptRequestSchema
+  'scripting.script': scriptRequestSchema,
+  'actions.describe': actionDescribeSchema,
+  'actions.script': actionRequestSchema,
+  'actions.execute': actionRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 // Shown as the dialog's User Name: one line of at most 256 characters without control or formatting characters (C#: KerberosProbe.Bounded).
