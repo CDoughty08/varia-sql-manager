@@ -1,5 +1,8 @@
 # Context menus on linux; enablement per state: disconnected, connected, running, busy
 editor.context, for the query editor
+  &Insert Snippet…  Ctrl+K Ctrl+X  +++-
+  &Surround With…  Ctrl+K Ctrl+S  +++-
+  ---
   C&onnection >
     &Connect…  ++++
     &Disconnect  -+--

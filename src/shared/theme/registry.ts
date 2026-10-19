@@ -148,6 +148,8 @@ const groups = {
     'editor.selectionBackground': ['V', '$textSelection', 'Selected text in the editor.', 'monaco'],
     'editorLineNumber.foreground': ['V', pair('$textMuted/80', '$textMuted'), 'Line numbers.', 'monaco', { opaqueOver: 'editor.background' }],
     'editorLineNumber.activeForeground': ['V', '$textSecondary', 'Line number of the current line.', 'monaco'],
+    'editorWhitespace.foreground': ['V', '$textMuted/50', 'Whitespace glyphs when View White Space is on.', 'monaco'],
+    'editorBookmark.foreground': ['X', '$accent', 'Bookmark glyph in the editor\'s indicator margin.', 'css'],
     'editorBracketHighlight.foreground1': ['V', '$syntaxBracket1', 'Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six.', 'monaco'],
     'editorBracketHighlight.foreground2': ['V', '$syntaxBracket2', 'Brackets one level in.', 'monaco'],
     'editorBracketHighlight.foreground3': ['V', '$syntaxBracket3', 'Brackets two levels in.', 'monaco'],

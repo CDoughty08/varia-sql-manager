@@ -436,7 +436,7 @@ describe('context menus', () => {
     doc.activeElement = line
     expect(menus.openForElement(line.dom, { keyboard: true })).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Query editor', active: 0, anchor: { kind: 'below', rect: caret } })
-    expect(titles(level(menus).items)).toEqual(['Connection', '-', 'Execute', 'Cancel Executing Query', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
+    expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Execute', 'Cancel Executing Query', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
     expect(menus.openForElement(null, { keyboard: true })).toBe(false)
   })
   it('opens a tree\'s menu from the keyboard for its active row, below that row, with focus left on the tree', async () => {

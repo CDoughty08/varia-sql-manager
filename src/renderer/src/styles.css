@@ -173,7 +173,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-actions .codicon { font-size: 14px; }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
+/* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
+.monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }
+.go-to-line-dialog { width: min(360px, calc(100vw - 40px)); }
+.go-to-line-dialog label { display: block; font-size: 11px; color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
+.go-to-line-dialog input { width: 100%; height: 28px; }
+.go-to-line-dialog .field-note { margin-top: 8px; }
 .filter-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .filter-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 7px 8px 3px 0; vertical-align: top; line-height: 20px; }
 .filter-grid thead th { width: 112px; padding: 0 8px 6px 0; }

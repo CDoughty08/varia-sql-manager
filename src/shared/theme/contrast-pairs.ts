@@ -150,6 +150,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['resultsGrid.activeCellBorder'], panel, ['resultsGrid.background', 'resultsGrid.selectionBackground']),
   ...graphic(['resultsGrid.truncationForeground', 'resultsGrid.splitterBackground'], panel),
   ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
+  // A bookmark is the only sign of itself in the indicator margin.
+  ...graphic(['editorBookmark.foreground'], editor),
   ...graphic(['button.background'], widget),
   // Control outlines (WCAG 1.4.11) on every surface the controls sit on: fields and dialogs; the toolbar's server and
   // database lists; Cancel on the Output toolbar; Object Explorer's buttons; the results grid's Retry; the empty
@@ -175,5 +177,6 @@ export const hoverPairs: readonly ContrastPair[] = [
 export const contrastExemptions: Readonly<Partial<Record<ColorKey, string>>> = {
   'statusBar.separatorForeground': 'Decorative divider between status items; the items carry the meaning.',
   'emptyState.iconForeground': 'Decorative glyph beside text that says the same thing.',
+  'editorWhitespace.foreground': 'Decorative glyph beside the text: View White Space marks spaces and tabs the text already has.',
   'disabledForeground': 'Disabled controls are exempt from WCAG 1.4.3 and 1.4.11.'
 }

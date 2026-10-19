@@ -4,11 +4,12 @@
 
 Every command, keybinding, and menu placement is declared in `src/shared/commands/catalog.ts`. A condition after a key
 limits where the key works; for example, `editorFocus` means the query editor has focus. Keys marked * belong to the
-editor, the browser engine, or Electron (zoom, full screen, quit): menus show them, but Varia does not dispatch them.
+editor, the browser engine, or Electron (zoom, full screen, quit), or are Varia's own editor chords (bridge keybindings),
+which the editor dispatches: menus show them, but Varia's key dispatcher does not.
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (109)
+## Commands (126)
 
 ### File
 
@@ -35,11 +36,26 @@ keys it uses are listed below.
 | Paste (not in the palette) | `edit.paste` | Ctrl+V * | Ctrl+V * | ⌘V * | Always | Edit › Paste; Editor context menu › Paste; Text field context menu › Paste |
 | Delete (not in the palette) | `edit.delete` | Delete * | Delete * | ⌦ * | Always | Edit › Delete; Text field context menu › Delete |
 | Select All (not in the palette) | `edit.selectAll` | Ctrl+A * | Ctrl+A * | ⌘A * | Always | Edit › Select All; Text field context menu › Select All |
-| Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find |
-| Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Replace |
-| Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Toggle Line Comment |
-| Comment Selection | `edit.commentLines` | Ctrl+K Ctrl+C * | Ctrl+K Ctrl+C * | ⌘K ⌘C * | `hasActiveDocument` | Edit › Comment Selection |
-| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `hasActiveDocument` | Edit › Uncomment Selection |
+| Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find and Replace › Quick Find |
+| Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Find and Replace › Quick Replace |
+| Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Advanced › Toggle Line Comment |
+| Comment Selection | `edit.commentLines` | Ctrl+K Ctrl+C * | Ctrl+K Ctrl+C * | ⌘K ⌘C * | `hasActiveDocument` | Edit › Advanced › Comment Selection |
+| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `hasActiveDocument` | Edit › Advanced › Uncomment Selection |
+| Find Next | `edit.findNext` | F3 * | F3 * | ⌘G *, F3 * | `hasActiveDocument` | Edit › Find and Replace › Find Next |
+| Find Previous | `edit.findPrevious` | Shift+F3 * | Shift+F3 * | ⇧⌘G *, ⇧F3 * | `hasActiveDocument` | Edit › Find and Replace › Find Previous |
+| Go To Line… | `edit.goToLine` | Ctrl+G (`editorFocus`) | Ctrl+G (`editorFocus`) | ⌃G (`editorFocus`) | `hasActiveDocument` | Edit › Go To Line… |
+| Make Uppercase | `edit.makeUppercase` | Ctrl+Shift+U (`editorTextFocus`) | Ctrl+Shift+U (`editorTextFocus`) | ⇧⌘U (`editorTextFocus`) | `hasActiveDocument` | Edit › Advanced › Make Uppercase |
+| Make Lowercase | `edit.makeLowercase` | Ctrl+Shift+L (`editorTextFocus`) | Ctrl+Shift+L (`editorTextFocus`) | ⇧⌘L (`editorTextFocus`) | `hasActiveDocument` | Edit › Advanced › Make Lowercase |
+| Increase Line Indent | `edit.increaseIndent` | — | — | — | `hasActiveDocument` | Edit › Advanced › Increase Line Indent |
+| Decrease Line Indent | `edit.decreaseIndent` | — | — | — | `hasActiveDocument` | Edit › Advanced › Decrease Line Indent |
+| Toggle Bookmark | `edit.toggleBookmark` | Ctrl+K Ctrl+K * | Ctrl+K Ctrl+K * | ⌘K ⌘K * | `hasActiveDocument` | Edit › Bookmarks › Toggle Bookmark |
+| Previous Bookmark | `edit.previousBookmark` | Ctrl+K Ctrl+P * | Ctrl+K Ctrl+P * | ⌘K ⌘P * | `hasBookmarks` | Edit › Bookmarks › Previous Bookmark |
+| Next Bookmark | `edit.nextBookmark` | Ctrl+K Ctrl+N * | Ctrl+K Ctrl+N * | ⌘K ⌘N * | `hasBookmarks` | Edit › Bookmarks › Next Bookmark |
+| Clear Bookmarks | `edit.clearBookmarks` | Ctrl+K Ctrl+L * | Ctrl+K Ctrl+L * | ⌘K ⌘L * | `hasBookmarks` | Edit › Bookmarks › Clear Bookmarks |
+| Previous Bookmark In Document | `edit.previousBookmarkInDocument` | — | — | — | `activeDocumentHasBookmarks` | Edit › Bookmarks › Previous Bookmark In Document |
+| Next Bookmark In Document | `edit.nextBookmarkInDocument` | — | — | — | `activeDocumentHasBookmarks` | Edit › Bookmarks › Next Bookmark In Document |
+| Insert Snippet… | `edit.insertSnippet` | Ctrl+K Ctrl+X * | Ctrl+K Ctrl+X * | ⌘K ⌘X * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Insert Snippet…; Editor context menu › Insert Snippet… |
+| Surround With… | `edit.surroundWith` | Ctrl+K Ctrl+S * | Ctrl+K Ctrl+S * | ⌘K ⌘S * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Surround With…; Editor context menu › Surround With… |
 
 ### View
 
@@ -55,7 +71,9 @@ keys it uses are listed below.
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
 | Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown | Ctrl+Tab, Ctrl+PageDown | ⌃⇥ | `multipleDocuments` | Window › Next Query |
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
-| Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | View › Word Wrap |
+| Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |
+| View White Space | `editor.toggleWhitespace` | — | — | — | Always; checked when `editorWhitespace` | Edit › Advanced › View White Space |
+| Toggle Line Numbers | `editor.toggleLineNumbers` | — | — | — | Always; checked when `editorLineNumbers` | — |
 | Zoom In | `view.zoomIn` | Ctrl+= *, Ctrl+Shift+= * | Ctrl+= *, Ctrl+Shift+= * | ⌘= *, ⇧⌘= * | Always | View › Zoom In |
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
@@ -201,11 +219,52 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `2_clipboard` | **P**aste | `edit.paste` | Always |
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `2_clipboard` | Select **A**ll | `edit.selectAll` | Always |
-| `3_find` | **F**ind | `edit.find` | Always |
-| `3_find` | R**e**place | `edit.replace` | Always |
-| `4_comment` | Toggle **L**ine Comment | `edit.toggleLineComment` | Always |
-| `4_comment` | Co**m**ment Selection | `edit.commentLines` | Always |
-| `4_comment` | U**n**comment Selection | `edit.uncommentLines` | Always |
+| `3_find` | **F**ind and Replace › | Submenu: Edit › Find and Replace | Always |
+| `3_find` | **G**o To Line… | `edit.goToLine` | Always |
+| `4_more` | Ad**v**anced › | Submenu: Edit › Advanced | Always |
+| `4_more` | Boo**k**marks › | Submenu: Edit › Bookmarks | Always |
+| `4_more` | **I**ntelliSense › | Submenu: Edit › IntelliSense | Always |
+
+#### Edit › Find and Replace
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_find` | **Q**uick Find | `edit.find` | Always |
+| `1_find` | Quick **R**eplace | `edit.replace` | Always |
+| `2_next` | Find **N**ext | `edit.findNext` | Always |
+| `2_next` | Find **P**revious | `edit.findPrevious` | Always |
+
+#### Edit › Advanced
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_case` | Make **U**ppercase | `edit.makeUppercase` | Always |
+| `1_case` | Make **L**owercase | `edit.makeLowercase` | Always |
+| `2_view` | View W**h**ite Space | `editor.toggleWhitespace` | Always |
+| `2_view` | **W**ord Wrap | `editor.toggleWordWrap` | Always |
+| `3_comment` | Co**m**ment Selection | `edit.commentLines` | Always |
+| `3_comment` | U**n**comment Selection | `edit.uncommentLines` | Always |
+| `3_comment` | **T**oggle Line Comment | `edit.toggleLineComment` | Always |
+| `4_indent` | **I**ncrease Line Indent | `edit.increaseIndent` | Always |
+| `4_indent` | **D**ecrease Line Indent | `edit.decreaseIndent` | Always |
+
+#### Edit › Bookmarks
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_toggle` | **T**oggle Bookmark | `edit.toggleBookmark` | Always |
+| `2_navigate` | **P**revious Bookmark | `edit.previousBookmark` | Always |
+| `2_navigate` | **N**ext Bookmark | `edit.nextBookmark` | Always |
+| `3_clear` | **C**lear Bookmarks | `edit.clearBookmarks` | Always |
+| `4_document` | P**r**evious Bookmark In Document | `edit.previousBookmarkInDocument` | Always |
+| `4_document` | Ne**x**t Bookmark In Document | `edit.nextBookmarkInDocument` | Always |
+
+#### Edit › IntelliSense
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_snippets` | **I**nsert Snippet… | `edit.insertSnippet` | Always |
+| `1_snippets` | **S**urround With… | `edit.surroundWith` | Always |
 
 #### View (Alt+V)
 
@@ -216,7 +275,6 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_layout` | **S**ave Layout… | `layout.save` | Always |
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
-| `2_editor` | **W**ord Wrap | `editor.toggleWordWrap` | Always |
 | `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
 | `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
 | `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
@@ -286,6 +344,8 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_snippets` | **I**nsert Snippet… | `edit.insertSnippet` | Always |
+| `0_snippets` | **S**urround With… | `edit.surroundWith` | Always |
 | `1_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
 | `2_execute` | E**x**ecute | `query.execute` | Always |
 | `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
@@ -458,7 +518,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (52)
+## Context keys (56)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -492,6 +552,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
+| `editorWhitespace` | boolean | state | View White Space is on in the query editor. |
+| `editorLineNumbers` | boolean | state | Line numbers show in the query editor. |
+| `hasBookmarks` | boolean | state | An open document has a bookmark. |
+| `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |
 | `explorerSelectionKind` | `''`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'` | state | The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses. |
 | `explorerSelectionFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'` | state | The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses. |

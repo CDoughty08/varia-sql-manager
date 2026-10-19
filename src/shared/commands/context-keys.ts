@@ -51,6 +51,10 @@ export const contextKeys = {
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
+  editorWhitespace: { type: 'boolean', scope: 'state', description: 'View White Space is on in the query editor.' },
+  editorLineNumbers: { type: 'boolean', scope: 'state', description: 'Line numbers show in the query editor.' },
+  hasBookmarks: { type: 'boolean', scope: 'state', description: 'An open document has a bookmark.' },
+  activeDocumentHasBookmarks: { type: 'boolean', scope: 'state', description: 'The active document has a bookmark.' },
   explorerHasSelection: { type: 'boolean', scope: 'state', description: 'A node is selected in Object Explorer (a loading, error, or progress row is not a node).' },
   explorerSelectionKind: {
     type: 'enum', scope: 'state', values: ['', 'folder', ...nodeKinds],

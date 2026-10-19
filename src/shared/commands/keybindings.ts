@@ -170,6 +170,8 @@ export interface ResolvedRule {
   readonly when?: WhenAst
   readonly whenSource?: string
   readonly native: boolean
+  /** A Varia chord Monaco dispatches (`registerEditorBridge`); always native. */
+  readonly bridge: boolean
   readonly allowRepeat: boolean
   /** The key also works while a modal dialog is open. */
   readonly modal: boolean
@@ -181,14 +183,23 @@ export function specForPlatform(spec: KeybindingSpec, platform: Platform): strin
   return override === null ? undefined : override ?? spec.key
 }
 
-/** Resolves one catalogue keybinding; two-part chords are only allowed on native rules until the workbench has chords. */
+/**
+ * Resolves one catalogue keybinding. Two-part chords are only allowed on native rules: Monaco dispatches them, Varia's
+ * own (`bridge`) through `registerEditorBridge`, which needs a `mod+k` first part and no `when` (Monaco's is editorTextFocus).
+ */
 export function resolveKeybinding(command: CommandId, spec: KeybindingSpec, platform: Platform): ResolvedRule | undefined {
   const source = specForPlatform(spec, platform)
   if (source === undefined) return undefined
   const chords = parseKeySpec(source, platform)
+  if (spec.bridge) {
+    if (!spec.native) throw new KeySpecError(`${command}: a bridge keybinding must be native.`)
+    if (chords.length !== 2) throw new KeySpecError(`${command}: "${source}" must have two parts to be a bridge keybinding.`)
+    if (chords[0] !== parseKeySpec('mod+k', platform)[0]) throw new KeySpecError(`${command}: "${source}" must start with the editor's chord prefix to be a bridge keybinding.`)
+    if (spec.when !== undefined) throw new KeySpecError(`${command}: a bridge keybinding cannot have a when clause.`)
+  }
   if (chords.length > 1 && !spec.native) throw new KeySpecError(`${command}: "${source}" has two parts; only native keybindings may be chords.`)
   return {
-    command, chords, native: spec.native === true, allowRepeat: spec.allowRepeat === true, modal: spec.modal === true,
+    command, chords, native: spec.native === true, bridge: spec.bridge === true, allowRepeat: spec.allowRepeat === true, modal: spec.modal === true,
     ...(spec.when === undefined ? {} : { when: compileWhen(spec.when), whenSource: spec.when })
   }
 }
@@ -207,6 +218,9 @@ export function defaultRules(platform: Platform): readonly ResolvedRule[] {
 /** The first one-chord rule for `id` on `platform`, workbench or native: the one labels and accelerators show. */
 export const primaryRule = (id: CommandId, platform: Platform): ResolvedRule | undefined =>
   defaultRules(platform).find(rule => rule.command === id && rule.chords.length === 1)
+
+/** The catalogue's bridge rules on `platform`: Varia's two-part editor chords, which Monaco dispatches. */
+export const bridgeRules = (platform: Platform): readonly ResolvedRule[] => defaultRules(platform).filter(rule => rule.bridge)
 
 /** First chords of native two-part rules: the workbench must let the key after them through to Monaco. */
 export const nativeChordPrefixes = (platform: Platform): ReadonlySet<string> =>

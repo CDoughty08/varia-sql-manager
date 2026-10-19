@@ -24,13 +24,22 @@ const command = (id: CommandId, title: string = id, extra: Partial<Extract<MenuE
 describe('menu resolution', () => {
   it('shows a menubar menu with mnemonics, chord labels, icons, and role-backed commands, without bare Electron roles', () => {
     const edit = resolveMenu('edit', options())
-    expect(marked(edit)).toEqual(['&Undo', '&Redo', '-', 'Cu&t', '&Copy', '&Paste', '&Delete', 'Select &All', '-', '&Find', 'R&eplace', '-', 'Toggle &Line Comment', 'Co&mment Selection', 'U&ncomment Selection'])
-    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:0', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'sep:1', 'edit.find', 'edit.replace', 'sep:2',
-      'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
+    expect(marked(edit)).toEqual(['&Undo', '&Redo', '-', 'Cu&t', '&Copy', '&Paste', '&Delete', 'Select &All', '-', '&Find and Replace', '&Go To Line…', '-', 'Ad&vanced', 'Boo&kmarks', '&IntelliSense'])
+    // Separator keys count through the submenus, which are resolved first.
+    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:7', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'sep:8', 'edit.findReplace', 'edit.goToLine', 'sep:9',
+      'edit.advanced', 'edit.bookmarks', 'edit.intellisense'])
+    const submenu = (key: string) => { const item = edit.find(entry => entry.key === key); return item?.kind === 'submenu' ? item.items : [] }
+    expect(marked(submenu('edit.findReplace'))).toEqual(['&Quick Find', 'Quick &Replace', '-', 'Find &Next', 'Find &Previous'])
+    expect(marked(submenu('edit.advanced'))).toEqual(['Make &Uppercase', 'Make &Lowercase', '-', 'View W&hite Space', '&Word Wrap', '-', 'Co&mment Selection', 'U&ncomment Selection', '&Toggle Line Comment', '-',
+      '&Increase Line Indent', '&Decrease Line Indent'])
+    expect(marked(submenu('edit.bookmarks'))).toEqual(['&Toggle Bookmark', '-', '&Previous Bookmark', '&Next Bookmark', '-', '&Clear Bookmarks', '-', 'P&revious Bookmark In Document', 'Ne&xt Bookmark In Document'])
+    // Varia's bridge chords are labelled like Monaco's.
+    expect(submenu('edit.bookmarks')[0]).toMatchObject({ icon: 'bookmark', keybinding: { text: 'Ctrl+K Ctrl+K' } })
+    expect(marked(submenu('edit.intellisense'))).toEqual(['&Insert Snippet…', '&Surround With…'])
     expect(edit.find(item => item.key === 'edit.paste')).toMatchObject({ icon: 'clippy', keybinding: { text: 'Ctrl+V' }, enabled: true })
     const [undo] = edit
     expect(undo).toEqual({ kind: 'command', key: 'edit.undo', id: 'edit.undo', title: 'Undo', mnemonic: 0, icon: 'discard', keybinding: { parts: ['Ctrl+Z'], text: 'Ctrl+Z', aria: 'Control+Z' }, enabled: true })
-    expect(edit.find(item => item.key === 'edit.commentLines')).toMatchObject({ keybinding: { text: 'Ctrl+K Ctrl+C' } })
+    expect(submenu('edit.advanced').find(item => item.key === 'edit.commentLines')).toMatchObject({ keybinding: { text: 'Ctrl+K Ctrl+C' } })
     const windowMenu = ['&Object Explorer', 'Query &Editor', 'Q&uery Output', 'S&how Results Pane', '-', '&Next Query', '&Previous Query', 'C&lose All Documents', '-', '&Save Window Layout…', 'Lo&ad Window Layout…', '&Reset Window Layout']
     expect(marked(resolveMenu('window', options({ platform: 'linux' })))).toEqual(windowMenu)
     // macOS's Minimize and Zoom are bare Electron roles: only its native menu shows them.
@@ -51,8 +60,9 @@ describe('menu resolution', () => {
       ['query.changeDatabase', true, args], 'separator', ['query.execute', false, args], ['query.cancel', true, args]
     ])
     expect(resolved.commands.isEnabled).toHaveBeenCalledWith('query.execute', args)
-    const wrap = resolveMenu('view', resolved).find(item => item.key === 'editor.toggleWordWrap')
+    const advanced = resolveMenu('edit', resolved).find(item => item.key === 'edit.advanced'), wrap = advanced?.kind === 'submenu' ? advanced.items.find(item => item.key === 'editor.toggleWordWrap') : undefined
     expect(wrap).toMatchObject({ checked: true, title: 'Word Wrap', mnemonic: 0, keybinding: { text: 'Alt+Z' } })
+    expect(resolveMenu('view', resolved).some(item => item.key === 'editor.toggleWordWrap')).toBe(false)
     expect(wrap).not.toHaveProperty('icon')
     expect(resolveMenu('file', resolved).find(item => item.key === 'file.new')).not.toHaveProperty('checked')
   })

@@ -31,6 +31,9 @@ import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
 import { scriptingContribution } from '../contributions/scripting'
 import { settingsContribution } from '../contributions/settings'
+import { editingContribution } from '../contributions/editing'
+import { BookmarkService } from '../editor/bookmarks'
+import { EditorDialogs } from '../editor/go-to-line'
 import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
@@ -75,6 +78,10 @@ export interface Workbench extends Disposable {
   readonly files: FileService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
+  /** Edit › Bookmarks: each open query's bookmarks, for this session. */
+  readonly bookmarks: BookmarkService
+  /** The query editor's dialogs (Go To Line). */
+  readonly editorDialogs: EditorDialogs
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
@@ -117,6 +124,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
     settingsDocumentOptions(() => settings.getSnapshot().values))
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
+  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
@@ -143,6 +151,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer: explorer.context,
     results: results.context,
     scripting: scripting.running,
+    bookmarks,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -182,6 +191,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     files,
     targets,
     editorOptions,
+    bookmarks,
+    editorDialogs,
     panes,
     explorer,
     databaseList,
@@ -211,6 +222,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       scripting.dispose()
       connections.dispose()
       editorOptions.dispose()
+      bookmarks.dispose()
+      editorDialogs.dispose()
       panes.dispose()
       resultSelection.dispose()
       settings.dispose()
@@ -222,6 +235,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     queryContribution(workbench, api),
     filesContribution(workbench, api),
     editorContribution(workbench),
+    editingContribution(workbench, monaco),
     editContribution(workbench, api),
     windowContribution(workbench, api),
     menusContribution(workbench),

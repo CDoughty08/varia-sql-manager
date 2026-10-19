@@ -87,8 +87,9 @@ pages, limits, error codes, display formats, benchmarks).
 - Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
   (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
   no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show the role, and custom
-  menus and the palette run it through `varia:run-role`. After catalogue changes, regenerate `docs/commands.md` with
-  `npx vitest run tests/commands-docs.test.ts -u`.
+  menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
+  registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
+  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
 - Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
   provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
   natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends

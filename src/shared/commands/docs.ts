@@ -13,6 +13,7 @@ const categories: readonly (Category | undefined)[] = ['File', 'Edit', 'View', '
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(applicationMenus.map(menu => [menu.id, menu.label])) as Record<typeof applicationMenus[number]['id'], string>,
+  'edit.findReplace': 'Edit › Find and Replace', 'edit.advanced': 'Edit › Advanced', 'edit.bookmarks': 'Edit › Bookmarks', 'edit.intellisense': 'Edit › IntelliSense',
   theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
@@ -156,7 +157,8 @@ export function renderCommandDocs(): string {
     '',
     'Every command, keybinding, and menu placement is declared in `src/shared/commands/catalog.ts`. A condition after a key',
     'limits where the key works; for example, `editorFocus` means the query editor has focus. Keys marked * belong to the',
-    'editor, the browser engine, or Electron (zoom, full screen, quit): menus show them, but Varia does not dispatch them.',
+    'editor, the browser engine, or Electron (zoom, full screen, quit), or are Varia\'s own editor chords (bridge keybindings),',
+    'which the editor dispatches: menus show them, but Varia\'s key dispatcher does not.',
     '"Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context',
     'keys it uses are listed below.',
     '',

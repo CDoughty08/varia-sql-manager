@@ -67,7 +67,8 @@ _No settings yet._
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. View › Word Wrap changes it too (Alt+Z on Windows and Linux). |
+| `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. Edit › Advanced › Word Wrap changes it too (Alt+Z on Windows and Linux). |
+| `textEditor.sql.viewWhiteSpace` | View white space | Boolean | False |  | All | At once | Shows spaces as dots and tabs as arrows. Edit › Advanced › View White Space changes it; as in SSMS, Options has no row for it. Not shown in Options. |
 | `textEditor.sql.lineNumbers` | Line numbers | Boolean | True | False (SSMS 18–20; SSMS 22 not verified) | All | At once | Shows line numbers beside the query text. |
 
 ### Text Editor › Transact-SQL › Tabs
@@ -178,4 +179,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (50 today).
+A patch holds at most one entry per setting (51 today).
