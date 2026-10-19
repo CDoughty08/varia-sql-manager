@@ -67,8 +67,18 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
     }
 
-    /// <summary>The most query sessions open at once. Only the live checks change it.</summary>
-    internal int SessionLimit { get; set; } = 32;
+    /// <summary>The most query sessions the app keeps open at once (each holds its own unpooled connection). It leaves room
+    /// within main's 256 pending requests for every session to run a script and still be cancelled. Idle sessions are never
+    /// reclaimed to make room: a session's SET options, temporary objects and open transaction are invisible from outside
+    /// (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing it would lose them
+    /// silently. Only the live checks change it.</summary>
+    internal int SessionLimit { get; set; } = 128;
+    /// <summary>The session probe that follows every script.</summary>
+    internal const string ProbeSql = "SELECT @@TRANCOUNT, @@SPID, SUSER_SNAME();";
+    /// <summary>What a query tab's session runs on the way out: every nesting level of its transaction committed, or the
+    /// transaction rolled back.</summary>
+    internal const string CommitSql = "WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION;";
+    internal const string RollbackSql = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;";
 
     /// <summary>What a tab's session runs when it opens: <see cref="SessionPrologue"/>. Only the live checks change it, to
     /// make it fail.</summary>
@@ -146,7 +156,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
-        "query.session.close" => CloseSession(Read<SessionArgs>(parameters, json)),
+        "query.session.close" => await CloseSessionAsync(Read<SessionArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
@@ -335,6 +345,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ResultSetBuffer? currentSet = null;
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
+        SessionProbe? probe = null;
         var completed = 0;
         var batchNumber = 0;
         var iteration = 0;
@@ -656,6 +667,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         finally
         {
+            // The elapsed time is the script's; the probe below is not part of it.
+            watch.Stop();
             queries.TryRemove(args.QueryId, out _);
             // A set cut short keeps the rows it stored.
             foreach (var set in sets.Where(set => set.IsOpen))
@@ -667,7 +680,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             {
                 session.Connection.FireInfoMessageEventOnUserErrors = false;
                 session.Connection.InfoMessage -= onInfo;
-                if (session.Connection.State == System.Data.ConnectionState.Open) database = session.Connection.Database;
+                if (session.Connection.State == System.Data.ConnectionState.Open)
+                {
+                    database = session.Connection.Database;
+                    // Still holding the session, so nothing else runs between the script and the probe.
+                    probe = await ProbeAsync(session.Connection);
+                }
                 if (session.Connection.State is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken)
                 {
                     ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(args.SessionId, session));
@@ -702,7 +720,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, probe?.TransactionCount, probe?.Spid, probe?.Login);
     }
 
     /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows
@@ -851,11 +869,81 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         try { source.Cancel(); } catch (ObjectDisposedException) { /* Query completed concurrently. */ }
     }
 
-    private object CloseSession(SessionArgs args)
+    /// <summary>The open transaction (@@TRANCOUNT), the session id and the login, read on the session after its script. It
+    /// has its own short timeout and no token: the script's token may already be cancelled, and a timeout ends only the
+    /// probe. A failure leaves the summary without them.</summary>
+    private static async Task<SessionProbe?> ProbeAsync(SqlConnection connection)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = ProbeSql;
+            command.CommandTimeout = 5;
+            await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SingleRow);
+            if (!await reader.ReadAsync()) return null;
+            return new SessionProbe(reader.GetInt32(0), reader.GetInt16(1), reader.IsDBNull(2) ? null : reader.GetString(2));
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or InvalidCastException) { return null; }
+    }
+
+    private async Task<object> CloseSessionAsync(SessionArgs args, CancellationToken token)
     {
         if (!Guid.TryParse(args.SessionId, out _)) throw new RequestException("INVALID_PARAMS", "A valid session ID is required.");
-        foreach (var query in queries.Values.Where(query => query.SessionId == args.SessionId)) query.Cancel();
-        var removed = sessions.TryRemove(args.SessionId, out var session);
+        if (args.Transaction is not (null or "commit" or "rollback")) throw new RequestException("INVALID_PARAMS", "A transaction ends by commit or rollback.");
+        if (args.Transaction is not null && sessions.TryGetValue(args.SessionId, out var open)) await EndTransactionAsync(args.SessionId, open, args.Transaction == "commit", token);
+        return CloseSession(args.SessionId);
+    }
+
+    /// <summary>Commits or rolls back the session's transaction before it closes. A commit that fails (an uncommittable
+    /// error, a script still running) throws and leaves the session open, so its tab stays open with its transaction for the
+    /// user to decide again; a session lost meanwhile (killed, or its connection broken) had its transaction rolled back by
+    /// SQL Server, which the error says, and is closed. A rollback cannot leave anything behind: closing the session rolls
+    /// back whatever is still open, so it is bounded to 5 seconds and its failures are ignored.</summary>
+    private async Task EndTransactionAsync(string sessionId, QuerySession session, bool commit, CancellationToken token)
+    {
+        if (!session.TryEnter())
+        {
+            if (commit) throw new RequestException("SESSION_BUSY", "A query is running in this tab. Cancel it before committing its transaction.");
+            return;
+        }
+        try
+        {
+            var connection = session.Connection;
+            RequestException Lost()
+            {
+                ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(sessionId, session));
+                session.Close();
+                return new RequestException("SESSION_LOST", "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.");
+            }
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                if (!commit || !session.HasOpened) return;
+                throw Lost();
+            }
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
+            if (!commit) bound.CancelAfter(TimeSpan.FromSeconds(5));
+            await using var command = connection.CreateCommand();
+            command.CommandText = commit ? CommitSql : RollbackSql;
+            // The token alone carries the deadline (see ExecuteAsync).
+            command.CommandTimeout = 0;
+            using var stop = bound.Token.Register(Attention, command);
+            try { await command.ExecuteNonQueryAsync(bound.Token); }
+            catch (SqlException error) when (commit && !token.IsCancellationRequested)
+            {
+                if (connection.State != System.Data.ConnectionState.Open) throw Lost();
+                var details = string.Join(Environment.NewLine, error.Errors.Cast<SqlError>().Where(item => item.Class > 10)
+                    .Select(item => "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + "\n" + item.Message));
+                throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. " + (details.Length == 0 ? error.Message : details));
+            }
+            catch (Exception error) when (!commit && error is SqlException or OperationCanceledException or InvalidOperationException) { }
+        }
+        finally { session.Exit(); }
+    }
+
+    private object CloseSession(string sessionId)
+    {
+        foreach (var query in queries.Values.Where(query => query.SessionId == sessionId)) query.Cancel();
+        var removed = sessions.TryRemove(sessionId, out var session);
         session?.Close();
         // The session's results stay until the renderer closes them (results.close) or its next query replaces them.
         return new { Closed = removed };
@@ -873,7 +961,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 if (existing.ConnectionId != args.ConnectionId) throw new RequestException("SESSION_TARGET", "Close this query session before selecting another server.");
                 return existing;
             }
-            if (sessions.Count >= SessionLimit) throw new RequestException("SESSION_LIMIT", "Close an unused query tab before opening another SQL session (maximum " + SessionLimit + ").");
+            if (sessions.Count >= SessionLimit)
+                throw new RequestException("SESSION_LIMIT", "This query was not executed: " + SessionLimit + " query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. "
+                    + "Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again.");
             var session = new QuerySession(args.ConnectionId, CreateConnection(args.ConnectionId, args.Database, stateful: true));
             sessions[args.SessionId] = session;
             return session;

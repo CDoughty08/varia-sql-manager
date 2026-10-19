@@ -90,6 +90,10 @@ using (var offline = new SqlService())
 {
     try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }
     catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "table columns reject an overlong name before looking up the connection"); }
+    try { await offline.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(Guid.NewGuid().ToString(), "save"), json), json); throw new Exception("Unknown transaction end accepted"); }
+    catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "closing a session ends its transaction only by commit or rollback"); }
+    var closed = await offline.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(Guid.NewGuid().ToString(), "commit"), json), json);
+    Check(JsonSerializer.Serialize(closed, json) == "{\"closed\":false}", "closing an unknown session with commit has nothing to commit");
 }
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
@@ -239,6 +243,7 @@ try
     result = await Run("SELECT * FROM #VariaBatchTest;");
     Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");
     await ExecutionLiveChecks.RunAsync(Check, service, info, json);
+    await TransactionLiveChecks.RunAsync(Check, service, info, json);
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
     await ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json);
     await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);

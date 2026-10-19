@@ -198,7 +198,7 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend also stops its own query after 30 s |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
-| `query.session.close` | invoke | unary | control | 10 s; answered locally `{ closed: false }` for a session of an ended generation |
+| `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -285,6 +285,30 @@ lost.
 severity 17–19 error cut short counts too); with `stopOnError`, the batch that stopped the script is not counted.
 Validation errors and a missing, busy or invalid session or connection use the error envelope instead of a summary, and
 nothing runs.
+
+**Session probe.** After every script, in the same `finally` path and while it still holds the session, the backend runs
+`SELECT @@TRANCOUNT, @@SPID, SUSER_SNAME();` on the session (its own 5 s timeout, no token: the script's may already be
+cancelled) and returns `transactionCount`, `spid` and `login` (≤ 128 characters; an `EXECUTE AS LOGIN` in force shows
+the impersonated login) with the summary. They are absent when the session was lost or never opened, or the probe
+failed. `elapsedMs` stops before the probe. A cancel does not roll back, so a cancelled script's open transaction is
+still reported; an error that dooms a transaction (`XACT_ABORT`) ends it by the batch's end (3998), and the probe says 0.
+
+**Ending a session.** `query.session.close` takes `{ sessionId, transaction? }`. Without `transaction` it cancels the tab's
+running script and closes the session (SQL Server rolls back what is open). With `'commit'` it first runs
+`WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION;` in the session, so every nesting level commits; a script still running
+(`SESSION_BUSY`), a commit SQL Server refuses (`SQL_ERROR`, "The transaction was not committed, and the query stays
+open. Msg …") or the deadline leaves the session open with its transaction, and a session lost meanwhile is closed and
+answers `SESSION_LOST` ("The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.").
+With `'rollback'` it runs `IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;` bounded to 5 s, ignores its failures (closing rolls
+back anyway), and closes. An unknown session answers `{ closed: false }`.
+
+**Session limit.** The backend keeps at most 128 query sessions (each one unpooled connection), which leaves room within
+main's 256 pending requests for every session to run a script and still be cancelled. The next session is refused with
+`SESSION_LIMIT`: "This query was not executed: 128 query tabs already hold SQL sessions, the most Varia SQL Manager keeps
+open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute
+again." Idle sessions are never reclaimed to make room: a session's SET options, temporary objects and open transaction
+cannot be seen from outside (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing
+it would lose them silently.
 
 ## Query events
 
@@ -646,7 +670,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 32 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 128 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
@@ -695,6 +719,8 @@ Failures reach the renderer as `{ ok: false, error, code }`. Messages are comple
 | Banner: crash loop | "The SQL backend stopped repeatedly and was not restarted again." **Restart SQL Backend** **Copy details** |
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
+| `SESSION_LIMIT` | "This query was not executed: 128 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
+| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
 
@@ -775,7 +801,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   stripping, with modes for each misbehaviour (`silent`, `exit`, `crash-after`, `bad-magic`, `oversize`, `truncated`,
   `no-hello`, `v1`, `wrong-version`, `missing-method`, `late`, `credit-overrun`, `seq-gap`, `unknown-id`, `contained`,
   `unresponsive`, and others) and a `workbench` mode for the Electron smoke tests, controlled through
-  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `silent-<generation>`). A
+  `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `fail-commit`, `silent-<generation>`). Each
+  session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK, so summaries carry the session probe. A
   script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92
   hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`; `@rate` is rows a second, `M1*n` is n one-row sets)
   with progress, message entries and a memory event, pages encoded per block on first read; `results.copy` and
