@@ -8,8 +8,12 @@
   {"accelerator":"Cmd+O","id":"file.open","label":"Open…","registerAccelerator":false,"type":"normal","click":[["command","file.open"]]}
   {"accelerator":"Cmd+S","id":"file.save","label":"Save","registerAccelerator":false,"type":"normal","click":[["command","file.save"]]}
   {"accelerator":"Cmd+Shift+S","id":"file.saveAs","label":"Save As…","registerAccelerator":false,"type":"normal","click":[["command","file.saveAs"]]}
+  {"accelerator":"Cmd+Alt+S","id":"file.saveAll","label":"Save All","registerAccelerator":false,"type":"normal","click":[["command","file.saveAll"]]}
   {"type":"separator"}
   {"accelerator":"Cmd+W","id":"file.close","label":"Close Query","registerAccelerator":false,"type":"normal","click":[["command","file.close"]]}
+  {"type":"separator"}
+  {"id":"file.recent","label":"Recent Files"}
+    {"enabled":false,"id":"file.recent.empty","label":"No Recent Files"}
 {"id":"menu.edit","label":"Edit"}
   {"accelerator":"Cmd+Z","id":"edit.undo","label":"Undo","registerAccelerator":false,"type":"normal","click":[["command","edit.undo"]]}
   {"accelerator":"Cmd+Shift+Z","id":"edit.redo","label":"Redo","registerAccelerator":false,"type":"normal","click":[["command","edit.redo"]]}

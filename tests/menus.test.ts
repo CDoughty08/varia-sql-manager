@@ -22,10 +22,10 @@ describe('menu model', () => {
     const windowMenu = ['window.explorer', 'window.editor', 'window.output', 'view.toggleResultsPane', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
     for (const platform of ['win32', 'linux'] as const) {
       // Exit (Windows) and Quit (Linux): macOS quits from its app menu.
-      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'window.close'])
+      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close', '-', 'submenu:file.recent', '-', 'window.close'])
       expect(outline('window', platform)).toEqual(windowMenu)
     }
-    expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close'])
+    expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close', '-', 'submenu:file.recent'])
     expect(outline('window', 'darwin')).toEqual([...windowMenu, '-', 'role:minimize', 'role:zoom'])
     for (const platform of platforms) {
       // SSMS's Edit menu: its submenus in the Visual Studio shell's order, Advanced before Bookmarks.
@@ -71,7 +71,7 @@ describe('menu model', () => {
     expect(menuRoots('query.connection')).toEqual(['query', 'editor.context'])
     expect(menuRoots('theme')).toEqual(['view'])
     expect(menuRoots('file')).toEqual(['file'])
-    expect(nativeMenuIds).toEqual(['file', 'edit', 'edit.findReplace', 'edit.advanced', 'edit.bookmarks', 'edit.intellisense', 'view', 'theme', 'query', 'query.connection', 'tools', 'window'])
+    expect(nativeMenuIds).toEqual(['file', 'file.recent', 'edit', 'edit.findReplace', 'edit.advanced', 'edit.bookmarks', 'edit.intellisense', 'view', 'theme', 'query', 'query.connection', 'tools', 'window'])
     expect(menuRoots('edit.bookmarks')).toEqual(['edit'])
   })
   it('carries placement mnemonics, platform titles, and compiled when clauses', () => {
@@ -224,7 +224,7 @@ describe('context menu model', () => {
 
 const themeModel = { theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes: [] } } as const
 function template(platform: NodeJS.Platform, checked: readonly CommandId[] = []) {
-  const actions = { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(id => checked.includes(id)), pageHasKeyFocus: () => true, sendActionToFirstResponder: vi.fn(), setTheme: vi.fn(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn() }
+  const actions = { command: vi.fn<ApplicationMenuActions['command']>(), isChecked: vi.fn<ApplicationMenuActions['isChecked']>(id => checked.includes(id)), pageHasKeyFocus: () => true, sendActionToFirstResponder: vi.fn(), setTheme: vi.fn(), createTheme: vi.fn(), openThemesFolder: vi.fn(), reloadThemes: vi.fn(), openRecent: vi.fn(), clearRecent: vi.fn() }
   return { actions, items: applicationMenuTemplate({ theme: { ...themeModel.theme, themes: [] } }, actions, platform) }
 }
 function flatten(items: readonly MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
@@ -324,7 +324,7 @@ describe('menu state', () => {
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', ...scriptCommandIds,
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
-      'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleLineNumbers']
+      'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -332,7 +332,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap', 'editor.toggleWhitespace', 'editor.toggleLineNumbers'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

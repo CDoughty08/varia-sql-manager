@@ -7,9 +7,13 @@ File
   &New Query  Ctrl+N  +++-
   &Open…  Ctrl+O  +++-
   &Save  Ctrl+S  +++-
-  Save &As…  Ctrl+Shift+S  +++-
+  Save &As…  +++-
+  Save A&ll  Ctrl+Shift+S  ----
   ---
   &Close Query  Ctrl+W  +++-
+  ---
+  Recent &Files >
+    No Recent Files  ----
   ---
   E&xit  Alt+F4  ++++
 Edit

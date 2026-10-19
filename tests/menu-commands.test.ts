@@ -205,7 +205,7 @@ describe('context menu commands', () => {
   })
   it('copy a saved query\'s path and show it in its folder through main, and stay disabled for an unsaved one', async () => {
     const { commands, documents, api } = setup()
-    const saved = documents.create('saved.sql', '', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql' })
+    const saved = documents.create('saved.sql', '', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql', encoding: 'utf8', readOnly: false })
     const unsaved = documents.create('SQLQuery2.sql', '', 'master')
     for (const id of ['file.copyPath', 'file.revealInFolder'] as const) {
       expect(commands.isEnabled(id), id).toBe(false)

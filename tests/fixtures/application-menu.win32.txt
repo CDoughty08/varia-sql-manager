@@ -6,9 +6,13 @@
   {"accelerator":"Ctrl+N","id":"file.new","label":"New Query","registerAccelerator":false,"type":"normal","click":[["command","file.new"]]}
   {"accelerator":"Ctrl+O","id":"file.open","label":"Open…","registerAccelerator":false,"type":"normal","click":[["command","file.open"]]}
   {"accelerator":"Ctrl+S","id":"file.save","label":"Save","registerAccelerator":false,"type":"normal","click":[["command","file.save"]]}
-  {"accelerator":"Ctrl+Shift+S","id":"file.saveAs","label":"Save As…","registerAccelerator":false,"type":"normal","click":[["command","file.saveAs"]]}
+  {"id":"file.saveAs","label":"Save As…","registerAccelerator":false,"type":"normal","click":[["command","file.saveAs"]]}
+  {"accelerator":"Ctrl+Shift+S","id":"file.saveAll","label":"Save All","registerAccelerator":false,"type":"normal","click":[["command","file.saveAll"]]}
   {"type":"separator"}
   {"accelerator":"Ctrl+W","id":"file.close","label":"Close Query","registerAccelerator":false,"type":"normal","click":[["command","file.close"]]}
+  {"type":"separator"}
+  {"id":"file.recent","label":"Recent Files"}
+    {"enabled":false,"id":"file.recent.empty","label":"No Recent Files"}
   {"type":"separator"}
   {"accelerator":"Alt+F4","id":"window.close","label":"Exit","role":"quit"}
 {"id":"menu.edit","label":"Edit"}

@@ -63,7 +63,7 @@ describe('query documents', () => {
     const saving = documents.save(tab.id)
     expect(api.saveSqlFile).toHaveBeenCalledWith(expect.objectContaining({ content: 'SELECT 1' }))
     model(tab.id).edit('SELECT 2')
-    pending.resolve({ ok: true, value: { id: 'file', name: 'saved.sql', path: 'C:/saved.sql' } })
+    pending.resolve({ ok: true, value: { id: 'file', name: 'saved.sql', path: 'C:/saved.sql', encoding: 'utf8', readOnly: false } })
     expect(await saving).toBe(true)
     expect(documents.get(tab.id)?.dirty).toBe(true)
     model(tab.id).undo()

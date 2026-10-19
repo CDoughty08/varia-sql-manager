@@ -266,8 +266,11 @@ try {
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
   const copyPath = artifact('saved-as.sql')
   await dialogs({ savePath: copyPath })
+  // Save As has no key on Windows and Linux, as in SSMS: Ctrl+Shift+S is Save All there, and nothing is unsaved.
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+Shift+S')
+  await expect(page.locator('.query-tabs').getByRole('tab', { name: 'saved-as.sql', exact: true })).toHaveCount(0)
+  await chooseMenu(page, 'File', 'Save As…')
   await expect(page.locator('.query-tabs').getByRole('tab', { name: 'saved-as.sql', exact: true })).toBeVisible()
   expect(await readFile(copyPath, 'utf8')).toBe('SELECT 43 AS answer;')
   // Close an inactive document, then change activation while its confirmation is pending.

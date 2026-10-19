@@ -67,7 +67,9 @@ resultsGrid.headerSelectionForeground #bcd4fa #0b4f99|resultsGrid.linkForeground
 statusBar.foreground #a3bbdc #2a4f7f|statusBar.separatorForeground #8a9cb3 #525e72|statusBar.onlineIndicator #8addac #146c38
 statusBar.idleIndicator #8a9cb3 #525e72|statusBar.executingBackground #1d2b40 #e3ebf5|statusBar.executingForeground #a3bbdc #2a4f7f
 statusBar.disconnectedBackground #1d2b40 #e3ebf5|statusBar.disconnectedForeground #a3bbdc #2a4f7f|statusBar.errorBackground #48242d #fbe4e6
-statusBar.errorForeground #f3bac0 #8a1c25|banner.errorBackground #48242d #fbe4e6|banner.errorForeground #f3bac0 #8a1c25
+statusBar.errorForeground #f3bac0 #8a1c25|queryStatusBar.background #1d2b40 #e3ebf5|queryStatusBar.foreground #a3bbdc #2a4f7f
+queryStatusBar.executingBackground #1d2b40 #e3ebf5|queryStatusBar.executingForeground #a3bbdc #2a4f7f|queryStatusBar.errorBackground #48242d #fbe4e6
+queryStatusBar.errorForeground #f3bac0 #8a1c25|banner.errorBackground #48242d #fbe4e6|banner.errorForeground #f3bac0 #8a1c25
 banner.warningBackground #3d3322 #fff3d6|banner.warningForeground #f0d49b #6b4400|dialog.backdropBackground #080c14bf #1f273366
 dialog.separatorBackground #354359 #cdd4de|dialog.labelForeground #c3cddd #2f3a49|dialog.descriptionForeground #9eafc5 #465366
 settings.headerForeground #a3bbdc #2a4f7f|notifications.background #1a2230 #ffffff|notifications.foreground #d9e1ec #1f2733
@@ -103,10 +105,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 61 slots, 199 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 61 slots, 205 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(61)
-    expect(colorKeys).toHaveLength(199)
-    expect(new Set(colorKeys).size).toBe(199)
+    expect(colorKeys).toHaveLength(205)
+    expect(new Set(colorKeys).size).toBe(205)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -122,7 +124,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(199)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(205)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -218,7 +220,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(199)
+      expect(Object.keys(theme.colors)).toHaveLength(205)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

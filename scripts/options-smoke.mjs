@@ -95,7 +95,7 @@ try {
   await expect(dialog().locator('.options-note').first()).toHaveText('Color theme: View › Theme')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click(fast)
   expect(await treeNames()).toEqual([
-    'Environment', '  General', '  Fonts and Colors', '  Keyboard', 'Text Editor', '  General', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
+    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
     'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting'
   ])
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
@@ -116,7 +116,17 @@ try {
   await field('Size').focus()
   await expect(dialog().locator('.options-note')).toHaveText('Colors come from the color theme (View › Theme).')
   await expect(dialog().locator('.options-description')).toContainText('Size')
-  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, and the tree has SSMS\'s 19 nodes and keys.')
+  // Environment › AutoRecover has SSMS's defaults (on, every 5 minutes, kept 7 days); off greys both numbers.
+  await node('AutoRecover').click(fast)
+  await expect(field('Save AutoRecover information')).toBeChecked()
+  await expect(field('Save AutoRecover information every')).toHaveValue('5')
+  await expect(field('Keep AutoRecover information for')).toHaveValue('7')
+  await field('Save AutoRecover information').uncheck()
+  await expect(field('Save AutoRecover information every')).toBeDisabled()
+  await expect(field('Keep AutoRecover information for')).toBeDisabled()
+  await field('Save AutoRecover information').check()
+  await expect(field('Keep AutoRecover information for')).toBeEnabled()
+  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, the tree has SSMS\'s 22 nodes and keys, and AutoRecover has SSMS\'s defaults.')
 
   // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.
   await node('Keyboard').focus()

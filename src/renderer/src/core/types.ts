@@ -8,6 +8,8 @@ export interface Disposable { dispose(): void }
 export interface CommandContext {
   /** The tab a tab-strip button acts on. */
   readonly tabId?: string
+  /** A File › Recent Files item: the opaque id main gave its path, which is all main accepts to open it. */
+  readonly recentFile?: string
   /** The choice of a View › Theme item. */
   readonly theme?: ThemePreferencePatch
   /** What the context menu that runs the command was opened for. */

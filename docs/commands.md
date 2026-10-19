@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (126)
+## Commands (131)
 
 ### File
 
@@ -18,7 +18,11 @@ keys it uses are listed below.
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
 | Save | `file.save` | Ctrl+S (`!outputGridFocus`) | Ctrl+S (`!outputGridFocus`) | ⌘S (`!outputGridFocus`) | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
-| Save As… | `file.saveAs` | Ctrl+Shift+S | Ctrl+Shift+S | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
+| Save As… | `file.saveAs` | — | — | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
+| Save All | `file.saveAll` | Ctrl+Shift+S | Ctrl+Shift+S | ⌥⌘S | `anyDocumentDirty && !documentBusy` | File › Save All |
+| Open Recent File… | `file.openRecent` | — | — | — | `hasRecentFiles && !documentBusy` | File › Recent Files › each recent file |
+| Clear Recent Files | `file.clearRecent` | — | — | — | `hasRecentFiles` | File › Recent Files › Clear Recent Files |
+| Recover Unsaved Queries… | `file.recoverUnsaved` | — | — | — | `hasRecoveryFiles` | — |
 | Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
 | Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
 | Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents; Query tab context menu › Close All |
@@ -36,6 +40,7 @@ keys it uses are listed below.
 | Paste (not in the palette) | `edit.paste` | Ctrl+V * | Ctrl+V * | ⌘V * | Always | Edit › Paste; Editor context menu › Paste; Text field context menu › Paste |
 | Delete (not in the palette) | `edit.delete` | Delete * | Delete * | ⌦ * | Always | Edit › Delete; Text field context menu › Delete |
 | Select All (not in the palette) | `edit.selectAll` | Ctrl+A * | Ctrl+A * | ⌘A * | Always | Edit › Select All; Text field context menu › Select All |
+| Toggle Insert/Overtype Mode | `editor.toggleOvertype` | Insert (`editorTextFocus`) | Insert (`editorTextFocus`) | — | `hasActiveDocument`; checked when `editorOvertype` | — |
 | Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find and Replace › Quick Find |
 | Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Find and Replace › Quick Replace |
 | Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Advanced › Toggle Line Comment |
@@ -204,9 +209,19 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_file` | **O**pen… | `file.open` | Always |
 | `1_file` | **S**ave | `file.save` | Always |
 | `1_file` | Save **A**s… | `file.saveAs` | Always |
+| `1_file` | Save A**l**l | `file.saveAll` | Always |
 | `2_close` | **C**lose Query | `file.close` | Always |
+| `7_recent` | Recent **F**iles › | Submenu: File › Recent Files | Always |
 | `z_quit` | E**x**it | `window.close` | Windows only |
 | `z_quit` | **Q**uit | `window.close` | Linux only |
+
+#### File › Recent Files
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| recent files | **1** C:\…\orders.sql: one item per file, as many as Options › Environment › General shows; access keys 1–9, then 0 | `file.openRecent` | Always |
+| recent files | No Recent Files (disabled), when the list is empty | `file.openRecent` | Always |
+| recent files | Clear Recent Files | `file.clearRecent` | Always |
 
 #### Edit (Alt+E)
 
@@ -518,7 +533,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (56)
+## Context keys (60)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -556,6 +571,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorLineNumbers` | boolean | state | Line numbers show in the query editor. |
 | `hasBookmarks` | boolean | state | An open document has a bookmark. |
 | `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |
+| `anyDocumentDirty` | boolean | state | Some open document has unsaved changes. |
+| `editorOvertype` | boolean | state | The editor is in overtype mode (OVR): typing replaces the character after the caret. |
+| `hasRecentFiles` | boolean | state | File › Recent Files lists at least one file. |
+| `hasRecoveryFiles` | boolean | state | AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |
 | `explorerSelectionKind` | `''`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'` | state | The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses. |
 | `explorerSelectionFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'` | state | The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses. |

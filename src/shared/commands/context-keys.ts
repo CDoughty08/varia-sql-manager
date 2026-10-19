@@ -55,6 +55,10 @@ export const contextKeys = {
   editorLineNumbers: { type: 'boolean', scope: 'state', description: 'Line numbers show in the query editor.' },
   hasBookmarks: { type: 'boolean', scope: 'state', description: 'An open document has a bookmark.' },
   activeDocumentHasBookmarks: { type: 'boolean', scope: 'state', description: 'The active document has a bookmark.' },
+  anyDocumentDirty: { type: 'boolean', scope: 'state', description: 'Some open document has unsaved changes.' },
+  editorOvertype: { type: 'boolean', scope: 'state', description: 'The editor is in overtype mode (OVR): typing replaces the character after the caret.' },
+  hasRecentFiles: { type: 'boolean', scope: 'state', description: 'File › Recent Files lists at least one file.' },
+  hasRecoveryFiles: { type: 'boolean', scope: 'state', description: 'AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded.' },
   explorerHasSelection: { type: 'boolean', scope: 'state', description: 'A node is selected in Object Explorer (a loading, error, or progress row is not a node).' },
   explorerSelectionKind: {
     type: 'enum', scope: 'state', values: ['', 'folder', ...nodeKinds],

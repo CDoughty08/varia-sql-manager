@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
-import { dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
+import { stat } from 'node:fs/promises'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
@@ -13,10 +14,16 @@ import { ScriptingRequests } from './backend/scripting-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest, validateResult } from './validation'
-import { SqlFileStore, fileKinds, saveFileSchema } from './sql-files'
+import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema } from './sql-files'
+import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
+import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
+import { recentFilesMenuModel } from '../shared/files/recent'
+import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { SettingsStore } from './settings-store'
+import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
+import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
@@ -31,7 +38,7 @@ import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
-import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
+import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptCancelSchema } from '../shared/scripting/schema.ts'
@@ -52,11 +59,15 @@ const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 let testHooks: BackendTestHooks | undefined
 // How long a reload waits for Chromium to see a renderer only the watchdog saw go before the page gets a new window.
 const lostRendererGraceMs = 5000
-const files = new SqlFileStore()
+// The ANSI code page is read when a file needs it: the system locale is known only once the app is ready.
+const files = new SqlFileStore({ legacyLabel: () => legacyCodePage(app.getSystemLocale()) })
 // Main's file dialogs and prompts, one at a time: a dialog asked for while another is open waits for it. A renderer reset
 // drops those not yet shown, and `rendererGeneration` tells a handler whose dialog was open then that its page is gone.
 const oneDialog = dialogQueue()
 let rendererGeneration = 0
+// The generation of the page the main frame shows. A reload's reset moves `rendererGeneration` as navigation starts, but
+// the page being replaced runs until the next one commits, and what it sends then (an AutoRecover write) is still its own.
+let pageGeneration = 0
 // Restart SQL Backend while one is pending (a double-click on the banner's Restart) shares it.
 let restarting: Promise<boolean> | undefined
 // The answer to "Workbench not responding", while it waits or shows; repeated closes share it.
@@ -82,6 +93,17 @@ let appearance: AppearanceService
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
 const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
+// File › Recent Files. macOS's Dock menu follows it, except in smoke runs, which must not add to the user's.
+const systemRecent = process.env.VARIA_SMOKE_TEST === '1' ? undefined : systemRecentDocuments(process.platform, app)
+const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), systemRecent ? { system: systemRecent } : {})
+// AutoRecover's copies of unsaved queries, user-only, in the profile; see recovery-store.ts.
+const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'))
+/** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
+ *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
+function lossDetailsFor(generation: number) {
+  const values = settings.current()
+  return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) })
+}
 /** A command's title with its setting filled in (Select Top <n> Rows), from validated settings only. */
 const menuTitle = (id: CommandId, title: string) => commandTitle(id, settings.current(), title)
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
@@ -99,13 +121,30 @@ const contextMenus = new ContextMenuPopups<BrowserWindow>({
   style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent(), build: template => Menu.buildFromTemplate(template),
   title: (id, title) => menuTitle(id, title)
 })
-// A second instance would overwrite this instance's layouts and connection library.
-const primaryInstance = app.requestSingleInstanceLock()
+// Files named on the command line, from a second instance, by macOS (open-file) or by a drop, until the page takes them.
+const launchFiles = new LaunchQueue()
+const commandLineFiles = (argv: readonly string[], cwd: string) => fileArguments(argv, { cwd, defaultApp: !!process.defaultApp })
+const ownFiles = commandLineFiles(process.argv, process.cwd())
+launchFiles.add(ownFiles)
+// A second instance would overwrite this instance's layouts and connection library, so it hands its files to this one
+// as additional data (which Chromium passes on as it was, while it may reorder the command line) and quits.
+const primaryInstance = app.requestSingleInstanceLock({ files: ownFiles } satisfies SecondInstanceData)
 if (!primaryInstance) app.quit()
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv, workingDirectory, data) => {
+  const handed = secondInstanceSchema.safeParse(data)
+  launchFiles.add(handed.success ? handed.data.files : commandLineFiles(argv, workingDirectory))
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.focus()
+  deliverLaunchFiles()
+})
+// macOS opens documents through the app (a double-click in Finder, a drop on the Dock icon), even before it is ready.
+let started = false
+app.on('open-file', (event, path) => {
+  event.preventDefault()
+  launchFiles.add([path])
+  if (started && !mainWindow) createWindow()
+  else deliverLaunchFiles()
 })
 
 // Ids come from main's compiled catalogue; the renderer checks them again before executing.
@@ -163,6 +202,94 @@ function pageDialog<T>(show: (window: BrowserWindow, signal?: AbortSignal) => Pr
     .then(answer => asked === rendererGeneration ? answer : cancelled)
 }
 
+/** Visual Studio's Save of Read-Only File, for a plain Save. Cancel, and a page that reloads meanwhile, save nothing. */
+async function askReadOnly(path: string): Promise<'saveAs' | 'overwrite' | 'cancel'> {
+  const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+    type: 'warning', title: 'Save of Read-Only File', message: `The file ${path} cannot be saved because it is write-protected.`,
+    detail: 'You can either save the file in a different location or Varia SQL Manager can attempt to remove the write-protection and overwrite the file in its current location.',
+    buttons: ['Save As…', 'Overwrite', 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal
+  }), { response: 2, checkboxChecked: false }, true)
+  return response === 0 ? 'saveAs' : response === 1 ? 'overwrite' : 'cancel'
+}
+
+/** A file read in the ANSI code page is saved only as Unicode, and only once the user agrees. */
+async function askUnicode(name: string, codePage: string): Promise<boolean> {
+  const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+    type: 'question', title: 'Save as Unicode', message: `${name} was read as ${codePage}.`,
+    detail: 'Varia SQL Manager saves only Unicode. Save it as UTF-8 with a byte order mark, which SSMS and other tools read correctly?',
+    buttons: ['Save as UTF-8', 'Cancel'], defaultId: 0, cancelId: 1, noLink: true, signal
+  }), { response: 1, checkboxChecked: false }, true)
+  return response === 0
+}
+
+/** File changed, before a Save replaces a change another program made to the file. */
+async function askChanged(path: string): Promise<boolean> {
+  const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+    type: 'warning', title: 'File changed', message: `The file ${path} was changed outside Varia SQL Manager.`, detail: 'Saving replaces those changes with this query.',
+    buttons: ['Save', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal
+  }), { response: 1, checkboxChecked: false }, true)
+  return response === 0
+}
+
+/** Why a file did not open, in a sentence rather than the system's wording, which repeats the path. */
+function openError(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'ENOENT' ? 'The file does not exist.' : code === 'EACCES' || code === 'EPERM' ? 'Access to the file was denied.' : errorMessage(error, 'The file could not be opened.')
+}
+
+/**
+ * Reads and registers files main was handed, never ones the page named: absolute paths to regular files, folders
+ * skipped without a word, and each opened file put first in Recent Files. What fails is reported as "name: reason".
+ */
+async function openPaths(paths: readonly string[]): Promise<OpenedFiles> {
+  const opened: OpenSqlFile[] = [], errors: string[] = []
+  for (const path of paths.slice(0, maxLaunchFiles)) {
+    try {
+      const file = await openPath(path)
+      if (file) opened.push(file)
+    } catch (error) { errors.push(openFailure(path, error)) }
+  }
+  return { files: opened, errors }
+}
+/** One file main was handed, read as Open reads it and put first in Recent Files; undefined for a folder. */
+async function openPath(path: string): Promise<OpenSqlFile | undefined> {
+  if (!isAbsolute(path)) throw new Error('The path is not absolute.')
+  if ((await stat(path)).isDirectory()) return undefined
+  const file = await files.read(path)
+  void recent.add(file.path).catch(() => {})
+  return file
+}
+const openFailure = (path: string, error: unknown) => `${basename(path)}: ${openError(error)}`.slice(0, 600)
+
+function sendOpened(opened: OpenedFiles): void {
+  if (mainWindow && !mainWindow.isDestroyed() && (opened.files.length || opened.errors.length)) mainWindow.webContents.send('varia:files-opened', opened)
+}
+
+/** Opens the files waiting for the page, once it is ready. */
+function deliverLaunchFiles(): void {
+  deliverWaiting(launchFiles, { ready: () => rendererReady && !!mainWindow, generation: () => rendererGeneration, open: openPaths, send: sendOpened })
+}
+
+/** Items shown in recently used file lists; the default while settings.json cannot be read. */
+const recentCount = async () => (await settings.load().catch(() => ({ values: settings.current() }))).values['environment.recentFiles.count']
+async function recentFiles() {
+  await recent.load()
+  return recent.list(await recentCount())
+}
+function publishRecentFiles(): void {
+  void recentFiles().then(list => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:recent-files-changed', list) }, () => {})
+}
+/** A Recent Files entry: opened as an Open would; a file that is gone offers to leave the list, and any other failure says why. */
+function openRecent(id: string): Promise<OpenedFiles> {
+  return openRecentEntry(recent, id, {
+    open: openPath, describe: openFailure,
+    askRemove: async path => (await pageDialog((window, signal) => dialog.showMessageBox(window, {
+      type: 'warning', title: 'Recent Files', message: `${basename(path)} cannot be opened.`, detail: `${path} no longer exists. Remove it from the Recent Files list?`,
+      buttons: ['Remove', 'Keep'], defaultId: 0, cancelId: 1, noLink: true, signal
+    }), { response: 1, checkboxChecked: false }, true)).response === 0
+  })
+}
+
 /** Asks the page to close, as the window's close button and a quit do; the request outlives a reload or crash. */
 function requestClose(intent: CloseIntent): void {
   closePending = true
@@ -195,7 +322,7 @@ function restartBackend(): Promise<boolean> {
  *  under way. */
 function confirmUnresponsiveClose(window: BrowserWindow, quit: boolean): void {
   unresponsivePrompt ??= oneDialog(async () => window.isDestroyed() ? { response: 1 } : !rendererUnresponsive ? { response: -1 }
-    : dialog.showMessageBox(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: 'The workbench is not responding. Unsaved queries will be lost.', buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }),
+    : dialog.showMessageBox(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: lossDetailsFor(pageGeneration).unresponsive, buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }),
   { response: 1 }).then(({ response }) => {
     if (window.isDestroyed() || response === 1) return
     if (response === 0) closeApproved = true
@@ -220,12 +347,17 @@ const menuActions: ApplicationMenuActions = {
     appearance.createStarterTheme().then(path => shell.showItemInFolder(path), error => { void appearance.notify(errorMessage(error, 'The custom theme could not be created.')) })
   },
   openThemesFolder: () => { openThemesFolder().catch(error => { void appearance.notify(errorMessage(error, 'The themes folder could not be opened.')) }) },
-  reloadThemes: () => { void appearance.reload() }
+  reloadThemes: () => { void appearance.reload() },
+  // The macOS menu bar's Recent Files: main opens the file and hands it to the page, as it does a drop.
+  openRecent: id => { if (rendererReady) openRecent(id).then(sendOpened, error => sendOpened({ files: [], errors: [errorMessage(error, 'The file could not be opened.')] })) },
+  clearRecent: () => { void recent.clear().catch(() => {}) }
 }
 
 // The renderer owns enablement and checkboxes; it sends them on varia:menu-state and every rebuild re-applies them.
 const menuBridge = new NativeMenuBridge({
-  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state, title: menuTitle }, menuActions, process.platform)),
+  build: () => Menu.buildFromTemplate(applicationMenuTemplate({
+    theme: appearance.state, title: menuTitle, recentFiles: recentFilesMenuModel(recent.list(settings.current()['environment.recentFiles.count']), process.platform)
+  }, menuActions, process.platform)),
   install: menu => Menu.setApplicationMenu(menu)
 })
 
@@ -320,12 +452,13 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   contents.on('did-start-navigation', details => {
     if (details.isMainFrame && !details.isSameDocument && rendererLoaded && details.url === contents.getURL()) resetRendererState()
   })
+  contents.on('did-navigate', () => { pageGeneration = rendererGeneration })
   // The renderer blocks unload only while queries are unsaved or servers are connected. This reload waits; the prompt
   // takes its turn after any open dialog, and Reload starts it again, allowed this time.
   contents.on('will-prevent-unload', event => {
     if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
     const generation = rendererGeneration
-    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: 'Unsaved queries will be lost. Connections are closed and uncommitted transactions are rolled back.', buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: lossDetailsFor(pageGeneration).reload, buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
       if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) return
       reloadApproved = true
@@ -347,8 +480,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     // backend while Chromium launches the new renderer, and on Windows the backend then inherits that renderer's channel
     // handle, so Chromium never sees the new renderer die and its crash leaves the window frozen.
     rendererLoaded = false
+    const lostPage = pageGeneration
     resetRendererState()
-    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.', buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
+    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
       if (response === 0) reloadLostRenderer(window)
@@ -440,11 +574,20 @@ app.whenReady().then(async () => {
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
   const explorerRequests = new ExplorerRequests(backend)
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
-  void settings.load().catch(() => {})
+  const loaded = settings.load()
+  loaded.catch(() => {})
+  // AutoRecover's copies older than Keep AutoRecover information for go before the page can list them; with settings
+  // unreadable, or a retention reset because settings.json was invalid, nothing is deleted under a retention the user
+  // may have changed.
+  void recovery.purge(retentionDays(settings))
   settings.onDidChange(state => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:settings-changed', state)
     buildMenu()
+    // Items shown in recently used file lists may have changed.
+    publishRecentFiles()
   })
+  void recent.load()
+  recent.onDidChange(() => { buildMenu(); publishRecentFiles() })
   const jobs = resultsJobs = new ResultsJobHost({
     backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), platform: process.platform,
     writeClipboard: text => clipboard.writeText(text), documentsDir: () => app.getPath('documents'),
@@ -493,6 +636,16 @@ app.whenReady().then(async () => {
     // A close or quit that the previous page could not finish (it reloaded or crashed first) goes to this one; a page
     // whose close is already under way shares it.
     if (rendererReady && closePending) command('window.close')
+    deliverLaunchFiles()
+  })
+  // The preload's drop listener sends the paths of files dropped on the window: trusted drops only, which page script
+  // can neither make nor read paths from.
+  ipcMain.on('varia:files-dropped', (event, value: unknown) => {
+    if (!trusted(event)) return
+    const dropped = droppedPathsSchema.safeParse(value)
+    if (!dropped.success) return
+    launchFiles.add(dropped.data.filter(path => isAbsolute(path)))
+    deliverLaunchFiles()
   })
   // Only the live page can end a close: a page being unloaded (not ready since the reset) may still report its own.
   ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined } })
@@ -557,20 +710,64 @@ app.whenReady().then(async () => {
   handle('varia:files-open', async () => {
     const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return []
-    return Promise.all(selected.filePaths.map(path => files.read(path)))
+    if (selected.filePaths.length > maxLaunchFiles) throw new Error(`Select at most ${maxLaunchFiles} files at a time.`)
+    const opened = await Promise.all(selected.filePaths.map(path => files.read(path)))
+    for (const file of opened) void recent.add(file.path).catch(() => {})
+    return opened
   })
   handle('varia:files-save', async value => {
     const options = saveFileSchema.parse(value), kind = fileKinds[options.kind ?? 'sql']
-    let selectedPath: string | undefined
-    if (!options.fileId || options.saveAs) {
-      const safeName = sanitizeFileName(options.name)
-      const defaultPath = options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName)
-      const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
-      if (selection.canceled || !selection.filePath) return null
-      selectedPath = selection.filePath
-    }
-    return files.save(options.content, options.fileId, selectedPath, options.kind)
+    // While settings.json cannot be read, Options cannot open either, so the defaults apply.
+    const values = (await settings.load().catch(() => ({ values: settings.current() }))).values
+    const encoding = values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined
+    let before: string | undefined
+    try { before = options.fileId ? files.get(options.fileId).path : undefined } catch { /* saveDocument reports it. */ }
+    const saved = await saveDocument(files, options, encoding, {
+      readOnly: askReadOnly, changed: askChanged, unicode: askUnicode,
+      saveDialog: async registeredPath => {
+        const defaultPath = registeredPath ?? join(app.getPath('documents'), sanitizeFileName(options.name))
+        const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
+        return selection.canceled || !selection.filePath ? undefined : selection.filePath
+      }
+    }, values['environment.documents.detectExternalChanges'])
+    // Saved under a new name: Recent Files lists it, as Visual Studio's does.
+    if (saved && saved.path !== before) void recent.add(saved.path).catch(() => {})
+    return saved
   })
+  handle('varia:files-check', () => files.check())
+  handle('varia:files-reload', value => files.reload(z.uuid().parse(value)))
+  // Visual Studio's question, naming the file by main's registration; the "All" answers apply to the rest of one check.
+  handle('varia:confirm-reload', async value => {
+    const { fileId, dirty, more } = reloadPromptSchema.parse(value), path = files.get(fileId).path
+    const answers: ReloadAnswer[] = more ? ['yes', 'yesToAll', 'no', 'noToAll'] : ['yes', 'no']
+    const no = more ? 2 : 1
+    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+      type: 'question', title: 'File changed', message: path,
+      detail: dirty ? 'This file has been modified outside of the source editor. Do you want to reload it and lose the changes made in the source editor?' : 'This file has been modified outside of the source editor. Do you want to reload it?',
+      buttons: more ? ['Yes', 'Yes to All', 'No', 'No to All'] : ['Yes', 'No'], defaultId: 0, cancelId: no, noLink: true, signal
+    }), { response: no, checkboxChecked: false }, true)
+    return answers[response] ?? 'no'
+  })
+  // AutoRecover. Main adds the path from its own registration of the query's file; nothing is written while AutoRecover is
+  // off (settings that cannot be read leave it on, as Options shows), or once the window is closing.
+  handle('varia:recovery-write', async value => {
+    const request = recoveryWriteSchema.parse(value), generation = pageGeneration
+    const values = (await settings.load().catch(() => ({ values: settings.current() }))).values
+    if (!values['environment.autoRecover.enabled'] || closeApproved) return
+    let path: string | undefined
+    try { path = request.fileId ? files.get(request.fileId).path : undefined } catch { /* Released: kept without a file. */ }
+    await recovery.write({ ...request, ...path ? { path } : {} }, generation)
+  })
+  handle('varia:recovery-discard', value => recovery.discard(recoveryDiscardSchema.parse(value).ids, pageGeneration))
+  handle('varia:recovery-list', () => recovery.list(pageGeneration))
+  handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
+    const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
+    const file = record.path && generation === rendererGeneration ? await files.register(record.path) : undefined
+    return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {} }
+  })
+  handle('varia:recent-files', () => recentFiles())
+  handle('varia:recent-files-open', value => openRecent(z.uuid().parse(value)))
+  handle('varia:recent-files-clear', () => recent.clear())
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
   // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
@@ -590,14 +787,17 @@ app.whenReady().then(async () => {
     return prompt.buttons[response]?.answer ?? 'cancel'
   })
   // The page has handled every unsaved query. On macOS a window close leaves the app running, as macOS apps do.
-  ipcMain.handle('varia:close-window', event => {
+  ipcMain.handle('varia:close-window', async event => {
     if (!trusted(event)) return
     closeApproved = true
+    // Every query was saved or discarded, so AutoRecover's copies of this page's go, before the app can exit.
+    await recovery.discardOwned(pageGeneration).catch(() => {})
     if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
     else app.quit()
   })
   buildMenu()
   createWindow()
+  started = true
   // The full catalogue only feeds the menu, so it loads after the window is on its way.
   void appearance.scan()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

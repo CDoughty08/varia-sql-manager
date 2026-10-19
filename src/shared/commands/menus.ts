@@ -14,6 +14,7 @@ export type MenubarId = typeof applicationMenus[number]['id']
 export const contextMenuIds = ['editor.context', 'explorer.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
 export const submenuIds = [
+  'file.recent',
   'edit.findReplace',
   'edit.advanced',
   'edit.bookmarks',
@@ -33,6 +34,7 @@ export type MenuId = MenubarId | SubmenuId | ContextMenuId
  */
 export const menuIds: readonly MenuId[] = [
   'file',
+  'file.recent',
   'edit',
   'edit.findReplace',
   'edit.advanced',
@@ -68,14 +70,18 @@ export interface SubmenuDescriptor {
   readonly title: string
   /** The native menu item id of its first placement (in `menuIds` order); later placements are `<nativeId>@<menu>`. */
   readonly nativeId: string
-  /** Items built from the theme state follow the catalogue's: main and the renderer each add them. */
-  readonly dynamic?: 'theme'
+  /** Items built from the theme state or the recent files follow the catalogue's: main and the renderer each add them. */
+  readonly dynamic?: DynamicSubmenu
   /** The title names the selected object ("Script Table as"): `scriptAsTitles[explorerScriptTitle]`, else `title`. */
   readonly dynamicTitle?: 'scriptAs'
   readonly placements: readonly SubmenuPlacement[]
 }
+/** What a dynamic submenu's own items come from: View › Theme's theme state, or File › Recent Files' list. */
+export type DynamicSubmenu = 'theme' | 'recentFiles'
 /** Submenus, placed like commands. One with nothing visible in it is left out (`pruneMenu`). */
 export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
+  // Visual Studio's File › Recent Files, before Exit; its items are the files (File › Open Recent File… runs each).
+  'file.recent': { title: 'Recent Files', nativeId: 'file.recent', dynamic: 'recentFiles', placements: [{ menu: 'file', group: '7_recent', order: 1, mnemonic: 'f' }] },
   // Edit's submenus in the order of the Visual Studio shell SSMS 22 runs on: Advanced comes before Bookmarks.
   'edit.findReplace': { title: 'Find and Replace', nativeId: 'edit.findReplace', placements: [{ menu: 'edit', group: '3_find', order: 1, mnemonic: 'f' }] },
   'edit.advanced': { title: 'Advanced', nativeId: 'edit.advanced', placements: [{ menu: 'edit', group: '4_more', order: 1, mnemonic: 'v' }] },
@@ -101,7 +107,7 @@ export type MenuEntry =
     readonly role?: RoleName; readonly accelerator?: string; readonly when?: WhenAst
   }
   | {
-    readonly kind: 'submenu'; readonly id: SubmenuId; readonly nativeId: string; readonly title: string; readonly mnemonic?: string; readonly when?: WhenAst; readonly dynamic?: 'theme'
+    readonly kind: 'submenu'; readonly id: SubmenuId; readonly nativeId: string; readonly title: string; readonly mnemonic?: string; readonly when?: WhenAst; readonly dynamic?: DynamicSubmenu
     readonly dynamicTitle?: 'scriptAs'
   }
   | { readonly kind: 'role'; readonly role: MenuRole }

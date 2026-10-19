@@ -722,7 +722,9 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   **Reload** of the workbench restarts the backend the same way, without a notice, so no session outlives the page that
   owned it.
 - **Lost renderer.** When the workbench's renderer process stops, main resets the page's state and restarts the backend
-  once, then asks "Workbench stopped" (**Reload** or **Close**); the reload that follows restarts nothing. On Windows a
+  once, then asks "Workbench stopped" (**Reload** or **Close**); the reload that follows restarts nothing. Its detail,
+  and those of "Workbench not responding" and "Reload workbench", name AutoRecover's copies when that page's generation
+  has any (see AutoRecover below); the reloaded page offers them. On Windows a
   process spawned while Chromium launches a renderer inherits every inheritable handle, that renderer's channel
   included: Node cannot spawn without passing them (libuv always lets the child inherit), so a backend generation that
   starts at that moment (a crash-loop restart at 0 s) holds the channel open, and when the renderer stops Chromium never
@@ -763,6 +765,9 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
+| Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
+| Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
+| AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
@@ -893,12 +898,32 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Backend → renderer.** Unary responses and events are decoded in main under the control limits; pages are opaque to
   main, size- and credit-checked, copied exactly, decoded only in the results worker, and rendered as text.
 - **SQL Server data is untrusted content**, bounded by the cell, row, page and budget limits.
+- **Paths.** The renderer never names a file: main takes paths from its own dialogs, the command line, a second
+  instance's handover, macOS's open-file and its Recent Files store, and the page refers to files by opaque ids. A drop
+  is read in the preload's isolated world, from trusted events only, and sent on `varia:files-dropped`, which
+  `window.varia` does not expose; main still accepts only absolute paths to regular files, at most 32, and reads them
+  as Open does (5 MB).
+- **AutoRecover** (`varia:recovery-write`, `-list`, `-take`, `-discard`, main's channels with strict zod schemas)
+  writes query text, never results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json` (a lower-case uuid;
+  a file named in upper case still counts against the caps, is quarantined rather than offered, and is purged): the folder is
+  0700 and each record 0600 on POSIX, written to a temporary file that is chmodded, synced and renamed, and never logged.
+  The page names a record only by uuid and its file only by its opaque id; main adds the path from its own
+  registration. Each record is owned by the main process and renderer generation that wrote it (the page the main frame
+  had committed when the message arrived, so a page being replaced by a reload still writes as itself): a page may write only
+  a new record or one its generation owns, and is offered every other (an earlier run's after a crash, kill or power
+  loss; an earlier generation's after the renderer stopped or reloaded), which taking moves to it, once: a record is
+  handed over only while it is offered, so it never backs two tabs. Writes stop while
+  AutoRecover is off and once a close is approved; an approved close deletes the page's records first. An invalid
+  record is quarantined and never offered; records, quarantined records and interrupted writes older than Keep
+  AutoRecover information for are deleted at startup, only once settings were read, and not when settings.json held a
+  retention that was reset because the file or that value was invalid.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an
   absolute `VARIA_TEST_NODE`), `VARIA_BACKEND_TEST_HOOKS`, `VARIA_RESULT_BUDGET_BYTES`, `VARIA_BACKEND_LIVENESS_MS`,
-  `--varia-test-mode` (`window.__variaResults`) and `globalThis.__variaTest`. `VARIA_IPC_TRACE=1` (unpackaged only)
+  `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, and `window.__variaRecovery.flush()`, AutoRecover's save at once)
+  and `globalThis.__variaTest`. `VARIA_IPC_TRACE=1` (unpackaged only)
   logs each frame's kind, id and length to stderr, never a body.
 
 ## Testing

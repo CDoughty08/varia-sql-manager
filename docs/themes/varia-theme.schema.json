@@ -903,13 +903,13 @@
         },
         "breadcrumb.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Query context line (server and database). Default $textMuted (Dark #8a9cb3, Light #525e72).",
-          "markdownDescription": "(VS Code) Query context line (server and database). Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
+          "description": "(VS Code) The bar that names an XML, JSON or execution plan document opened from the results. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(VS Code) The bar that names an XML, JSON or execution plan document opened from the results. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "breadcrumb.separatorForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Separator in the query context line. Default @breadcrumb.foreground (Dark #8a9cb3, Light #525e72).",
-          "markdownDescription": "(Varia) Separator in the query context line. Default `@breadcrumb.foreground` (Dark `#8a9cb3`, Light `#525e72`)."
+          "description": "(Varia) Unused since the query status bar replaced the query context line; themes that set it stay valid. Default @breadcrumb.foreground (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Unused since the query status bar replaced the query context line; themes that set it stay valid. Default `@breadcrumb.foreground` (Dark `#8a9cb3`, Light `#525e72`)."
         },
         "editor.background": {
           "$ref": "#/definitions/value",
@@ -1215,6 +1215,36 @@
           "$ref": "#/definitions/value",
           "description": "(Varia) Status bar text when the backend is unavailable. Default $errorSurfaceText (Dark #f3bac0, Light #8a1c25).",
           "markdownDescription": "(Varia) Status bar text when the backend is unavailable. Default `$errorSurfaceText` (Dark `#f3bac0`, Light `#8a1c25`)."
+        },
+        "queryStatusBar.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status bar of the query window, below or above the query (as in SSMS), while its query is idle. Default @statusBar.background (Dark #1d2b40, Light #e3ebf5).",
+          "markdownDescription": "(Varia) Status bar of the query window, below or above the query (as in SSMS), while its query is idle. Default `@statusBar.background` (Dark `#1d2b40`, Light `#e3ebf5`)."
+        },
+        "queryStatusBar.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Query status bar text. Default @statusBar.foreground (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(Varia) Query status bar text. Default `@statusBar.foreground` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "queryStatusBar.executingBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Query status bar while its query runs. Default @statusBar.executingBackground (Dark #1d2b40, Light #e3ebf5).",
+          "markdownDescription": "(Varia) Query status bar while its query runs. Default `@statusBar.executingBackground` (Dark `#1d2b40`, Light `#e3ebf5`)."
+        },
+        "queryStatusBar.executingForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Query status bar text while its query runs. Default @statusBar.executingForeground (Dark #a3bbdc, Light #2a4f7f).",
+          "markdownDescription": "(Varia) Query status bar text while its query runs. Default `@statusBar.executingForeground` (Dark `#a3bbdc`, Light `#2a4f7f`)."
+        },
+        "queryStatusBar.errorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Query status bar after a run failed, was cancelled or timed out, or lost its connection. Default @statusBar.errorBackground (Dark #48242d, Light #fbe4e6).",
+          "markdownDescription": "(Varia) Query status bar after a run failed, was cancelled or timed out, or lost its connection. Default `@statusBar.errorBackground` (Dark `#48242d`, Light `#fbe4e6`)."
+        },
+        "queryStatusBar.errorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Query status bar text after a run failed, was cancelled or timed out, or lost its connection. Default @statusBar.errorForeground (Dark #f3bac0, Light #8a1c25).",
+          "markdownDescription": "(Varia) Query status bar text after a run failed, was cancelled or timed out, or lost its connection. Default `@statusBar.errorForeground` (Dark `#f3bac0`, Light `#8a1c25`)."
         },
         "banner.errorBackground": {
           "$ref": "#/definitions/value",

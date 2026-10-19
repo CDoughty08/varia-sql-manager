@@ -3,7 +3,8 @@ import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
 import { menubarIds, menuForMnemonic, type ContextMenuId, type MenubarId, type MenuId } from '../../../shared/commands/menus'
-import type { VariaApi } from '../../../shared/contracts'
+import type { RecentFile, VariaApi } from '../../../shared/contracts'
+import { recentFilesMenuModel } from '../../../shared/files/recent'
 import type { MenuStyle } from '../../../shared/menu-style'
 import { themeMenuModel, type ThemeMenuItem } from '../../../shared/theme/menu'
 import type { ThemeState } from '../../../shared/theme/types'
@@ -19,6 +20,19 @@ import { MenubarAccess } from './menubar'
 import { NativeMenuPresenter } from './native'
 import { resolveMenu, type DynamicMenuItem, type ResolvedCommandItem, type ResolvedMenuItem } from './resolve'
 import { argsFor, contextMenuLabels, menuForTarget, targetKeys, type MenuTarget, type MenuTargetService, type TargetHit } from './targets'
+
+/**
+ * File › Recent Files' items: each file runs Open Recent File with its id, after a separator Clear Recent Files, and an
+ * empty list shows one disabled No Recent Files. Files have no icon.
+ */
+export function recentFileMenuItems(list: readonly RecentFile[], platform: Platform): DynamicMenuItem[] {
+  return recentFilesMenuModel(list, platform).map((item): DynamicMenuItem => {
+    if (item.kind === 'separator') return item
+    if (item.kind === 'clear') return { kind: 'command', key: 'recent.clear', id: 'file.clearRecent', title: item.label, mnemonic: 'c', icon: null }
+    if (item.kind === 'empty') return { kind: 'command', key: 'recent.empty', id: 'file.openRecent', title: item.label, mnemonic: null, enabled: false, icon: null }
+    return { kind: 'command', key: 'recent.' + item.id, id: 'file.openRecent', args: { recentFile: item.id }, title: item.label, mnemonic: item.mnemonic ?? null, icon: null }
+  })
+}
 
 /**
  * View › Theme's theme items as menu items: the mode and theme choices run `preferences.setTheme` with the choice as
@@ -44,6 +58,8 @@ export interface MenuServiceOptions {
   readonly context: { getState(): ContextKeys }
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
   readonly theme: { readonly state: Pick<ThemeState, 'preference' | 'themes'> }
+  /** File › Recent Files' list, as main last sent it. */
+  readonly recentFiles?: { getSnapshot(): readonly RecentFile[] }
   /** The settings titles follow (Select Top <n> Rows). */
   readonly settings?: () => SettingsValues
   readonly focus: FocusAdapter
@@ -134,7 +150,7 @@ export class MenuService implements Disposable {
   resolve(menu: MenuId, target?: MenuTarget): readonly ResolvedMenuItem[] {
     const { platform, commands, keybindings, theme } = this.options
     return resolveMenu(menu, {
-      platform, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state) }, settings: this.options.settings?.(),
+      platform, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state), recentFiles: () => recentFileMenuItems(this.options.recentFiles?.getSnapshot() ?? [], platform) }, settings: this.options.settings?.(),
       ...(target ? { target: targetKeys(target), args: argsFor(target) } : {})
     })
   }

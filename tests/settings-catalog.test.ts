@@ -16,10 +16,13 @@ import { valueSchema } from '../src/shared/settings/schema'
 const expectedTree = [
   'Environment',
   '  General (environment.general)',
+  '  AutoRecover (environment.autoRecover)',
+  '  Documents (environment.documents)',
   '  Fonts and Colors (environment.fontsAndColors)',
   '  Keyboard (environment.keyboard)',
   'Text Editor',
   '  General (textEditor.general)',
+  '  Editor Tab and Status Bar (textEditor.editorTabAndStatusBar)',
   '  Transact-SQL',
   '    General (textEditor.transactSql.general)',
   '    Tabs (textEditor.transactSql.tabs)',
