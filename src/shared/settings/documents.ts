@@ -1,10 +1,25 @@
 import type { SettingDef } from './types'
 
 /**
- * Environment › Documents, as SSMS 22 (the Visual Studio 2022 shell) names it, and Environment › General's recently used
- * lists. Later document settings (AutoRecover) join this file.
+ * Environment › Documents, as SSMS 22 (the Visual Studio 2022 shell) names it, Environment › General's recently used
+ * lists, and Environment › AutoRecover (on, every 5 minutes, kept 7 days, as in SSMS).
  */
 export const documentSettings = [
+  {
+    key: 'environment.autoRecover.enabled', page: 'environment.autoRecover', label: 'Save AutoRecover information', type: 'boolean', default: true,
+    keywords: ['autorecover', 'recover', 'recovery', 'crash', 'backup', 'unsaved'],
+    description: 'Keeps a copy of each query with unsaved changes in Varia SQL Manager\'s profile folder, readable only by you, so a crash, a forced close or a power loss loses at most the last few minutes. The next start offers the copies in Recover Unsaved Queries. Turning it off deletes this window\'s copies; copies left by earlier runs are still offered.'
+  },
+  {
+    key: 'environment.autoRecover.intervalMinutes', page: 'environment.autoRecover', label: 'Save AutoRecover information every', type: 'integer', min: 1, max: 60, default: 5, unit: 'minutes',
+    enabledBy: 'environment.autoRecover.enabled', keywords: ['autorecover', 'interval', 'minutes'],
+    description: 'How often AutoRecover saves the queries whose text changed since it last saved them.'
+  },
+  {
+    key: 'environment.autoRecover.keepDays', page: 'environment.autoRecover', label: 'Keep AutoRecover information for', type: 'integer', min: 1, max: 90, default: 7, unit: 'days',
+    enabledBy: 'environment.autoRecover.enabled', keywords: ['autorecover', 'retention', 'days', 'delete'],
+    description: 'How long a copy that was not recovered is kept. Older copies are deleted when Varia SQL Manager starts.'
+  },
   {
     key: 'environment.recentFiles.count', page: 'environment.general', label: 'Items shown in recently used file lists', type: 'integer', min: 1, max: 24, default: 10,
     keywords: ['recent', 'recently used', 'most recently used', 'mru', 'file menu'],

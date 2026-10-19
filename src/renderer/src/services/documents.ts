@@ -74,6 +74,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     return this.add(name, sql, database, connectionId, unsaved, file, undefined, false, eol ?? this.options.newLineEnding)
   }
   /**
+   * Opens a query AutoRecover kept: its text, unsaved, with no connection, its line ending, and its original file when
+   * main registered it again. A large value has no bracket matching or colours, as `openText` opens it.
+   */
+  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file']): QueryDocument {
+    const value = kind === 'sql' ? undefined : kind
+    return this.add(name, text, value ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol)
+  }
+  /**
    * Opens a value from the results as a text document: no connection, not dirty, in its language. A long text opens
    * with its first 16,384 characters and appends 131,072 a frame without undo stops, so a 4 MB value never blocks the
    * window; the document counts as saved once the last chunk is in. A value over 65,536 characters has no bracket

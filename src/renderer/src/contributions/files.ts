@@ -13,9 +13,10 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * File commands act on the tab a toolbar button or query tab menu names (`tabId`), otherwise on the active query. New
  * Query with Object Explorer focused opens on the selected node's server and database, as in SSMS.
  */
-export function filesContribution({ files, commands, documents, context, explorer, connections, recentFiles, quickInput }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
+export function filesContribution({ files, commands, documents, context, explorer, connections, recentFiles, quickInput, recovery }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
   readonly context: Pick<Workbench['context'], 'get'>; readonly explorer: Pick<Workbench['explorer'], 'queryTarget'>; readonly connections: Pick<Workbench['connections'], 'get'>
   readonly recentFiles?: ExternalStore<readonly RecentFile[]>; readonly quickInput?: Pick<Workbench['quickInput'], 'pick'>
+  readonly recovery?: Pick<Workbench['recovery'], 'getSnapshot' | 'refresh' | 'openDialog'>
 }, api: Pick<VariaApi, 'writeClipboardText' | 'revealSqlFile'> & Partial<Pick<VariaApi, 'clearRecentFiles'>>): Disposable {
   const tabOf = (context?: CommandArgs) => context?.tabId ?? documents.getSnapshot().activeId
   const fileOf = (context?: CommandArgs) => documents.get(tabOf(context))?.file
@@ -50,6 +51,15 @@ export function filesContribution({ files, commands, documents, context, explore
     commands.register('file.clearRecent', {
       when: () => !!recentFiles?.getSnapshot().length,
       run: async () => { if (api.clearRecentFiles) unwrap(await api.clearRecentFiles()) }
+    }),
+    // Asks main again first: the dialog lists what is there now.
+    commands.register('file.recoverUnsaved', {
+      when: () => !!recovery?.getSnapshot().entries.length,
+      run: async () => {
+        if (!recovery) return
+        if (!(await recovery.refresh()).length) throw new Error('AutoRecover has nothing to recover.')
+        recovery.openDialog()
+      }
     }),
     commands.register('file.close', { when: context => files.canClose(context?.tabId), run: context => files.close(context?.tabId) }),
     commands.register('file.closeOthers', {

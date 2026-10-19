@@ -7,6 +7,7 @@ import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
 import { RecentFilesService } from '../services/recent-files'
+import { RecoveryService } from '../services/recovery'
 import { EditorOptionsService } from '../services/editor-options'
 import { EditorStatusService } from '../services/editor-status'
 import { TargetService } from '../services/targets'
@@ -79,6 +80,8 @@ export interface Workbench extends Disposable {
   readonly files: FileService
   /** File › Recent Files, as main last sent it. */
   readonly recentFiles: RecentFilesService
+  /** AutoRecover: copies of unsaved queries, and the Recover dialog for those an earlier run or page left. */
+  readonly recovery: RecoveryService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
   /** The editor caret's Ln, Col and Ch and the line ending, for the IDE status bar. */
@@ -135,6 +138,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
   const recentFiles = new RecentFilesService(api)
+  const recovery = new RecoveryService({
+    api, documents, files, settings, warn: message => commands.reportWarning(message),
+    server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
+  })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
   const focus = domFocusAdapter(documents)
@@ -157,6 +164,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scripting: scripting.running,
     inputMode,
     recentFiles,
+    recovery,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -195,6 +203,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ...gridStats ? { gridStats } : {},
     files,
     recentFiles,
+    recovery,
     targets,
     editorOptions,
     editorStatus,
@@ -209,6 +218,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dispose: () => {
       if (disposed) return
       disposed = true
+      // Before the documents close: a page that unloads leaves its AutoRecover copies to be offered.
+      recovery.dispose()
       // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
       listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
       contributions.forEach(contribution => contribution.dispose())
@@ -264,5 +275,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')
+  // What an earlier run or page left unsaved is offered once the workbench is up.
+  void recovery.start()
   return workbench
 }

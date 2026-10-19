@@ -164,6 +164,11 @@ export const commandCatalog = {
     unavailableHint: 'No files were opened recently.'
   },
   'file.clearRecent': { title: 'Clear Recent Files', category: 'File', keywords: ['recent', 'mru'], precondition: 'hasRecentFiles', unavailableHint: 'No files were opened recently.' },
+  // The Recover dialog again, for queries AutoRecover kept that were neither recovered nor discarded when it first showed.
+  'file.recoverUnsaved': {
+    title: 'Recover Unsaved Queries…', category: 'File', icon: 'history', keywords: ['autorecover', 'recover', 'recovery', 'crash', 'unsaved'], precondition: 'hasRecoveryFiles',
+    unavailableHint: 'AutoRecover has nothing to recover.'
+  },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }],

@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { BackendState, ConnectionInfo, ConnectionOptions, ExplorerChildrenResult, ExplorerNode as WireNode, QueryResult, RecentFile, VariaApi } from '../../src/shared/contracts'
+import type { BackendState, ConnectionInfo, ConnectionOptions, ExplorerChildrenResult, ExplorerNode as WireNode, QueryResult, RecentFile, RecoveredDocument, RecoveryEntry, RecoveryWrite, VariaApi } from '../../src/shared/contracts'
 import { folderSpecs, kindSpecs, type FolderId } from '../../src/shared/explorer/catalog'
 import type { ExplorerChildrenParams, ObjectRef } from '../../src/shared/explorer/refs'
 import type { Platform } from '../../src/shared/commands/keybindings'
@@ -14,6 +14,7 @@ import { EditorOptionsService } from '../../src/renderer/src/services/editor-opt
 import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
 import { RecentFilesService } from '../../src/renderer/src/services/recent-files'
+import { RecoveryService } from '../../src/renderer/src/services/recovery'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
 import { PaneService } from '../../src/renderer/src/services/panes'
@@ -119,6 +120,30 @@ export function recentFilesApi(initial: RecentFile[] = []) {
     pushRecent: (files: RecentFile[]) => { listeners.forEach(listener => listener(files)) }
   }
 }
+/**
+ * Main's half of AutoRecover, in memory: `written` holds this page's copies by id, `offered` what an earlier page or run
+ * left, which `take` hands over (its text is `-- <name>` unless `texts` says otherwise) and `discard` deletes.
+ */
+export function recoveryApi(offered: RecoveryEntry[] = []) {
+  const written = new Map<string, RecoveryWrite>(), texts = new Map<string, Partial<RecoveredDocument>>()
+  const state = { offered: [...offered] }
+  return {
+    writeRecovery: vi.fn<VariaApi['writeRecovery']>(async record => { written.set(record.id, record); return { ok: true, value: undefined } }),
+    discardRecovery: vi.fn<VariaApi['discardRecovery']>(async ids => {
+      for (const id of ids) written.delete(id)
+      state.offered = state.offered.filter(entry => !ids.includes(entry.id))
+      return { ok: true, value: undefined }
+    }),
+    listRecovery: vi.fn<VariaApi['listRecovery']>(async () => ({ ok: true, value: state.offered })),
+    takeRecovery: vi.fn<VariaApi['takeRecovery']>(async id => {
+      const entry = state.offered.find(item => item.id === id)
+      if (!entry) return { ok: false, error: 'This query is no longer offered for recovery.' }
+      state.offered = state.offered.filter(item => item.id !== id)
+      return { ok: true, value: { text: `-- ${entry.name}`, name: entry.name, kind: entry.kind, eol: 'crlf', ...texts.get(id) } }
+    }),
+    written, texts, recoveryState: state
+  }
+}
 /** Storage backed by a Map, for the command history. */
 export function memoryStorage(initial: Record<string, string> = {}): HistoryStorage & { readonly values: Map<string, string> } {
   const values = new Map(Object.entries(initial))
@@ -162,7 +187,7 @@ export function fakeInputMode(): MonacoInputMode {
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues> } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[] } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture(settingsDocumentOptions(() => settings.getSnapshot().values))
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
@@ -206,6 +231,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' })),
     ...recentFilesApi(),
+    ...recoveryApi(options.recovery),
     ...settingsApi(options.settings),
     ...backendApi()
   }
@@ -222,6 +248,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
   const recentFiles = new RecentFilesService(api)
+  // AutoRecover's timer runs only when a test advances it.
+  const recoveryTimers = manualTimers()
+  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
@@ -248,6 +277,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     results: results.context,
     scripting: scripting.running,
     recentFiles,
+    recovery,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -273,6 +303,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     queries,
     files,
     recentFiles,
+    recovery,
     editorOptions,
     inputMode,
     connections,
@@ -318,6 +349,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
+    recovery.dispose()
     menus.dispose()
     quickInput.dispose()
     contributions.forEach(contribution => contribution.dispose())
@@ -353,6 +385,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     queries,
     files,
     recentFiles,
+    recovery,
+    recoveryTimers,
     targets,
     context,
     commands,

@@ -16,6 +16,7 @@ import { valueSchema } from '../src/shared/settings/schema'
 const expectedTree = [
   'Environment',
   '  General (environment.general)',
+  '  AutoRecover (environment.autoRecover)',
   '  Documents (environment.documents)',
   '  Fonts and Colors (environment.fontsAndColors)',
   '  Keyboard (environment.keyboard)',
