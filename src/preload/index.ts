@@ -62,6 +62,7 @@ const api: VariaApi = {
   revealSqlFile: fileId => ipcRenderer.invoke('varia:files-reveal', fileId),
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
+  confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),
   closeWindowCancelled: () => { ipcRenderer.send('varia:close-cancelled') },
   loadLayouts: () => ipcRenderer.invoke('varia:layouts-load'),

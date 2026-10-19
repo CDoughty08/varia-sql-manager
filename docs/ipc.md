@@ -292,6 +292,8 @@ cancelled) and returns `transactionCount`, `spid` and `login` (≤ 128 character
 the impersonated login) with the summary. They are absent when the session was lost or never opened, or the probe
 failed. `elapsedMs` stops before the probe. A cancel does not roll back, so a cancelled script's open transaction is
 still reported; an error that dooms a transaction (`XACT_ABORT`) ends it by the batch's end (3998), and the probe says 0.
+The renderer keeps the count per tab for the connection it ran on; moving the query, a lost connection, or a session that
+ended (or was found lost) clears it. The status bar shows `login (spid)`, as SSMS does.
 
 **Ending a session.** `query.session.close` takes `{ sessionId, transaction? }`. Without `transaction` it cancels the tab's
 running script and closes the session (SQL Server rolls back what is open). With `'commit'` it first runs
@@ -309,6 +311,17 @@ open. Close query tabs you no longer need, or disconnect idle ones (Query > Conn
 again." Idle sessions are never reclaimed to make room: a session's SET options, temporary objects and open transaction
 cannot be seen from outside (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing
 it would lose them silently.
+
+**Prompts.** Before sessions end, the renderer sends main `varia:confirm-sessions` with `{ action, tabs }` (`action`:
+`close`, `closeAll`, `changeConnection`, `disconnect`, `disconnectAll` or `exit`; at most 1,024 tabs, each `{ name ≤ 512,
+transactions, running }` and only those with an open transaction or a running script). Main composes the message box
+from these facts (`src/shared/sessions.ts`) and shows it through its dialog queue, so a page that crashes or reloads
+while it is open gets Cancel and the box closes. One query with an open transaction asks **Commit**, **Roll Back** or
+**Cancel**; several ask once, **Commit All**, **Roll Back All** or **Cancel**, listing up to 10 by name; a query still
+executing is never committed: it is cancelled (the renderer waits up to 15 s for it to stop) and its session rolls back,
+and when only executing queries are involved the box asks **Cancel Query and Close** or **Keep Running**. Cancel (Keep
+Running) is the default and the Escape answer. The renderer then ends each session with `query.session.close` and the
+chosen `transaction`; a commit that fails is shown and the close, move, disconnect or quit stops there.
 
 ## Query events
 
@@ -670,6 +683,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
+| Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 128 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |

@@ -2,6 +2,7 @@ import type { ApiResult, ConnectionInfo, DatabaseInfo, VariaApi } from '../../..
 import type { Workbench } from '../core/workbench'
 import type { Disposable } from '../core/types'
 import type { QuickPickItem } from '../quickinput/QuickInputService'
+import { isQueryDocument } from '../documents'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
@@ -24,10 +25,19 @@ export function databaseItems(databases: readonly DatabaseInfo[]): QuickPickItem
   return [...databases].sort((a, b) => rank(a) - rank(b)).map(database => ({ id: database.name, label: database.name, icon: 'database', group: databaseGroups[rank(database)] }))
 }
 
-export function queryContribution({ commands, queries, documents, connections, targets, quickInput }: Pick<Workbench, 'commands' | 'queries' | 'documents' | 'connections' | 'targets' | 'quickInput'>,
+export function queryContribution({ commands, queries, documents, connections, targets, quickInput, events, backend }: Pick<Workbench, 'commands' | 'queries' | 'documents' | 'connections' | 'targets' | 'quickInput' | 'events' | 'backend'>,
   api: Pick<VariaApi, 'databases'>): Disposable {
+  /** A query with no connection (never a lost one, which Reconnect replaces): Execute connects it first. */
+  const connectsFirst = () => {
+    const tab = documents.active
+    return !!tab && isQueryDocument(tab) && !tab.connectionId && !queries.isRunning(tab.id) && !documents.getSnapshot().busy && backend.getSnapshot().state.status === 'ready'
+  }
   const registrations = [
-    commands.register('query.execute', { when: () => queries.canExecute(), run: () => queries.execute() }),
+    // SSMS's F5 on a disconnected query opens Connect, then runs the query on the server chosen.
+    commands.register('query.execute', {
+      when: () => queries.canExecute() || connectsFirst(),
+      run: () => { if (queries.canExecute()) return queries.execute(); if (connectsFirst()) events.emit({ type: 'query.connectRequested', tabId: documents.active!.id }) }
+    }),
     commands.register('query.cancel', { run: () => queries.cancel() }),
     commands.register('query.changeConnection', { run: () => {
       const tab = documents.active

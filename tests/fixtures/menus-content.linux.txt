@@ -9,7 +9,7 @@ File
   &Save  Ctrl+S  +++-
   Save &As…  Ctrl+Shift+S  +++-
   ---
-  &Close Query  Ctrl+W  ++--
+  &Close Query  Ctrl+W  +++-
   ---
   &Quit  Ctrl+Q  ++++
 Edit
@@ -73,7 +73,7 @@ Query
     C&hange Connection…  ++--
   Change &Database…  Ctrl+U  -+--
   ---
-  E&xecute  F5  -+--
+  E&xecute  F5  ++--
   &Cancel Executing Query  Alt+Pause  --+-
 Tools
   &Options…  ++++

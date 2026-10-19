@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle } from './fixtures/dialog-lifecycle.mjs'
+import { sessionPrompts } from './fixtures/session-prompts.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -139,7 +140,7 @@ try {
   await expect(textbox()).toBeFocused()
   // A disabled item does nothing and the menu stays open; clicking its button again closes it, and focus never moved.
   await menubarItem('Query').click(fast)
-  await menu('Query').getByRole('menuitem', { name: 'Execute', exact: true }).click({ force: true })
+  await menu('Query').getByRole('menuitem', { name: 'Cancel Executing Query', exact: true }).click({ force: true })
   await expect(menu('Query')).toBeVisible()
   await menubarItem('Query').click(fast)
   await expect(openMenus()).toHaveCount(0)
@@ -476,7 +477,9 @@ try {
   const editorMenu = menu('Query editor')
   await expect(editorMenu).toBeVisible()
   expect(await editorMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Connection', 'Execute', 'Cancel Executing Query', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
-  await expect(editorMenu.getByRole('menuitem', { name: 'Execute', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  // The query is not connected: Execute connects it first; nothing is running to cancel.
+  await expect(editorMenu.getByRole('menuitem', { name: 'Execute', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(editorMenu.getByRole('menuitem', { name: 'Cancel Executing Query', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await expect(editorMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toContainText('Ctrl+C')
   await expect(page.locator('.monaco-menu')).toHaveCount(0)
   await page.keyboard.press('Escape')
@@ -1221,7 +1224,12 @@ try {
   await dialogLifecycle(launchOptions)
   console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload.')
 
-  // 17. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
+  // 17. Open transactions and running queries (fixtures/session-prompts.mjs), in a fresh app: F5 connects a disconnected
+  // query first; closing, changing connection and quitting ask Commit, Roll Back or Cancel; an executing query is
+  // cancelled only when asked; and a crash closes the open prompt.
+  await sessionPrompts(launchOptions)
+
+  // 18. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on
   // master, and the server's Refresh reloads its lists without an error.
   if (process.env.VARIA_TEST_SQL_SERVER) {
     application = await electron.launch({ ...launchOptions, env: liveEnv })
@@ -1268,7 +1276,7 @@ try {
   } else console.log('Menus checks: the live server step was skipped (VARIA_TEST_SQL_SERVER is not set).')
 
   expect(failures).toEqual([])
-  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; main\'s dialogs across a restart, a crash and a quit; and a live server when configured.')
+  console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; main\'s dialogs across a restart, a crash and a quit; open-transaction and running-query prompts; and a live server when configured.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'menus-failure.png') }).catch(() => {})
   console.log(await page?.evaluate(() => ({ focused: document.activeElement?.outerHTML.slice(0, 300), menus: document.querySelectorAll('.menu').length, errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })).catch(() => 'no page'))
