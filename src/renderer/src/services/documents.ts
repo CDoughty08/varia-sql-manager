@@ -185,6 +185,32 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     try { await action() }
     finally { if (!this.disposed) this.changed({ ...this.getSnapshot(), busy: false }) }
   }
+  /**
+   * Puts a file's text, as read again, in its document (File changed's Yes): one undoable edit of only the part that
+   * changed, so the caret stays where it can, with the file's line ending; the document is clean afterwards.
+   */
+  reload(id: string, text: string, eol: LineEnding, file: NonNullable<QueryDocument['file']>): void {
+    const model = this.entries.get(id)?.model
+    if (!model || this.disposed) return
+    const sequence = eol === 'crlf' ? '\r\n' : '\n'
+    model.pushStackElement()
+    if (model.getEOL() !== sequence) model.pushEOL(eol === 'crlf' ? 1 : 0)
+    const current = model.getValue(), next = text.replace(/\r\n|\r|\n/g, sequence)
+    if (current !== next) {
+      let start = 0, end = 0
+      while (start < current.length && start < next.length && current[start] === next[start]) start++
+      while (end < current.length - start && end < next.length - start && current[current.length - 1 - end] === next[next.length - 1 - end]) end++
+      // Never inside a line break or a surrogate pair, which the model would split.
+      while (start > 0 && (current[start - 1] === '\r' || (current.charCodeAt(start - 1) & 0xfc00) === 0xd800)) start--
+      while (end > 0 && (current[current.length - end - 1] === '\r' || (current.charCodeAt(current.length - end) & 0xfc00) === 0xdc00)) end--
+      const from = model.getPositionAt(start), to = model.getPositionAt(current.length - end)
+      model.pushEditOperations([], [{ range: { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column }, text: next.slice(start, next.length - end) }], () => null)
+    }
+    model.pushStackElement()
+    this.replace(id, { file, name: file.name, savedVersionId: model.getAlternativeVersionId(), dirty: false })
+  }
+  /** The document's file was deleted outside: it has unsaved changes until Save writes the file again. */
+  markUnsaved(id: string): void { this.replace(id, { savedVersionId: null, dirty: true }) }
   async save(id: string, saveAs = false): Promise<boolean> {
     const document = this.get(id), model = this.entries.get(id)?.model
     if (!document || !model) return false

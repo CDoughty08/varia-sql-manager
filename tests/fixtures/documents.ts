@@ -19,6 +19,8 @@ export class TestModel {
   eol: '\n' | '\r\n' = '\n'
   private index = 0
   private version = 1
+  /** pushEOL and pushEditOperations join one undo step until pushStackElement closes it, as in Monaco. */
+  private open = false
   constructor(value: string, readonly uri: string, readonly language = 'sql') { this.history = [{ value, alternative: 1 }] }
   getValue(): string { return this.history[this.index].value }
   getValueLength(): number { return this.getValue().length }
@@ -41,7 +43,30 @@ export class TestModel {
     this.emit()
   }
   onDidChangeContent(listener: () => void) { this.listeners.add(listener); return { dispose: () => { this.listeners.delete(listener) } } }
-  pushStackElement(): void {}
+  pushStackElement(): void { this.open = false }
+  /** Monaco's pushEOL: an undoable change of every line ending. */
+  pushEOL(sequence: 0 | 1): void {
+    const eol = sequence === 1 ? '\r\n' : '\n'
+    if (eol === this.eol) return
+    this.eol = eol
+    this.step(this.getValue().replace(/\r?\n/g, eol))
+  }
+  /** Monaco's pushEditOperations: undoable edits, joined with the open undo step. */
+  pushEditOperations(_selections: unknown, edits: { range: IRange; text: string }[]): null {
+    let value = this.getValue()
+    for (const { range, text } of edits) value = value.slice(0, this.offset(range.startLineNumber, range.startColumn)) + text + value.slice(this.offset(range.endLineNumber, range.endColumn))
+    this.step(value)
+    return null
+  }
+  getPositionAt(offset: number): { lineNumber: number; column: number } {
+    const before = this.getValue().slice(0, offset).split('\n')
+    return { lineNumber: before.length, column: before.at(-1)!.length + 1 }
+  }
+  private step(value: string): void {
+    if (this.open) this.history[this.index] = { value, alternative: ++this.version }
+    else { this.history = this.history.slice(0, this.index + 1); this.history.push({ value, alternative: ++this.version }); this.index++; this.open = true }
+    this.emit()
+  }
   getEOL(): string { return this.eol }
   /** Monaco's setEOL: the text takes the new line ending, and the version changes, without an undo stop. */
   setEOL(sequence: 0 | 1): void {

@@ -3,12 +3,15 @@ import type { CommandId } from '../shared/commands/catalog'
 import { defaultRules, toAccelerator, toPlatform, type Platform } from '../shared/commands/keybindings'
 import { applicationMenus, buildMenuModel, menuMayShowChords, pruneMenu, type MenuEntry, type MenuId } from '../shared/commands/menus'
 import { themeMenuModel, type ThemeMenuItem } from '../shared/theme/menu'
+import { recentFilesMenuModel, type RecentMenuItem } from '../shared/files/recent'
 import type { ThemePreferencePatch, ThemeState } from '../shared/theme/types'
 
 export interface ApplicationMenuModel {
   theme: Pick<ThemeState, 'preference' | 'themes'>
   /** A command's title with its setting filled in (`commandTitle` over main's validated settings); the catalogue's otherwise. */
   title?(id: CommandId, title: string): string
+  /** File › Recent Files' items (`recentFilesMenuModel`); No Recent Files when left out. */
+  recentFiles?: readonly RecentMenuItem[]
 }
 export interface ApplicationMenuActions {
   command(id: CommandId): void
@@ -22,6 +25,9 @@ export interface ApplicationMenuActions {
   createTheme(): void
   openThemesFolder(): void
   reloadThemes(): void
+  /** A Recent Files item, by the id main gave its path. */
+  openRecent(id: string): void
+  clearRecent(): void
 }
 
 const mnemonicSafe = (label: string, platform: NodeJS.Platform) => platform === 'darwin' ? label : label.replaceAll('&', '&&')
@@ -37,6 +43,18 @@ function themeItems(items: readonly ThemeMenuItem[], actions: ApplicationMenuAct
     if (item.kind === 'action') return { id: item.id, label: item.label, click: () => themeActions[item.id](actions) }
     const { patch } = item
     return { id: item.id, label: mnemonicSafe(item.label, platform), type: 'radio', checked: item.checked, enabled: item.enabled, ...(patch ? { click: () => actions.setTheme(patch) } : {}) }
+  })
+}
+
+/** File › Recent Files as native items; paths are escaped where Electron reads access keys, and an item's digit is its key. */
+function recentItems(items: readonly RecentMenuItem[], actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
+  return items.map((item, index): MenuItemConstructorOptions => {
+    if (item.kind === 'separator') return { type: 'separator' }
+    if (item.kind === 'empty') return { id: 'file.recent.empty', label: item.label, enabled: false }
+    if (item.kind === 'clear') return { id: 'file.recent.clear', label: item.label, click: () => actions.clearRecent() }
+    // The number before the path holds no '&', so the access key's position survives the escaping.
+    const label = mnemonicSafe(item.label, platform), at = item.mnemonic ? item.label.indexOf(item.mnemonic) : -1
+    return { id: `file.recent.${index + 1}`, label: at < 0 ? label : label.slice(0, at) + '&' + label.slice(at), click: () => actions.openRecent(item.id) }
   })
 }
 
@@ -83,7 +101,7 @@ function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: Applicati
     if (entry.kind === 'role') return [{ role: entry.role }]
     if (entry.kind === 'command') return commandItems(entry, actions, platform, model.title?.(entry.id, entry.title) ?? entry.title)
     const commands = menuItems(entry.id, model, actions, platform)
-    const dynamic = entry.dynamic === 'theme' ? themeItems(themeMenuModel(model.theme), actions, platform) : []
+    const dynamic = entry.dynamic === 'theme' ? themeItems(themeMenuModel(model.theme), actions, platform) : entry.dynamic === 'recentFiles' ? recentItems(model.recentFiles ?? recentFilesMenuModel([], platform), actions, platform) : []
     return [{ id: entry.nativeId, label: entry.title, submenu: [...commands, ...(commands.length && dynamic.length ? [{ type: 'separator' as const }] : []), ...dynamic] }]
   })
 }

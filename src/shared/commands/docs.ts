@@ -13,7 +13,7 @@ const categories: readonly (Category | undefined)[] = ['File', 'Edit', 'View', '
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(applicationMenus.map(menu => [menu.id, menu.label])) as Record<typeof applicationMenus[number]['id'], string>,
-  theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
+  'file.recent': 'File › Recent Files', theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
 }
@@ -57,11 +57,14 @@ function themePlacements(id: CommandId): string[] {
   }
   return themeItems.flatMap(item => item.kind === 'action' && item.command === id ? [`${menuNames.theme} › ${item.label}`] : [])
 }
+/** File › Recent Files' items, built from the list main keeps. */
+const recentItems: Partial<Record<CommandId, string>> = { 'file.openRecent': 'each recent file', 'file.clearRecent': 'Clear Recent Files' }
+const recentPlacements = (id: CommandId): string[] => recentItems[id] ? [`${menuNames['file.recent']} › ${recentItems[id]}`] : []
 
 function menus(id: CommandId): string {
   const placements = (commandDescriptor(id).menus ?? []).flatMap(placement =>
     placementTitles(id, placement).map(([title, shown]) => `${menuNames[placement.menu]} › ${title}${only(shown) ? ` (${only(shown)})` : ''}`))
-  return [...placements, ...themePlacements(id)].join('; ') || '—'
+  return [...placements, ...themePlacements(id), ...recentPlacements(id)].join('; ') || '—'
 }
 
 /** Items without their own letter take the first free one in their menu, as the menus assign them. */
@@ -107,6 +110,12 @@ function menuTable(menu: MenuId): string[] {
       row(['theme items', themeItems.flatMap(item => item.kind === 'radio' ? [label(item)] : []).join(', '), code('preferences.setTheme'), 'Always']),
       row(['theme items', themeItems.flatMap(item => item.kind === 'submenu' ? [label(item) + ' ›'] : []).join(', ') + ': one item per theme', code('preferences.setTheme'), 'Always']),
       ...themeItems.flatMap(item => item.kind === 'action' ? [row(['theme items', label(item), code(item.command), 'Always'])] : []))
+  }
+  if (submenuIds.some(id => id === menu && submenus[id].dynamic === 'recentFiles')) {
+    lines.push(
+      row(['recent files', '**1** C:\\…\\orders.sql: one item per file, as many as Options › Environment › General shows; access keys 1–9, then 0', code('file.openRecent'), 'Always']),
+      row(['recent files', 'No Recent Files (disabled), when the list is empty', code('file.openRecent'), 'Always']),
+      row(['recent files', 'Clear Recent Files', code('file.clearRecent'), 'Always']))
   }
   return lines
 }

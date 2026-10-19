@@ -1,7 +1,7 @@
 import { commandDescriptor, type Codicon, type CommandId } from '../../../shared/commands/catalog'
 import { contextRecord, type ContextKeys, type TargetKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
-import { assignMnemonics, buildMenuModel, pruneMenu, submenuTitle, trimSeparators, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
+import { assignMnemonics, buildMenuModel, pruneMenu, submenuTitle, trimSeparators, type DynamicSubmenu, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
 import type { ScriptAsTitleKey } from '../../../shared/scripting/catalog.ts'
 import { evaluateWhen } from '../../../shared/commands/when'
 import { commandTitle, type SettingsValues } from '../../../shared/settings/catalog'
@@ -35,6 +35,8 @@ export type DynamicMenuItem =
   | {
     readonly kind: 'command'; readonly key: string; readonly id: CommandId; readonly args?: CommandArgs; readonly title: string; readonly mnemonic?: string | null
     readonly enabled?: boolean; readonly checked?: boolean; readonly radio?: true
+    /** null shows no icon where the command has one (each recent file would repeat it). */
+    readonly icon?: null
   }
   | { readonly kind: 'submenu'; readonly key: string; readonly title: string; readonly mnemonic?: string | null; readonly items: readonly DynamicMenuItem[] }
   | { readonly kind: 'separator' }
@@ -49,7 +51,7 @@ export interface ResolveOptions {
   readonly args?: CommandArgs
   readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'>
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
-  readonly dynamic?: { readonly theme?: () => readonly DynamicMenuItem[] }
+  readonly dynamic?: { readonly [K in DynamicSubmenu]?: () => readonly DynamicMenuItem[] }
   /** Settings that titles follow ("Select Top 50 Rows"); the defaults without them. Applied here, not in the cached model. */
   readonly settings?: SettingsValues
   /** Each menu's entries; defaults to the catalogue's model (tests pass their own). */
@@ -87,8 +89,8 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
   const children = (id: SubmenuId) => model(id)
   let separators = 0
 
-  const command = (id: CommandId, title: string, extra: { mnemonic?: string | null; key: string; toggle?: boolean; args?: CommandArgs; enabled?: boolean; checked?: boolean; radio?: true }): Draft => {
-    const itemArgs = extra.args ?? args, icon = extra.toggle || extra.radio ? undefined : commandDescriptor(id).icon
+  const command = (id: CommandId, title: string, extra: { mnemonic?: string | null; key: string; toggle?: boolean; args?: CommandArgs; enabled?: boolean; checked?: boolean; radio?: true; icon?: null }): Draft => {
+    const itemArgs = extra.args ?? args, icon = extra.toggle || extra.radio || extra.icon === null ? undefined : commandDescriptor(id).icon
     const keybinding = guarded(() => keybindings.lookup(id), undefined)
     const checked = extra.toggle ? guarded(() => commands.isToggled(id), false) : extra.checked
     return {

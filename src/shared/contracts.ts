@@ -10,6 +10,7 @@ import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.t
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
+import type { RecentFile } from './files/recent'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -302,6 +303,15 @@ export interface OpenSqlFile extends SqlFile { content: string; eol: LineEnding;
 /** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
 export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
 export type DocumentKind = typeof documentKinds[number]
+/** Files main opened for the page (the command line, a second instance, macOS's open-file, a drop, Recent Files), with
+ *  what could not be opened: at most 32 errors, each "name: message". */
+export interface OpenedFiles { files: OpenSqlFile[]; errors: string[] }
+/** A registered file another program changed or deleted (`varia:files-check`). */
+export interface FileChange { fileId: string; change: 'modified' | 'deleted' }
+/** File changed's answer; the "All" answers apply to the rest of one check. */
+export type ReloadAnswer = 'yes' | 'yesToAll' | 'no' | 'noToAll'
+export interface ReloadPrompt { fileId: string; dirty: boolean; more: boolean }
+export type { RecentFile }
 /** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
@@ -374,6 +384,21 @@ export interface VariaApi {
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>
   /** Shows an open query's saved file in the file manager; main looks its path up by id. */
   revealSqlFile(fileId: string): Promise<ApiResult<void>>
+  /** Files main opened by itself: from the command line, a second instance, macOS, a drop on the window, or the macOS
+   *  menu's Recent Files. The page adopts them as it does an Open's. */
+  onFilesOpened(callback: (opened: OpenedFiles) => void): () => void
+  /** The registered files changed or deleted outside Varia SQL Manager since main last looked. */
+  checkSqlFiles(): Promise<ApiResult<FileChange[]>>
+  /** Reads a registered file again, keeping its id. */
+  reloadSqlFile(fileId: string): Promise<ApiResult<OpenSqlFile>>
+  /** Visual Studio's "modified outside of the source editor" question about one file, in main's message box. */
+  confirmReload(prompt: ReloadPrompt): Promise<ApiResult<ReloadAnswer>>
+  /** File › Recent Files, most recent first, as many as Options shows; names and paths are for display only. */
+  recentFiles(): Promise<ApiResult<RecentFile[]>>
+  /** Opens a Recent Files entry by its id; a file that no longer opens asks whether to remove it. */
+  openRecentFile(id: string): Promise<ApiResult<OpenedFiles>>
+  clearRecentFiles(): Promise<ApiResult<void>>
+  onRecentFiles(callback: (files: RecentFile[]) => void): () => void
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
