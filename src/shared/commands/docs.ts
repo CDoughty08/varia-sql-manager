@@ -13,6 +13,7 @@ const categories: readonly (Category | undefined)[] = ['File', 'Edit', 'View', '
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(applicationMenus.map(menu => [menu.id, menu.label])) as Record<typeof applicationMenus[number]['id'], string>,
+  'file.recent': 'File › Recent Files', 'edit.findReplace': 'Edit › Find and Replace', 'edit.advanced': 'Edit › Advanced', 'edit.bookmarks': 'Edit › Bookmarks', 'edit.intellisense': 'Edit › IntelliSense',
   theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
@@ -57,11 +58,14 @@ function themePlacements(id: CommandId): string[] {
   }
   return themeItems.flatMap(item => item.kind === 'action' && item.command === id ? [`${menuNames.theme} › ${item.label}`] : [])
 }
+/** File › Recent Files' items, built from the list main keeps. */
+const recentItems: Partial<Record<CommandId, string>> = { 'file.openRecent': 'each recent file', 'file.clearRecent': 'Clear Recent Files' }
+const recentPlacements = (id: CommandId): string[] => recentItems[id] ? [`${menuNames['file.recent']} › ${recentItems[id]}`] : []
 
 function menus(id: CommandId): string {
   const placements = (commandDescriptor(id).menus ?? []).flatMap(placement =>
     placementTitles(id, placement).map(([title, shown]) => `${menuNames[placement.menu]} › ${title}${only(shown) ? ` (${only(shown)})` : ''}`))
-  return [...placements, ...themePlacements(id)].join('; ') || '—'
+  return [...placements, ...themePlacements(id), ...recentPlacements(id)].join('; ') || '—'
 }
 
 /** Items without their own letter take the first free one in their menu, as the menus assign them. */
@@ -107,6 +111,12 @@ function menuTable(menu: MenuId): string[] {
       row(['theme items', themeItems.flatMap(item => item.kind === 'radio' ? [label(item)] : []).join(', '), code('preferences.setTheme'), 'Always']),
       row(['theme items', themeItems.flatMap(item => item.kind === 'submenu' ? [label(item) + ' ›'] : []).join(', ') + ': one item per theme', code('preferences.setTheme'), 'Always']),
       ...themeItems.flatMap(item => item.kind === 'action' ? [row(['theme items', label(item), code(item.command), 'Always'])] : []))
+  }
+  if (submenuIds.some(id => id === menu && submenus[id].dynamic === 'recentFiles')) {
+    lines.push(
+      row(['recent files', '**1** C:\\…\\orders.sql: one item per file, as many as Options › Environment › General shows; access keys 1–9, then 0', code('file.openRecent'), 'Always']),
+      row(['recent files', 'No Recent Files (disabled), when the list is empty', code('file.openRecent'), 'Always']),
+      row(['recent files', 'Clear Recent Files', code('file.clearRecent'), 'Always']))
   }
   return lines
 }
@@ -156,7 +166,8 @@ export function renderCommandDocs(): string {
     '',
     'Every command, keybinding, and menu placement is declared in `src/shared/commands/catalog.ts`. A condition after a key',
     'limits where the key works; for example, `editorFocus` means the query editor has focus. Keys marked * belong to the',
-    'editor, the browser engine, or Electron (zoom, full screen, quit): menus show them, but Varia does not dispatch them.',
+    'editor, the browser engine, or Electron (zoom, full screen, quit), or are Varia\'s own editor chords (bridge keybindings),',
+    'which the editor dispatches: menus show them, but Varia\'s key dispatcher does not.',
     '"Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context',
     'keys it uses are listed below.',
     '',

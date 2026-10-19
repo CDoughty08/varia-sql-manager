@@ -50,11 +50,11 @@ pages, limits, error codes, display formats, benchmarks).
   `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
   takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `globalThis.__variaTest` (kill, pid, state,
   states, synthesize, and the renderer hooks rendererLosses, holdNextRenderer and releaseHolders), the renderer's test
-  mode (`window.__variaResults`, `window.__variaGrid`, and `window.__variaTestShellFault()`, which makes the workbench's
-  next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and
-  `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from
-  `scripts/fixtures/smoke.mjs`: assertions wait 15 s on Windows, whose runners can take seconds to write a file, and
-  closing the app logs main's file operations that took 500 ms or more.
+  mode (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`, which saves AutoRecover's
+  copies at once, and `window.__variaTestShellFault()`, which makes the workbench's next render throw), and passes the
+  backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and
+  `expect` from `scripts/fixtures/smoke.mjs`: assertions wait 15 s on Windows, whose runners can take seconds to write a
+  file, and closing the app logs main's file operations that took 500 ms or more.
 
 ## Architecture invariants
 
@@ -87,8 +87,9 @@ pages, limits, error codes, display formats, benchmarks).
 - Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
   (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
   no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show the role, and custom
-  menus and the palette run it through `varia:run-role`. After catalogue changes, regenerate `docs/commands.md` with
-  `npx vitest run tests/commands-docs.test.ts -u`.
+  menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
+  registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
+  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
 - Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
   provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
   natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends

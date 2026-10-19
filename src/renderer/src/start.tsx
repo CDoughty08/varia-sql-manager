@@ -8,6 +8,8 @@ import 'monaco-editor/editor/contrib/find/browser/findController.js'
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js'
 import 'monaco-editor/editor/contrib/comment/browser/comment.js'
+// Insert Snippet and Surround With insert through it; it adds only Tab, Shift+Tab and Escape while a snippet is active.
+import 'monaco-editor/editor/contrib/snippet/browser/snippetController2.js'
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js'
 import 'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js'
 import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js'
@@ -33,8 +35,8 @@ export async function start(root: Root): Promise<void> {
   // editor's first frame has its font and options; neither waits for main longer than its timeout.
   const [theme, settings] = await Promise.all([ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia)])
   const workbench = createWorkbench(window.varia, monaco, theme, settings)
-  // Smoke tests drive the results API directly (backend-smoke.mjs) and read the grids' counters (results-smoke.mjs); main
-  // enables test mode only in unpackaged smoke runs.
+  // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs) and save
+  // AutoRecover's copies on demand (files-smoke.mjs); main enables test mode only in unpackaged smoke runs.
   if (window.varia.testMode) {
     const stats = workbench.gridStats
     Object.assign(window, {
@@ -43,7 +45,9 @@ export async function start(root: Root): Promise<void> {
         stats: async () => ({ ...stats?.snapshot(), client: await workbench.resultClient.stats() }),
         reset: () => stats?.reset(),
         setScrollCap: (px?: number) => stats?.setScrollCap(px)
-      }
+      },
+      // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
+      __variaRecovery: { flush: () => workbench.recovery.flush() }
     })
   }
   root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)

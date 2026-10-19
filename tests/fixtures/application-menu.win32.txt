@@ -6,9 +6,13 @@
   {"accelerator":"Ctrl+N","id":"file.new","label":"New Query","registerAccelerator":false,"type":"normal","click":[["command","file.new"]]}
   {"accelerator":"Ctrl+O","id":"file.open","label":"Open…","registerAccelerator":false,"type":"normal","click":[["command","file.open"]]}
   {"accelerator":"Ctrl+S","id":"file.save","label":"Save","registerAccelerator":false,"type":"normal","click":[["command","file.save"]]}
-  {"accelerator":"Ctrl+Shift+S","id":"file.saveAs","label":"Save As…","registerAccelerator":false,"type":"normal","click":[["command","file.saveAs"]]}
+  {"id":"file.saveAs","label":"Save As…","registerAccelerator":false,"type":"normal","click":[["command","file.saveAs"]]}
+  {"accelerator":"Ctrl+Shift+S","id":"file.saveAll","label":"Save All","registerAccelerator":false,"type":"normal","click":[["command","file.saveAll"]]}
   {"type":"separator"}
   {"accelerator":"Ctrl+W","id":"file.close","label":"Close Query","registerAccelerator":false,"type":"normal","click":[["command","file.close"]]}
+  {"type":"separator"}
+  {"id":"file.recent","label":"Recent Files"}
+    {"enabled":false,"id":"file.recent.empty","label":"No Recent Files"}
   {"type":"separator"}
   {"accelerator":"Alt+F4","id":"window.close","label":"Exit","role":"quit"}
 {"id":"menu.edit","label":"Edit"}
@@ -21,12 +25,40 @@
   {"accelerator":"Delete","id":"edit.delete","label":"Delete","role":"delete"}
   {"accelerator":"Ctrl+A","id":"edit.selectAll","label":"Select All","role":"selectAll"}
   {"type":"separator"}
-  {"accelerator":"Ctrl+F","id":"edit.find","label":"Find","registerAccelerator":false,"type":"normal","click":[["command","edit.find"]]}
-  {"accelerator":"Ctrl+H","id":"edit.replace","label":"Replace","registerAccelerator":false,"type":"normal","click":[["command","edit.replace"]]}
+  {"id":"edit.findReplace","label":"Find and Replace"}
+    {"accelerator":"Ctrl+F","id":"edit.find","label":"Quick Find","registerAccelerator":false,"type":"normal","click":[["command","edit.find"]]}
+    {"accelerator":"Ctrl+H","id":"edit.replace","label":"Quick Replace","registerAccelerator":false,"type":"normal","click":[["command","edit.replace"]]}
+    {"type":"separator"}
+    {"accelerator":"F3","id":"edit.findNext","label":"Find Next","registerAccelerator":false,"type":"normal","click":[["command","edit.findNext"]]}
+    {"accelerator":"Shift+F3","id":"edit.findPrevious","label":"Find Previous","registerAccelerator":false,"type":"normal","click":[["command","edit.findPrevious"]]}
+  {"accelerator":"Ctrl+G","id":"edit.goToLine","label":"Go To Line…","registerAccelerator":false,"type":"normal","click":[["command","edit.goToLine"]]}
   {"type":"separator"}
-  {"accelerator":"Ctrl+/","id":"edit.toggleLineComment","label":"Toggle Line Comment","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleLineComment"]]}
-  {"id":"edit.commentLines","label":"Comment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.commentLines"]]}
-  {"id":"edit.uncommentLines","label":"Uncomment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.uncommentLines"]]}
+  {"id":"edit.advanced","label":"Advanced"}
+    {"accelerator":"Ctrl+Shift+U","id":"edit.makeUppercase","label":"Make Uppercase","registerAccelerator":false,"type":"normal","click":[["command","edit.makeUppercase"]]}
+    {"accelerator":"Ctrl+Shift+L","id":"edit.makeLowercase","label":"Make Lowercase","registerAccelerator":false,"type":"normal","click":[["command","edit.makeLowercase"]]}
+    {"type":"separator"}
+    {"id":"editor.toggleWhitespace","label":"View White Space","registerAccelerator":false,"type":"checkbox","click":[["command","editor.toggleWhitespace"]],"checkedAfterClick":false}
+    {"accelerator":"Alt+Z","id":"editor.toggleWordWrap","label":"Word Wrap","registerAccelerator":false,"type":"checkbox","click":[["command","editor.toggleWordWrap"]],"checkedAfterClick":true}
+    {"type":"separator"}
+    {"id":"edit.commentLines","label":"Comment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.commentLines"]]}
+    {"id":"edit.uncommentLines","label":"Uncomment Selection","registerAccelerator":false,"type":"normal","click":[["command","edit.uncommentLines"]]}
+    {"accelerator":"Ctrl+/","id":"edit.toggleLineComment","label":"Toggle Line Comment","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleLineComment"]]}
+    {"type":"separator"}
+    {"id":"edit.increaseIndent","label":"Increase Line Indent","registerAccelerator":false,"type":"normal","click":[["command","edit.increaseIndent"]]}
+    {"id":"edit.decreaseIndent","label":"Decrease Line Indent","registerAccelerator":false,"type":"normal","click":[["command","edit.decreaseIndent"]]}
+  {"id":"edit.bookmarks","label":"Bookmarks"}
+    {"id":"edit.toggleBookmark","label":"Toggle Bookmark","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleBookmark"]]}
+    {"type":"separator"}
+    {"id":"edit.previousBookmark","label":"Previous Bookmark","registerAccelerator":false,"type":"normal","click":[["command","edit.previousBookmark"]]}
+    {"id":"edit.nextBookmark","label":"Next Bookmark","registerAccelerator":false,"type":"normal","click":[["command","edit.nextBookmark"]]}
+    {"type":"separator"}
+    {"id":"edit.clearBookmarks","label":"Clear Bookmarks","registerAccelerator":false,"type":"normal","click":[["command","edit.clearBookmarks"]]}
+    {"type":"separator"}
+    {"id":"edit.previousBookmarkInDocument","label":"Previous Bookmark In Document","registerAccelerator":false,"type":"normal","click":[["command","edit.previousBookmarkInDocument"]]}
+    {"id":"edit.nextBookmarkInDocument","label":"Next Bookmark In Document","registerAccelerator":false,"type":"normal","click":[["command","edit.nextBookmarkInDocument"]]}
+  {"id":"edit.intellisense","label":"IntelliSense"}
+    {"id":"edit.insertSnippet","label":"Insert Snippet…","registerAccelerator":false,"type":"normal","click":[["command","edit.insertSnippet"]]}
+    {"id":"edit.surroundWith","label":"Surround With…","registerAccelerator":false,"type":"normal","click":[["command","edit.surroundWith"]]}
 {"id":"menu.view","label":"View"}
   {"accelerator":"Ctrl+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Ctrl+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
@@ -34,8 +66,6 @@
   {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
   {"id":"layout.reset","label":"Reset Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
-  {"type":"separator"}
-  {"accelerator":"Alt+Z","id":"editor.toggleWordWrap","label":"Word Wrap","registerAccelerator":false,"type":"checkbox","click":[["command","editor.toggleWordWrap"]],"checkedAfterClick":true}
   {"type":"separator"}
   {"id":"view.theme","label":"Theme"}
     {"id":"preferences.colorTheme","label":"Color Theme…","registerAccelerator":false,"type":"normal","click":[["command","preferences.colorTheme"]]}

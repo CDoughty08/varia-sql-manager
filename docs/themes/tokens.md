@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (197)
+## Color keys (205)
 
 ### Base
 
@@ -210,8 +210,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `documentTabs.closeForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Close buttons of query tabs. |
 | `documentTabs.iconForeground` | Varia | `$warning` | `#dfbd82` | `#8a5300` | SQL badge of query tabs. |
 | `documentTabs.modifiedIndicator` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Dot that marks a query with unsaved changes. |
-| `breadcrumb.foreground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Query context line (server and database). |
-| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#8a9cb3` | `#525e72` | Separator in the query context line. |
+| `breadcrumb.foreground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | The bar that names an XML, JSON or execution plan document opened from the results. |
+| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#8a9cb3` | `#525e72` | Unused since the query status bar replaced the query context line; themes that set it stay valid. |
 
 ### Editor, widgets, and empty states
 
@@ -223,6 +223,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `editor.selectionBackground` | VS Code | `$textSelection` | `#264f78` | `#add6ff` | Selected text in the editor. |
 | `editorLineNumber.foreground` | VS Code | Dark `$textMuted/80`, Light `$textMuted` | `#728195` | `#525e72` | Line numbers. Made opaque over `editor.background`. |
 | `editorLineNumber.activeForeground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Line number of the current line. |
+| `editorWhitespace.foreground` | VS Code | `$textMuted/50` | `#8a9cb380` | `#525e7280` | Whitespace glyphs when View White Space is on. |
+| `editorBookmark.foreground` | Varia | `$accent` | `#8fb7ff` | `#005fb8` | Bookmark glyph in the editor's indicator margin. |
 | `editorBracketHighlight.foreground1` | VS Code | `$syntaxBracket1` | `#ffd700` | `#0431fa` | Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six. |
 | `editorBracketHighlight.foreground2` | VS Code | `$syntaxBracket2` | `#da70d6` | `#287a28` | Brackets one level in. |
 | `editorBracketHighlight.foreground3` | VS Code | `$syntaxBracket3` | `#179fff` | `#7b3814` | Brackets two levels in. |
@@ -286,6 +288,12 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `statusBar.disconnectedForeground` | Varia | `@statusBar.foreground` | `#a3bbdc` | `#2a4f7f` | Status bar text without a connection. |
 | `statusBar.errorBackground` | Varia | `$errorSurface` | `#48242d` | `#fbe4e6` | Status bar when the backend is unavailable. |
 | `statusBar.errorForeground` | Varia | `$errorSurfaceText` | `#f3bac0` | `#8a1c25` | Status bar text when the backend is unavailable. |
+| `queryStatusBar.background` | Varia | `@statusBar.background` | `#1d2b40` | `#e3ebf5` | Status bar of the query window, below or above the query (as in SSMS), while its query is idle. |
+| `queryStatusBar.foreground` | Varia | `@statusBar.foreground` | `#a3bbdc` | `#2a4f7f` | Query status bar text. |
+| `queryStatusBar.executingBackground` | Varia | `@statusBar.executingBackground` | `#1d2b40` | `#e3ebf5` | Query status bar while its query runs. |
+| `queryStatusBar.executingForeground` | Varia | `@statusBar.executingForeground` | `#a3bbdc` | `#2a4f7f` | Query status bar text while its query runs. |
+| `queryStatusBar.errorBackground` | Varia | `@statusBar.errorBackground` | `#48242d` | `#fbe4e6` | Query status bar after a run failed, was cancelled or timed out, or lost its connection. |
+| `queryStatusBar.errorForeground` | Varia | `@statusBar.errorForeground` | `#f3bac0` | `#8a1c25` | Query status bar text after a run failed, was cancelled or timed out, or lost its connection. |
 
 ### Banners, dialogs, notifications, and quick input
 

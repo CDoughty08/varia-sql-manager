@@ -173,7 +173,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-actions .codicon { font-size: 14px; }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
+/* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
+.monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }
+.go-to-line-dialog { width: min(360px, calc(100vw - 40px)); }
+.go-to-line-dialog label { display: block; font-size: 11px; color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
+.go-to-line-dialog input { width: 100%; height: 28px; }
+.go-to-line-dialog .field-note { margin-top: 8px; }
 .filter-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .filter-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 7px 8px 3px 0; vertical-align: top; line-height: 20px; }
 .filter-grid thead th { width: 112px; padding: 0 8px 6px 0; }
@@ -187,6 +193,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .filter-problem { margin-top: 4px; font-size: 11px; color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
 .filter-dialog .field-note { margin-top: 12px; }
 .filter-dialog .connect-error { margin: 12px 0 0; }
+/* Recover Unsaved Queries: a row a query, long names and paths cut with an ellipsis (whole in their tooltips). */
+.recovery-dialog { width: min(820px, calc(100vw - 40px)); }
+.recovery-dialog .field-note { margin-bottom: 10px; font-size: 12px; color: var(--varia-editorWidget-foreground); }
+.recovery-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.recovery-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 0 8px 6px 0; }
+.recovery-grid td { padding: 5px 8px 5px 0; border-top: 1px solid var(--varia-dialog-separatorBackground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+.recovery-grid th:first-child { width: 28px; }
+.recovery-grid th:nth-child(2) { width: 22%; }
+.recovery-grid th:nth-child(4) { width: 22%; }
+.recovery-grid th:last-child { width: 96px; }
+.recovery-grid input { width: 16px; height: 16px; margin: 0; vertical-align: middle; accent-color: var(--varia-button-background); }
+.recovery-confirm { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 10px; border-radius: 5px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.recovery-confirm > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.recovery-confirm > button { border: 1px solid var(--varia-button-border); }
+.recovery-dialog .connect-error { margin: 12px 0 0; }
 /* Tools › Options: SSMS's search box and page tree beside the page, dense rows (22 px), the focused row's description below. */
 /* Two classes: .connection-modal, later in this file, would otherwise set its own width. */
 .connection-modal.options-dialog { width: min(820px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px)); max-height: none; }
@@ -263,12 +284,28 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-select { display: flex; align-items: center; gap: 8px; height: 35px; border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tab-readonly { font-size: 12px; margin-left: -4px; }
 .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
 .tab-close .icon { width: 12px; height: 12px; flex-basis: 12px; }
 .tab-close:focus-visible { outline-offset: -2px; }
 .sql-icon { font-size: 8px; line-height: 16px; color: var(--varia-documentTabs-iconForeground); font-weight: 700; }
-.query-context { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 20px; color: var(--varia-breadcrumb-foreground); font-size: 10px; line-height: 16px; flex-shrink: 0; }
-.breadcrumb { margin: 0 9px; color: var(--varia-breadcrumb-separatorForeground); }
+/* SSMS's query window status bar: the run's state, then server (version), login (SPID), database, time and rows. The
+   server gives way first when the bar is narrow; the tooltip holds the whole text. A value's document names its kind. */
+.query-status-bar { display: flex; align-items: center; gap: 16px; height: 24px; padding: 0 12px; flex-shrink: 0; overflow: hidden; white-space: nowrap; font-size: 10px; line-height: 16px; background: var(--varia-queryStatusBar-background); color: var(--varia-queryStatusBar-foreground); }
+.query-status-bar[data-tone="value"] { background: none; color: var(--varia-breadcrumb-foreground); padding: 0 20px; }
+.query-status-bar[data-tone="executing"] { background: var(--varia-queryStatusBar-executingBackground); color: var(--varia-queryStatusBar-executingForeground); }
+.query-status-bar[data-tone="error"] { background: var(--varia-queryStatusBar-errorBackground); color: var(--varia-queryStatusBar-errorForeground); }
+.query-status-state { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.query-status-state .codicon { font-size: 12px; }
+.query-status-segments { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-left: auto; }
+.query-status-segment { flex-shrink: 0; }
+.query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
+/* Short of room, the server gives way first, then the login, then the database (each whole in the bar's tooltip); the
+   time and rows keep their size. The weights make the shrinking all but sequential. */
+.query-status-server, .query-status-login, .query-status-database { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.query-status-server { flex-shrink: 1000000; }
+.query-status-login { flex-shrink: 1000; }
+.query-status-database { flex-shrink: 1; }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .workspace-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: 13px; }
@@ -383,12 +420,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
 .status-bar > span:first-child { display: flex; align-items: center; gap: 8px; }
 .status-bar > span:nth-child(2) { margin-left: auto; }
-.status-divider { margin: 0 12px; color: var(--varia-statusBar-separatorForeground); }
 /* The outer segments keep their size. Scripting, in the middle, takes the space left over down to a floor that keeps
    Cancel and the start of its text; past that the server and database give way. The bar itself never widens the page.
    The segment clips what still does not fit, and its padding and full height leave room for a focus ring. */
 .status-bar > :not(.status-scripting) { flex-shrink: 0; white-space: nowrap; }
-.status-bar > .status-place { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin: 0 12px; }
+.editor-status-position { display: flex; gap: 10px; }
+.editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
+.editor-status-readonly { display: flex; align-items: center; gap: 4px; }
+.editor-status .codicon { font-size: 12px; }
 .status-scripting { display: flex; align-items: center; align-self: stretch; justify-content: safe center; gap: 8px; flex: 1 1 0; min-width: 0; overflow: hidden; margin: 0 8px; padding: 0 4px; }
 .status-scripting:not(:empty) { min-width: 20em; }
 /* Its own left gap: the status bar's second child otherwise loses it to the auto margin above. */

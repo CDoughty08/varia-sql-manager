@@ -51,7 +51,13 @@ export const codicons = [
   'warning',
   'settings-gear',
   'file-code',
-  'edit'
+  'edit',
+  'bookmark',
+  'whitespace',
+  'symbol-snippet',
+  'save-all',
+  'lock',
+  'history'
 ] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
@@ -73,6 +79,11 @@ export interface KeybindingSpec {
   readonly when?: string
   /** Monaco or Chromium dispatches the key; the catalogue uses it only for labels, menus, and conflict checks. */
   readonly native?: true
+  /**
+   * Varia registers this two-part chord with Monaco (`registerEditorBridge`), which dispatches it in editor text, chord
+   * mode included. It requires `native`, a `mod+k` first part, and no `when`.
+   */
+  readonly bridge?: true
   /** Auto-repeat runs the command again; otherwise a repeated key is consumed without running it. */
   readonly allowRepeat?: true
   /** The key also works while a modal dialog is open. Only `allowInModal` commands may have such a key. */
@@ -125,6 +136,8 @@ const openFirst = 'Open a query first.'
 const noServer = 'No server is connected.'
 const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
+const noBookmarks = 'No bookmarks are set.'
+const noDocumentBookmarks = 'This query has no bookmarks.'
 
 /**
  * Every command, with its keys, menu placements, and enablement. Main builds native menus from its own compiled copy,
@@ -144,10 +157,27 @@ export const commandCatalog = {
     // In a results grid, Ctrl+S saves its results (SSMS).
     keybindings: [{ key: 'mod+s', when: '!outputGridFocus' }], menus: [{ menu: 'file', group: '1_file', order: 3, mnemonic: 's' }, { menu: 'documentTab.context', group: '1_save', order: 1, mnemonic: 's' }]
   },
+  // SSMS's Save As has no key on Windows: Ctrl+Shift+S is Save All there. macOS keeps ⇧⌘S, its Save As key.
   'file.saveAs': {
     title: 'Save As…', category: 'File', icon: 'save-as', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+shift+s' }],
+    keybindings: [{ mac: 'mod+shift+s' }],
     menus: [{ menu: 'file', group: '1_file', order: 4, mnemonic: 'a' }, { menu: 'documentTab.context', group: '1_save', order: 2, mnemonic: 'a' }]
+  },
+  // The queries with unsaved changes, in tab order; a query never saved asks for its file. ⌥⌘S on macOS, where ⇧⌘S is Save As.
+  'file.saveAll': {
+    title: 'Save All', category: 'File', icon: 'save-all', precondition: 'anyDocumentDirty && !documentBusy', unavailableHint: 'No query has unsaved changes.',
+    keybindings: [{ win: 'ctrl+shift+s', linux: 'ctrl+shift+s', mac: 'alt+mod+s' }], menus: [{ menu: 'file', group: '1_file', order: 5, mnemonic: 'l' }]
+  },
+  // File › Recent Files' items run this with their entry (`recentFile`); without one, it picks from the list.
+  'file.openRecent': {
+    title: 'Open Recent File…', category: 'File', icon: 'history', keywords: ['recent', 'mru'], precondition: 'hasRecentFiles && !documentBusy',
+    unavailableHint: 'No files were opened recently.'
+  },
+  'file.clearRecent': { title: 'Clear Recent Files', category: 'File', keywords: ['recent', 'mru'], precondition: 'hasRecentFiles', unavailableHint: 'No files were opened recently.' },
+  // The Recover dialog again, for queries AutoRecover kept that were neither recovered nor discarded when it first showed.
+  'file.recoverUnsaved': {
+    title: 'Recover Unsaved Queries…', category: 'File', icon: 'history', keywords: ['autorecover', 'recover', 'recovery', 'crash', 'unsaved'], precondition: 'hasRecoveryFiles',
+    unavailableHint: 'AutoRecover has nothing to recover.'
   },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
@@ -376,30 +406,108 @@ export const commandCatalog = {
     keybindings: [{ key: 'ctrl+shift+tab', allowRepeat: true }, { win: 'ctrl+pageup', linux: 'ctrl+pageup', allowRepeat: true }],
     menus: [{ menu: 'window', group: '2_documents', order: 2, mnemonic: 'p' }]
   },
+  // Edit › Advanced › Word Wrap, where SSMS has it.
   'editor.toggleWordWrap': {
     title: 'Toggle Word Wrap', category: 'View', icon: 'word-wrap', toggled: 'editorWordWrap',
     // ⌥Z types Ω on macOS.
-    keybindings: [{ win: 'alt+z', linux: 'alt+z' }], menus: [{ menu: 'view', group: '2_editor', order: 1, title: 'Word Wrap', mnemonic: 'w' }]
+    keybindings: [{ win: 'alt+z', linux: 'alt+z' }], menus: [{ menu: 'edit.advanced', group: '2_view', order: 2, title: 'Word Wrap', mnemonic: 'w' }]
+  },
+  // Visual Studio's Insert key: overtype replaces the character after the caret. macOS keyboards have no Insert key.
+  'editor.toggleOvertype': {
+    title: 'Toggle Insert/Overtype Mode', category: 'Edit', keywords: ['insert', 'overtype', 'overwrite', 'ins', 'ovr'], toggled: 'editorOvertype',
+    precondition: 'hasActiveDocument', unavailableHint: openFirst, keybindings: [{ win: 'insert', linux: 'insert', when: 'editorTextFocus' }]
   },
   'edit.find': {
     title: 'Find', category: 'Edit', icon: 'search', precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+f', native: true }], menus: [{ menu: 'edit', group: '3_find', order: 1, mnemonic: 'f' }]
+    keybindings: [{ key: 'mod+f', native: true }], menus: [{ menu: 'edit.findReplace', group: '1_find', order: 1, title: 'Quick Find', mnemonic: 'q' }]
   },
   'edit.replace': {
     title: 'Replace', category: 'Edit', icon: 'replace', precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ win: 'ctrl+h', linux: 'ctrl+h', mac: 'alt+mod+f', native: true }], menus: [{ menu: 'edit', group: '3_find', order: 2, mnemonic: 'e' }]
+    keybindings: [{ win: 'ctrl+h', linux: 'ctrl+h', mac: 'alt+mod+f', native: true }], menus: [{ menu: 'edit.findReplace', group: '1_find', order: 2, title: 'Quick Replace', mnemonic: 'r' }]
   },
   'edit.toggleLineComment': {
     title: 'Toggle Line Comment', category: 'Edit', icon: 'comment', precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+/', native: true }], menus: [{ menu: 'edit', group: '4_comment', order: 1, mnemonic: 'l' }]
+    keybindings: [{ key: 'mod+/', native: true }], menus: [{ menu: 'edit.advanced', group: '3_comment', order: 3, mnemonic: 't' }]
   },
   'edit.commentLines': {
     title: 'Comment Selection', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+k mod+c', native: true }], menus: [{ menu: 'edit', group: '4_comment', order: 2, mnemonic: 'm' }]
+    keybindings: [{ key: 'mod+k mod+c', native: true }], menus: [{ menu: 'edit.advanced', group: '3_comment', order: 1, mnemonic: 'm' }]
   },
   'edit.uncommentLines': {
     title: 'Uncomment Selection', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+k mod+u', native: true }], menus: [{ menu: 'edit', group: '4_comment', order: 3, mnemonic: 'n' }]
+    keybindings: [{ key: 'mod+k mod+u', native: true }], menus: [{ menu: 'edit.advanced', group: '3_comment', order: 2, mnemonic: 'n' }]
+  },
+  // SSMS's editing commands: Find and Replace, Go To Line, Edit › Advanced, Bookmarks, and IntelliSense's snippets.
+  'edit.findNext': {
+    title: 'Find Next', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ win: 'f3', linux: 'f3', mac: 'mod+g', native: true }, { mac: 'f3', native: true }], menus: [{ menu: 'edit.findReplace', group: '2_next', order: 1, mnemonic: 'n' }]
+  },
+  'edit.findPrevious': {
+    title: 'Find Previous', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', native: true }, { mac: 'shift+f3', native: true }],
+    menus: [{ menu: 'edit.findReplace', group: '2_next', order: 2, mnemonic: 'p' }]
+  },
+  // SSMS's Ctrl+G; ⌘G is Find Next on macOS, so macOS uses ⌃G, as VS Code does.
+  'edit.goToLine': {
+    title: 'Go To Line…', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ win: 'ctrl+g', linux: 'ctrl+g', mac: 'ctrl+g', when: 'editorFocus' }], menus: [{ menu: 'edit', group: '3_find', order: 2, mnemonic: 'g' }]
+  },
+  'edit.makeUppercase': {
+    title: 'Make Uppercase', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ key: 'mod+shift+u', when: 'editorTextFocus' }], menus: [{ menu: 'edit.advanced', group: '1_case', order: 1, mnemonic: 'u' }]
+  },
+  'edit.makeLowercase': {
+    title: 'Make Lowercase', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ key: 'mod+shift+l', when: 'editorTextFocus' }], menus: [{ menu: 'edit.advanced', group: '1_case', order: 2, mnemonic: 'l' }]
+  },
+  // No keys: Tab and Shift+Tab indent selected lines, and SSMS has none for these.
+  'edit.increaseIndent': {
+    title: 'Increase Line Indent', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    menus: [{ menu: 'edit.advanced', group: '4_indent', order: 1, mnemonic: 'i' }]
+  },
+  'edit.decreaseIndent': {
+    title: 'Decrease Line Indent', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    menus: [{ menu: 'edit.advanced', group: '4_indent', order: 2, mnemonic: 'd' }]
+  },
+  // No key: SSMS's Ctrl+R Ctrl+W cannot coexist with Ctrl+R alone toggling the results pane.
+  'editor.toggleWhitespace': {
+    title: 'View White Space', category: 'View', icon: 'whitespace', toggled: 'editorWhitespace',
+    menus: [{ menu: 'edit.advanced', group: '2_view', order: 1, mnemonic: 'h' }]
+  },
+  'editor.toggleLineNumbers': { title: 'Toggle Line Numbers', category: 'View', toggled: 'editorLineNumbers' },
+  'edit.toggleBookmark': {
+    title: 'Toggle Bookmark', category: 'Edit', icon: 'bookmark', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ key: 'mod+k mod+k', native: true, bridge: true }], menus: [{ menu: 'edit.bookmarks', group: '1_toggle', order: 1, mnemonic: 't' }]
+  },
+  'edit.previousBookmark': {
+    title: 'Previous Bookmark', category: 'Edit', icon: 'bookmark', precondition: 'hasBookmarks', unavailableHint: noBookmarks,
+    keybindings: [{ key: 'mod+k mod+p', native: true, bridge: true }], menus: [{ menu: 'edit.bookmarks', group: '2_navigate', order: 1, mnemonic: 'p' }]
+  },
+  'edit.nextBookmark': {
+    title: 'Next Bookmark', category: 'Edit', icon: 'bookmark', precondition: 'hasBookmarks', unavailableHint: noBookmarks,
+    keybindings: [{ key: 'mod+k mod+n', native: true, bridge: true }], menus: [{ menu: 'edit.bookmarks', group: '2_navigate', order: 2, mnemonic: 'n' }]
+  },
+  'edit.clearBookmarks': {
+    title: 'Clear Bookmarks', category: 'Edit', icon: 'bookmark', precondition: 'hasBookmarks', unavailableHint: noBookmarks,
+    keybindings: [{ key: 'mod+k mod+l', native: true, bridge: true }], menus: [{ menu: 'edit.bookmarks', group: '3_clear', order: 1, mnemonic: 'c' }]
+  },
+  'edit.previousBookmarkInDocument': {
+    title: 'Previous Bookmark In Document', category: 'Edit', icon: 'bookmark', precondition: 'activeDocumentHasBookmarks', unavailableHint: noDocumentBookmarks,
+    menus: [{ menu: 'edit.bookmarks', group: '4_document', order: 1, mnemonic: 'r' }]
+  },
+  'edit.nextBookmarkInDocument': {
+    title: 'Next Bookmark In Document', category: 'Edit', icon: 'bookmark', precondition: 'activeDocumentHasBookmarks', unavailableHint: noDocumentBookmarks,
+    menus: [{ menu: 'edit.bookmarks', group: '4_document', order: 2, mnemonic: 'x' }]
+  },
+  'edit.insertSnippet': {
+    title: 'Insert Snippet…', category: 'Edit', icon: 'symbol-snippet', keywords: ['template', 'create'], precondition: 'activeDocumentIsQuery && !documentBusy', unavailableHint: openFirst,
+    keybindings: [{ key: 'mod+k mod+x', native: true, bridge: true }],
+    menus: [{ menu: 'edit.intellisense', group: '1_snippets', order: 1, mnemonic: 'i' }, { menu: 'editor.context', group: '0_snippets', order: 1, mnemonic: 'i' }]
+  },
+  'edit.surroundWith': {
+    title: 'Surround With…', category: 'Edit', icon: 'symbol-snippet', keywords: ['begin', 'if', 'while', 'snippet'], precondition: 'activeDocumentIsQuery && !documentBusy', unavailableHint: openFirst,
+    keybindings: [{ key: 'mod+k mod+s', native: true, bridge: true }],
+    menus: [{ menu: 'edit.intellisense', group: '1_snippets', order: 2, mnemonic: 's' }, { menu: 'editor.context', group: '0_snippets', order: 2, mnemonic: 's' }]
   },
   // Not theme.*: PR1's theme menu items (theme.mode.*, theme.create, …) come from themeMenuModel and keep those ids.
   'preferences.colorTheme': {

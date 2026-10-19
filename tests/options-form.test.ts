@@ -19,7 +19,7 @@ describe('Options page tree', () => {
     expect(treeRows(new Set()).map(row => row.page.title)).toEqual(['Environment', 'Text Editor', 'Query Execution', 'Query Results', 'SQL Server Object Explorer'])
     const open = treeRows(new Set(['textEditor', 'textEditor.transactSql']))
     expect(open.map(row => `${row.level}:${row.page.title}:${row.expandable ? row.expanded : '-'}`)).toEqual([
-      '1:Environment:false', '1:Text Editor:true', '2:General:-', '2:Transact-SQL:true', '3:General:-', '3:Tabs:-', '1:Query Execution:false', '1:Query Results:false', '1:SQL Server Object Explorer:false'
+      '1:Environment:false', '1:Text Editor:true', '2:General:-', '2:Editor Tab and Status Bar:-', '2:Transact-SQL:true', '3:General:-', '3:Tabs:-', '1:Query Execution:false', '1:Query Results:false', '1:SQL Server Object Explorer:false'
     ])
   })
   it('shows a category\'s first page when it is selected, with the path to it expanded', () => {

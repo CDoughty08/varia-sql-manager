@@ -1,5 +1,5 @@
-import { memo, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
-import { browserTimers } from '../core/timers'
+import { memo, useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useTicker } from '../core/useTicker'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ResultsStack from '../grid/ResultsStack'
 import MessagesView from './MessagesView'
@@ -8,19 +8,6 @@ import { formatCount, plural, statusSentence } from './status'
 
 /** `query` is false for a value's document (XML, JSON, plan), which has no results of its own. */
 interface Props { tabId: string; query: boolean; connected: boolean; hint?: string }
-
-/** Re-renders once a second while `running`, for the elapsed time. */
-function useTicker(running: boolean): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!running) return
-    let handle: unknown
-    const tick = () => { setNow(Date.now()); handle = browserTimers.setTimeout(tick, 1000) }
-    handle = browserTimers.setTimeout(tick, 1000)
-    return () => browserTimers.clearTimeout(handle)
-  }, [running])
-  return now
-}
 
 function jobText(job: ResultJob): string {
   const percent = job.rowsTotal > 0 ? Math.min(100, Math.floor(job.rowsDone / job.rowsTotal * 100)) : 0

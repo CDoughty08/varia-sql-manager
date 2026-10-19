@@ -67,6 +67,9 @@ export class SettingsStore {
   private established = false
   /** What the store moved settings.json away from (quarantine, salvage) and could not write back. */
   private unsaved?: Content
+  /** Settings that settings.json held but this session could not take from it: every one when the file was invalid and
+   *  reset, or those a salvage dropped. A value the user then sets is theirs again. */
+  private reset = new Set<SettingKey>()
   constructor(private readonly path: string, private readonly legacyPath: string) {}
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
@@ -75,6 +78,12 @@ export class SettingsStore {
     return next
   }
   current(): SettingsValues { return this.values }
+  /**
+   * Whether `key` holds its default only because settings.json held a value for it that could not be read (the file was
+   * invalid, or the value unsupported). Main deletes nothing under such a value: AutoRecover's retention may have been
+   * longer. A settings.json that does not set `key` is the user's choice of its default.
+   */
+  wasReset(key: SettingKey): boolean { return this.reset.has(key) }
   private state(): SettingsState { return { revision: this.revision, values: this.values } }
   onDidChange(listener: (state: SettingsState) => void): () => void {
     this.listeners.add(listener)
@@ -117,7 +126,7 @@ export class SettingsStore {
           this.unsaved = undefined
           const parsed = read.kind === 'ok' ? parseStoredSettings(read.value) : undefined
           // What a load would quarantine is kept the same way before the file is replaced.
-          if (!parsed || parsed.invalidKeys.length) { await quarantine(this.path); rewrite = true }
+          if (!parsed || parsed.invalidKeys.length) { await quarantine(this.path); rewrite = true; this.lost(parsed?.invalidKeys) }
           content = parsed ? { overrides: parsed.overrides, unknown: parsed.unknown } : empty
         }
       } catch { throw new Error(unreadableSettings) }
@@ -127,6 +136,7 @@ export class SettingsStore {
         try { await this.write(next) } catch (error) { if (rewrite) this.unsaved = content; throw error }
         this.unsaved = undefined
       }
+      for (const key of Object.keys(patch) as SettingKey[]) this.reset.delete(key)
       this.loading = Promise.resolve({})
       if (!this.apply(next)) return this.state()
       this.revision++
@@ -137,6 +147,10 @@ export class SettingsStore {
     })
   }
 
+  /** Records what a quarantine lost: `keys`, or every setting when the whole file was invalid. */
+  private lost(keys: readonly SettingKey[] = Object.keys(defaultSettings) as SettingKey[]): void {
+    for (const key of keys) this.reset.add(key)
+  }
   /** Sets the cached values; whether they changed. */
   private apply(content: Content): boolean {
     const values = Object.freeze(withDefaults(content.overrides))
@@ -167,6 +181,7 @@ export class SettingsStore {
     const parsed = read.kind === 'ok' ? parseStoredSettings(read.value) : undefined
     if (!parsed) {
       await quarantine(this.path)
+      this.lost()
       this.apply(empty)
       await this.writeBack(empty)
       const reason = reasons(settingsLimits.fileBytes)[read.kind === 'invalid' ? read.reason ?? 'json' : 'values']
@@ -176,6 +191,7 @@ export class SettingsStore {
     this.apply(content)
     if (!parsed.invalidKeys.length) return {}
     await quarantine(this.path)
+    this.lost(parsed.invalidKeys)
     await this.writeBack(content)
     return { warning: salvageWarning(parsed.invalidKeys) }
   }

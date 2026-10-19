@@ -1,11 +1,15 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
+import { platformLineEnding } from '../../../shared/files/encoding'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
+import { RecentFilesService } from '../services/recent-files'
+import { RecoveryService } from '../services/recovery'
 import { EditorOptionsService } from '../services/editor-options'
+import { EditorStatusService } from '../services/editor-status'
 import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
@@ -19,7 +23,7 @@ import { DatabaseListService } from '../services/database-list'
 import { ResultSelectionService } from '../services/result-selection'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
-import { filesContribution } from '../contributions/files'
+import { filesContribution, watchExternalChanges } from '../contributions/files'
 import { editorContribution } from '../contributions/editor'
 import { paletteContribution } from '../contributions/palette'
 import { themeContribution } from '../contributions/theme'
@@ -31,6 +35,9 @@ import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
 import { scriptingContribution } from '../contributions/scripting'
 import { settingsContribution } from '../contributions/settings'
+import { editingContribution } from '../contributions/editing'
+import { BookmarkService } from '../editor/bookmarks'
+import { EditorDialogs } from '../editor/go-to-line'
 import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
@@ -45,6 +52,7 @@ import { CommandService } from './commands'
 import { ContextKeyService } from './contextkeys'
 import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
+import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
 import { MenuStatePublisher } from './menu-state'
 import { modalOpen } from './modal'
@@ -76,8 +84,20 @@ export interface Workbench extends Disposable {
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
   readonly files: FileService
+  /** File › Recent Files, as main last sent it. */
+  readonly recentFiles: RecentFilesService
+  /** AutoRecover: copies of unsaved queries, and the Recover dialog for those an earlier run or page left. */
+  readonly recovery: RecoveryService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
+  /** Edit › Bookmarks: each open query's bookmarks, for this session. */
+  readonly bookmarks: BookmarkService
+  /** The query editor's dialogs (Go To Line). */
+  readonly editorDialogs: EditorDialogs
+  /** The editor caret's Ln, Col and Ch and the line ending, for the IDE status bar. */
+  readonly editorStatus: EditorStatusService
+  /** Insert or overtype (the Insert key). */
+  readonly inputMode: InputModeService
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
@@ -122,14 +142,21 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
-    settingsDocumentOptions(() => settings.getSnapshot().values))
+    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
+  const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
+  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
-  const files = new FileService(documents, queries, api)
+  const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
+  const recentFiles = new RecentFilesService(api)
+  const recovery = new RecoveryService({
+    api, documents, files, settings, warn: message => commands.reportWarning(message),
+    server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
+  })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
   const focus = domFocusAdapter(documents)
@@ -151,6 +178,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer: explorer.context,
     results: results.context,
     scripting: scripting.running,
+    bookmarks,
+    inputMode,
+    recentFiles,
+    recovery,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -159,7 +190,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
-  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, settings: () => settings.getSnapshot().values, focus, modalOpen,
+  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
     findWidgetFocused: () => !!document.activeElement?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
@@ -192,8 +223,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultMemory,
     ...gridStats ? { gridStats } : {},
     files,
+    recentFiles,
+    recovery,
     targets,
     editorOptions,
+    bookmarks,
+    editorDialogs,
+    editorStatus,
+    inputMode,
     panes,
     explorer,
     databaseList,
@@ -206,6 +243,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dispose: () => {
       if (disposed) return
       disposed = true
+      // Before the documents close: a page that unloads leaves its AutoRecover copies to be offered.
+      recovery.dispose()
       // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
       listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
       contributions.forEach(contribution => contribution.dispose())
@@ -214,6 +253,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       commands.dispose()
       context.dispose()
       files.dispose()
+      recentFiles.dispose()
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
@@ -227,6 +267,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       dialogs.dispose()
       connections.dispose()
       editorOptions.dispose()
+      bookmarks.dispose()
+      editorDialogs.dispose()
+      editorStatus.dispose()
+      inputMode.dispose()
       panes.dispose()
       resultSelection.dispose()
       settings.dispose()
@@ -238,6 +282,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     queryContribution(workbench, api),
     filesContribution(workbench, api),
     editorContribution(workbench),
+    editingContribution(workbench, monaco),
     editContribution(workbench, api),
     windowContribution(workbench, api),
     menusContribution(workbench),
@@ -251,10 +296,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     settingsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
-  const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
+  const listeners = [
+    keybindings.attach(window),
+    menus.attach(window),
+    trackWindowFocus(window, document.documentElement),
+    watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
+  ]
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')
+  // What an earlier run or page left unsaved is offered once the workbench is up.
+  void recovery.start()
   return workbench
 }

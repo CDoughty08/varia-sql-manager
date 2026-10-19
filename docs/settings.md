@@ -12,10 +12,13 @@ from Microsoft's documentation, so Varia keeps its own.
 
 - Environment
   - General (`environment.general`)
+  - AutoRecover (`environment.autoRecover`)
+  - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
   - Keyboard (`environment.keyboard`)
 - Text Editor
   - General (`textEditor.general`)
+  - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
   - Transact-SQL
     - General (`textEditor.transactSql.general`)
     - Tabs (`textEditor.transactSql.tabs`)
@@ -39,7 +42,28 @@ page titles, setting labels, descriptions and keywords.
 
 Its first row is a note: Color theme: View › Theme (stored in `appearance.json`).
 
-_No settings yet._
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
+
+### Environment › AutoRecover
+
+Copies of queries with unsaved changes, offered after Varia SQL Manager closes unexpectedly.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.autoRecover.enabled` | Save AutoRecover information | Boolean | True |  | All | At once | Keeps a copy of each query with unsaved changes in Varia SQL Manager's profile folder, readable only by you, so a crash, a forced close or a power loss loses at most the last few minutes. The next start offers the copies in Recover Unsaved Queries. Turning it off deletes this window's copies; copies left by earlier runs are still offered. |
+| `environment.autoRecover.intervalMinutes` | Save AutoRecover information every | Integer 1–60 minutes | 5 minutes |  | All | At once | How often AutoRecover saves the queries whose text changed since it last saved them. Greyed while `environment.autoRecover.enabled` is False. |
+| `environment.autoRecover.keepDays` | Keep AutoRecover information for | Integer 1–90 days | 7 days |  | All | At once | How long a copy that was not recovered is kept. Older copies are deleted when Varia SQL Manager starts. Greyed while `environment.autoRecover.enabled` is False. |
+
+### Environment › Documents
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.documents.detectExternalChanges` | Detect when file is changed outside the environment | Boolean | True |  | All | At once | When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes. |
+| `environment.documents.autoReload` | Reload modified files unless there are unsaved changes | Boolean | False |  | All | At once | Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks. Greyed while `environment.documents.detectExternalChanges` is False. |
+| `environment.documents.saveWithSpecificEncoding` | Save files with a specific encoding | Boolean | False |  | All | At once | Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none. |
+| `environment.documents.saveEncoding` | Save encoding | One of `utf8bom` (Unicode (UTF-8 with signature)), `utf8` (Unicode (UTF-8 without signature)), `utf16le` (Unicode), `utf16be` (Unicode (Big-Endian)) | Unicode (UTF-8 with signature) |  | All | At once | The encoding every file is saved in while Save files with a specific encoding is True. Unicode is UTF-16 little-endian. Greyed while `environment.documents.saveWithSpecificEncoding` is False. |
 
 ### Environment › Fonts and Colors
 
@@ -63,11 +87,25 @@ _No settings yet._
 | `textEditor.delimiterHighlighting` | Automatic delimiter highlighting | Boolean | True |  | All | At once | Highlights the bracket or parenthesis that matches the one at the caret. Large values opened from the results never match brackets. |
 | `textEditor.highlightCurrentLine` | Highlight current line | Boolean | True |  | All | At once | Highlights the line that holds the caret. |
 
+### Text Editor › Editor Tab and Status Bar
+
+The query window's status bar: where it is, and what it shows. A property grid: True/False lists, values that differ from their default in bold.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `textEditor.statusBar.executionTime` | Display execution time | One of `elapsed` (Elapsed), `end` (End), `none` (None) | Elapsed |  | All | At once | Select type of time display to include on the status bar: how long the query has run or ran (Elapsed), or the time its last execution ended (End). |
+| `textEditor.statusBar.showDatabase` | Include database name | Boolean | True |  | All | At once | Include the database name on the status bar. |
+| `textEditor.statusBar.showLogin` | Include login name | Boolean | True |  | All | At once | Include login information on the status bar: the login and session id, `login (SPID)`, of the query's last execution. |
+| `textEditor.statusBar.showRowCount` | Include row count | Boolean | True |  | All | At once | Include count of returned rows on the status bar. |
+| `textEditor.statusBar.showServer` | Include server name | Boolean | True |  | All | At once | Include server name on the status bar, with the server's major and minor version. |
+| `textEditor.statusBar.location` | Status bar location | One of `bottom` (Bottom), `top` (Top) | Bottom |  | All | At once | Select the location of the status bar for the editor: below the query text, or above it. |
+
 ### Text Editor › Transact-SQL › General
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. View › Word Wrap changes it too (Alt+Z on Windows and Linux). |
+| `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. Edit › Advanced › Word Wrap changes it too (Alt+Z on Windows and Linux). |
+| `textEditor.sql.viewWhiteSpace` | View white space | Boolean | False |  | All | At once | Shows spaces as dots and tabs as arrows. Edit › Advanced › View White Space changes it; as in SSMS, Options has no row for it. Not shown in Options. |
 | `textEditor.sql.lineNumbers` | Line numbers | Boolean | True | False (SSMS 18–20; SSMS 22 not verified) | All | At once | Shows line numbers beside the query text. |
 
 ### Text Editor › Transact-SQL › Tabs
@@ -178,4 +216,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (50 today).
+A patch holds at most one entry per setting (65 today).

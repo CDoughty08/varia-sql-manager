@@ -11,6 +11,8 @@ import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
+import type { RecentFile } from './files/recent'
+import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -297,11 +299,28 @@ export type BackendState =
   | { status: 'stopped' }
 export type BackendStatus = BackendState['status']
 
-export interface SqlFile { id: string; name: string; path: string }
-export interface OpenSqlFile extends SqlFile { content: string }
+/** How a file's text is stored: Unicode with or without a byte order mark (`utf16le` and `utf16be` have one), or the
+ *  system's ANSI code page (`legacy`, read only). */
+export const fileEncodings = ['utf8', 'utf8bom', 'utf16le', 'utf16be', 'utf16leNoBom', 'utf16beNoBom', 'legacy'] as const
+export type FileEncoding = typeof fileEncodings[number]
+export type LineEnding = 'crlf' | 'lf'
+/** A file main registered: `codePage` names a `legacy` encoding ('Windows-1252'); `readOnly` is what the last read or save saw. */
+export interface SqlFile { id: string; name: string; path: string; encoding: FileEncoding; codePage?: string; readOnly: boolean }
+/** `eol` is the file's dominant line ending (the platform's when it has none); `mixedEol` says it had more than one. */
+export interface OpenSqlFile extends SqlFile { content: string; eol: LineEnding; mixedEol: boolean }
 /** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
 export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
 export type DocumentKind = typeof documentKinds[number]
+/** Files main opened for the page (the command line, a second instance, macOS's open-file, a drop, Recent Files), with
+ *  what could not be opened: at most 32 errors, each "name: message". */
+export interface OpenedFiles { files: OpenSqlFile[]; errors: string[] }
+/** A registered file another program changed or deleted (`varia:files-check`). */
+export interface FileChange { fileId: string; change: 'modified' | 'deleted' }
+/** File changed's answer; the "All" answers apply to the rest of one check. */
+export type ReloadAnswer = 'yes' | 'yesToAll' | 'no' | 'noToAll'
+export interface ReloadPrompt { fileId: string; dirty: boolean; more: boolean }
+export type { RecentFile }
+export type { RecoveredDocument, RecoveryEntry, RecoveryWrite }
 /** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
@@ -383,6 +402,29 @@ export interface VariaApi {
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>
   /** Shows an open query's saved file in the file manager; main looks its path up by id. */
   revealSqlFile(fileId: string): Promise<ApiResult<void>>
+  /** Files main opened by itself: from the command line, a second instance, macOS, a drop on the window, or the macOS
+   *  menu's Recent Files. The page adopts them as it does an Open's. */
+  onFilesOpened(callback: (opened: OpenedFiles) => void): () => void
+  /** The registered files changed or deleted outside Varia SQL Manager since main last looked. */
+  checkSqlFiles(): Promise<ApiResult<FileChange[]>>
+  /** Reads a registered file again, keeping its id. */
+  reloadSqlFile(fileId: string): Promise<ApiResult<OpenSqlFile>>
+  /** Visual Studio's "modified outside of the source editor" question about one file, in main's message box. */
+  confirmReload(prompt: ReloadPrompt): Promise<ApiResult<ReloadAnswer>>
+  /** File › Recent Files, most recent first, as many as Options shows; names and paths are for display only. */
+  recentFiles(): Promise<ApiResult<RecentFile[]>>
+  /** Opens a Recent Files entry by its id; a file that no longer opens asks whether to remove it. */
+  openRecentFile(id: string): Promise<ApiResult<OpenedFiles>>
+  clearRecentFiles(): Promise<ApiResult<void>>
+  onRecentFiles(callback: (files: RecentFile[]) => void): () => void
+  /** AutoRecover: keeps a copy of a query with unsaved changes (main adds its file's path), replacing its earlier copy. */
+  writeRecovery(record: RecoveryWrite): Promise<ApiResult<void>>
+  /** Deletes copies this page kept or was offered (1–256 ids). */
+  discardRecovery(ids: readonly string[]): Promise<ApiResult<void>>
+  /** The copies an earlier run or an earlier page left, newest first, without their text. */
+  listRecovery(): Promise<ApiResult<RecoveryEntry[]>>
+  /** One offered copy with its text, now this page's; its original file is registered again when it still exists. */
+  takeRecovery(id: string): Promise<ApiResult<RecoveredDocument>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>

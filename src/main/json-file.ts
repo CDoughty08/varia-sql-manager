@@ -59,14 +59,29 @@ export async function quarantine(path: string): Promise<void> {
   await rename(path, path + '.invalid-' + randomUUID() + '.json')
 }
 
-export async function writeJsonAtomic(path: string, value: unknown, limit: number, tooLarge: string): Promise<void> {
+export interface AtomicWriteOptions {
+  /** POSIX permissions of the new file, set on the temporary file before it is synced and renamed into place, so its
+   *  content is never readable under the umask's default. Windows ignores it. */
+  readonly mode?: number
+}
+export async function writeJsonAtomic(path: string, value: unknown, limit: number, tooLarge: string, options: AtomicWriteOptions = {}): Promise<void> {
   const bytes = Buffer.from(JSON.stringify(value, null, 2) + '\n')
   if (bytes.length > limit) throw new Error(tooLarge)
+  await writeBytesAtomic(path, bytes, options)
+}
+
+/** Writes a temporary file beside `path` and renames it over `path`, so a failed write leaves the old file as it was. */
+export async function writeBytesAtomic(path: string, bytes: Uint8Array, options: AtomicWriteOptions = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   const temporary = join(dirname(path), `.varia-${randomUUID()}.tmp`)
   try {
-    const file = await open(temporary, 'wx')
-    try { await file.writeFile(bytes); await file.sync() } finally { await file.close() }
+    const file = await open(temporary, 'wx', options.mode ?? 0o666)
+    try {
+      // Before any content: open's mode is masked by the umask, chmod's is not.
+      if (options.mode !== undefined && posix) await file.chmod(options.mode)
+      await file.writeFile(bytes)
+      await file.sync()
+    } finally { await file.close() }
     await replaceFile(temporary, path)
   } finally { await rm(temporary, { force: true }) }
 }

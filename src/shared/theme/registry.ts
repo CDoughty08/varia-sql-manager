@@ -138,8 +138,8 @@ const groups = {
     'documentTabs.closeForeground': ['X', '$textMuted', 'Close buttons of query tabs.', 'css'],
     'documentTabs.iconForeground': ['X', '$warning', 'SQL badge of query tabs.', 'css'],
     'documentTabs.modifiedIndicator': ['X', '$textMuted', 'Dot that marks a query with unsaved changes.', 'css'],
-    'breadcrumb.foreground': ['V', '$textMuted', 'Query context line (server and database).', 'css'],
-    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'Separator in the query context line.', 'css']
+    'breadcrumb.foreground': ['V', '$textMuted', 'The bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
+    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'Unused since the query status bar replaced the query context line; themes that set it stay valid.', '']
   },
   'Editor, widgets, and empty states': {
     'editor.background': ['V', '$canvas', 'Editor and application background; also the native window background.', 'css monaco native', { opaqueOver: 'base' }],
@@ -148,6 +148,8 @@ const groups = {
     'editor.selectionBackground': ['V', '$textSelection', 'Selected text in the editor.', 'monaco'],
     'editorLineNumber.foreground': ['V', pair('$textMuted/80', '$textMuted'), 'Line numbers.', 'monaco', { opaqueOver: 'editor.background' }],
     'editorLineNumber.activeForeground': ['V', '$textSecondary', 'Line number of the current line.', 'monaco'],
+    'editorWhitespace.foreground': ['V', '$textMuted/50', 'Whitespace glyphs when View White Space is on.', 'monaco'],
+    'editorBookmark.foreground': ['X', '$accent', 'Bookmark glyph in the editor\'s indicator margin.', 'css'],
     'editorBracketHighlight.foreground1': ['V', '$syntaxBracket1', 'Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six.', 'monaco'],
     'editorBracketHighlight.foreground2': ['V', '$syntaxBracket2', 'Brackets one level in.', 'monaco'],
     'editorBracketHighlight.foreground3': ['V', '$syntaxBracket3', 'Brackets two levels in.', 'monaco'],
@@ -204,7 +206,13 @@ const groups = {
     'statusBar.disconnectedBackground': ['X', '@statusBar.background', 'Status bar without a connection.', 'css'],
     'statusBar.disconnectedForeground': ['X', '@statusBar.foreground', 'Status bar text without a connection.', 'css'],
     'statusBar.errorBackground': ['X', '$errorSurface', 'Status bar when the backend is unavailable.', 'css'],
-    'statusBar.errorForeground': ['X', '$errorSurfaceText', 'Status bar text when the backend is unavailable.', 'css']
+    'statusBar.errorForeground': ['X', '$errorSurfaceText', 'Status bar text when the backend is unavailable.', 'css'],
+    'queryStatusBar.background': ['X', '@statusBar.background', 'Status bar of the query window, below or above the query (as in SSMS), while its query is idle.', 'css'],
+    'queryStatusBar.foreground': ['X', '@statusBar.foreground', 'Query status bar text.', 'css'],
+    'queryStatusBar.executingBackground': ['X', '@statusBar.executingBackground', 'Query status bar while its query runs.', 'css'],
+    'queryStatusBar.executingForeground': ['X', '@statusBar.executingForeground', 'Query status bar text while its query runs.', 'css'],
+    'queryStatusBar.errorBackground': ['X', '@statusBar.errorBackground', 'Query status bar after a run failed, was cancelled or timed out, or lost its connection.', 'css'],
+    'queryStatusBar.errorForeground': ['X', '@statusBar.errorForeground', 'Query status bar text after a run failed, was cancelled or timed out, or lost its connection.', 'css']
   },
   'Banners, dialogs, notifications, and quick input': {
     'banner.errorBackground': ['X', '$errorSurface', 'Error banner.', 'css'],

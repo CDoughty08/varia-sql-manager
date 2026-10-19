@@ -16,8 +16,11 @@ export class TestModel {
   private listeners = new Set<() => void>()
   private history: { value: string; alternative: number }[]
   readonly options: Record<string, unknown> = {}
+  eol: '\n' | '\r\n' = '\n'
   private index = 0
   private version = 1
+  /** pushEOL and pushEditOperations join one undo step until pushStackElement closes it, as in Monaco. */
+  private open = false
   constructor(value: string, readonly uri: string, readonly language = 'sql') { this.history = [{ value, alternative: 1 }] }
   getValue(): string { return this.history[this.index].value }
   getValueLength(): number { return this.getValue().length }
@@ -31,6 +34,10 @@ export class TestModel {
     return this.getValue().slice(this.offset(range.startLineNumber, range.startColumn), this.offset(range.endLineNumber, range.endColumn))
   }
   getLineCount(): number { return this.getValue().split('\n').length }
+  getLineContent(line: number): string { return this.getValue().split('\n')[line - 1] }
+  getValueLengthInRange(range: IRange): number { return this.getValueInRange(range).length }
+  /** The indentation DocumentService set, as Monaco's resolved options. */
+  getOptions() { return { tabSize: 4, indentSize: 4, insertSpaces: false, ...this.options } }
   getLineMaxColumn(line: number): number { return this.getValue().split('\n')[line - 1].length + 1 }
   /** Monaco's applyEdits: a new version, but no undo stop. */
   applyEdits(edits: { range: IRange; text: string }[]): void {
@@ -40,7 +47,39 @@ export class TestModel {
     this.emit()
   }
   onDidChangeContent(listener: () => void) { this.listeners.add(listener); return { dispose: () => { this.listeners.delete(listener) } } }
-  pushStackElement(): void {}
+  pushStackElement(): void { this.open = false }
+  /** Monaco's pushEOL: an undoable change of every line ending. */
+  pushEOL(sequence: 0 | 1): void {
+    const eol = sequence === 1 ? '\r\n' : '\n'
+    if (eol === this.eol) return
+    this.eol = eol
+    this.step(this.getValue().replace(/\r?\n/g, eol))
+  }
+  /** Monaco's pushEditOperations: undoable edits, joined with the open undo step. */
+  pushEditOperations(_selections: unknown, edits: { range: IRange; text: string }[]): null {
+    let value = this.getValue()
+    for (const { range, text } of edits) value = value.slice(0, this.offset(range.startLineNumber, range.startColumn)) + text + value.slice(this.offset(range.endLineNumber, range.endColumn))
+    this.step(value)
+    return null
+  }
+  getPositionAt(offset: number): { lineNumber: number; column: number } {
+    const before = this.getValue().slice(0, offset).split('\n')
+    return { lineNumber: before.length, column: before.at(-1)!.length + 1 }
+  }
+  private step(value: string): void {
+    if (this.open) this.history[this.index] = { value, alternative: ++this.version }
+    else { this.history = this.history.slice(0, this.index + 1); this.history.push({ value, alternative: ++this.version }); this.index++; this.open = true }
+    this.emit()
+  }
+  getEOL(): string { return this.eol }
+  /** Monaco's setEOL: the text takes the new line ending, and the version changes, without an undo stop. */
+  setEOL(sequence: 0 | 1): void {
+    const eol = sequence === 1 ? '\r\n' : '\n'
+    if (eol === this.eol) return
+    this.eol = eol
+    this.history[this.index] = { value: this.getValue().replace(/\r?\n/g, eol), alternative: ++this.version }
+    this.emit()
+  }
   updateOptions(options: Record<string, unknown>): void { Object.assign(this.options, options) }
   edit(value: string): void {
     this.history = this.history.slice(0, this.index + 1)
@@ -76,7 +115,7 @@ export class TestEditor {
 export function documentFixture(options: DocumentOptions = {}) {
   const events = new EventBus(), models = new Map<string, TestModel>()
   const api = {
-    saveSqlFile: vi.fn<VariaApi['saveSqlFile']>(async () => ({ ok: true, value: { id: 'file-id', name: 'saved.sql', path: 'C:/saved.sql' } })),
+    saveSqlFile: vi.fn<VariaApi['saveSqlFile']>(async () => ({ ok: true, value: { id: 'file-id', name: 'saved.sql', path: 'C:/saved.sql', encoding: 'utf8', readOnly: false } })),
     closeQuerySession: vi.fn<VariaApi['closeQuerySession']>(async () => ({ ok: true, value: { closed: true } }))
   }
   const frames: (() => void)[] = []

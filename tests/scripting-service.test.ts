@@ -33,7 +33,7 @@ function setup() {
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined }))
   }
   const documents = { newQuery: vi.fn() }
-  const files = { saveCopy: vi.fn(async (name: string, _content: string) => ({ id: 'file-id', name, path: `/home/me/${name}` }) as { id: string; name: string; path: string } | undefined) }
+  const files = { saveCopy: vi.fn(async (name: string, _content: string) => ({ id: 'file-id', name, path: `/home/me/${name}`, encoding: 'utf8', readOnly: false }) as SqlFile | undefined) }
   const connections = new ConnectionService()
   connections.add(connectionInfo('server-a'), connectionOptions)
   let options = { options: defaultScriptingOptions }
@@ -313,11 +313,11 @@ describe('Script As commands', () => {
     await vi.waitFor(() => expect(api.scriptObjects).toHaveBeenCalledTimes(2))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(api.saveSqlFile).toHaveBeenCalledOnce()
-    dialogs[0].resolve({ ok: true, value: { id: 'f1', name: 'dbo.Orders.sql', path: '/tmp/dbo.Orders.sql' } })
+    dialogs[0].resolve({ ok: true, value: { id: 'f1', name: 'dbo.Orders.sql', path: '/tmp/dbo.Orders.sql', encoding: 'utf8', readOnly: false } })
     await first
     await vi.waitFor(() => expect(api.saveSqlFile).toHaveBeenCalledTimes(2))
     expect(api.saveSqlFile.mock.calls[1][0]).toMatchObject({ content: '-- drop dbo.Orders' })
-    dialogs[1].resolve({ ok: true, value: { id: 'f2', name: 'dbo.Orders.sql', path: '/tmp/dbo.Orders (2).sql' } })
+    dialogs[1].resolve({ ok: true, value: { id: 'f2', name: 'dbo.Orders.sql', path: '/tmp/dbo.Orders (2).sql', encoding: 'utf8', readOnly: false } })
     await second
     expect(files.getSnapshot().error).toBe('')
     expect(scripting.getSnapshot().notice?.text).toBe('Saved dbo.Orders.sql.')

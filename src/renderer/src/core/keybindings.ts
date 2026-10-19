@@ -49,7 +49,8 @@ export const nativeChordTimeout = 5000
  * The workbench's only key dispatcher: capture listeners on window, so it runs before Monaco and React. Open menus see
  * keys first, then menu access keys; otherwise it consumes a key only when a rule's `when` matches, even if the command
  * is then unavailable, and leaves every other key alone. Native rules (Monaco's) are never dispatched; after a native
- * chord prefix in editor text (Ctrl/⌘+K), the next key goes to Monaco if it comes within Monaco's chord timeout.
+ * chord prefix in editor text (Ctrl/⌘+K), the next key goes to Monaco if it comes within Monaco's chord timeout. That
+ * pass-through also delivers Varia's own two-part chords (bridge keybindings), which Monaco dispatches to the catalogue.
  */
 export class KeybindingService implements Disposable {
   private readonly rules: readonly ResolvedRule[]

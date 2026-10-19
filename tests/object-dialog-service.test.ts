@@ -32,7 +32,7 @@ function setup() {
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
   const explorer = { listingFolderOf: vi.fn(() => 3 as number | undefined), refresh: vi.fn() }
-  const documents = { newQuery: vi.fn() }, files = { saveCopy: vi.fn(async (name: string) => ({ id: 'f', name, path: '/x/' + name })) }
+  const documents = { newQuery: vi.fn() }, files = { saveCopy: vi.fn(async (name: string) => ({ id: 'f', name, path: '/x/' + name, encoding: 'utf8' as const, readOnly: false })) }
   let ids = 0
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, newId: () => `id-${++ids}` })
   cleanups.push(() => dialogs.dispose())

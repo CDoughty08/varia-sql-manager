@@ -1,10 +1,11 @@
 import { vi } from 'vitest'
-import type { BackendState, ConnectionInfo, ConnectionOptions, ExplorerChildrenResult, ExplorerNode as WireNode, QueryResult, VariaApi } from '../../src/shared/contracts'
+import type { BackendState, ConnectionInfo, ConnectionOptions, ExplorerChildrenResult, ExplorerNode as WireNode, QueryResult, RecentFile, RecoveredDocument, RecoveryEntry, RecoveryWrite, VariaApi } from '../../src/shared/contracts'
 import { folderSpecs, kindSpecs, type FolderId } from '../../src/shared/explorer/catalog'
 import type { ExplorerChildrenParams, ObjectRef } from '../../src/shared/explorer/refs'
 import type { Platform } from '../../src/shared/commands/keybindings'
 import { CommandService } from '../../src/renderer/src/core/commands'
 import { ContextKeyService } from '../../src/renderer/src/core/contextkeys'
+import { InputModeService, type InputModeName, type MonacoInputMode } from '../../src/renderer/src/core/input-mode'
 import { KeybindingService } from '../../src/renderer/src/core/keybindings'
 import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
@@ -12,6 +13,8 @@ import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
 import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
+import { RecentFilesService } from '../../src/renderer/src/services/recent-files'
+import { RecoveryService } from '../../src/renderer/src/services/recovery'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
 import { PaneService } from '../../src/renderer/src/services/panes'
@@ -23,6 +26,10 @@ import { browserTimers } from '../../src/renderer/src/core/timers'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
 import { outputContribution } from '../../src/renderer/src/contributions/output'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
+import { editingContribution } from '../../src/renderer/src/contributions/editing'
+import { BookmarkService } from '../../src/renderer/src/editor/bookmarks'
+import { EditorDialogs } from '../../src/renderer/src/editor/go-to-line'
+import type { BridgeMonaco } from '../../src/renderer/src/editor/keybinding-bridge'
 import { editContribution } from '../../src/renderer/src/contributions/edit'
 import { windowContribution } from '../../src/renderer/src/contributions/window'
 import { MenuService } from '../../src/renderer/src/menus/MenuService'
@@ -109,6 +116,41 @@ export function settingsApi(seed: Partial<SettingsValues> = {}) {
     get state() { return state }
   }
 }
+/** Main's half of Recent Files: `push` stands in for main's pushes; opening an entry opens nothing unless a test says so. */
+export function recentFilesApi(initial: RecentFile[] = []) {
+  const listeners = new Set<(files: RecentFile[]) => void>()
+  return {
+    recentFiles: vi.fn<VariaApi['recentFiles']>(async () => ({ ok: true, value: initial })),
+    onRecentFiles: vi.fn<VariaApi['onRecentFiles']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
+    openRecentFile: vi.fn<VariaApi['openRecentFile']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
+    clearRecentFiles: vi.fn<VariaApi['clearRecentFiles']>(async () => { listeners.forEach(listener => listener([])); return { ok: true, value: undefined } }),
+    pushRecent: (files: RecentFile[]) => { listeners.forEach(listener => listener(files)) }
+  }
+}
+/**
+ * Main's half of AutoRecover, in memory: `written` holds this page's copies by id, `offered` what an earlier page or run
+ * left, which `take` hands over (its text is `-- <name>` unless `texts` says otherwise) and `discard` deletes.
+ */
+export function recoveryApi(offered: RecoveryEntry[] = []) {
+  const written = new Map<string, RecoveryWrite>(), texts = new Map<string, Partial<RecoveredDocument>>()
+  const state = { offered: [...offered] }
+  return {
+    writeRecovery: vi.fn<VariaApi['writeRecovery']>(async record => { written.set(record.id, record); return { ok: true, value: undefined } }),
+    discardRecovery: vi.fn<VariaApi['discardRecovery']>(async ids => {
+      for (const id of ids) written.delete(id)
+      state.offered = state.offered.filter(entry => !ids.includes(entry.id))
+      return { ok: true, value: undefined }
+    }),
+    listRecovery: vi.fn<VariaApi['listRecovery']>(async () => ({ ok: true, value: state.offered })),
+    takeRecovery: vi.fn<VariaApi['takeRecovery']>(async id => {
+      const entry = state.offered.find(item => item.id === id)
+      if (!entry) return { ok: false, error: 'This query is no longer offered for recovery.' }
+      state.offered = state.offered.filter(item => item.id !== id)
+      return { ok: true, value: { text: `-- ${entry.name}`, name: entry.name, kind: entry.kind, eol: 'crlf', ...texts.get(id) } }
+    }),
+    written, texts, recoveryState: state
+  }
+}
 /** Storage backed by a Map, for the command history. */
 export function memoryStorage(initial: Record<string, string> = {}): HistoryStorage & { readonly values: Map<string, string> } {
   const values = new Map(Object.entries(initial))
@@ -139,11 +181,20 @@ export function manualTimers() {
   return { timers, pending, advance }
 }
 
+/** A stand-in for Monaco's InputMode, which every editor in a page shares, so tests never change the real one. */
+export function fakeInputMode(): MonacoInputMode {
+  const listeners = new Set<(mode: InputModeName) => void>()
+  const target: MonacoInputMode = {
+    _inputMode: 'insert', _onDidChangeInputMode: { fire: mode => listeners.forEach(listener => listener(mode)) }, getInputMode: () => target._inputMode,
+    onDidChangeInputMode: listener => { listeners.add(listener); return { dispose: () => { listeners.delete(listener) } } }
+  }
+  return target
+}
 /**
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues> } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[] } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture(settingsDocumentOptions(() => settings.getSnapshot().values))
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
@@ -190,6 +241,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
+    reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
+    confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' })),
+    ...recentFilesApi(),
+    ...recoveryApi(options.recovery),
     ...settingsApi(options.settings),
     ...backendApi()
   }
@@ -198,13 +254,20 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
   settings.subscribe(() => documents.refreshOptions())
   const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
+  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
+  // Monaco's command and keybinding registries, for the editor chords the bridge registers.
+  const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
   const explorer = new ExplorerService({ api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const resultClient = fakeResultClient()
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
-  const files = new FileService(documents, queries, api)
+  const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
+  const recentFiles = new RecentFilesService(api)
+  // AutoRecover's timer runs only when a test advances it.
+  const recoveryTimers = manualTimers()
+  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
@@ -217,6 +280,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
+  const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
     platform,
     documents,
@@ -224,11 +288,15 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    inputMode,
     panes,
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
     scripting: scripting.running,
+    bookmarks,
+    recentFiles,
+    recovery,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -249,7 +317,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
-  const menus = new MenuService({ platform, commands, context, keybindings, theme, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const workbench = {
     platform,
     commands,
@@ -257,7 +325,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     documents,
     queries,
     files,
+    recentFiles,
+    recovery,
     editorOptions,
+    bookmarks,
+    editorDialogs,
+    inputMode,
     connections,
     backend,
     targets,
@@ -281,6 +354,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     queryContribution(workbench, api),
     filesContribution(workbench, api),
     editorContribution(workbench),
+    editingContribution(workbench, monaco),
     editContribution(workbench, api),
     windowContribution(workbench, api),
     menusContribution(workbench),
@@ -304,12 +378,14 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
+    recovery.dispose()
     menus.dispose()
     quickInput.dispose()
     contributions.forEach(contribution => contribution.dispose())
     commands.dispose()
     context.dispose()
     files.dispose()
+    recentFiles.dispose()
     queries.dispose()
     resultSelection.dispose()
     results.dispose()
@@ -318,6 +394,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting.dispose()
     actions.dispose()
     dialogs.dispose()
+    bookmarks.dispose()
+    editorDialogs.dispose()
     settings.dispose()
     documents.dispose()
     backend.dispose()
@@ -328,6 +406,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    bookmarks,
+    editorDialogs,
+    monaco,
     panes,
     explorer,
     databaseList,
@@ -341,6 +422,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     focusEditor,
     queries,
     files,
+    recentFiles,
+    recovery,
+    recoveryTimers,
     targets,
     context,
     commands,

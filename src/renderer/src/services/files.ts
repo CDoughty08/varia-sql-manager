@@ -1,12 +1,22 @@
-import type { ApiResult, SqlFile, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, OpenedFiles, OpenSqlFile, SqlFile, VariaApi } from '../../../shared/contracts'
+import { lineEndingLabel } from '../../../shared/files/encoding'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
+import type { QueryDocument } from '../documents'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
 
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
-export interface FileSnapshot { readonly error: string }
+  & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'confirmReload'>>
+export interface FileServiceOptions {
+  /** Tools › Options › Environment › Documents › Reload modified files unless there are unsaved changes. */
+  readonly autoReload?: () => boolean
+}
+/** The file banner: an error, or a warning that changes nothing (a file whose line endings were mixed). */
+export interface FileSnapshot { readonly error: string; readonly kind: 'error' | 'warning' }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
+/** What a document keeps of an opened file: everything but its text and line endings, which the model holds. */
+export const registeredFile = ({ id, name, path, encoding, codePage, readOnly }: OpenSqlFile | SqlFile): SqlFile => ({ id, name, path, encoding, ...codePage ? { codePage } : {}, readOnly })
 /** Queries that were running when the prompt opened, and finished since with a transaction: they were not asked about,
  *  so they stay (`open` or `connected`) rather than have it rolled back without asking. */
 export const unfinished = (count: number, stayed: 'open' | 'connected'): string => !count ? ''
@@ -17,16 +27,22 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private disposed = false
   private readonly waiters = new Set<() => void>()
   private closing: Promise<void> | undefined
+  private checking: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>, private api: FileApi) { super({ error: '' }) }
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
+    super({ error: '', kind: 'error' })
+  }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
   canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
   /** A query still executing can close too: main asks to cancel it first. */
   canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canSave(id) }
-  reportError(error: string): void {
-    if (!this.disposed && error !== this.getSnapshot().error) this.publish({ error })
+  reportError(error: string, kind: FileSnapshot['kind'] = 'error'): void {
+    const current = this.getSnapshot()
+    if (!this.disposed && (error !== current.error || kind !== current.kind)) this.publish({ error, kind })
   }
+  /** Save All: a document task, and some query has unsaved changes. */
+  canSaveAll(): boolean { return this.canRun() && this.documents.getSnapshot().documents.some(document => document.dirty) }
   clearError(): void { this.reportError('') }
   /** Resolves once no file task runs, or on disposal. */
   private idle(): Promise<void> {
@@ -52,23 +68,135 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     const owned = new Set(this.documents.getSnapshot().documents.map(document => document.file?.id))
     for (const id of new Set(files.map(file => file.id))) if (!owned.has(id)) unwrap(await this.api.releaseSqlFile(id))
   }
+  /**
+   * Opens files main read into tabs, on `target`'s connection and database (the query active when the open began): a
+   * file already open activates its tab, and ids no tab claims are released. What could not be opened is reported, and
+   * mixed line endings get a notice.
+   */
+  private async openFiles({ files, errors }: OpenedFiles, target: QueryDocument | undefined): Promise<void> {
+    const mixed: string[] = []
+    try {
+      if (this.disposed) return
+      for (const file of files) {
+        // Main gives a file one id, however its path was spelled or linked.
+        const existing = this.documents.getSnapshot().documents.find(document => document.file?.id === file.id)
+        if (existing) { this.documents.activate(existing.id); continue }
+        this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, registeredFile(file), file.eol)
+        if (file.mixedEol) mixed.push(`Line endings in ${file.name} were mixed; it will be saved with ${lineEndingLabel(file.eol)} line endings.`)
+      }
+    } finally { await this.releaseUnclaimed(files) }
+    if (errors.length) throw new Error([...errors, ...mixed].join(' '))
+    // Visual Studio asks; this is a notice, and the text opens with one kind of line ending, which Save writes.
+    if (mixed.length) this.reportError(mixed.join(' '), 'warning')
+  }
   async open(): Promise<void> {
     const target = this.documents.active
-    await this.perform(async () => {
-      const opened = unwrap(await this.api.openSqlFiles())
+    await this.perform(async () => { await this.openFiles({ files: unwrap(await this.api.openSqlFiles()), errors: [] }, target) })
+  }
+  /** File › Recent Files: one entry, by the id main gave its path. */
+  async openRecent(id: string): Promise<void> {
+    const target = this.documents.active, openRecentFile = this.api.openRecentFile
+    if (!openRecentFile) return
+    await this.perform(async () => { await this.openFiles(unwrap(await openRecentFile(id)), target) })
+  }
+  /**
+   * Files main opened by itself (the command line, a second instance, macOS, a drop, the macOS menu's Recent Files).
+   * They arrive whenever main has read them, so behind another file task they wait their turn.
+   */
+  async adopt(opened: OpenedFiles): Promise<void> {
+    await this.later(target => this.openFiles(opened, target))
+  }
+  /**
+   * Runs `action` as a file task once no other one runs (an open or save dialog, a close prompt), with the query active
+   * then; a failure goes to the file banner. AutoRecover's Recover opens its queries this way.
+   */
+  async later(action: (target: QueryDocument | undefined) => Promise<void>): Promise<void> {
+    while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
+    if (this.disposed) return
+    const target = this.documents.active
+    await this.perform(() => action(target))
+  }
+  /** Releases main's registrations of `files` that no tab holds. */
+  release(files: readonly SqlFile[]): Promise<void> { return this.releaseUnclaimed(files) }
+  /**
+   * Visual Studio's check for files changed outside the environment, run when the window gets focus while Tools ›
+   * Options says to. In tab order: a changed file asks whether to reload it (Yes to All and No to All answer for the
+   * rest of this check), or reloads without asking when it has no unsaved changes and Reload modified files unless
+   * there are unsaved changes is on; a deleted file's query becomes unsaved, with a notice, so Save writes it again. A
+   * file not reloaded is asked about again when it next changes, and its next Save asks first (main's File changed).
+   * One check runs at a time, after any other file task.
+   */
+  checkExternalChanges(): Promise<void> {
+    if (this.checking) return this.checking
+    const checking = this.checking = (async () => {
+      while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
+      if (this.disposed || !this.documents.getSnapshot().documents.some(document => document.file)) return
+      await this.perform(() => this.reviewChanges())
+    })()
+    // Cleared once it is the one held: a check with nothing to do ends before it is assigned.
+    void checking.finally(() => { if (this.checking === checking) this.checking = undefined })
+    return checking
+  }
+  private async reviewChanges(): Promise<void> {
+    const { checkSqlFiles, confirmReload } = this.api
+    if (!checkSqlFiles || !confirmReload) return
+    const changes = new Map(unwrap(await checkSqlFiles()).map(change => [change.fileId, change.change]))
+    const changeOf = (document: QueryDocument | undefined) => document?.file ? changes.get(document.file.id) : undefined
+    const silent = (document: QueryDocument) => !document.dirty && !!this.options.autoReload?.()
+    const ids = this.documents.getSnapshot().documents.filter(document => changeOf(document)).map(document => document.id)
+    const deleted: string[] = [], failed: string[] = []
+    let all: 'yes' | 'no' | undefined
+    for (const [index, id] of ids.entries()) {
+      const document = this.documents.get(id), change = changeOf(document)
+      if (this.disposed) return
+      if (!document?.file || !change) continue
+      if (change === 'deleted') {
+        this.documents.markUnsaved(id)
+        deleted.push(`${document.name} was deleted or moved outside Varia SQL Manager. Save it to keep it.`)
+        continue
+      }
+      // Main has moved every reported file's stamp, so a file left out here is not reported again: one that fails is
+      // reported and the rest are still asked about.
       try {
-        if (this.disposed) return
-        for (const file of opened) {
-          const existing = this.documents.getSnapshot().documents.find(document => document.file?.path === file.path)
-          if (existing) { this.documents.activate(existing.id); continue }
-          this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, { id: file.id, name: file.name, path: file.path })
+        let reload = silent(document) || all === 'yes'
+        if (!reload && !all) {
+          const later = ids.slice(index + 1).map(other => this.documents.get(other)).some(other => !!other && changeOf(other) === 'modified' && !silent(other))
+          const answer = unwrap(await confirmReload({ fileId: document.file.id, dirty: document.dirty, more: later }))
+          if (answer === 'yesToAll') all = 'yes'
+          if (answer === 'noToAll') all = 'no'
+          reload = answer === 'yes' || answer === 'yesToAll'
         }
-      } finally { await this.releaseUnclaimed(opened) }
-    })
+        if (reload) await this.reload(id)
+      } catch (error) { failed.push(`${document.name} was not reloaded: ${error instanceof Error ? error.message : 'The file could not be read.'}`) }
+    }
+    if (failed.length) throw new Error([...failed, ...deleted].join(' '))
+    if (deleted.length) this.reportError(deleted.join(' '), 'warning')
+  }
+  /** Reads the query's file again into it, as one undoable edit that leaves it clean. */
+  private async reload(id: string): Promise<void> {
+    const file = this.documents.get(id)?.file, reloadSqlFile = this.api.reloadSqlFile
+    if (!file || !reloadSqlFile) return
+    const opened = unwrap(await reloadSqlFile(file.id))
+    if (this.disposed || this.documents.get(id)?.file?.id !== opened.id) return
+    this.documents.reload(id, opened.content, opened.eol, registeredFile(opened))
   }
   async save(id = this.documents.getSnapshot().activeId, saveAs = false): Promise<void> {
     if (!this.canSave(id)) return
     await this.perform(async () => { await this.documents.save(id, saveAs) })
+  }
+  /**
+   * File › Save All: the queries with unsaved changes, in tab order, as one task. A query never saved asks for its file
+   * in turn, as SSMS does; cancelling that dialog stops the rest, and so does a save that fails.
+   */
+  async saveAll(): Promise<void> {
+    if (!this.canSaveAll()) return
+    await this.perform(async () => {
+      for (const { id } of this.documents.getSnapshot().documents) {
+        if (this.disposed) return
+        if (!this.documents.get(id)?.dirty) continue
+        if (!await this.documents.save(id)) return
+      }
+    })
   }
   /**
    * Saves text to a file the user picks (Script … to File…), without opening it as a query. Resolves with the saved
@@ -187,6 +315,6 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     this.disposed = true
     for (const done of [...this.waiters]) done()
     this.clearListeners()
-    this.publish({ error: '' })
+    this.publish({ error: '', kind: 'error' })
   }
 }

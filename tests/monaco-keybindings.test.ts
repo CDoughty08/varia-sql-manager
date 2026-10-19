@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { commandDescriptor } from '../src/shared/commands/catalog'
-import { defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
+import { bridgeRules, defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
 
 /**
  * Keybinding drift against Monaco. The workbench dispatcher runs before Monaco (a capture listener on window), so a
@@ -19,6 +19,7 @@ const reviewedImports = [
   'monaco-editor/editor/contrib/clipboard/browser/clipboard.js',
   'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js',
   'monaco-editor/editor/contrib/comment/browser/comment.js',
+  'monaco-editor/editor/contrib/snippet/browser/snippetController2.js',
   'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js',
   'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js',
   'monaco-editor/editor/contrib/hover/browser/hoverContribution.js',
@@ -34,7 +35,8 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'shift+f10': "workbench.showContextMenu replaces Monaco's menu (contextmenu: false), so Shift+F10 opens the workbench's editor menu",
   'contextmenu': 'the context-menu key, likewise (Windows and Linux)',
   'delete': "Delete in Object Explorer's tree only (activePanel == 'explorer' && !textInputFocus); Monaco's deleteRight acts in editor text",
-  'cmd+backspace': "Delete in Object Explorer's tree on macOS, as in Finder; Monaco's deleteWordLeft acts in editor text"
+  'cmd+backspace': "Delete in Object Explorer's tree on macOS, as in Finder; Monaco's deleteWordLeft acts in editor text",
+  'ctrl+g': 'Go To Line, as in SSMS (Windows and Linux); Monaco binds ⌘G (next match) only on macOS'
 }
 
 const keyNames: Readonly<Record<string, string>> = {
@@ -135,7 +137,18 @@ describe('Monaco keybinding drift', () => {
   it.each(platforms)('labels only keys Monaco really binds as native on %s', platform => {
     const monaco = chordsByPlatform.get(platform)!
     // Electron dispatches the keys of role-backed commands (Zoom In, Exit): their native menu items carry them.
-    for (const rule of defaultRules(platform).filter(rule => rule.native && !commandDescriptor(rule.command).role)) expect(monaco.has(rule.chords.join(' ')), `${rule.command} ${rule.chords.join(' ')}`).toBe(true)
+    // Bridge rules are Varia's chords, which Monaco dispatches only because Varia registers them (registerEditorBridge).
+    for (const rule of defaultRules(platform).filter(rule => rule.native && !rule.bridge && !commandDescriptor(rule.command).role)) expect(monaco.has(rule.chords.join(' ')), `${rule.command} ${rule.chords.join(' ')}`).toBe(true)
+  })
+  it.each(platforms)('bridge chords are free in Monaco on %s', platform => {
+    // A Monaco contrib that binds one (linesOperations has Ctrl+K Ctrl+X) would race the bridge for it.
+    const monaco = chordsByPlatform.get(platform)!
+    expect(bridgeRules(platform).filter(rule => monaco.has(rule.chords.join(' '))).map(rule => `${rule.command} ${rule.chords.join(' ')} is bound by ${[...monaco.get(rule.chords.join(' '))!].join(', ')}`)).toEqual([])
+  })
+  it.each(platforms)('bridge chords start with the native chord prefix on %s', platform => {
+    const rules = bridgeRules(platform)
+    expect(rules.length).toBeGreaterThan(0)
+    for (const rule of rules) expect([rule.chords.length, nativeChordPrefixes(platform).has(rule.chords[0])], rule.command).toEqual([2, true])
   })
   it("turns Monaco's own context menu off, so Shift+F10 and right-clicks show only the workbench's", () => {
     expect(readFileSync(join('src', 'renderer', 'src', 'QueryEditor.tsx'), 'utf8')).toMatch(/\bcontextmenu: false\b/)

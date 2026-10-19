@@ -647,7 +647,7 @@ describe('Go to Query', () => {
   it('lists open queries most recent first with the previous one active, so Enter switches back', async () => {
     const { key, quickInput, view, documents, connections } = palette()
     connections.add({ ...connectionInfo('server-a'), displayName: 'Production' }, connectionOptions)
-    const a = documents.create('a.sql', 'SELECT 1', 'AppData', 'server-a', true), b = documents.create('b.sql', '', 'master', undefined, false, { id: 'f', name: 'b.sql', path: '/tmp/b.sql' })
+    const a = documents.create('a.sql', 'SELECT 1', 'AppData', 'server-a', true), b = documents.create('b.sql', '', 'master', undefined, false, { id: 'f', name: 'b.sql', path: '/tmp/b.sql', encoding: 'utf8', readOnly: false })
     const c = documents.create('c.sql', '', 'master')
     documents.activate(a.id)
     await key('workbench.quickOpen')

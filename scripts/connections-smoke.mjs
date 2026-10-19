@@ -340,7 +340,8 @@ try {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(page.locator('.query-context')).toContainText('Development')
-  expect(await page.locator('.query-context').evaluate(element => getComputedStyle(element).borderBottomColor)).toBe('rgb(230, 107, 115)')
+  // The query status bar sits below the query by default, so the connection's colour is its top edge, facing the query.
+  expect(await page.locator('.query-context').evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 107, 115)')
   // Object Explorer shows the server by its name and color, expanded to its folders.
   const serverRow = await explorerRow(page, 'Development')
   await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
