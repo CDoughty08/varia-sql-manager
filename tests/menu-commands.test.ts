@@ -313,13 +313,14 @@ describe('Object Explorer commands', () => {
     expect(api.scriptObjects.mock.calls.map(([params]) => [params.connectionId, params.targets, params.verb])).toEqual([['server-a', [{ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }], 'create']])
   })
   it('select as many rows as Tools › Options says', async () => {
-    const { commands, documents, model } = connected({ settings: { 'objectExplorer.selectTopRows': 50 } })
-    expect(await commands.execute('explorer.selectTopRows', orders, 'menu')).toBe(true)
+    const fixture = connected({ settings: { 'objectExplorer.selectTopRows': 50 } }), { commands, documents, model } = fixture
+    expect(await commands.execute('explorer.selectTopRows', await selectOrders(fixture), 'menu')).toBe(true)
     expect(model(documents.active!.id).getValue()).toContain('SELECT TOP (50) [Id]')
   })
   it('select the top 1000 rows of a table by its columns and run them on its database', async () => {
-    const { commands, documents, api, model } = connected()
-    expect(await commands.execute('explorer.selectTopRows', orders, 'menu')).toBe(true)
+    const fixture = connected(), { commands, documents, api, model } = fixture
+    const menu = await selectOrders(fixture)
+    expect(await commands.execute('explorer.selectTopRows', menu, 'menu')).toBe(true)
     expect(api.tableColumns.mock.calls).toEqual([['server-a', 'AppData', 'dbo', 'Orders']])
     const script = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [Id]', '      ,[CustomerName]', '  FROM [AppData].[dbo].[Orders]'].join('\n')
     const tab = documents.active!
@@ -327,9 +328,9 @@ describe('Object Explorer commands', () => {
     // The menu can make it again, so closing it asks nothing. It ran on AppData (the result then names the database).
     expect(tab).toMatchObject({ connectionId: 'server-a', dirty: false })
     expect(api.execute.mock.calls.map(([options]) => [options.sql, options.database, options.sessionId])).toEqual([[script, 'AppData', tab.id]])
-    api.tableColumns.mockResolvedValueOnce({ ok: false, error: 'Table was not found.' })
-    expect(await commands.execute('explorer.selectTopRows', orders, 'menu')).toBe(false)
-    expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Select Top 1000 Rows”: Table was not found.')
+    api.tableColumns.mockResolvedValueOnce({ ok: false, error: 'The table or view no longer exists.' })
+    expect(await commands.execute('explorer.selectTopRows', menu, 'menu')).toBe(false)
+    expect(commands.getSnapshot().error).toBe('Could not run “Object Explorer: Select Top 1000 Rows”: The table or view no longer exists.')
     expect(documents.getSnapshot().documents).toHaveLength(1)
     expect(commands.isEnabled('explorer.selectTopRows', tables)).toBe(false)
   })

@@ -8,6 +8,7 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import type { LiveConnection } from '../services/connections'
+import { clipboardNotice, deliverScript } from './deliver'
 
 /** A running request; `visible` once it has run long enough to show in the status bar. */
 export interface ScriptingJob { readonly id: string; readonly label: string; readonly visible: boolean }
@@ -33,7 +34,7 @@ export const scriptingMessages = {
   notConnected: 'Connect to a SQL Server first.',
   cap: 'Four scripting operations are already running. Wait for one to finish or cancel it.',
   disconnected: 'The server was disconnected before scripting finished.',
-  clipboard: 'Script copied to the clipboard.',
+  clipboard: clipboardNotice,
   cancelled: 'Scripting cancelled.'
 } as const
 const maxLabel = 400
@@ -117,7 +118,8 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
     const value = unwrap(result)
     if (value.error) throw new Error(value.error.message)
     if (value.text === undefined) throw new Error(`SQL Server Management Objects produced no script for ${job.label}.`)
-    await this.deliver(destination, value.text, value.database, connectionId, object)
+    const notice = await deliverScript({ destination, text: value.text, database: value.database, connectionId, fileName: scriptFileName(object) }, this.options)
+    if (notice) this.notify({ text: notice, kind: 'info' }, scriptLimits.noticeMs)
     if (value.warnings.length) this.notify({ text: `Scripted ${job.label} with a warning: ${value.warnings[0]}`, title: value.warnings.join('\n'), kind: 'warning' }, scriptLimits.warningNoticeMs)
   }
 
@@ -148,23 +150,6 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
     this.clearListeners()
   }
 
-  private async deliver(destination: ScriptDestination, text: string, database: string, connectionId: string, object: ObjectRef): Promise<void> {
-    switch (destination) {
-      case 'newQuery':
-        // Not marked unsaved, as with Select Top 1000 Rows: the menu can always produce it again.
-        this.options.documents.newQuery(text, undefined, connectionId, database, false)
-        this.options.focusEditor?.()
-        return
-      case 'file': {
-        const saved = await this.options.files.saveCopy(scriptFileName(object), text)
-        if (saved) this.notify({ text: `Saved ${displayText(saved.name)}.`, kind: 'info' }, scriptLimits.noticeMs)
-        return
-      }
-      case 'clipboard':
-        unwrap(await this.options.api.writeClipboardText(text))
-        this.notify({ text: scriptingMessages.clipboard, kind: 'info' }, scriptLimits.noticeMs)
-    }
-  }
   private isLive(connectionId: string): boolean {
     return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
   }

@@ -231,7 +231,7 @@ try {
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   const orders = await explorerRow(page, ...ordersPath)
   await orders.click({ button: 'right', force: true })
-  expect(await explorerMenu().locator('.menu-item .menu-label').allTextContents()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Refresh'])
+  expect(await explorerMenu().locator('.menu-item .menu-label').allTextContents()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click(fast)
   const scriptMenu = menuNamed('Script Table as')
   expect(await scriptMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To', 'EXECUTE To'])
@@ -286,7 +286,7 @@ try {
   const procedurePath = ['server-a', 'Databases', 'AppData', 'Programmability', 'Stored Procedures', 'dbo.ShipOrder']
   await expandExplorerPath(page, ...procedurePath.slice(0, -1))
   await (await explorerRow(page, ...procedurePath)).click({ button: 'right', force: true })
-  expect(await explorerMenu().locator('.menu-item .menu-label').allTextContents()).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Refresh'])
+  expect(await explorerMenu().locator('.menu-item .menu-label').allTextContents()).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await explorerMenu().getByRole('menuitem', { name: 'Script Stored Procedure as', exact: true }).click(fast)
   expect(await menuNamed('Script Stored Procedure as').locator('.menu-item .menu-label').allTextContents()).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'EXECUTE To'])
   await page.keyboard.press('ArrowLeft')

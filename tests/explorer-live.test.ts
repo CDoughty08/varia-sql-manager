@@ -125,7 +125,7 @@ describe.runIf(server)('Select Top 1000 Rows against SQL Server', () => {
     expect(result.status).toBe('completed')
     expect(result.resultSets[0].columns.map(column => column.name)).toEqual(columns.map(column => column.name))
     expect(result.resultSets[0].rows.length).toBeGreaterThan(0)
-    await expect(supervisor.request('tables.columns', { connectionId: connection.id, database: 'master', schema: 'sys', name: 'objects]' })).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Table was not found.' })
+    await expect(supervisor.request('tables.columns', { connectionId: connection.id, database: 'master', schema: 'sys', name: 'objects]' })).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'The table or view no longer exists.' })
   }, 90_000)
   it.runIf(scratch)('leaves out graph tables\' internal columns, which cannot be selected, and keeps hidden period columns', async () => {
     const { supervisor, connection, run } = await connect()

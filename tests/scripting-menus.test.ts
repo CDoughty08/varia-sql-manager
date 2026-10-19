@@ -11,11 +11,12 @@ import { hoverDelay, MenuController, type MenuKey } from '../src/renderer/src/me
 import { nativeMenuRequest } from '../src/renderer/src/menus/native'
 import { resolveMenu, type ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { scriptAsTitles, scriptCommandIds, scriptContextValues, scriptKindSpecs, scriptMenuState, type ScriptTarget } from '../src/shared/scripting/catalog'
+import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
 import { manualTimers } from './fixtures/workbench'
 
 /** The state a right-click on a node of this kind leaves: the backend is ready, a server is connected, and the node is selected. */
 const stateFor = (platform: Platform, target: ScriptTarget, extra: Partial<ContextKeys> = {}) =>
-  contextRecord(platform, { backendReady: true, hasConnection: true, ...scriptContextValues(scriptMenuState(target)), ...extra })
+  contextRecord(platform, { backendReady: true, hasConnection: true, ...scriptContextValues(scriptMenuState(target)), ...actionContextValues(actionMenuState(target)), ...extra })
 /** Object Explorer's menu for a node, with enablement from each command's precondition, as the workbench resolves it. */
 function resolveFor(platform: Platform, target: ScriptTarget, extra: Partial<ContextKeys> = {}): readonly ResolvedMenuItem[] {
   const state = stateFor(platform, target, extra)
@@ -65,7 +66,7 @@ describe('Script As in Object Explorer\'s context menu', () => {
     expect(verbs).toEqual([['CREATE To', true], ['ALTER To', false], ['CREATE OR ALTER To', false], ['DROP To', true], ['DROP And CREATE To', true], ['-'],
       ['SELECT To', true], ['INSERT To', true], ['UPDATE To', true], ['DELETE To', true], ['-'], ['EXECUTE To', false]])
     const procedure = resolveFor('linux', { kind: 'procedure', subtype: 'sql' })
-    expect(describe_(procedure).filter(line => !line.startsWith('  '))).toEqual(['Modif&y', '---', '&Script Stored Procedure as >', '---', 'Copy &Name', '---', 'Re&fresh'])
+    expect(describe_(procedure).filter(line => !line.startsWith('  '))).toEqual(['Modif&y', '---', '&Script Stored Procedure as >', '---', 'Copy &Name', '---', 'Rena&me', 'D&elete', '---', 'Re&fresh'])
     expect(resolveFor('linux', { kind: 'procedure', subtype: 'clr' }).some(item => item.kind === 'command' && item.id === 'explorer.modify')).toBe(false)
     for (const [kind, subtype, title] of [['type', 'clr', 'Script User-Defined Type as'], ['type', 'alias', 'Script User-Defined Data Type as'], ['tableType', undefined, 'Script User-Defined Table Type as']] as const) {
       expect(resolveFor('win32', { kind, subtype }).find(item => item.key === 'explorer.scriptAs'), `${kind} ${subtype}`).toMatchObject({ title })
@@ -159,8 +160,8 @@ describe('Script As in Object Explorer\'s context menu', () => {
       expect(request.scriptAsTitle ?? '', JSON.stringify(target)).toBe(scriptMenuState(target).title)
       expect(request.visible.filter(id => (scriptCommandIds as readonly string[]).includes(id)).length, JSON.stringify(target)).toBe(Object.values(scriptMenuState(target).verbs).filter(Boolean).length * 3)
     }
-    // A table: 30 script commands (its greyed verbs too), Select Top 1000 Rows, Copy Name and Refresh.
+    // A table: 30 script commands (its greyed verbs too), Select Top 1000 Rows, Copy Name, Rename, Delete and Refresh.
     expect(largest).toBeLessThanOrEqual(64)
-    expect(largest).toBe(33)
+    expect(largest).toBe(35)
   })
 })

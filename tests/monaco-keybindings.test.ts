@@ -34,6 +34,8 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'ctrl+pagedown': 'Next Query (Windows and Linux only); Monaco binds ⌘PageDown only on macOS and Alt+PageDown elsewhere',
   'shift+f10': "workbench.showContextMenu replaces Monaco's menu (contextmenu: false), so Shift+F10 opens the workbench's editor menu",
   'contextmenu': 'the context-menu key, likewise (Windows and Linux)',
+  'delete': "Delete in Object Explorer's tree only (activePanel == 'explorer' && !textInputFocus); Monaco's deleteRight acts in editor text",
+  'cmd+backspace': "Delete in Object Explorer's tree on macOS, as in Finder; Monaco's deleteWordLeft acts in editor text",
   'ctrl+g': 'Go To Line, as in SSMS (Windows and Linux); Monaco binds ⌘G (next match) only on macOS'
 }
 

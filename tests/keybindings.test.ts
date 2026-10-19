@@ -197,11 +197,12 @@ describe('default keybindings', () => {
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
-        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh',
+        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete',
         'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...display, ...output])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
-      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.previous', ...native, ...macEditing,
+      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'query.changeDatabase',
+      'document.next', 'document.previous', ...native, ...macEditing,
       'preferences.options', ...display, ...output])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
     expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])

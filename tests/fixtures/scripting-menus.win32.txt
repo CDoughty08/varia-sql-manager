@@ -47,6 +47,9 @@ explorer.context, for a table
   ---
   Copy &Name
   ---
+  Rena&me
+  D&elete
+  ---
   Re&fresh
 explorer.context, for a history table
   Select Top 1000 Ro&ws
@@ -96,6 +99,9 @@ explorer.context, for a history table
       C&lipboard (disabled)
   ---
   Copy &Name
+  ---
+  Rena&me (disabled)
+  D&elete (disabled)
   ---
   Re&fresh
 explorer.context, for a ledger history table
@@ -147,8 +153,13 @@ explorer.context, for a ledger history table
   ---
   Copy &Name
   ---
+  Rena&me (disabled)
+  D&elete (disabled)
+  ---
   Re&fresh
 explorer.context, for a view
+  Select Top 1000 Ro&ws
+  ---
   &Script View as >
     &CREATE To >
       &New Query Editor Window
@@ -195,8 +206,13 @@ explorer.context, for a view
   ---
   Copy &Name
   ---
+  Rena&me
+  D&elete
+  ---
   Re&fresh
 explorer.context, for a ledger view
+  Select Top 1000 Ro&ws
+  ---
   &Script View as >
     &CREATE To >
       &New Query Editor Window
@@ -243,6 +259,9 @@ explorer.context, for a ledger view
   ---
   Copy &Name
   ---
+  Rena&me (disabled)
+  D&elete (disabled)
+  ---
   Re&fresh
 explorer.context, for a T-SQL procedure
   Modif&y
@@ -276,6 +295,9 @@ explorer.context, for a T-SQL procedure
   ---
   Copy &Name
   ---
+  Rena&me
+  D&elete
+  ---
   Re&fresh
 explorer.context, for a CLR procedure
   &Script Stored Procedure as >
@@ -306,6 +328,9 @@ explorer.context, for a CLR procedure
       C&lipboard
   ---
   Copy &Name
+  ---
+  Rena&me
+  D&elete
   ---
   Re&fresh
 explorer.context, for an inline table-valued function
@@ -345,6 +370,9 @@ explorer.context, for an inline table-valued function
   ---
   Copy &Name
   ---
+  Rena&me
+  D&elete
+  ---
   Re&fresh
 explorer.context, for a scalar function
   Modif&y
@@ -383,6 +411,9 @@ explorer.context, for a scalar function
   ---
   Copy &Name
   ---
+  Rena&me
+  D&elete
+  ---
   Re&fresh
 explorer.context, for an aggregate
   &Script Function as >
@@ -418,6 +449,9 @@ explorer.context, for an aggregate
       C&lipboard (disabled)
   ---
   Copy &Name
+  ---
+  Rena&me
+  D&elete (disabled)
   ---
   Re&fresh
 explorer.context, for a DML trigger
@@ -471,6 +505,9 @@ explorer.context, for a database
   ---
   Copy &Name
   ---
+  Rena&me
+  D&elete
+  ---
   Re&fresh
 explorer.context, for a database snapshot
   New &Query
@@ -494,6 +531,9 @@ explorer.context, for a database snapshot
       C&lipboard
   ---
   Copy &Name
+  ---
+  Rena&me (disabled)
+  D&elete
   ---
   Re&fresh
 explorer.context, for an index
@@ -592,6 +632,9 @@ explorer.context, for a certificate (deferred)
   Re&fresh
 explorer.context, for an extended procedure (deferred)
   Copy &Name
+  ---
+  Rena&me (disabled)
+  D&elete (disabled)
   ---
   Re&fresh
 explorer.context, for a table type's index (not scriptable)

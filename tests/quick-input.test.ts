@@ -7,7 +7,7 @@ import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/histo
 import { QuickInputService, quickInputLimits, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
 import { quickInputKeyAction, resultStatus, type QuickInputKeyEvent } from '../src/renderer/src/quickinput/view-model'
 import { deferred, TestEditor } from './fixtures/documents'
-import { connectionInfo, connectionOptions, fakeFocus, manualTimers, memoryStorage, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, fakeFocus, manualTimers, memoryStorage, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -487,11 +487,18 @@ describe('command palette', () => {
     expect(sources).toEqual(['workbench.showCommands keybinding focus grid', 'file.new palette focus grid'])
   })
   it('titles Select Top Rows in the palette with the Options value, and in custom menus too', async () => {
-    const { key, quickInput, menus } = palette({ settings: { 'objectExplorer.selectTopRows': 50 } })
+    const { key, quickInput, menus, api, connect, explorer } = palette({ settings: { 'objectExplorer.selectTopRows': 50 } })
     await key('workbench.showCommands')
     quickInput.filter('>select top')
     expect(quickInput.getSnapshot().rows[0].item.label).toBe('Object Explorer: Select Top 50 Rows')
-    const table = menus.resolve('explorer.context', { kind: 'explorer', node: { kind: 'table', id: 1, lost: false } } as never)
+    // A table's menu, as a right-click on dbo.Orders opens it (it selects the row first).
+    api.push(readyBackend())
+    connect(connectionInfo('server-a'))
+    const find = async (label: string) => { let id: number | undefined; await vi.waitFor(() => { id = explorer.getSnapshot().rows.nodes.find(node => node?.label === label)?.id; expect(id).toBeDefined() }); return id! }
+    for (const label of ['Databases', 'AppData', 'Tables']) explorer.expand(await find(label))
+    const orders = await find('dbo.Orders')
+    explorer.select(orders)
+    const table = menus.resolve('explorer.context', { kind: 'explorer', node: explorer.menuNode(orders)! })
     expect(table.flatMap(item => item.kind === 'command' && item.id === 'explorer.selectTopRows' ? [item.title] : [])).toEqual(['Select Top 50 Rows'])
   })
   it('switches mode by prefix, keeping the value, and returns to Go to Query when the prefix is deleted', async () => {

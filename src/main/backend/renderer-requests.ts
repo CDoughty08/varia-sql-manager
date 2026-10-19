@@ -82,3 +82,9 @@ export class RendererRequests {
     }
   }
 }
+
+/** The methods main registers before sending, so their cancel channel (varia:explorer-cancel, varia:scripting-cancel,
+ *  varia:actions-cancel) can always find them; any other method is not cancellable by `requestId`. */
+export function cancellableRequests<T>(method: string, channels: { readonly explorer: T; readonly scripting: T; readonly actions: T }): T | undefined {
+  return method === 'explorer.children' ? channels.explorer : method === 'scripting.script' ? channels.scripting : method.startsWith('actions.') ? channels.actions : undefined
+}

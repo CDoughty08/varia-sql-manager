@@ -554,3 +554,47 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .quick-input-empty { height: 24px; padding: 4px 10px; margin-bottom: 4px; line-height: 16px; color: var(--varia-descriptionForeground); }
 .quick-input-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 1150px) { .toolbar { gap: 8px; padding: 7px 8px; } .toolbar-actions { gap: 2px; } .toolbar-actions button { padding: 0 6px; } .toolbar-context { grid-template-columns: auto 140px auto 130px; gap: 6px; } }
+
+/* Object dialogs (Delete Object) and Object Explorer's inline Rename box. */
+.explorer-rename { min-width: 120px; flex: 1 1 auto; height: 20px; padding: 0 4px; font-size: 12px; line-height: 16px; color: var(--varia-input-foreground); background: var(--varia-input-background); border: 1px solid var(--varia-focusBorder); border-radius: 2px; }
+.explorer-rename:focus-visible { outline: none; }
+.connection-modal.object-dialog { width: min(820px, calc(100vw - 48px)); height: min(560px, calc(100vh - 48px)); max-height: none; }
+.connection-modal.object-dialog:focus { outline: none; }
+.object-dialog-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); }
+.object-dialog-side { flex: 0 0 clamp(170px, 26%, 220px); display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--varia-dialog-separatorBackground); }
+.object-dialog-caption { padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--varia-settings-headerForeground); }
+.object-dialog-pages { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding-bottom: 6px; }
+.object-dialog-pages > button { display: flex; align-items: center; gap: 6px; border-radius: 0; padding: 3px 10px; text-align: left; }
+.object-dialog-pages > button[aria-current="page"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.object-dialog-pages > button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.object-dialog-box { border-top: 1px solid var(--varia-dialog-separatorBackground); padding-bottom: 8px; }
+.object-dialog-box dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 6px; margin: 0; padding: 0 10px; font-size: 11px; }
+.object-dialog-box dt { color: var(--varia-dialog-labelForeground); }
+.object-dialog-box dd { margin: 0; overflow-wrap: anywhere; }
+.object-dialog-progress { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 11px; }
+.object-dialog-spinner { animation: oe-spin 1.5s steps(30) infinite; }
+@media (prefers-reduced-motion: reduce) { .object-dialog-spinner { animation: none; } }
+.object-dialog-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.object-dialog-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.object-dialog-script { position: relative; display: inline-flex; }
+.object-dialog-script > button { display: inline-flex; align-items: center; gap: 5px; border-color: var(--varia-button-border); }
+.object-dialog-script-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.object-dialog-script-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding: 6px 4px; }
+.object-dialog-script-list { position: absolute; top: calc(100% + 2px); left: 0; z-index: 1; min-width: 240px; margin: 0; padding: 4px 0; list-style: none; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 12px var(--varia-widget-shadow); }
+.object-dialog-script-list > li { padding: 4px 12px; white-space: nowrap; cursor: default; }
+.object-dialog-script-list > li[aria-selected="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); }
+.object-dialog-message { display: flex; align-items: flex-start; gap: 6px; margin: 8px 10px 0; padding: 6px 8px; border-radius: 3px; background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); overflow-wrap: anywhere; user-select: text; }
+.object-dialog-message.info { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.object-dialog-page { flex: 1; min-height: 0; overflow: auto; padding: 4px 10px 10px; }
+.object-dialog-grid { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.object-dialog-grid th { text-align: left; font-weight: 400; color: var(--varia-resultsGrid-headerForeground); background: var(--varia-resultsGrid-headerBackground); }
+.object-dialog-grid th, .object-dialog-grid td { padding: 3px 6px; border: 1px solid var(--varia-resultsGrid-gridlines); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-dialog-grid td.object-dialog-cell-message { white-space: normal; overflow-wrap: anywhere; }
+.object-dialog-warnings { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.object-dialog-warnings > li { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border-radius: 3px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; }
+.object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
+.object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
+.object-dialog-delete .field-note { margin-top: 10px; }
+@media (forced-colors: active) {
+  .object-dialog-pages > button[aria-current="page"], .object-dialog-script-list > li[aria-selected="true"] { outline: 1px solid CanvasText; outline-offset: -1px; }
+}

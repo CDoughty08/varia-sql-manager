@@ -43,6 +43,9 @@ import { themeContribution, type ThemeController } from '../../src/renderer/src/
 import { backendContribution } from '../../src/renderer/src/contributions/backend'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
+import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
+import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
+import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
@@ -231,6 +234,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       return { ok: true, value: { text: `-- ${params.verb} ${[object.schema, object.name].filter(Boolean).join('.')}`, database: object.database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 } }
     }),
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    // Delete Object's row for the object; actions succeed with one done step.
+    describeObject: vi.fn<VariaApi['describeObject']>(async params => ({
+      ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
+    })),
+    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.target.database ?? 'master', warnings: [] } })),
+    executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
+    cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
     reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' })),
@@ -269,6 +279,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
+  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
   const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
     platform,
@@ -289,6 +300,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
+  const actions = new ObjectActionService({
+    api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }, ...(options.timers ? { timers: options.timers } : {})
+  })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
     disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
@@ -331,7 +346,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultSelection,
     results,
     settings,
-    scripting
+    scripting,
+    actions,
+    dialogs
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -348,6 +365,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     themeContribution(workbench, api, options.timers),
     backendContribution(workbench),
     scriptingContribution(workbench),
+    actionsContribution(workbench),
     settingsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
@@ -374,6 +392,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     explorer.dispose()
     databaseList.dispose()
     scripting.dispose()
+    actions.dispose()
+    dialogs.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     settings.dispose()
@@ -397,6 +417,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultClient,
     settings,
     scripting,
+    actions,
+    dialogs,
     focusEditor,
     queries,
     files,

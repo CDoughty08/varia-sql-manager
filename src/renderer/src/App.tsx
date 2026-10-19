@@ -13,6 +13,7 @@ import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
+import ObjectDialog from './dialogs/ObjectDialog'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -260,6 +261,7 @@ export default function App() {
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
+    <ObjectDialog />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
     <QuickInput />

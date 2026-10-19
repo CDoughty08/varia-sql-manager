@@ -6,8 +6,10 @@ import type { BackendMethod, BackendMethods } from '../contracts'
 export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
  *  one of 16 read slots, and explorer runs at once under Object Explorer's own gates (4 per connection, 8 in all; static
- *  folders need none). Main reserves 32 extra pending requests for the control lane. */
-export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer'
+ *  folders need none), and actions runs object action DDL at once under the action service's own gates (1 per connection,
+ *  2 in all), so a DROP waiting on a lock never holds a metadata slot. Main reserves 32 extra pending requests for the
+ *  control lane. */
+export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly kind: MethodKind
@@ -53,6 +55,11 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },
   // The backend answers its own 55 s budget as a TIMEOUT value, inside this deadline; main cancels it from the renderer (varia:scripting-cancel).
   'scripting.script': { kind: 'unary', lane: 'metadata', deadlineMs: 60_000 },
+  // Object actions: describe and script answer their own 40 s and 25 s budgets as TIMEOUT values. DDL waits for locks as
+  // SSMS does, without a deadline; Stop (varia:actions-cancel) always ends it.
+  'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
+  'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
+  'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
 

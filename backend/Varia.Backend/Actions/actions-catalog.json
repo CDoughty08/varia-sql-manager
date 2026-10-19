@@ -1,0 +1,62 @@
+{
+  "actions": [
+    {"action":"selectTop","class":"query","title":"Select Top 1000 Rows"},
+    {"action":"rename","class":"inline","title":"Rename"},
+    {"action":"delete","class":"dialog","title":"Delete"}
+  ],
+  "dialogs": [
+    {"dialog":"deleteObject","pages":["general"]}
+  ],
+  "errors": [
+    {"code":"NOT_FOUND","retryable":false},
+    {"code":"NOT_SUPPORTED","retryable":false},
+    {"code":"PERMISSION_DENIED","retryable":true},
+    {"code":"IN_USE","retryable":true},
+    {"code":"BLOCKED","retryable":true},
+    {"code":"DEPENDENTS","retryable":false},
+    {"code":"NAME_IN_USE","retryable":false},
+    {"code":"DATABASE_UNAVAILABLE","retryable":true},
+    {"code":"TIMEOUT","retryable":true},
+    {"code":"CONNECTION_LOST","retryable":true},
+    {"code":"SQL_ERROR","retryable":true},
+    {"code":"CANCELLED","retryable":true},
+    {"code":"AUTH_KERBEROS","retryable":true},
+    {"code":"AUTH_UNSUPPORTED","retryable":true}
+  ],
+  "limits": {"cancelIds":16,"dependents":100,"describeMs":40000,"executePerConnection":1,"executeTotal":2,"gateWaitMs":30000,"infoMessageChars":512,"infoMessages":32,"messageChars":2048,"newName":128,"readLockTimeoutMs":10000,"readPerConnection":2,"readTotal":4,"registered":128,"scriptChars":65536,"scriptMs":25000,"statusDelayMs":300,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64},
+  "rows": [
+    {"disabled":[],"enabled":["rename","delete"],"kind":"database","subtype":""},
+    {"disabled":["rename","delete"],"enabled":[],"kind":"database","subtype":"system"},
+    {"disabled":["rename"],"enabled":["delete"],"kind":"database","subtype":"snapshot"},
+    {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"table","subtype":""},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"systemVersioned"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"history"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"updatableLedger"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"appendOnlyLedger"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"ledgerHistory"},
+    {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"table","subtype":"graphNode"},
+    {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"table","subtype":"graphEdge"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"fileTable"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"external"},
+    {"disabled":["rename","delete"],"enabled":[],"kind":"table","subtype":"droppedLedger"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"system"},
+    {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"view","subtype":""},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"view","subtype":"system"},
+    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"view","subtype":"ledger"},
+    {"disabled":["rename","delete"],"enabled":[],"kind":"view","subtype":"droppedLedger"},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"procedure","subtype":""},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"procedure","subtype":"sql"},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"procedure","subtype":"clr"},
+    {"disabled":["rename","delete"],"enabled":[],"kind":"procedure","subtype":"extended"},
+    {"disabled":["rename","delete"],"enabled":[],"kind":"procedure","subtype":"replicationFilter"},
+    {"disabled":["rename","delete"],"enabled":[],"kind":"procedure","subtype":"system"},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":""},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"inline"},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"tableValued"},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"clrTableValued"},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"scalar"},
+    {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"clrScalar"},
+    {"disabled":["delete"],"enabled":["rename"],"kind":"function","subtype":"aggregate"}
+  ],
+  "version": 1
+}

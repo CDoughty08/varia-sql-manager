@@ -18,5 +18,7 @@
     <EmbeddedResource Include="Explorer/explorer-catalog.json" LogicalName="Varia.Backend.Explorer.explorer-catalog.json" />
     <!-- Generated from src/shared/scripting/catalog.ts by tests/scripting-catalog.test.ts. -->
     <EmbeddedResource Include="Scripting/scripting-catalog.json" LogicalName="Varia.Backend.Scripting.scripting-catalog.json" />
+    <!-- Generated from src/shared/actions/catalog.ts by tests/object-actions-catalog.test.ts. -->
+    <EmbeddedResource Include="Actions/actions-catalog.json" LogicalName="Varia.Backend.Actions.actions-catalog.json" />
   </ItemGroup>
 </Project>

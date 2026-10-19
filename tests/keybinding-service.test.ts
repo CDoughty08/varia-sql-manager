@@ -35,6 +35,23 @@ const editorText: Partial<ContextKeys> = { editorFocus: true, editorTextFocus: t
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('keybinding dispatch', () => {
+  it.each(platforms)('runs Rename on F2 and Delete on Delete (and ⌘⌫ on macOS) only in Object Explorer, consuming the key so the Delete role does not also run, on %s', platform => {
+    const { press, ran, state } = service(platform, { values: { activePanel: 'explorer' } })
+    const deleteKey = () => key('Delete', 'Delete'), backspace = () => key('Backspace', 'Backspace', { meta: true })
+    expect(press(key('F2', 'F2')).consumed).toBe(true)
+    const pressed = press(deleteKey())
+    // preventDefault keeps Electron from also running the hidden application menu's Delete role accelerator.
+    expect(pressed.consumed).toBe(true)
+    if (platform === 'darwin') expect(press(backspace()).consumed).toBe(true)
+    expect(ran()).toEqual(platform === 'darwin' ? ['explorer.rename', 'explorer.delete', 'explorer.delete'] : ['explorer.rename', 'explorer.delete'])
+    // In the Rename box, a filter field or the editor, the keys edit text.
+    for (const values of [{ activePanel: 'explorer', inputFocus: true, textInputFocus: true }, editorText, { activePanel: 'output' }] as Partial<ContextKeys>[]) {
+      state.values = values
+      expect(press(key('F2', 'F2')).consumed, JSON.stringify(values)).toBe(false)
+      expect(press(deleteKey()).consumed, JSON.stringify(values)).toBe(false)
+    }
+    expect(ran()).toHaveLength(platform === 'darwin' ? 3 : 2)
+  })
   it.each(platforms)('runs and consumes workbench keys on %s, and leaves every other key alone', platform => {
     const { press, execute, ran } = service(platform)
     expect(press(letter('n', platform)).consumed).toBe(true)

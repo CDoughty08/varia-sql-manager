@@ -4,6 +4,7 @@ import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSche
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
 import { deadlineFor, mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 import { scriptCancelSchema } from '../src/shared/scripting/schema'
+import { actionCancelSchema } from '../src/shared/actions/schema'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
 
 describe('IPC validation', () => {
@@ -86,6 +87,29 @@ describe('IPC validation', () => {
     expect(scriptCancelSchema.parse({ requestIds: [valid.requestId] })).toEqual({ requestIds: [valid.requestId] })
     for (const params of [{ requestIds: [] }, { requestIds: [valid.requestId, valid.requestId] }, { requestIds: Array.from({ length: 65 }, () => crypto.randomUUID()) }, { requestIds: ['x'] }, { requestIds: [valid.requestId], extra: 1 }])
       expect(scriptCancelSchema.safeParse(params).success, JSON.stringify(params).slice(0, 80)).toBe(false)
+  })
+  it('takes object action requests for kinds that offer the action, with names used verbatim', () => {
+    const target = { kind: 'table', database: 'Sales', schema: 'dbo', name: ' o]1 ' }
+    const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }
+    const rename = { action: 'rename', ...ids, target, newName: "q]'); DROP TABLE x; --" }, remove = { action: 'delete', ...ids, target, closeConnections: false, deleteHistory: false }
+    const describe = { ...ids, dialog: 'deleteObject', target }
+    expect(validateRequest('actions.execute', rename)).toEqual(rename)
+    expect(validateRequest('actions.script', remove)).toEqual(remove)
+    expect(validateRequest('actions.describe', describe)).toEqual(describe)
+    for (const [method, value] of [
+      ['actions.execute', { ...rename, newName: ' o]1 ' }], ['actions.execute', { ...rename, newName: 'x'.repeat(129) }], ['actions.execute', { ...rename, closeConnections: false }],
+      ['actions.execute', { ...remove, closeConnections: true }], ['actions.execute', { ...remove, target: { kind: 'login', name: 'sa' } }], ['actions.execute', { ...remove, action: 'drop' }],
+      ['actions.script', { ...rename, target: { kind: 'database', name: 'master' } }], ['actions.describe', { ...describe, dialog: 'databaseProperties' }], ['actions.describe', { ...describe, extra: 1 }]
+    ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
+    // DDL runs on its own lane, without a deadline (Stop ends a lock wait); reads keep metadata deadlines around their budgets.
+    expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0 })
+    expect(methodPolicies['actions.describe']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 45_000 })
+    expect(methodPolicies['actions.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 30_000 })
+    // Stop is main's own channel (varia:actions-cancel), not a backend method.
+    expect(() => validateRequest('actions.cancel', { requestIds: [ids.requestId] })).toThrow('Unsupported backend method')
+    expect(actionCancelSchema.parse({ requestIds: [ids.requestId] })).toEqual({ requestIds: [ids.requestId] })
+    for (const params of [{ requestIds: [] }, { requestIds: [ids.requestId, ids.requestId] }, { requestIds: Array.from({ length: 17 }, () => crypto.randomUUID()) }, { requestIds: ['x'] }, { requestIds: [ids.requestId], extra: 1 }])
+      expect(actionCancelSchema.safeParse(params).success, JSON.stringify(params).slice(0, 80)).toBe(false)
   })
   it('validates results port requests strictly', () => {
     const read = { t: 'read', rid: 1, generation: 1, resultId: 1, firstRow: 0, maxRows: 65_536, credit: 16 * 1024 * 1024 }

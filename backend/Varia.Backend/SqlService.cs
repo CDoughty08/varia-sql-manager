@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Smo;
+using Varia.Backend.Actions;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -12,7 +13,7 @@ using Varia.Backend.Scripting;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost
+internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
@@ -21,7 +22,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
-        "scripting.script"
+        "scripting.script", "actions.describe", "actions.script", "actions.execute"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -45,6 +46,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
+    private readonly ActionService actions;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
@@ -114,6 +116,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
+        actions = new ActionService(this);
         if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
     }
 
@@ -133,6 +136,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public ExplorerService Explorer => explorer;
     /// <summary>Script As (the checks set its test options).</summary>
     public ScriptingService Scripting => scripting;
+    /// <summary>Object actions (the checks reach its dry run and test options).</summary>
+    public ActionService Actions => actions;
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
     /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads,
@@ -142,6 +147,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "query.execute" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
+        "actions.execute" => RequestLane.Actions,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -182,6 +188,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
         "scripting.script" => await scripting.ScriptAsync(Read<ScriptArgs>(parameters, json), Token(context)),
+        "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
+        "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
+        "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -279,6 +288,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         profiles.TryRemove(args.ConnectionId, out _);
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
+        actions.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
@@ -313,6 +323,49 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     ServerProfile IExplorerHost.Profile(string connectionId) => Profile(connectionId);
     ServerProfile IScriptingHost.Profile(string connectionId) => Profile(connectionId);
+    ServerProfile IActionHost.Profile(string connectionId) => Profile(connectionId);
+
+    /// <summary>Object actions' own connection: unpooled, so DDL settings and a database it used never outlive the request,
+    /// and never retried, so a DDL request is never sent twice. It starts in master on box servers, so it never holds the
+    /// database it renames or drops.</summary>
+    SqlConnection IActionHost.Connection(string connectionId)
+    {
+        if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+        var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = "master" };
+        var name = builder.ApplicationName + " - Object Actions";
+        builder.ApplicationName = name.Length > 128 ? name[..128] : name;
+        return new SqlConnection(builder.ConnectionString);
+    }
+
+    Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+
+    /// <summary>Idle pooled connections whose initial catalog is the database (Object Explorer's and scripting's per-database
+    /// pools, and before PR17 tables.columns) keep it in use: DROP DATABASE and MODIFY NAME would fail while the server
+    /// stays connected. Clearing them closes the idle ones; busy ones are discarded when they return.</summary>
+    public void ClearPoolsFor(string connectionId, string database)
+    {
+        if (!pools.TryGetValue(connectionId, out var used)) return;
+        foreach (var pooled in used.Keys)
+        {
+            if (!string.Equals(new SqlConnectionStringBuilder(pooled).InitialCatalog, database, StringComparison.OrdinalIgnoreCase)) continue;
+            using var connection = new SqlConnection(pooled);
+            SqlConnection.ClearPool(connection);
+        }
+    }
+
+    /// <summary>After a rename or drop of the database a connection was opened in (the Connect dialog's Database), every
+    /// connection derived from it would fail with 4060: it moves to the new name, or to master after a drop, and the old
+    /// database's pools are cleared.</summary>
+    public void DatabaseChanged(string connectionId, string database, string? newName)
+    {
+        if (connections.TryGetValue(connectionId, out var current) && new SqlConnectionStringBuilder(current) is var builder
+            && string.Equals(builder.InitialCatalog, database, StringComparison.OrdinalIgnoreCase))
+        {
+            builder.InitialCatalog = newName ?? "master";
+            if (connections.TryUpdate(connectionId, builder.ConnectionString, current) && pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
+        }
+        ClearPoolsFor(connectionId, database);
+    }
 
     private ServerProfile Profile(string connectionId) =>
         connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
@@ -361,14 +414,35 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     private const int MaxColumns = 4096;
 
+    /// <summary>tables.columns' statement, run in the object's database through sp_executesql: the table's or view's id by
+    /// schema and name (sys.all_objects, not OBJECT_ID, so no name is parsed), then its columns.</summary>
+    internal const string ColumnsSql = "DECLARE @id int = (SELECT o.object_id FROM sys.all_objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
+        + "WHERE s.name = @schema AND o.name = @name AND o.type IN ('U', 'V'));\n"
+        + "SELECT CONVERT(bit, CASE WHEN @id IS NULL THEN 0 ELSE 1 END);\n"
+        + "SELECT TOP (4097) c.name, TYPE_NAME(c.user_type_id) FROM sys.all_columns AS c WHERE c.object_id = @id"
+        + " AND (c.is_hidden = 0 OR c.generated_always_type <> 0) ORDER BY c.column_id;";
+    /// <summary>Runs <see cref="ColumnsSql"/> in the object's database, which reaches T-SQL only through QUOTENAME.</summary>
+    internal const string ColumnsCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
+        + "EXEC @module @stmt, N'@schema sysname, @name sysname', @schema = @schema, @name = @name;";
+    /// <summary>What tables.columns sends: the statement itself on a connection already in the object's database (Azure SQL
+    /// Database, or Object Explorer's ForcePerDatabaseScope test seam), else the cross-database call.</summary>
+    internal static string ColumnsText(bool perDatabase) => perDatabase ? ColumnsSql : ColumnsCall;
+    /// <summary>Whether tables.columns opens its connection in the object's database: on Azure SQL Database, which refuses a
+    /// three-part module name (Msg 40515).</summary>
+    internal static bool ColumnsPerDatabase(ServerProfile profile, bool force) => profile.Explorer(ExplorerCatalog.Current).Cloud || force;
+
     // Select Top N Rows lists the columns; QUOTENAME and parameters keep the names out of the SQL text. Hidden internal
     // columns (graph tables' graph_id and node ids) cannot be selected, unlike hidden temporal period and ledger columns,
-    // which are GENERATED ALWAYS.
+    // which are GENERATED ALWAYS. On box servers the connection keeps the login's database and reaches the object's through
+    // sp_executesql, so no idle pooled connection is left in the object's database to block DROP or MODIFY NAME. Azure SQL
+    // Database opens it in the object's database, as Object Explorer does there; object actions are not offered there.
     private async Task<TableColumnsResult> ColumnsAsync(TableArgs args, CancellationToken token)
     {
+        Name(args.Database);
         Name(args.Schema);
         Name(args.Name);
-        await using var connection = CreateConnection(args.ConnectionId, args.Database);
+        var perDatabase = ColumnsPerDatabase(Profile(args.ConnectionId), explorer.Options.ForcePerDatabaseScope);
+        await using var connection = perDatabase ? CreateConnection(args.ConnectionId, args.Database) : CreateConnection(args.ConnectionId);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         await Open(connection, deadline.Token);
@@ -376,14 +450,20 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         // Only the token's deadline: on a pooled connection that opens at once, a 30 s CommandTimeout would expire on the
         // same tick and could leave the connection a response behind for its next user.
         command.CommandTimeout = 0;
-        command.CommandText = "DECLARE @id int = OBJECT_ID(QUOTENAME(@schema) + N'.' + QUOTENAME(@name));\n"
-            + "SELECT CONVERT(bit, CASE WHEN @id IS NULL THEN 0 ELSE 1 END);\n"
-            + "SELECT TOP (" + (MaxColumns + 1) + ") c.name, TYPE_NAME(c.user_type_id) FROM sys.all_columns AS c WHERE c.object_id = @id"
-            + " AND (c.is_hidden = 0 OR c.generated_always_type <> 0) ORDER BY c.column_id;";
+        command.CommandText = ColumnsText(perDatabase);
+        if (!perDatabase)
+        {
+            command.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = args.Database });
+            command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = ColumnsSql });
+        }
         command.Parameters.Add(new SqlParameter("@schema", System.Data.SqlDbType.NVarChar, 128) { Value = args.Schema });
         command.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = args.Name });
-        await using var reader = await command.ExecuteReaderAsync(deadline.Token);
-        if (!await reader.ReadAsync(deadline.Token) || !reader.GetBoolean(0)) throw new RequestException("NOT_FOUND", "Table was not found.");
+        SqlDataReader reader;
+        try { reader = await command.ExecuteReaderAsync(deadline.Token); }
+        // Inside EXEC [db].sys.sp_executesql, a missing procedure can only be the wrapper's: the database is gone.
+        catch (SqlException error) when (error.Number is 2812 or 911 && !deadline.IsCancellationRequested) { throw new RequestException("NOT_FOUND", "The table or view no longer exists."); }
+        await using var reading = reader;
+        if (!await reader.ReadAsync(deadline.Token) || !reader.GetBoolean(0)) throw new RequestException("NOT_FOUND", "The table or view no longer exists.");
         await reader.NextResultAsync(deadline.Token);
         var columns = new List<ColumnInfo>();
         while (await reader.ReadAsync(deadline.Token)) columns.Add(new(reader.GetString(0), reader.IsDBNull(1) ? "" : reader.GetString(1)));
@@ -1115,12 +1195,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         foreach (var query in queries.Values) query.Cancel();
         scripting.CancelAll();
+        actions.CancelAll();
     }
     public void Dispose()
     {
         memoryTimer?.Dispose();
         explorer.Dispose();
         scripting.Dispose();
+        actions.Dispose();
         CancelAll();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();

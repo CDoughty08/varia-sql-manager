@@ -1,5 +1,6 @@
 import type { Platform } from './keybindings'
 import { comparisons, parseWhen, referencedKeys, type ContextRecord } from './when'
+import { actionContextKey, objectActions, objectActionSpecs, type ActionContextKey } from '../actions/catalog.ts'
 import { folderIds, nodeKinds } from '../explorer/catalog.ts'
 import { scriptAsTitleKeys, scriptVerbContextKey, scriptVerbs, scriptVerbSpecs, type ScriptVerbContextKey } from '../scripting/catalog.ts'
 
@@ -24,6 +25,11 @@ const scriptVerbKeys = Object.fromEntries(scriptVerbs.map(verb => [scriptVerbCon
   type: 'enum', scope: 'state', values: verbStates,
   description: `How the selected Object Explorer node offers Script as › ${scriptVerbSpecs[verb].name} To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding \`when\` clauses.`
 }])) as { readonly [K in ScriptVerbContextKey]: VerbKeyDeclaration }
+/** One key per object action (Select Top, Rename, Delete), from `actionMenuState` of the selection. */
+const actionKeys = Object.fromEntries(objectActions.map(action => [actionContextKey(action), {
+  type: 'enum', scope: 'state', values: verbStates,
+  description: `How the selected Object Explorer node offers ${objectActionSpecs[action].title}: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding \`when\` clauses.`
+}])) as { readonly [K in ActionContextKey]: VerbKeyDeclaration }
 
 export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
@@ -77,6 +83,7 @@ export const contextKeys = {
   },
   ...scriptVerbKeys,
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
+  ...actionKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
   scriptingRunning: { type: 'boolean', scope: 'state', description: 'A Script As request is running.' },
   explorerNode: {
