@@ -407,6 +407,9 @@ internal static class ExplorerChecks
             Hold?.Wait();
             return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
         }
+        /// <summary>Replaces the open, as SqlService's does for a Kerberos token failure.</summary>
+        public Func<SqlConnection, CancellationToken, Task>? Opening { get; set; }
+        public Task OpenAsync(SqlConnection connection, CancellationToken token) => Opening?.Invoke(connection, token) ?? connection.OpenAsync(token);
     }
 
     private static async Task ServiceAsync(Action<bool, string> check)
@@ -479,6 +482,12 @@ internal static class ExplorerChecks
         // A failed open is a value on the node, never an exception.
         var unreachable = await service.ChildrenAsync(Args(Folder(server, "logins")), CancellationToken.None);
         check(unreachable.Error is { Retryable: true } && unreachable.Nodes.Count == 0, "a connection failure becomes the node's error value: " + unreachable.Error?.Code);
+        using (var expired = new ExplorerService(new FakeHost { Opening = ConnectionFailureChecks.ExpiredTicket }))
+        {
+            var refused = await expired.ChildrenAsync(Args(Folder(server, "logins")), CancellationToken.None);
+            check(refused.Error is { Code: "AUTH_KERBEROS", Retryable: true, Action: null } && refused.Error.Message == ConnectionFailures.Messages.Expired && refused.Nodes.Count == 0 && expired.RunningCount == 0,
+                "a pool connection whose Kerberos ticket expired becomes the node's retryable error value with the kinit advice");
+        }
 
         // Duplicates, the per-connection gate, and disconnect.
         var gated = new FakeHost { Hold = new SemaphoreSlim(0) };

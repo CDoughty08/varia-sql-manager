@@ -207,7 +207,8 @@ export interface ExplorerNode {
   readonly status?: NodeStatus
   readonly created?: string
 }
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR'] as const
+// AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -260,8 +261,11 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
+/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
+ *  server that answered (at most 256 characters). Never the connection string or the password. */
+export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode }
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails }
 
 /** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'

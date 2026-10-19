@@ -109,11 +109,17 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
+/** A backend failure keeps its code and, for a failed connection, its details (never the connection string or password). */
+function failure(error: unknown, fallback: string): ApiResult<never> {
+  if (!(error instanceof BackendError)) return { ok: false, error: errorMessage(error, fallback) }
+  return { ok: false, error: errorMessage(error, fallback), code: error.code, ...(error.details ? { details: error.details } : {}) }
+}
+
 function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T): void {
   ipcMain.handle(channel, async (event, value: unknown): Promise<ApiResult<T>> => {
     if (!trusted(event)) return { ok: false, error: 'Untrusted IPC sender.' }
     try { return { ok: true, value: await action(value) } }
-    catch (error) { return { ok: false, error: errorMessage(error, 'The operation failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
+    catch (error) { return failure(error, 'The operation failed.') }
   })
 }
 
@@ -463,7 +469,7 @@ app.whenReady().then(async () => {
         catch { (result as RpcMethods['connections.connect']['result']).historyWarning = 'Connected successfully, but recent connections could not be saved.' }
       }
       return { ok: true, value: result }
-    } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
+    } catch (error) { return failure(error, 'Backend request failed.') }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
   // Copy and Save Results As: the renderer names a result it owns; the backend formats the text, main writes the

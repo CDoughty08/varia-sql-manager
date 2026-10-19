@@ -59,7 +59,7 @@ export default function App() {
   const optionsOpen = useServiceSnapshot(workbench.scriptingOptions.dialog)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
-  const [options, setOptions] = useState<ConnectionOptions>(connectionDefaults)
+  const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.

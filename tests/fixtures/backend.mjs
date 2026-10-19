@@ -108,6 +108,10 @@ function request(id, deadline, { method, params, credit }) {
     case 'late':
       if (answered === 1) { setTimeout(() => respond(id, { late: true }), Number(argument ?? 300)); return }
       break
+    // connections.connect fails with details (docs/ipc.md); server 'long' sends a server name over the 256-character bound.
+    case 'error-details':
+      if (method === 'connections.connect') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: params.server === 'long' ? { number: 0, server: 'x'.repeat(257) } : { number: 0, state: 0, class: 11, server: params.server } } })
+      break
     case 'events':
       // Global events (id 0) are advisory: an undecodable one is dropped, not a violation.
       write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: 1, globalBytes: 2 })

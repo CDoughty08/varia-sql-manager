@@ -1,13 +1,17 @@
+import type { ErrorDetails } from '../../shared/contracts'
 import type { ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { Loss } from './connection'
 
-/** A failed backend request. The code reaches the renderer as `ApiResult.code`; the message is shown as is. */
+/** A failed backend request. The code reaches the renderer as `ApiResult.code`, and a failed connection's details as
+ *  `ApiResult.details`; the message is shown as is. */
 export class BackendError extends Error {
   readonly code: ErrorCode
-  constructor(code: ErrorCode, message: string) {
+  readonly details?: ErrorDetails
+  constructor(code: ErrorCode, message: string, details?: ErrorDetails) {
     super(message)
     this.name = 'BackendError'
     this.code = code
+    if (details) this.details = details
   }
 }
 

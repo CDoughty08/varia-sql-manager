@@ -289,7 +289,7 @@ internal sealed class ProtocolHost
         if (context.Token.IsCancellationRequested && (error is OperationCanceledException || Find<SqlException>(error) is not null)) return CancelledError(context);
         return error switch
         {
-            RequestException request => Error(request.Code, request.Message),
+            RequestException request => Error(request.Code, request.Message, request.Details),
             JsonException => Error("INVALID_PARAMS", "Invalid request parameters."),
             // The operation's own time limit (for example database discovery's 30 seconds), not main's deadline.
             OperationCanceledException => Error("TIMEOUT", "The operation exceeded its time limit."),
@@ -311,17 +311,30 @@ internal sealed class ProtocolHost
         return buffer.WrittenSpan.ToArray();
     }
 
-    private static byte[] Error(string code, string message)
+    private static byte[] Error(string code, string message, ErrorDetails? details = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         var writer = new MsgPackWriter(buffer);
         writer.WriteMapHeader(1);
         writer.WriteString("error");
-        writer.WriteMapHeader(2);
+        writer.WriteMapHeader(details is null ? 2 : 3);
         writer.WriteString("code");
         writer.WriteString(code);
         writer.WriteString("message");
         writer.WriteString(message.Length > MaxErrorCharacters ? message[..MaxErrorCharacters] : message);
+        if (details is not null)
+        {
+            writer.WriteString("details");
+            writer.WriteMapHeader((details.Number is null ? 0 : 1) + (details.State is null ? 0 : 1) + (details.Class is null ? 0 : 1) + (details.Server is null ? 0 : 1));
+            if (details.Number is { } number) { writer.WriteString("number"); writer.WriteInt64(number); }
+            if (details.State is { } state) { writer.WriteString("state"); writer.WriteInt64(state); }
+            if (details.Class is { } level) { writer.WriteString("class"); writer.WriteInt64(level); }
+            if (details.Server is { } server)
+            {
+                writer.WriteString("server");
+                writer.WriteString(server.Length > ConnectionFailures.MaxServerLength ? server[..ConnectionFailures.MaxServerLength] : server);
+            }
+        }
         return buffer.WrittenSpan.ToArray();
     }
 
