@@ -59,5 +59,9 @@ internal static class ExplorerErrors
         return new(code, Clip(message, MaxMessage), code is not ("NO_DB_ACCESS" or "NOT_FOUND"), code == "NOT_FOUND" ? "refreshParent" : null);
     }
 
+    /// <summary>A pool connection that could not sign in with Kerberos (ConnectionFailures.OpenAsync): what to fix, such as kinit,
+    /// after which Retry works.</summary>
+    public static ExplorerError SignIn(RequestException error) => new(error.Code, Clip(error.Message, MaxMessage), true);
+
     private static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
 }

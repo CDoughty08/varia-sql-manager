@@ -46,6 +46,8 @@ export const errorCodes = [
   'INVALID_REQUEST', 'INVALID_PARAMS', 'METHOD_NOT_FOUND', 'BUSY', 'CANCELLED', 'SQL_ERROR', 'SMO_ERROR', 'BACKEND_ERROR',
   'NOT_CONNECTED', 'NOT_FOUND', 'DUPLICATE_QUERY', 'SESSION_BUSY', 'SESSION_LOST', 'SESSION_CLOSED', 'SESSION_TARGET',
   'SESSION_LIMIT', 'AUTH_UNSUPPORTED', 'INVALID_SCRIPT',
+  // Backend: integrated authentication on Linux and macOS without a usable Kerberos ticket (AUTH_UNSUPPORTED: no GSSAPI library).
+  'AUTH_KERBEROS',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
   // Backend, results jobs: an export failure (its message is one token: ACCESS, DISK_FULL, IN_USE, NOT_FOUND,

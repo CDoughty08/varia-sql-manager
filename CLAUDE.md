@@ -26,8 +26,9 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports 524 checks instead of 373
-  (644 against SQL Server 2022 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer and Script As
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 373 offline
+  checks; how many depends on the server version and authentication (566 against a local SQL Server 2025 with Windows
+  authentication, 673 with `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer and Script As
   scratch-database checks and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
   and `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the

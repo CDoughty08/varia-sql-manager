@@ -69,6 +69,77 @@ try {
   expect(await page.evaluate(() => window.varia.databases(crypto.randomUUID()))).toEqual({ ok: false, error: 'Connect to a SQL Server first.', code: 'NOT_CONNECTED' })
   expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke, port: typeof window.varia.port, postMessage: typeof window.varia.postMessage }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined', port: 'undefined', postMessage: 'undefined' })
   expect(await application.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox'))).toBe(process.platform === 'linux' && !launchOptions.chromiumSandbox)
+  // The page's policy refuses inline scripts and eval, from main's header and from the built page's own <meta>; the
+  // <meta> alone still refuses them in a session main's header hook does not reach. There, without main's preload, the
+  // workbench cannot start, and its failure screen says so instead of a blank window.
+  const policyProbe = `new Promise(resolve => {
+    const violations = []
+    document.addEventListener('securitypolicyviolation', event => violations.push(event.effectiveDirective))
+    const script = document.createElement('script')
+    script.textContent = 'window.variaInlineRan = true'
+    document.head.append(script)
+    let evalRefused = false
+    try { eval('1') } catch (error) { evalRefused = error instanceof EvalError }
+    setTimeout(() => resolve({ inlineRan: window.variaInlineRan === true, evalRefused, violations: [...new Set(violations)].sort(), meta: document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content ?? null }), 300)
+  })`
+  const refused = { inlineRan: false, evalRefused: true, violations: ['script-src', 'script-src-elem'] }
+  const workbenchPolicy = await application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code), policyProbe)
+  expect(workbenchPolicy).toMatchObject(refused)
+  expect(workbenchPolicy.meta).toMatch(/^default-src 'self'; script-src 'self'; .*object-src 'none'; frame-src 'none'; base-uri 'none'$/)
+  const metaOnly = await application.evaluate(async ({ app, BrowserWindow }, code) => {
+    const { join } = process.getBuiltinModule('node:path')
+    const window = new BrowserWindow({ show: false, webPreferences: { partition: 'varia-policy-probe', sandbox: true, contextIsolation: true } })
+    try {
+      await window.loadFile(join(app.getAppPath(), 'out/renderer/index.html'))
+      const heading = "document.querySelector('.shell-failure h1')?.textContent ?? null"
+      let failure = null
+      for (let tries = 0; tries < 100 && !failure; tries++) failure = await window.webContents.executeJavaScript(heading) ?? await new Promise(resolve => setTimeout(resolve, 100, null))
+      return { ...await window.webContents.executeJavaScript(code), failure, buttons: await window.webContents.executeJavaScript("[...document.querySelectorAll('.shell-failure button')].map(button => button.textContent)") }
+    } finally { window.destroy() }
+  }, policyProbe)
+  expect(metaOnly).toMatchObject({ ...refused, meta: workbenchPolicy.meta, failure: 'Varia SQL Manager could not start.', buttons: ['Reload', 'Copy details'] })
+  // The page's own script loads the workbench as a separate chunk, so a chunk that cannot load (or a module that throws
+  // while it loads) still gets the failure screen, styled: the stylesheet does not come with that chunk.
+  const chunkLost = await application.evaluate(async ({ app, BrowserWindow, net, session }) => {
+    const { join } = process.getBuiltinModule('node:path')
+    const probe = session.fromPartition('varia-chunk-probe'), blocked = []
+    probe.protocol.handle('file', request => {
+      if (!/\/assets\/start-[^/]+\.js$/.test(new URL(request.url).pathname)) return net.fetch(request, { bypassCustomProtocolHandlers: true })
+      blocked.push(request.url)
+      return new Response('', { status: 404 })
+    })
+    const window = new BrowserWindow({ show: false, webPreferences: { session: probe, sandbox: true, contextIsolation: true } })
+    try {
+      await window.loadFile(join(app.getAppPath(), 'out/renderer/index.html'))
+      const heading = "document.querySelector('.shell-failure h1')?.textContent ?? null"
+      let failure = null
+      for (let tries = 0; tries < 100 && !failure; tries++) failure = await window.webContents.executeJavaScript(heading) ?? await new Promise(resolve => setTimeout(resolve, 100, null))
+      return { failure, blocked: blocked.length, ...await window.webContents.executeJavaScript(`({
+        buttons: [...document.querySelectorAll('.shell-failure button')].map(button => button.textContent),
+        headingSize: document.querySelector('.shell-failure h1') && getComputedStyle(document.querySelector('.shell-failure h1')).fontSize,
+        details: document.querySelector('.shell-failure-details')?.textContent ?? ''
+      })`) }
+    } finally { window.destroy(); probe.protocol.unhandle('file') }
+  })
+  expect(chunkLost).toMatchObject({ failure: 'Varia SQL Manager could not start.', blocked: 1, buttons: ['Reload', 'Copy details'], headingSize: '18px' })
+  expect(chunkLost.details).toMatch(/dynamically imported module/)
+  // A rendering fault anywhere in the workbench shows the failure screen instead of a blank window, and still reaches
+  // this suite as a page error. Copy details copies the error with where it happened; Reload starts a new workbench.
+  await page.evaluate(() => window.__variaTestShellFault())
+  const shellFailure = page.getByRole('main', { name: 'The workbench stopped because of an error.', exact: true })
+  await expect(shellFailure).toBeVisible()
+  await expect(shellFailure.getByRole('alert')).toContainText('Reload starts the workbench again')
+  await expect(shellFailure.getByRole('button', { name: 'Reload', exact: true })).toBeFocused()
+  await expect.poll(() => failures).toEqual(['Workbench test fault.'])
+  failures.length = 0
+  expect(await page.evaluate(() => window.__variaFailures)).toEqual(['Workbench test fault.'])
+  await shellFailure.getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(shellFailure.getByRole('status')).toHaveText('Details copied.')
+  expect(await application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/Error: Workbench test fault\.[\s\S]*Component stack:/)
+  await shellFailure.getByRole('button', { name: 'Reload', exact: true }).click()
+  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(shellFailure).toHaveCount(0)
   await expect(page.locator('.app-header')).toHaveCount(0)
   await expect(page.getByRole('menubar', { name: 'Application menu' })).toBeVisible()
   const chrome = await application.evaluate(({ BrowserWindow }) => {
@@ -314,10 +385,13 @@ try {
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect(page.locator('.messages')).toContainText('logical reads 2')
   await expect(page.locator('.messages')).toContainText('CPU time = 1 ms')
-  // A failed run shows Messages, its error inline in red in SSMS's two-line form; its partial results stay a tab away.
+  // A run with errors shows Messages, its error inline in red in SSMS's two-line form, then the line saying the next batch
+  // still ran, as in SSMS; its results stay a tab away.
   await expect(page.locator('.messages .msg.error')).toContainText('Msg 137, Level 15, State 2, Line 8')
+  await expect(page.locator('.messages .msg.error + .msg')).toHaveText('Batch 2 raised an error; execution continued with the next batch.')
+  await expect(page.locator('.messages')).toContainText('third batch')
   await expect(page.locator('.output-status')).toContainText('Query completed with errors.')
-  await expect(page.locator('.output-status')).toContainText('1/3 batches')
+  await expect(page.locator('.output-status')).toContainText('3/3 batches')
   await page.locator('.output-toolbar').getByRole('tab', { name: /^Results/ }).click()
   await expect(page.locator('.results-grid')).toContainText('42')
   // A plan's XML is a grid cell's text, never markup.
@@ -457,7 +531,8 @@ try {
   await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idA)
   await page.locator('.query-tabs').getByRole('tab', { name: tabB, exact: true }).click()
   await expect(page.getByLabel('Query server', { exact: true })).toHaveValue('')
-  await expect(page.getByRole('button', { name: /Execute/ })).toBeDisabled()
+  // A disconnected query's Execute connects it first.
+  await expect(page.getByRole('button', { name: /Execute/ })).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const alignment = await page.evaluate(() => {
@@ -476,7 +551,7 @@ try {
   expect(alignment.titleBarFits).toBe(true)
   await page.screenshot({ path: artifact('workbench-compact.png') })
   expect(failures).toEqual([])
-  console.log('Electron regression checks passed: integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
+  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})

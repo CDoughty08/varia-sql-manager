@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult, OpenSqlFile, VariaApi } from '../src/shared/contracts'
 import { FileService } from '../src/renderer/src/services/files'
+import type { QueryService } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
 import { filesContribution } from '../src/renderer/src/contributions/files'
 import { deferred, documentFixture, type SaveResponse } from './fixtures/documents'
@@ -20,7 +21,8 @@ function fixture() {
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>()
   }
-  const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false) }
+  // Nothing to ask about unless a test says otherwise: every session ends plainly.
+  const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false), mayHaveTransaction: vi.fn<(id: string) => boolean>(() => false), confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map()) }
   const files = new FileService(doc.documents, queries, api), commands = new CommandService()
   // Focus is in Object Explorer when `explorer.panel` says so; its selection is `explorer.target`.
   const explorer: { panel: '' | 'explorer'; target?: { connectionId: string; database?: string } } = { panel: '' }
@@ -147,6 +149,22 @@ describe('file commands', () => {
     expect(api.closeQuerySession.mock.calls.map(call => call[0])).toEqual([first.id, saved.id, dirty.id])
     expect(files.getSnapshot().error).toBe('')
   })
+  it('asks once about open transactions when closing many, ends each as its query closes, and closes nothing on Cancel', async () => {
+    const { documents, queries, api, commands } = fixture()
+    const [first] = documents.getSnapshot().documents
+    const open = documents.create('open.sql', '', 'master'), busy = documents.create('busy.sql', '', 'master')
+    queries.isRunning.mockImplementation(id => id === busy.id)
+    queries.confirmSessions.mockResolvedValueOnce(undefined)
+    await commands.run('file.closeAll')
+    // Running queries stay open, as before, so they are not asked about here.
+    expect(queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('closeAll', [first.id, open.id])
+    expect(documents.getSnapshot().documents).toHaveLength(3)
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+    queries.confirmSessions.mockResolvedValueOnce(new Map([[open.id, 'rollback']]))
+    await commands.run('file.closeAll')
+    expect(api.closeQuerySession.mock.calls).toEqual([[first.id], [open.id, 'rollback']])
+    expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([busy.id])
+  })
   it('keeps running queries open when closing many, and says how many', async () => {
     const { documents, queries, commands, files } = fixture()
     const running = [documents.create('a.sql', '', 'master'), documents.create('b.sql', '', 'master')]
@@ -159,6 +177,24 @@ describe('file commands', () => {
     await files.closeMany(running.map(document => document.id))
     expect(files.getSnapshot().error).toBe('1 query is still running and stayed open.')
     expect(documents.getSnapshot().documents.map(document => document.name)).toEqual(['a.sql'])
+  })
+  it('keeps open a query that finished with a transaction while Close All asked about the others', async () => {
+    const { documents, queries, api, commands, files } = fixture()
+    const [first] = documents.getSnapshot().documents
+    const open = documents.create('open.sql', '', 'master'), late = documents.create('late.sql', '', 'master'), clean = documents.create('clean.sql', '', 'master')
+    const running = new Set([late.id, clean.id])
+    queries.isRunning.mockImplementation(id => running.has(id))
+    // Both finish while the prompt about open.sql is open: late.sql with a transaction nobody was asked about.
+    queries.confirmSessions.mockImplementationOnce(async () => {
+      running.clear()
+      queries.mayHaveTransaction.mockImplementation(id => id === late.id || id === open.id)
+      return new Map([[open.id, 'commit']])
+    })
+    await commands.run('file.closeAll')
+    expect(queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('closeAll', [first.id, open.id])
+    expect(api.closeQuerySession.mock.calls).toEqual([[first.id], [open.id, 'commit'], [clean.id]])
+    expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([late.id])
+    expect(files.getSnapshot().error).toBe('1 query finished with an open transaction while this ran and stayed open; run it again to be asked about it.')
   })
   it('saves a copy to a file the user picks without opening it, and saves nothing on Cancel', async () => {
     const { documents, api, files } = fixture()
@@ -174,13 +210,56 @@ describe('file commands', () => {
     await files.saveCopy('dbo.Orders.sql', 'x')
     expect(files.getSnapshot().error).toBe('Disk full.')
   })
-  it('keeps a running tab open without prompting', async () => {
+  it('asks before closing a running query: Keep Running keeps it, and cancelling it closes it with its work rolled back', async () => {
     const { documents, queries, api, commands } = fixture()
+    const tab = documents.active!
     queries.isRunning.mockReturnValue(true)
+    queries.confirmSessions.mockResolvedValueOnce(undefined)
     await commands.run('file.close')
+    expect(queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('close', [tab.id])
     expect(documents.getSnapshot().documents).toHaveLength(1)
-    expect(api.confirmClose).not.toHaveBeenCalled()
     expect(api.closeQuerySession).not.toHaveBeenCalled()
+    queries.confirmSessions.mockResolvedValueOnce(new Map([[tab.id, 'rollback']]))
+    await commands.run('file.close')
+    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, 'rollback']])
+    expect(documents.getSnapshot().documents).toHaveLength(0)
+  })
+  it('asks about unsaved changes before an open transaction, and commits it in the query\'s session as it closes', async () => {
+    const { documents, model, queries, api, commands, files, events } = fixture()
+    const tab = documents.active!
+    model(tab.id).edit('SELECT dirty')
+    const order: string[] = []
+    api.confirmClose.mockImplementation(async () => { order.push('save?'); return { ok: true, value: 'discard' } })
+    queries.confirmSessions.mockImplementation(async () => { order.push('transaction?'); return new Map([[tab.id, 'commit']]) })
+    // A commit that fails keeps the query open, with its transaction, and says why.
+    api.closeQuerySession.mockResolvedValueOnce({ ok: false, error: 'The transaction was not committed, and the query stays open.', code: 'SQL_ERROR' })
+    const ended: string[] = []
+    events.subscribe(event => { if (event.type === 'session.ended') ended.push(event.tabId) })
+    await commands.run('file.close')
+    expect(order).toEqual(['save?', 'transaction?'])
+    expect(documents.get(tab.id)).toBeDefined()
+    expect(files.getSnapshot().error).toBe('The transaction was not committed, and the query stays open.')
+    expect(ended).toEqual([])
+    await commands.run('file.close')
+    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, 'commit'], [tab.id, 'commit']])
+    expect(documents.get(tab.id)).toBeUndefined()
+    expect(ended).toEqual([tab.id])
+    // Cancel on the save prompt asks nothing more.
+    const next = documents.newQuery('SELECT 2')
+    model(next.id).edit('SELECT changed')
+    api.confirmClose.mockImplementation(async () => ({ ok: true, value: 'cancel' }))
+    await commands.run('file.close')
+    expect(queries.confirmSessions).toHaveBeenCalledTimes(2)
+  })
+  it('counts a session found lost as ended, so its query is not asked about again', async () => {
+    const { documents, api, files, events } = fixture()
+    const tab = documents.active!, ended: string[] = []
+    events.subscribe(event => { if (event.type === 'session.ended') ended.push(event.tabId) })
+    api.closeQuerySession.mockResolvedValueOnce({ ok: false, error: 'The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.', code: 'SESSION_LOST' })
+    await documents.runTask(() => documents.close(tab.id, 'commit')).catch((error: Error) => files.reportError(error.message))
+    expect(ended).toEqual([tab.id])
+    expect(documents.get(tab.id)).toBeDefined()
+    expect(files.getSnapshot().error).toContain('Nothing was committed.')
   })
   it.each(['cancel', 'save'] as const)('keeps the tab open when close %s is cancelled', async decision => {
     const { documents, model, api, commands, files } = fixture()
@@ -254,6 +333,33 @@ describe('file commands', () => {
     expect(api.closeWindow).not.toHaveBeenCalled()
     // Main would otherwise hand the quit it asked for to the next page after a reload.
     expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
+  })
+  it('asks once about every open transaction before quitting, after the unsaved queries, and ends each before the window closes', async () => {
+    const { documents, model, queries, api, files } = fixture()
+    const [first] = documents.getSnapshot().documents
+    const second = documents.create('second.sql', '', 'master', 'server-a')
+    model(second.id).edit('SELECT dirty')
+    const order: string[] = []
+    api.confirmClose.mockImplementation(async name => { order.push('save ' + name); return { ok: true, value: 'discard' } })
+    queries.confirmSessions.mockImplementation(async (action, ids) => { order.push(`${action} ${ids.length}`); return undefined })
+    const flush = vi.fn(async () => {})
+    await files.closeWindow(flush)
+    expect(order).toEqual(['save second.sql', 'exit 2'])
+    expect(flush).not.toHaveBeenCalled()
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
+    // Commit All: each session commits in turn before the window closes; one that fails keeps the window open.
+    queries.confirmSessions.mockImplementation(async () => new Map([[first.id, 'commit'], [second.id, 'commit']]))
+    api.closeQuerySession.mockResolvedValueOnce({ ok: true, value: { closed: true } }).mockResolvedValueOnce({ ok: false, error: 'The transaction was not committed, and the query stays open.' })
+    await files.closeWindow(flush)
+    expect(api.closeQuerySession.mock.calls).toEqual([[first.id, 'commit'], [second.id, 'commit']])
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    expect(files.getSnapshot().error).toBe('The transaction was not committed, and the query stays open.')
+    expect(api.closeWindowCancelled).toHaveBeenCalledTimes(2)
+    queries.confirmSessions.mockImplementation(async () => new Map([[second.id, 'rollback']]))
+    await files.closeWindow(flush)
+    expect(api.closeQuerySession.mock.calls.at(-1)).toEqual([second.id, 'rollback'])
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
   it('tells main when its close fails, but not when the window closes', async () => {
     const { api, files } = fixture()

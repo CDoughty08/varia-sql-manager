@@ -17,18 +17,18 @@ const resolve = (file: Record<string, unknown>, variant: ThemeType = 'dark') => 
 const specValues = `
 foreground #d9e1ec #1f2733|descriptionForeground #8a9cb3 #525e72|disabledForeground #8a9cb3 #525e72|errorForeground #f39c9f #ae2117
 warningForeground #dfbd82 #8a5300|successForeground #8addac #146c38|infoForeground #8fb7ff #005fb8|focusBorder #76acff #005fb8
-icon.foreground #8aa9d4 #3e6696|widget.shadow #00000099 #0000002e|widget.border #40516b #c3ccd8|textPreformat.foreground #c3cddd #2f3a49
+icon.foreground #8aa9d4 #3e6696|widget.shadow #00000099 #0000002e|widget.border #5f7089 #c3ccd8|textPreformat.foreground #c3cddd #2f3a49
 sash.hoverBorder #76acff #005fb8|scrollbarSlider.background #8a9cb366 #525e7266|scrollbarSlider.hoverBackground #8a9cb38c #525e728c
 scrollbarSlider.activeBackground #8a9cb3b3 #525e72b3|titleBar.activeBackground #181f2a #e9edf2|titleBar.activeForeground #9eafc5 #465366
 titleBar.inactiveBackground #181f2a #e9edf2|titleBar.inactiveForeground #9eafc5 #465366|titleBar.border #2b3443 #d3d9e2
 titleBar.iconForeground #a3bbdc #2a4f7f|titleBar.controlsForeground #d9e1ec #1f2733|menubar.selectionBackground #2e3c51 #ccd6e3
 menubar.selectionForeground #ffffff #0b1220|menubar.selectionBorder #8fb7ff00 #005fb800|menu.background #1a2230 #ffffff|menu.foreground #d9e1ec #1f2733|menu.selectionBackground #2e4058 #c4daf4
-menu.selectionForeground #ffffff #0b1220|menu.selectionBorder #8fb7ff00 #005fb800|menu.separatorBackground #354359 #cdd4de|menu.border #40516b #c3ccd8|toolbar.background #181f2a #e9edf2
+menu.selectionForeground #ffffff #0b1220|menu.selectionBorder #8fb7ff00 #005fb800|menu.separatorBackground #354359 #cdd4de|menu.border #5f7089 #c3ccd8|toolbar.background #181f2a #e9edf2
 toolbar.border #2b3443 #d3d9e2|toolbar.hoverBackground #d9e1ec1f #1f27331f|toolbar.separatorBackground #354359 #cdd4de|toolbar.labelForeground #9eafc5 #465366
 keybindingLabel.foreground #8a9cb3 #525e72|keybindingLabel.border #354359 #cdd4de|button.background #8fb7ff #005fb8|button.foreground #101b2d #ffffff
-button.hoverBackground #accaff #004c94|button.border #40516b #8792a2|button.secondaryForeground #c3cddd #2f3a49
+button.hoverBackground #accaff #004c94|button.border #5f7089 #7a8596|button.secondaryForeground #c3cddd #2f3a49
 button.secondaryHoverBackground #263041 #d0d8e3|button.secondaryHoverForeground #ffffff #0b1220|input.background #111721 #ffffff
-input.foreground #d9e1ec #1f2733|input.border #364357 #8792a2|input.placeholderForeground #8a9cb3 #525e72
+input.foreground #d9e1ec #1f2733|input.border #5d6e88 #7a8596|input.placeholderForeground #8a9cb3 #525e72
 inputValidation.errorBackground #48242d #fbe4e6|inputValidation.errorForeground #f3bac0 #8a1c25|sideBar.background #151b24 #f3f5f8
 sideBarTitle.foreground #9eafc5 #465366|sideBarSectionHeader.border #252f3d #e3e7ed|list.hoverBackground #263041 #d0d8e3
 list.activeSelectionBackground #2e4058 #c4daf4|list.activeSelectionForeground #d9e1ec #1f2733|list.inactiveSelectionBackground #24324a #d6e3f3
@@ -53,7 +53,7 @@ editorLineNumber.foreground #728195 #525e72|editorLineNumber.activeForeground #c
 editorBracketHighlight.foreground1 #ffd700 #0431fa|editorBracketHighlight.foreground2 #da70d6 #287a28|editorBracketHighlight.foreground3 #179fff #7b3814
 editorBracketHighlight.foreground4 #ffd700 #0431fa|editorBracketHighlight.foreground5 #da70d6 #287a28|editorBracketHighlight.foreground6 #179fff #7b3814
 editorBracketHighlight.unexpectedBracket.foreground #f39c9f #ae2117|editorWidget.background #1a2230 #ffffff
-editorWidget.foreground #d9e1ec #1f2733|editorWidget.border #40516b #c3ccd8|emptyState.foreground #8a9cb3 #525e72
+editorWidget.foreground #d9e1ec #1f2733|editorWidget.border #5f7089 #c3ccd8|emptyState.foreground #8a9cb3 #525e72
 emptyState.titleForeground #9eafc5 #465366|emptyState.iconForeground #7e93b199 #63718999|panel.background #141a23 #fafbfc
 panel.border #2b3443 #d3d9e2|panelTitle.background #181f2a #e9edf2|panelTitle.activeForeground #bcd4fa #0b4f99
 panelTitle.inactiveForeground #8a9cb3 #525e72|panelTitle.activeBorder #8fb7ff #005fb8|badge.background #2e3c51 #ccd6e3
@@ -63,7 +63,7 @@ resultsGrid.gridlines #252f3d #e3e7ed|resultsGrid.alternateRowBackground #d9e1ec
 resultsGrid.nullForeground #dfbd82b3 #8a5300|resultsGrid.nullBackground #dfbd8214 #8a53001f|resultsGrid.truncationForeground #dfbd82 #8a5300|resultsGrid.selectionBackground #2e4058 #c4daf4
 resultsGrid.selectionForeground #d9e1ec #1f2733|resultsGrid.inactiveSelectionBackground #24324a #d6e3f3|resultsGrid.activeCellBorder #76acff #005fb8
 resultsGrid.hoverBackground #263041 #d0d8e3|resultsGrid.headerSelectionBackground #24324a #d6e3f3
-resultsGrid.headerSelectionForeground #bcd4fa #0b4f99|resultsGrid.linkForeground #8fb7ff #005fb8|resultsGrid.splitterBackground #8a9cb399 #8792a2|resultsMessages.foreground #a3bbdc #1f2733|statusBar.background #1d2b40 #e3ebf5
+resultsGrid.headerSelectionForeground #bcd4fa #0b4f99|resultsGrid.linkForeground #8fb7ff #005fb8|resultsGrid.splitterBackground #8a9cb399 #7a8596|resultsMessages.foreground #a3bbdc #1f2733|statusBar.background #1d2b40 #e3ebf5
 statusBar.foreground #a3bbdc #2a4f7f|statusBar.separatorForeground #8a9cb3 #525e72|statusBar.onlineIndicator #8addac #146c38
 statusBar.idleIndicator #8a9cb3 #525e72|statusBar.executingBackground #1d2b40 #e3ebf5|statusBar.executingForeground #a3bbdc #2a4f7f
 statusBar.disconnectedBackground #1d2b40 #e3ebf5|statusBar.disconnectedForeground #a3bbdc #2a4f7f|statusBar.errorBackground #48242d #fbe4e6
@@ -71,7 +71,7 @@ statusBar.errorForeground #f3bac0 #8a1c25|banner.errorBackground #48242d #fbe4e6
 banner.warningBackground #3d3322 #fff3d6|banner.warningForeground #f0d49b #6b4400|dialog.backdropBackground #080c14bf #1f273366
 dialog.separatorBackground #354359 #cdd4de|dialog.labelForeground #c3cddd #2f3a49|dialog.descriptionForeground #9eafc5 #465366
 settings.headerForeground #a3bbdc #2a4f7f|notifications.background #1a2230 #ffffff|notifications.foreground #d9e1ec #1f2733
-notifications.border #40516b #c3ccd8|notificationsErrorIcon.foreground #f39c9f #ae2117|notificationsWarningIcon.foreground #dfbd82 #8a5300
+notifications.border #5f7089 #c3ccd8|notificationsErrorIcon.foreground #f39c9f #ae2117|notificationsWarningIcon.foreground #dfbd82 #8a5300
 notificationsInfoIcon.foreground #8fb7ff #005fb8|quickInput.background #1a2230 #ffffff|quickInput.foreground #d9e1ec #1f2733
 quickInputTitle.background #202a39 #e1e7ee|quickInputList.focusBackground #2e4058 #c4daf4|quickInputList.focusForeground #d9e1ec #1f2733
 pickerGroup.foreground #8fb7ff #005fb8|pickerGroup.border #354359 #cdd4de|connection.red #e66b73 #c42b3c|connection.orange #e6a15c #b45309

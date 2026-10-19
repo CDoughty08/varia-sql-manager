@@ -68,7 +68,7 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Execute; Editor context menu › Execute |
+| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
@@ -153,7 +153,7 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Reload Window | `developer.reloadWindow` | — | — | — | Always | View › Reload Window |
-| Toggle Developer Tools | `developer.toggleDevTools` | Ctrl+Shift+I * | Ctrl+Shift+I * | ⌥⌘I * | Always | View › Toggle Developer Tools |
+| Toggle Developer Tools (unpackaged builds only) | `developer.toggleDevTools` | Ctrl+Shift+I * | Ctrl+Shift+I * | ⌥⌘I * | Always | View › Toggle Developer Tools |
 
 ### Other
 

@@ -52,10 +52,12 @@ export const queryEventSchema = z.discriminatedUnion('type', [
 /** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
   resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max), discardedResultSets: count, messages: z.array(message).max(limits.messages.count + limits.messages.lateErrors + 8),
-  recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'failed', 'cancelled', 'timedOut']),
+  recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'completedWithErrors', 'failed', 'cancelled', 'timedOut']),
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),
-  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count }).strict(), completedAt: z.string().max(40)
+  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count }).strict(), completedAt: z.string().max(40),
+  // The session probe after the script: @@TRANCOUNT, @@SPID (a smallint) and SUSER_SNAME().
+  transactionCount: z.number().int().min(0).max(2 ** 31 - 1).optional(), spid: z.number().int().min(0).max(32767).optional(), login: z.string().max(128).optional()
 }).strict()
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()

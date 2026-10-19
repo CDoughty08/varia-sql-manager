@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer } from '../../shared/contracts'
+import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
 import { advancedDefaults, connectionDefaults, connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../../shared/connections'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
@@ -23,6 +23,11 @@ const sections: { title: string; fields: Field[] }[] = [
   { title: 'Security', fields: [{ key: 'ipAddressPreference', label: 'IP address preference', choices: ['IPv4First', 'IPv6First', 'UsePlatformDefault'] }, { key: 'serverCertificate', label: 'Server certificate (file path)', maxLength: 1024 }] },
   { title: 'Source', fields: [{ key: 'attachDbFilename', label: 'Attach DB filename', maxLength: 1024 }, { key: 'failoverPartner', label: 'Failover partner', maxLength: 256 }, { key: 'failoverPartnerSpn', label: 'Failover partner SPN', maxLength: 512 }, { key: 'multiSubnetFailover', label: 'Multi subnet failover', boolean: true }, { key: 'serverSpn', label: 'Server SPN', maxLength: 512 }, { key: 'userInstance', label: 'User instance', boolean: true }] }
 ]
+/** SQL Server's facts about a failed connection, as SSMS shows them under its error; absent facts are left out. */
+function FailureDetails({ details }: { details: ErrorDetails }) {
+  const rows: [string, string | number | undefined][] = [['Error number', details.number], ['Severity', details.class], ['State', details.state], ['Server', details.server]]
+  return <details className="connect-error-details"><summary>Error details</summary><dl>{rows.filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
+}
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
 function AdvancedProperties({ value, onSave, onClose }: { value: Partial<AdvancedConnectionOptions>; onSave(value: AdvancedConnectionOptions): void; onClose(): void }) {
@@ -46,7 +51,7 @@ function AdvancedProperties({ value, onSave, onClose }: { value: Partial<Advance
 }
 
 export default function ConnectDialog({ initial, onConnected, onClose }: Props) {
-  const { theme } = useWorkbench()
+  const { theme, platform } = useWorkbench()
   const { active } = useServiceSnapshot(theme)
   const [options, setOptions] = useState<ConnectionOptions>({ ...initial, password: '' })
   const [library, setLibrary] = useState<ConnectionLibrary>({ version: 1, profiles: [] })
@@ -62,6 +67,8 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const [busy, setBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  // The failed connection's details, shown only while its message is the dialog's error.
+  const [failure, setFailure] = useState<{ error: string; details: ErrorDetails }>()
   const [notice, setNotice] = useState('')
   const [databases, setDatabases] = useState<DatabaseInfo[]>([])
   const [dbBusy, setDbBusy] = useState(false)
@@ -173,8 +180,10 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   async function connect(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('')
     try {
-      const info = unwrap(await window.varia.connect(options))
-      if (alive.current) onConnected(info, { ...options, password: '' })
+      const result = await window.varia.connect(options)
+      if (!alive.current) return
+      if (result.ok) onConnected(result.value, { ...options, password: '' })
+      else { setError(result.error); setFailure(result.details ? { error: result.error, details: result.details } : undefined) }
     } catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setBusy(false) }
   }
@@ -216,7 +225,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
         <div id="connection-properties" role="tabpanel" aria-label={properties === 'properties' ? 'Connection Properties' : 'Connection String'}>
           <div className="property-grid" hidden={properties !== 'properties'}>
             <div className="property-row"><label htmlFor="connect-server">Server Name</label><input id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
-            <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as ConnectionOptions['authentication'], password: '' })}><option value="windows">Windows authentication</option><option value="sql">SQL Server authentication</option></select></div>
+            <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as ConnectionOptions['authentication'], password: '' })}><option value="windows">{platform === 'win32' ? 'Windows authentication' : 'Windows authentication (Kerberos)'}</option><option value="sql">SQL Server authentication</option></select></div>
             <div className="property-row"><label htmlFor="connect-user">User Name</label><input id="connect-user" required={options.authentication === 'sql'} disabled={locked || options.authentication === 'windows'} autoComplete="off" maxLength={128} value={options.authentication === 'windows' ? identity : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
             <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked || options.authentication === 'windows'} maxLength={1024} value={options.password ?? ''} onChange={event => update({ password: event.target.value })} /></div>
             <div className="property-row"><span /><p className="field-note">Passwords are used for this connection only.</p></div>
@@ -233,9 +242,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
           <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => { labelServer.current = null; update({ displayName: event.target.value }) }} /></div>
           <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
         </div><div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}>{selected?.favorite ? '★ Remove favorite' : '☆ Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div></fieldset>
-        {notice && <p className="field-note" role="status">{notice}</p>}{error && <p className="connect-error" role="alert">{error}</p>}
+        {notice && <p className="field-note" role="status">{notice}</p>}{error && <p className="connect-error" role="alert">{error}</p>}{error && failure?.error === error && <FailureDetails details={failure.details} />}
       </div>
-      <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions({ ...connectionDefaults }); setError('') }}>Reset</button><span /><button className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button type="button" disabled={locked} onClick={onClose}>Cancel</button></div>
+      <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button type="button" disabled={locked} onClick={onClose}>Cancel</button></div>
     </form></div>
     {advanced && <AdvancedProperties value={options.advanced ?? {}} onSave={value => { update({ advanced: value }); setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}
   </>

@@ -120,7 +120,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const queries = new QueryService(documents, api, id => connections.get(id), events, results)
   const files = new FileService(documents, queries, api)
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files, api)
+  const targets = new TargetService(documents, queries, connections, files)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
   const scriptingOptions = new ScriptingOptionsService(api, (message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
@@ -133,7 +133,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
-  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, focus, modalOpen,
+  const menus = new MenuService({ platform, packaged: !api.developerTools, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, focus, modalOpen,
     findWidgetFocused: () => !!document.activeElement?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })

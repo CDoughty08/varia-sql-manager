@@ -37,7 +37,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000 },
   'query.cancel': control,
-  'query.session.close': control,
+  // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
+  'query.session.close': { ...control, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 10_000 },
   // Pages arrive as DATA frames within the stream's credit; the RESPONSE ends the stream.
   'results.read': { kind: 'stream', lane: 'results', deadlineMs: 60_000 },
   'results.close': control,

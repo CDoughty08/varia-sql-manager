@@ -9,6 +9,7 @@ import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ScriptingOptions } from './scripting/options.ts'
+import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -85,6 +86,8 @@ export interface QueryOptions {
   startLine?: number
   /** Result sets kept per script, 1..1000 (default 10); later ones are counted, not stored. */
   maxResultSets?: number
+  /** Stop at the first batch that raises an error (SQLCMD's `:on error exit`). By default the next GO batch still runs, as in SSMS. */
+  stopOnError?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -123,6 +126,7 @@ export interface ResultDescriptor {
 }
 /** One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order). */
 export interface MessageEntry { text: string; kind: 'info' | 'error' }
+export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */
 export interface QueryResult {
@@ -131,7 +135,9 @@ export interface QueryResult {
   messages: MessageEntry[]
   recordsAffected: number
   elapsedMs: number
-  status: 'completed' | 'failed' | 'cancelled' | 'timedOut'
+  /** `completedWithErrors`: every batch ran and at least one raised an error (`error` names the first such batch).
+   *  `failed`: an error stopped execution (before the first batch, with `stopOnError`, or by closing the session). */
+  status: QueryStatus
   error?: { code: string; message: string; batchNumber: number; iteration: number }
   completedBatches: number
   totalBatches: number
@@ -139,6 +145,13 @@ export interface QueryResult {
   messagesTruncated: boolean
   budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
   completedAt: string
+  /** `spid` is the session's while it is still open after the script. `transactionCount` and `login` are the session as
+   *  probed after the script (@@TRANCOUNT, SUSER_SNAME() ≤ 128 characters): absent when the session was lost or never
+   *  opened, or the probe read nothing (SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON, or a timeout). A `spid` without
+   *  a `transactionCount` is an open session whose transaction could not be checked. */
+  transactionCount?: number
+  spid?: number
+  login?: string
 }
 /** Orders what the backend reports about result memory (results.memory events and summaries): `seq` counts within the
  *  backend process that main numbered `generation`, so a figure overtaken by a newer one is never shown after it. */
@@ -194,7 +207,8 @@ export interface ExplorerNode {
   readonly status?: NodeStatus
   readonly created?: string
 }
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR'] as const
+// AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -222,7 +236,8 @@ export interface RpcMethods {
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
-  'query.session.close': { params: { sessionId: string }; result: { closed: boolean } }
+  /** `transaction` ends the session's open transaction first; a failed commit leaves the session open. */
+  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd }; result: { closed: boolean } }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
 }
@@ -246,8 +261,11 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
+/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
+ *  server that answered (at most 256 characters). Never the connection string or the password. */
+export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode }
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails }
 
 /** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'
@@ -312,7 +330,9 @@ export interface VariaApi {
   setScriptingOptions(options: ScriptingOptions): Promise<ApiResult<ScriptingOptions>>
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
-  closeQuerySession(sessionId: string): Promise<ApiResult<{ closed: boolean }>>
+  /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
+   *  the session open, with its transaction. */
+  closeQuerySession(sessionId: string, transaction?: SessionEnd): Promise<ApiResult<{ closed: boolean }>>
   getBackendState(): Promise<ApiResult<BackendState>>
   onBackendState(callback: (state: BackendState) => void): () => void
   /** Ends the current backend generation and starts the next one; main asks first when servers are connected.
@@ -330,6 +350,8 @@ export interface VariaApi {
   onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void
   /** True only in unpackaged smoke runs (main passed --varia-test-mode). */
   readonly testMode: boolean
+  /** True only in unpackaged builds (main passed --varia-developer-tools): Toggle Developer Tools exists only there. */
+  readonly developerTools: boolean
   openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>
@@ -338,6 +360,9 @@ export interface VariaApi {
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
+  /** Asks, in main's message box, what to do with the open transactions and running queries of sessions that are about
+   *  to end (src/shared/sessions.ts composes the prompt). */
+  confirmSessions(request: SessionPromptRequest): Promise<ApiResult<SessionAnswer>>
   closeWindow(): Promise<void>
   /** The page's close ended without closing (a prompt was cancelled, or a save failed). Main hands a close it asked for
    *  to the next page when this one reloads or crashes first, but not one that ended. */

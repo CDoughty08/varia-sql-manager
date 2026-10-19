@@ -2,6 +2,13 @@ using System.Text.Json;
 using Varia.Backend;
 using Varia.Backend.Tests;
 
+// The child process of ConnectionFailureChecks' native Kerberos probe check.
+if (args is [ConnectionFailureChecks.ProbeArgument])
+{
+    Console.WriteLine(KerberosProbe.Inspect());
+    return;
+}
+
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 void Check(bool condition, string name)
@@ -37,6 +44,9 @@ foreach (var go in new[] { "GO;", "GO 0", "GO -1", "GO +2", "GO 2.5", "GO 1001",
 Invalid(string.Concat(Enumerable.Repeat("SELECT 1;\nGO 1000\n", 2)), "total repetition budget");
 Invalid("SELECT 1;\nGO\n:r file.sql", "SQLCMD include rejected before executing anything");
 Invalid("!! echo command", "shell escape rejected");
+Invalid("SELECT 1;\n  :setvar name value", "an indented SQLCMD command is rejected");
+batches = SqlScript.Parse("SELECT *\nFROM\n::fn_helpcollations();\nGO\nSELECT geography\n::Point(1, 2, 4326);");
+Check(batches.Count == 2 && batches[0].Sql.Contains("::fn_helpcollations") && batches[1].Sql.Contains("::Point"), "a line starting with :: is T-SQL, not a SQLCMD command");
 Invalid("SELECT 'unfinished", "unterminated literal");
 Invalid("SELECT 1; /* unfinished", "unterminated comment");
 try { SqlScript.Parse("SELECT 1;\nGO 0", 20); throw new Exception("Invalid selection accepted"); }
@@ -79,6 +89,7 @@ catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requ
 ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
+await ConnectionFailureChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
@@ -87,6 +98,10 @@ using (var offline = new SqlService())
 {
     try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }
     catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "table columns reject an overlong name before looking up the connection"); }
+    try { await offline.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(Guid.NewGuid().ToString(), "save"), json), json); throw new Exception("Unknown transaction end accepted"); }
+    catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "closing a session ends its transaction only by commit or rollback"); }
+    var closed = await offline.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(Guid.NewGuid().ToString(), "commit"), json), json);
+    Check(JsonSerializer.Serialize(closed, json) == "{\"closed\":false}", "closing an unknown session with commit has nothing to commit");
 }
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
@@ -107,8 +122,8 @@ using var service = new SqlService();
 async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
 var info = await Call<ConnectionInfo>("connections.connect", Live("master"));
 var sessionId = Guid.NewGuid().ToString();
-Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master") =>
-    Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine));
+Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master", bool stopOnError = false) =>
+    Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine, StopOnError: stopOnError));
 // Rows stay in the backend's result store; read them back as the results worker would, from the stored pages.
 List<string?[]> RowsOf(ResultDescriptor set) => LiveResultChecks.RowsOf(service.Results, set);
 List<string> Texts(QueryResult value) => LiveResultChecks.Texts(value);
@@ -117,6 +132,44 @@ try
 {
     var discovered = await Call<List<DatabaseInfo>>("connections.databases", Live("DatabaseThatDoesNotExist"));
     Check(discovered.Any(database => database.Name == "master") && discovered.Any(database => database.Name == "tempdb"), "live database discovery ignores a stale selected database and closes its temporary connection");
+    var rejected = new ConnectOptions(server, "master", "sql", "varia_no_such_login_" + Guid.NewGuid().ToString("N")[..8], "never-shown-marker", true);
+    foreach (var method in new[] { "connections.connect", "connections.databases" })
+    {
+        try { await Call<object>(method, rejected); throw new Exception("A login that does not exist was accepted by " + method); }
+        catch (RequestException error)
+        {
+            // Login failed is 18456, class 14; a server that accepts only Windows authentication sometimes closes the pipe
+            // before SqlClient reads it, which SqlClient reports as 233, class 20.
+            Check(error.Code == "SQL_ERROR" && error.Details is { Number: 18456, Class: 14, State: not null, Server.Length: > 0 } or { Number: 233, Class: 20, State: not null, Server.Length: > 0 } && !error.Message.Contains("never-shown-marker")
+                && !JsonSerializer.Serialize(error.Details).Contains("never-shown-marker"), method + " answers a failed login with its number, state, class and server, and never the password");
+        }
+    }
+    await ConnectionFailureChecks.PoolBlockingAsync(Check, rejected);
+
+    // A Kerberos ticket that expires while connected: every later open says to run kinit, and works again after it.
+    var signIn = Guid.NewGuid().ToString();
+    service.Open = ConnectionFailureChecks.ExpiredTicket;
+    try
+    {
+        async Task<string> Refused(Func<Task> call)
+        {
+            try { await call(); return "accepted"; }
+            catch (RequestException error) { return error.Code == "AUTH_KERBEROS" && error.Message == ConnectionFailures.Messages.Expired && error.Details is null ? "kinit" : error.Code + ": " + error.Message; }
+        }
+        var refusals = new[]
+        {
+            await Refused(() => Run("SELECT 1;", session: signIn)),
+            await Refused(() => Call<List<DatabaseInfo>>("databases.list", new ConnectionArgs(info.Id))),
+            await Refused(() => Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"))),
+            await Refused(() => Call<ScriptResult>("scripting.script", new ScriptArgs(info.Id, Guid.NewGuid().ToString(), [new ObjectRefDto("table", "master", "dbo", "VariaNoSuchTable")], "create", ScriptingLiveChecks.Defaults(json))))
+        };
+        Check(refusals.All(answer => answer == "kinit"), "a query session, database and column lists, and Script As say to run kinit when the ticket has expired: " + string.Join(", ", refusals));
+        var node = await Call<ExplorerChildrenResult>("explorer.children", new ExplorerChildrenArgs(info.Id, Guid.NewGuid().ToString(), new NodeRefDto("folder", Owner: new ObjectRefDto("server"), Folder: "logins")));
+        Check(node.Error is { Code: "AUTH_KERBEROS", Retryable: true } && node.Error.Message == ConnectionFailures.Messages.Expired && node.Nodes.Count == 0,
+            "Object Explorer shows an expired ticket's kinit advice on the node, which Retry loads again");
+    }
+    finally { service.Open = ConnectionFailures.OpenAsync; }
+    Check((await Run("SELECT 1;", session: signIn)).Status == "completed", "after kinit, the tab whose session could not sign in opens a new one");
     var columns = await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"));
     Check(columns.Columns.Count > 2 && columns.Columns[0] == new ColumnInfo("name", "sysname") && columns.Columns[1] == new ColumnInfo("object_id", "int") && !columns.Truncated, "table columns come in column order with their types");
     try { await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects]")); throw new Exception("A closing bracket matched another table"); }
@@ -131,10 +184,12 @@ try
     Check(result.Status == "completed" && Texts(result).Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)), "SET options and temp tables persist across Execute calls");
     result = await Run("SELECT 'isolated';", Guid.NewGuid().ToString());
     Check(!Texts(result).Any(value => value.Contains("CPU time", StringComparison.OrdinalIgnoreCase)), "statistics settings do not leak to another query tab");
-    result = await Run("DECLARE @value int = 1;\nGO\nSELECT @value;\nGO\nPRINT 'SHOULD_NOT_RUN';", startLine: 20);
-    Check(result.Status == "failed" && result.Error?.Message.Contains("Line 22") == true, "variables are batch scoped and selected-text line offsets are mapped");
-    Check(result.CompletedBatches == 1 && !Texts(result).Any(value => value.Contains("SHOULD_NOT_RUN")), "later batches stop on error");
-    result = await Run("SELECT 42 AS retained; PRINT 'before error';\nGO\nTHROW 51000, 'expected failure', 1;\nGO\nPRINT 'SHOULD_NOT_RUN';");
+    result = await Run("DECLARE @value int = 1;\nGO\nSELECT @value;\nGO\nPRINT 'runs after the error';", startLine: 20);
+    Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Line 22") == true, "variables are batch scoped and selected-text line offsets are mapped");
+    Check(result.CompletedBatches == 3 && Texts(result).Contains("runs after the error"), "later batches run after a batch's error, as in SSMS");
+    result = await Run("DECLARE @value int = 1;\nGO\nSELECT @value;\nGO\nPRINT 'SHOULD_NOT_RUN';", startLine: 20, stopOnError: true);
+    Check(result.Status == "failed" && result.CompletedBatches == 1 && !Texts(result).Any(value => value.Contains("SHOULD_NOT_RUN")), "with stopOnError, later batches stop on error");
+    result = await Run("SELECT 42 AS retained; PRINT 'before error';\nGO\nTHROW 51000, 'expected failure', 1;\nGO\nPRINT 'SHOULD_NOT_RUN';", stopOnError: true);
     Check(result.Status == "failed" && RowsOf(result.ResultSets[0]).Count == 1 && Texts(result).Contains("before error"), "partial results and messages survive later batch errors");
     result = await Run("SET STATISTICS TIME, IO OFF;\nGO\nSELECT * FROM #VariaBatchTest;");
     Check(result.Status == "completed" && !Texts(result).Any(value => value.Contains("logical reads", StringComparison.OrdinalIgnoreCase)), "statistics OFF applies to subsequent batches");
@@ -149,7 +204,7 @@ try
         result = await Run("SET " + mode + " ON;\nGO\nSELECT COUNT(*) FROM #VariaBatchTest;\nGO\nSET " + mode + " OFF;");
         Check(result.Status == "completed" && result.ResultSets.Count > 0 && result.ResultSets.All(set => set.Kind == "rows"), mode + " preserves estimated plan result sets");
     }
-    result = await Run("SELECT 1 AS before_error; SELECT 1/0 AS failed;\nSELECT 2 AS after_error; PRINT 'after statement error';\nGO\nPRINT 'SHOULD_NOT_RUN';", startLine: 5);
+    result = await Run("SELECT 1 AS before_error; SELECT 1/0 AS failed;\nSELECT 2 AS after_error; PRINT 'after statement error';\nGO\nPRINT 'SHOULD_NOT_RUN';", startLine: 5, stopOnError: true);
     Check(result.Status == "failed" && result.ResultSets.Any(set => set.Columns[0].Name == "after_error" && RowsOf(set).Count == 1) && Texts(result).Contains("after statement error"),
         "statement-level errors leave the rest of the batch to SQL Server, as in SSMS");
     Check(result.Error?.Message.Contains("Msg 8134") == true && result.Error.Message.Contains("Line 5") && result.CompletedBatches == 0 && !Texts(result).Contains("SHOULD_NOT_RUN"),
@@ -159,9 +214,9 @@ try
         && RowsOf(result.ResultSets[0])[0][2] is null && Convert.ToString(RowsOf(result.ResultSets[0])[0][3]) == "12345678901234567890123456789012345678",
         "CLR UDT values and decimals beyond System.Decimal are displayed instead of failing the script");
     result = await Run("DECLARE @i int = 0; WHILE @i < 50 BEGIN SELECT 1/0; SET @i += 1; END");
-    Check(result.Status == "failed" && result.Error?.Message.Contains("and 30 more errors") == true, "errors repeated by a running batch are counted, not accumulated");
+    Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("and 30 more errors") == true, "errors repeated by a running batch are counted, not accumulated");
     result = await Run("SELECT id, 10 / (id - 5) AS v FROM (VALUES (1), (2), (3), (4), (5), (6)) AS t(id);");
-    Check(result.Status == "failed" && result.ResultSets[0].Incomplete && RowsOf(result.ResultSets[0]).Count < 6, "a result set cut short by a statement error is marked incomplete");
+    Check(result.Status == "completedWithErrors" && result.ResultSets[0].Incomplete && RowsOf(result.ResultSets[0]).Count < 6, "a result set cut short by a statement error is marked incomplete");
     // When SqlClient's CommandTimeout and the script's token expired on the same timer tick, SqlClient could leave the
     // session one response behind: the next execution in that tab returned nothing and each later one the previous one's
     // results. The race needs the deadline to land in NextResultAsync, and it is likeliest while the timeout paths are
@@ -193,7 +248,7 @@ try
     result = await Run("SELECT DB_NAME();");
     Check(result.Status == "completed" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "master", "the session recovers after a failed database change");
     result = await Run("SELECT 1 AS a;\nGO\nSELECT * FROM dbo.VariaTableThatDoesNotExist;");
-    Check(result.Status == "failed" && result.ResultSets.Count == 1 && result.Error?.Message.Contains("Msg 208") == true, "compile errors in later batches keep earlier output");
+    Check(result.Status == "completedWithErrors" && result.CompletedBatches == 2 && result.ResultSets.Count == 1 && result.Error?.Message.Contains("Msg 208") == true, "compile errors in later batches keep earlier output");
     result = await Run("RAISERROR ('expected informational message', 10, 1); PRINT 'expected print';");
     Check(result.Status == "completed" && Texts(result).Contains("expected informational message") && Texts(result).Contains("expected print"), "low severity informational messages do not become errors");
     result = await Run("USE tempdb;\nGO\nSELECT DB_NAME();");
@@ -201,7 +256,7 @@ try
     result = await Run("SELECT DB_NAME();", database: result.Database);
     Check(result.Database == "tempdb" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "tempdb", "returned database context persists across Execute calls");
     result = await Run("USE master; THROW 51000, 'expected context failure', 1;", database: "tempdb");
-    Check(result.Status == "failed" && result.Database == "master", "database context is retained even when a later statement fails");
+    Check(result.Status == "completedWithErrors" && result.Database == "master", "database context is retained even when a later statement fails");
     result = await Run("BEGIN TRANSACTION; INSERT #VariaBatchTest VALUES (9);\nGO\nSELECT @@TRANCOUNT AS openTransactions, COUNT(*) AS count FROM #VariaBatchTest;");
     Check(result.Status == "completed" && Convert.ToInt32(RowsOf(result.ResultSets[0])[0][0]) == 1 && Convert.ToInt32(RowsOf(result.ResultSets[0])[0][1]) == 4, "GO does not commit an explicit transaction");
     result = await Run("SELECT @@TRANCOUNT; ROLLBACK; SELECT COUNT(*) FROM #VariaBatchTest;");
@@ -232,7 +287,9 @@ try
     Check(result.Status == "completed" && result.ResultSets.Sum(set => RowsOf(set).Count) == 2 && Texts(result).Contains("after display cap"), "display limits do not skip later SQL");
     await Call<object>("query.session.close", new SessionArgs(sessionId));
     result = await Run("SELECT * FROM #VariaBatchTest;");
-    Check(result.Status == "failed", "closing a tab removes temporary objects and session state");
+    Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");
+    await ExecutionLiveChecks.RunAsync(Check, service, info, json);
+    await TransactionLiveChecks.RunAsync(Check, service, info, json);
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
     await ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json);
     await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);

@@ -538,6 +538,9 @@ internal static class ScriptingChecks
             Hold?.Wait();
             return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
         }
+        /// <summary>Replaces the open, as SqlService's does for a Kerberos token failure.</summary>
+        public Func<SqlConnection, CancellationToken, Task>? Opening { get; set; }
+        public Task OpenAsync(SqlConnection connection, CancellationToken token) => Opening?.Invoke(connection, token) ?? connection.OpenAsync(token);
     }
 
     private static readonly string Missing = Guid.NewGuid().ToString();
@@ -578,6 +581,15 @@ internal static class ScriptingChecks
         var unreachable = await service.ScriptAsync(Args(), CancellationToken.None);
         check(unreachable.Error is { Retryable: true } && unreachable.Text is null && unreachable.Database == "Sales" && SpinWait.SpinUntil(() => service.ActiveJobs == 0, 2000),
             "a connection that cannot open is an error value: " + unreachable.Error?.Code);
+        using (var expired = new ScriptingService(new FakeHost { Opening = ConnectionFailureChecks.ExpiredTicket }))
+        {
+            try { await expired.ScriptAsync(Args(), CancellationToken.None); check(false, "a connection whose Kerberos ticket expired scripted"); }
+            catch (RequestException error)
+            {
+                check(error.Code == "AUTH_KERBEROS" && error.Message == ConnectionFailures.Messages.Expired && SpinWait.SpinUntil(() => expired.ActiveJobs == 0 && expired.RunningCount == 0, 2000),
+                    "a scripting connection whose Kerberos ticket expired answers AUTH_KERBEROS with the kinit advice, as NOT_CONNECTED answers");
+            }
+        }
         var cloud = await new ScriptingService(new FakeHost(5)).ScriptAsync(Args(new ObjectRefDto("login", Name: "sa")), CancellationToken.None);
         check(cloud.Error?.Code == "NOT_SUPPORTED" && cloud.Database == "master", "cloud editions refuse server-level objects");
 

@@ -35,8 +35,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `borderSubtle` | Section headers and grid lines. | `#252f3d` | `#e3e7ed` |
 | `borderStrong` | Dock splitters. | `#303b4c` | `#c3ccd8` |
 | `separator` | Toolbar, menu, and dialog separators; the keyboard shortcut outline. | `#354359` | `#cdd4de` |
-| `controlBorder` | Outlined buttons and the Dark dialog border. | `#40516b` | `#8792a2` |
-| `inputBorder` | Input borders. | `#364357` | `#8792a2` |
+| `controlBorder` | Outlined buttons and the Dark dialog border. | `#5f7089` | `#7a8596` |
+| `inputBorder` | Input borders. | `#5d6e88` | `#7a8596` |
 | `accent` | Primary button and active indicators. | `#8fb7ff` | `#005fb8` |
 | `accentHover` | Primary button hover. | `#accaff` | `#004c94` |
 | `onAccent` | Text on the accent color. | `#101b2d` | `#ffffff` |
@@ -89,7 +89,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `focusBorder` | VS Code | `$focus` | `#76acff` | `#005fb8` | Focus ring around the focused control. |
 | `icon.foreground` | VS Code | `$icon` | `#8aa9d4` | `#3e6696` | Default glyph color. |
 | `widget.shadow` | VS Code | `$shadow` | `#00000099` | `#0000002e` | Shadow of dialogs, floating dock groups, and editor widgets. |
-| `widget.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Border of floating dock groups and widgets. |
+| `widget.border` | VS Code | `@editorWidget.border` | `#5f7089` | `#c3ccd8` | Border of floating dock groups and widgets. |
 | `textPreformat.foreground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Preformatted text in the editor. |
 | `sash.hoverBorder` | VS Code | `$focus` | `#76acff` | `#005fb8` | Dock splitter while it is hovered or dragged. |
 | `scrollbarSlider.background` | VS Code | `$textMuted/40` | `#8a9cb366` | `#525e7266` | Scrollbar thumb. |
@@ -116,7 +116,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `menu.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Highlighted item in title-bar and context menus. |
 | `menu.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the highlighted menu item; none by default. |
 | `menu.separatorBackground` | VS Code | `$separator` | `#354359` | `#cdd4de` | Menu separators. |
-| `menu.border` | VS Code | `@editorWidget.border` | `#40516b` | `#c3ccd8` | Menu border. |
+| `menu.border` | VS Code | `@editorWidget.border` | `#5f7089` | `#c3ccd8` | Menu border. |
 | `toolbar.background` | Varia | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Main toolbar. |
 | `toolbar.border` | Varia | `@titleBar.border` | `#2b3443` | `#d3d9e2` | Line below the main toolbar. |
 | `toolbar.hoverBackground` | VS Code | `$text/12` | `#d9e1ec1f` | `#1f27331f` | Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. |
@@ -132,13 +132,13 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `button.background` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Primary button; also the checkbox accent. |
 | `button.foreground` | VS Code | `$onAccent` | `#101b2d` | `#ffffff` | Primary button text. |
 | `button.hoverBackground` | VS Code | `$accentHover` | `#accaff` | `#004c94` | Primary button when hovered. |
-| `button.border` | VS Code | `$controlBorder` | `#40516b` | `#8792a2` | Outline of secondary buttons. |
+| `button.border` | VS Code | `$controlBorder` | `#5f7089` | `#7a8596` | Outline of secondary buttons. |
 | `button.secondaryForeground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Text of secondary and toolbar buttons. |
 | `button.secondaryHoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Secondary and toolbar buttons when hovered. |
 | `button.secondaryHoverForeground` | Varia | `$textStrong` | `#ffffff` | `#0b1220` | Secondary button text when hovered. |
 | `input.background` | VS Code | `$input` | `#111721` | `#ffffff` | Inputs and selects. |
 | `input.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Input and select text. |
-| `input.border` | VS Code | `$inputBorder` | `#364357` | `#8792a2` | Input and select border. |
+| `input.border` | VS Code | `$inputBorder` | `#5d6e88` | `#7a8596` | Input and select border. |
 | `input.placeholderForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Placeholder text. |
 | `inputValidation.errorBackground` | VS Code | `$errorSurface` | `#48242d` | `#fbe4e6` | Connection error message. |
 | `inputValidation.errorForeground` | VS Code | `$errorSurfaceText` | `#f3bac0` | `#8a1c25` | Connection error message text. |
@@ -231,7 +231,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `editorBracketHighlight.unexpectedBracket.foreground` | VS Code | `$error` | `#f39c9f` | `#ae2117` | A closing bracket without a matching opening one. |
 | `editorWidget.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Dialogs and editor widgets such as find, suggest, and hover. |
 | `editorWidget.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Text of dialogs and editor widgets. |
-| `editorWidget.border` | VS Code | Dark `$controlBorder`, Light `$borderStrong` | `#40516b` | `#c3ccd8` | Border of dialogs and editor widgets. |
+| `editorWidget.border` | VS Code | Dark `$controlBorder`, Light `$borderStrong` | `#5f7089` | `#c3ccd8` | Border of dialogs and editor widgets. |
 | `emptyState.foreground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Text of empty views (no query, no results, empty dock). |
 | `emptyState.titleForeground` | Varia | `$textTertiary` | `#9eafc5` | `#465366` | Heading of empty views. |
 | `emptyState.iconForeground` | Varia | `$iconMuted/60` | `#7e93b199` | `#63718999` | Decorative glyph of empty views. |
@@ -267,7 +267,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.headerSelectionBackground` | Varia | `$selection` | `#24324a` | `#d6e3f3` | Column and row headers of selected cells. |
 | `resultsGrid.headerSelectionForeground` | Varia | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the headers of selected cells. |
 | `resultsGrid.linkForeground` | Varia | `$accent` | `#8fb7ff` | `#005fb8` | XML, JSON and plan values that open in a new tab. |
-| `resultsGrid.splitterBackground` | Varia | Dark `$textMuted/60`, Light `$controlBorder` | `#8a9cb399` | `#8792a2` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
+| `resultsGrid.splitterBackground` | Varia | Dark `$textMuted/60`, Light `$controlBorder` | `#8a9cb399` | `#7a8596` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
 | `resultsMessages.foreground` | Varia | Dark `$accentMuted`, Light `$text` | `#a3bbdc` | `#1f2733` | Text of the Messages tab. |
 
 ### Status bar
@@ -301,7 +301,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `settings.headerForeground` | VS Code | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Section headings in dialogs. |
 | `notifications.background` | VS Code | `@editorWidget.background` | `#1a2230` | `#ffffff` | Notification toasts. Not used yet; reserved for notifications. |
 | `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9e1ec` | `#1f2733` | Notification text. Not used yet; reserved for notifications. |
-| `notifications.border` | VS Code | `@widget.border` | `#40516b` | `#c3ccd8` | Notification border. Not used yet; reserved for notifications. |
+| `notifications.border` | VS Code | `@widget.border` | `#5f7089` | `#c3ccd8` | Notification border. Not used yet; reserved for notifications. |
 | `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39c9f` | `#ae2117` | Error notification icon. Not used yet; reserved for notifications. |
 | `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#dfbd82` | `#8a5300` | Warning notification icon. Not used yet; reserved for notifications. |
 | `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8fb7ff` | `#005fb8` | Information notification icon. Not used yet; reserved for notifications. |

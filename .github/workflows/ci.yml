@@ -62,6 +62,16 @@ jobs:
       - run: npm ci
       - name: Type check, .NET checks (offline and live), vitest, production build
         run: npm run check
+      - name: Integrated authentication without a Kerberos ticket
+        # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
+        # must say to run kinit (AUTH_KERBEROS) with the failure's details, not refuse the mode or show SqlClient's bare
+        # "Cannot generate SSPI context.". The cache named here never exists; the suite fails rather than skips if it cannot run.
+        env:
+          KRB5CCNAME: FILE:/tmp/varia-no-kerberos-ticket
+          VARIA_TEST_KERBEROS_NO_TICKET: '1'
+        run: |
+          dpkg -s libgssapi-krb5-2 > /dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y libgssapi-krb5-2; }
+          npx vitest run tests/kerberos-live.test.ts
       - name: Prepare the Electron sandbox and display
         # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chromium's sandbox needs them because
         # npm's chrome-sandbox helper is not setuid root. The smoke tests launch with chromiumSandbox (scripts/*-smoke.mjs),

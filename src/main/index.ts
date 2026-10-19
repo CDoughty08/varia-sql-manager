@@ -1,11 +1,11 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec } from './backend/spawn-spec'
-import { installTestHooks } from './backend/test-hooks'
+import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
@@ -21,11 +21,15 @@ import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
 import { runRole, UserActivation } from './window-roles'
+import { closeAction, mergeCloseIntent, type CloseIntent } from './close-intent'
+import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
+import { contentSecurityPolicy } from '../shared/csp'
 import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
+import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import type { ApiResult, QueryResult, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -44,6 +48,9 @@ let resultsPort: ResultsPortHost | undefined
 let resultsJobs: ResultsJobHost | undefined
 // Test seams (fake backend, liveness override, __variaTest, the renderer test-mode flag) exist only in unpackaged smoke runs.
 const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
+let testHooks: BackendTestHooks | undefined
+// How long a reload waits for Chromium to see a renderer only the watchdog saw go before the page gets a new window.
+const lostRendererGraceMs = 5000
 const files = new SqlFileStore()
 // Main's file dialogs and prompts, one at a time: a dialog asked for while another is open waits for it. A renderer reset
 // drops those not yet shown, and `rendererGeneration` tells a handler whose dialog was open then that its page is gone.
@@ -59,6 +66,8 @@ let closeApproved = false
 // Main asked the page to close (a quit or the window's close button) and the page has not said that its close ended
 // without closing. A page that reloads or crashes first cannot finish it, so it goes to the next page.
 let closePending = false
+// Whether that close is a quit or only the window's (which on macOS leaves the app running).
+let closeIntent: CloseIntent | undefined
 /** The app is quitting (before-quit went ahead), so a closed window needs no new backend. */
 let quitting = false
 let backendStopped = false
@@ -108,11 +117,17 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
+/** A backend failure keeps its code and, for a failed connection, its details (never the connection string or password). */
+function failure(error: unknown, fallback: string): ApiResult<never> {
+  if (!(error instanceof BackendError)) return { ok: false, error: errorMessage(error, fallback) }
+  return { ok: false, error: errorMessage(error, fallback), code: error.code, ...(error.details ? { details: error.details } : {}) }
+}
+
 function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T): void {
   ipcMain.handle(channel, async (event, value: unknown): Promise<ApiResult<T>> => {
     if (!trusted(event)) return { ok: false, error: 'Untrusted IPC sender.' }
     try { return { ok: true, value: await action(value) } }
-    catch (error) { return { ok: false, error: errorMessage(error, 'The operation failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
+    catch (error) { return failure(error, 'The operation failed.') }
   })
 }
 
@@ -143,8 +158,9 @@ function pageDialog<T>(show: (window: BrowserWindow, signal?: AbortSignal) => Pr
 }
 
 /** Asks the page to close, as the window's close button and a quit do; the request outlives a reload or crash. */
-function requestClose(): void {
+function requestClose(intent: CloseIntent): void {
   closePending = true
+  closeIntent = mergeCloseIntent(closeIntent, intent)
   command('window.close')
 }
 
@@ -203,7 +219,7 @@ const menuActions: ApplicationMenuActions = {
 
 // The renderer owns enablement and checkboxes; it sends them on varia:menu-state and every rebuild re-applies them.
 const menuBridge = new NativeMenuBridge({
-  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform)),
+  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state }, menuActions, process.platform, app.isPackaged)),
   install: menu => Menu.setApplicationMenu(menu)
 })
 
@@ -249,23 +265,28 @@ function applyAppearance(state: ThemeState): void {
   buildMenu()
 }
 
-function createWindow(): void {
+/** `bounds` and `maximized` place a window that replaces one whose renderer was lost. */
+function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
   closePending = false
+  closeIntent = undefined
   windowActive = true
   rendererLoaded = false
   rendererReady = false
   rendererUnresponsive = false
   const chrome = appearance.windowChrome()
   mainWindow = new BrowserWindow({
-    title: 'Varia SQL Manager', width: 1440, height: 960, minWidth: 1024, minHeight: 700,
+    title: 'Varia SQL Manager', width: 1440, height: 960, ...place.bounds, minWidth: 1024, minHeight: 700,
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : [])] }
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(app.isPackaged ? [] : ['--varia-developer-tools'])],
+      // Developer tools are for unpackaged builds: a packaged one has neither the command nor the tools.
+      devTools: !app.isPackaged }
   })
   const window = mainWindow, contents = window.webContents
+  if (place.maximized) window.maximize()
   if (process.platform !== 'darwin') {
     // The application menu stays hidden: the renderer draws the title-bar menus and handles F10 and Alt itself.
     mainWindow.setAutoHideMenuBar(false)
@@ -283,11 +304,10 @@ function createWindow(): void {
   contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
     callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
   })
+  // Production pages also carry this policy in a <meta> (electron.vite.config.ts).
+  const policy = contentSecurityPolicy(developmentUrl)
   contents.session.webRequest.onHeadersReceived((details, callback) => {
-    const connect = developmentUrl ? `${new URL(developmentUrl).origin} ws://127.0.0.1:* ws://localhost:*` : "'self'"
-    callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [
-      `default-src 'self'; script-src 'self'${developmentUrl ? " 'unsafe-inline'" : ''}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; worker-src 'self' blob:; connect-src ${connect}; object-src 'none'; frame-src 'none'; base-uri 'none'`
-    ] } })
+    callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [policy] } })
   })
   contents.on('did-finish-load', () => { rendererLoaded = true })
   // will-navigate cancels navigation elsewhere, so only a same-URL main-frame navigation is a reload (View › Reload Window, the palette, or dev HMR).
@@ -307,10 +327,16 @@ function createWindow(): void {
       void contents.executeJavaScript('0').catch(() => {}).then(() => { if (!window.isDestroyed() && generation === rendererGeneration) contents.reload() })
     }, () => {})
   })
-  // The prompt waits for any open dialog (a Save dialog the page asked for just before it stopped); the reset drops
-  // those it asked for that were not shown yet.
-  contents.on('render-process-gone', (_event, details) => {
-    if (details.reason === 'clean-exit' || window.isDestroyed()) return
+  // A lost renderer, from Chromium's report or the watchdog's (when Chromium cannot see it go), is handled once; the
+  // next page's navigation starts a new renderer to watch. The prompt waits for any open dialog (a Save dialog the page
+  // asked for just before it stopped); the reset drops those it asked for that were not shown yet.
+  let rendererLost = false
+  const lost = (source: RendererLossSource) => {
+    // A window that is closing loses its renderer on purpose.
+    const handled = !rendererLost && !window.isDestroyed() && !(source === 'watchdog' && (closeApproved || quitting))
+    testHooks?.rendererLoss(source, handled)
+    if (!handled) return
+    rendererLost = true
     // This reset is the crash's: the reload that follows must not reset (restart the backend) again. It would spawn the
     // backend while Chromium launches the new renderer, and on Windows the backend then inherits that renderer's channel
     // handle, so Chromium never sees the new renderer die and its crash leaves the window frozen.
@@ -319,17 +345,31 @@ function createWindow(): void {
     void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.', buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
-      if (response === 0) window.reload()
+      if (response === 0) reloadLostRenderer(window)
       else if (response === 1) { closeApproved = true; window.close() }
     }, () => {})
+  }
+  contents.on('render-process-gone', (_event, details) => { if (details.reason !== 'clean-exit') lost('event') })
+  const watchdog = new RendererWatchdog(contents, { alive: processAlive, gone: () => lost('watchdog') })
+  contents.on('did-start-navigation', details => {
+    if (!details.isMainFrame || details.isSameDocument) return
+    rendererLost = false
+    testHooks?.navigationStarted()
   })
   window.on('unresponsive', () => { rendererUnresponsive = true })
   window.on('responsive', () => { rendererUnresponsive = false })
   if (developmentUrl) void window.loadURL(developmentUrl)
   else void window.loadFile(rendererFile)
   window.on('close', event => {
+    // A renderer only the watchdog saw go would never answer the unload Chromium sends it, so the window goes at once.
+    if (rendererLost && !contents.isCrashed()) {
+      closeApproved = true
+      event.preventDefault()
+      setImmediate(() => { if (!window.isDestroyed()) window.destroy() })
+      return
+    }
     if (closeApproved) return
-    if (rendererCanConfirm(window)) { event.preventDefault(); requestClose(); return }
+    if (rendererCanConfirm(window)) { event.preventDefault(); requestClose('window'); return }
     // A crashed, hung, or unmounted workbench cannot run the unsaved-query prompts, so never trap the user. A hung one
     // is asked about first; the close (and a quit under way) waits for the answer.
     if (rendererUnresponsive) {
@@ -342,7 +382,36 @@ function createWindow(): void {
   })
   // A closed window can no longer address its sessions. Only macOS keeps the app running after its last window closes,
   // so only there does a later window need a new backend.
-  window.on('closed', () => { mainWindow = null; resetRendererState(process.platform === 'darwin' && !quitting) })
+  // A window replaced after its renderer was lost has already been reset.
+  window.on('closed', () => {
+    watchdog.stop()
+    if (mainWindow !== window) return
+    mainWindow = null
+    resetRendererState(process.platform === 'darwin' && !quitting)
+  })
+}
+
+/**
+ * Chromium starts a new renderer only once it has seen the old one go. When only the watchdog saw it (a process that
+ * inherited the renderer's channel still holds it open), a reload would go to the dead renderer and leave the window
+ * frozen, so main waits for Chromium to notice (the holder is usually a backend generation, which the reset ended) and
+ * otherwise opens the workbench in a new window where this one was.
+ */
+function reloadLostRenderer(window: BrowserWindow): void {
+  const contents = window.webContents
+  if (contents.isCrashed()) { window.reload(); return }
+  const seen = () => { clearTimeout(timer); setImmediate(() => { if (!window.isDestroyed()) window.reload() }) }
+  const timer = setTimeout(() => {
+    contents.off('render-process-gone', seen)
+    if (window.isDestroyed()) return
+    const bounds = window.getNormalBounds(), maximized = window.isMaximized(), pending = closePending, intent = closeIntent
+    createWindow({ bounds, maximized })
+    // A close the lost page could not finish goes to the new one.
+    closePending = pending
+    closeIntent = intent
+    window.destroy()
+  }, lostRendererGraceMs)
+  contents.once('render-process-gone', seen)
 }
 
 app.whenReady().then(async () => {
@@ -375,7 +444,7 @@ app.whenReady().then(async () => {
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
   })
-  if (testSeams) installTestHooks(backend, results)
+  if (testSeams) testHooks = installTestHooks(backend, results)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
@@ -413,7 +482,7 @@ app.whenReady().then(async () => {
     if (rendererReady && closePending) command('window.close')
   })
   // Only the live page can end a close: a page being unloaded (not ready since the reset) may still report its own.
-  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) closePending = false })
+  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined } })
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
@@ -438,7 +507,7 @@ app.whenReady().then(async () => {
   // Paste needs the focused window (smoke-test windows are hidden, so never focused) and a click or key just before.
   handle('varia:run-role', value => {
     const window = mainWindow
-    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent())
+    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent(), { developerTools: !app.isPackaged })
   })
   handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
   ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {
@@ -462,7 +531,7 @@ app.whenReady().then(async () => {
         catch { (result as RpcMethods['connections.connect']['result']).historyWarning = 'Connected successfully, but recent connections could not be saved.' }
       }
       return { ok: true, value: result }
-    } catch (error) { return { ok: false, error: errorMessage(error, 'Backend request failed.'), ...(error instanceof BackendError ? { code: error.code } : {}) } }
+    } catch (error) { return failure(error, 'Backend request failed.') }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
   // Copy and Save Results As: the renderer names a result it owns; the backend formats the text, main writes the
@@ -498,10 +567,20 @@ app.whenReady().then(async () => {
     const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)
     return (['save', 'discard', 'cancel'] as const)[response.response]
   })
+  // Open transactions and running queries in sessions about to end. Main writes the prompt from validated facts, and a page
+  // that reloads or crashes while it is open gets Cancel (its sessions ended with it), so a dead page cannot hold it open.
+  handle('varia:confirm-sessions', async value => {
+    const prompt = sessionPrompt(sessionPromptRequestSchema.parse(value))
+    if (!prompt) return 'proceed'
+    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal }), { response: prompt.cancelId, checkboxChecked: false }, true)
+    return prompt.buttons[response]?.answer ?? 'cancel'
+  })
+  // The page has handled every unsaved query. On macOS a window close leaves the app running, as macOS apps do.
   ipcMain.handle('varia:close-window', event => {
     if (!trusted(event)) return
     closeApproved = true
-    app.quit()
+    if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
+    else app.quit()
   })
   buildMenu()
   createWindow()
@@ -512,7 +591,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
-  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); requestClose(); return }
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && rendererCanConfirm(mainWindow)) { event.preventDefault(); requestClose('quit'); return }
   quitting = true
 })
 // A window can still cancel the quit (e.g. 'Wait' for a hung workbench), so the backend stops only once quitting is

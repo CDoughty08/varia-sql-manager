@@ -1,22 +1,19 @@
-import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { isQueryDocument, type QueryDocument } from '../documents'
 import type { ConnectionService } from './connections'
 import type { DocumentService } from './documents'
-import type { FileService } from './files'
+import { unfinished, type FileService } from './files'
 import type { QueryService } from './queries'
 
 export type TargetPatch = Partial<Pick<QueryDocument, 'connectionId' | 'database'>>
-const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'The operation failed.'
 
 /** Which server and database each query runs against. The toolbar, Object Explorer, and the pickers all go through it. */
 export class TargetService {
   constructor(
     private readonly documents: DocumentService,
-    private readonly queries: Pick<QueryService, 'isRunning'>,
+    private readonly queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>,
     private readonly connections: Pick<ConnectionService, 'get'>,
-    private readonly files: Pick<FileService, 'clearError' | 'reportError'>,
-    private readonly api: Pick<VariaApi, 'closeQuerySession'>
+    private readonly files: Pick<FileService, 'clearError' | 'reportError'>
   ) {}
   update(tabId: string, patch: TargetPatch): void {
     const current = this.documents.get(tabId)
@@ -27,8 +24,9 @@ export class TargetService {
     this.documents.update(tabId, patch)
   }
   /**
-   * Moves a query to another server (or disconnects it), ending its session first so no transaction follows it.
-   * Choosing the server it already uses keeps the session, with its open transaction, temp tables, and SET options.
+   * Moves a query to another server (or disconnects it), ending its session first so no transaction follows it: an open
+   * transaction is committed or rolled back as the user answers, and Cancel leaves the query where it was. Choosing the
+   * server it already uses keeps the session, with its open transaction, temp tables, and SET options.
    */
   async changeConnection(tabId: string, connectionId?: string): Promise<void> {
     const document = this.documents.get(tabId)
@@ -37,7 +35,9 @@ export class TargetService {
     if (document.connectionId === next?.id) return
     const database = next?.database ?? document.database
     await this.runDocumentTask(async () => {
-      unwrap(await this.api.closeQuerySession(tabId))
+      const plan = await this.queries.confirmSessions(next ? 'changeConnection' : 'disconnectQuery', [tabId])
+      if (!plan) return
+      await this.documents.endSession(tabId, plan.get(tabId))
       this.update(tabId, { connectionId: next?.id, database })
     })
   }
@@ -47,17 +47,24 @@ export class TargetService {
   retarget(oldId: string, newId: string): void {
     for (const document of this.documents.getSnapshot().documents) if (document.connectionId === oldId) this.documents.update(document.id, { connectionId: newId, sessionNotice: true })
   }
-  /** Disconnects every query that is not running, ending its session; the running ones stay connected and are reported. */
+  /** Disconnects every query that is not running, ending its session (open transactions are asked about once, first);
+   *  the running ones stay connected and are reported, and so does one that finished during the prompt with a transaction
+   *  nobody was asked about. */
   async disconnectAll(): Promise<void> {
     await this.runDocumentTask(async () => {
-      let running = 0
+      const asked = new Set(this.documents.getSnapshot().documents.filter(document => document.connectionId !== undefined && !this.queries.isRunning(document.id)).map(document => document.id))
+      const plan = await this.queries.confirmSessions('disconnectAll', [...asked])
+      if (!plan) return
+      let running = 0, unasked = 0
       for (const { id, connectionId } of this.documents.getSnapshot().documents) {
         if (connectionId === undefined) continue
         if (this.queries.isRunning(id)) { running++; continue }
-        unwrap(await this.api.closeQuerySession(id))
+        if (!asked.has(id) && this.queries.mayHaveTransaction(id)) { unasked++; continue }
+        await this.documents.endSession(id, plan.get(id))
         this.update(id, { connectionId: undefined })
       }
-      if (running) throw new Error(running === 1 ? '1 query is still running and stayed connected.' : `${running} queries are still running and stayed connected.`)
+      const kept = [running ? (running === 1 ? '1 query is still running and stayed connected.' : `${running} queries are still running and stayed connected.`) : '', unfinished(unasked, 'connected')]
+      if (running || unasked) throw new Error(kept.filter(Boolean).join(' '))
     })
   }
   /** Runs a task under the document lock, reporting failures in the file error banner. */

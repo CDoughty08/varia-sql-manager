@@ -107,7 +107,7 @@ try {
   // The editor's context menu is the workbench's: its border and highlighted item use the menu colors.
   await page.locator('.monaco-editor .view-lines').click({ button: 'right' })
   await expect(page.locator('.menu')).toBeVisible()
-  expect(await contextMenuBorder()).toBe('1px solid rgb(64, 81, 107)')
+  expect(await contextMenuBorder()).toBe('1px solid rgb(95, 112, 137)')
   await page.keyboard.press('ArrowDown')
   await expect(page.locator('.menu-item[data-active]')).toBeFocused()
   expect(await page.locator('.menu-item[data-active]').evaluate(item => getComputedStyle(item).backgroundColor)).toBe(await colorOf('menu.selectionBackground'))

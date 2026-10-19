@@ -78,6 +78,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['keybindingLabel.foreground'], toolbar, hover),
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
+  // The failure screen's heading.
+  ...text(['errorForeground'], editor),
   ...text(['sideBarTitle.foreground', 'objectExplorer.headingForeground', 'objectExplorer.countForeground', 'errorForeground'], sideBar),
   ...text(['objectExplorer.countForeground'], sideBarHover),
   // Object Explorer rows: labels and sublabels on hover, on the active query's server, and selected (labels then take
@@ -119,6 +121,11 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['resultsGrid.truncationForeground', 'resultsGrid.splitterBackground'], panel),
   ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
   ...graphic(['button.background'], widget),
+  // Control outlines (WCAG 1.4.11) on every surface the controls sit on: fields and dialogs; the toolbar's server and
+  // database lists; Cancel on the Output toolbar; Object Explorer's buttons; the results grid's Retry; the empty
+  // workspace's buttons; and the failure screen's details (panel) and Copy details (editor).
+  ...graphic(['input.border'], input, widget, toolbar, panel),
+  ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
   ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground'])
 ]
@@ -133,9 +140,6 @@ export const hoverPairs: readonly ContrastPair[] = [
   // The highlighted menu item follows the pointer and the keyboard alike.
   ...pairs(1.2, ['menu.selectionBackground'], ['menu.background'])
 ]
-
-/** Reported, not enforced: the Dark control borders are below 3:1 until the owner decides on a heavier look. */
-export const advisoryPairs: readonly ContrastPair[] = graphic(['input.border', 'button.border'], input, widget)
 
 /** Foreground keys that are deliberately not checked, with the reason. */
 export const contrastExemptions: Readonly<Partial<Record<ColorKey, string>>> = {

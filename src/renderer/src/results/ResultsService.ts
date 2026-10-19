@@ -1,5 +1,5 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
-import type { MessageEntry, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
+import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -12,7 +12,7 @@ import type { ResultClient, ResultHandle } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
 
-export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'timedOut' | 'lost' | 'closed'
+export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
 export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle }
 /**
@@ -188,6 +188,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  messages when they differ; events that arrive later are ignored. */
   finish(tabId: string, queryId: string, end: RunEnd): void {
     const run = this.runs.get(tabId)
+    // The tab closed before its run ended: nothing will show or close the sets the summary describes, so they go now.
+    if (!run && end.summary?.resultSets.length && !this.disposed) void this.client.release(end.summary.resultSets.map(set => ({ generation: set.generation, resultId: set.resultId }))).catch(() => {})
     if (!run || run.queryId !== queryId || run.status !== 'running') return
     run.subscription?.dispose()
     run.subscription = undefined
