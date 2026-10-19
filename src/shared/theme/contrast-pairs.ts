@@ -19,6 +19,12 @@ const treeActive: ColorKey[] = ['sideBar.background', 'list.activeSelectionBackg
 const treeHover: ColorKey[] = ['sideBar.background', 'list.hoverBackground'], treeServer: ColorKey[] = ['sideBar.background', 'objectExplorer.activeConnectionBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
+/** A secondary button's hover fill over the surface it sits on. */
+const hovered = (...surface: ColorKey[]): ColorKey[] => [...surface, 'button.secondaryHoverBackground']
+const dock: ColorKey[] = ['dock.background'], grid: ColorKey[] = ['resultsGrid.background']
+const widgetInactiveSelection: ColorKey[] = ['editorWidget.background', 'list.inactiveSelectionBackground']
+const suggestFocus: ColorKey[] = ['editorWidget.background', 'quickInputList.focusBackground']
+const headerHover: ColorKey[] = ['resultsGrid.headerBackground', 'resultsGrid.hoverBackground']
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
 /** Monaco paints every matched bracket in these by depth, over the delimiter and identifier.quote scopes. */
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
@@ -104,6 +110,30 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['resultsGrid.linkForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
+  // The readability audit: the remaining text each surface draws (styles.css and Monaco's widgets).
+  // Title-bar menu labels at rest; a hovered button's text on every surface buttons sit on, banners and the status bar's
+  // Script As buttons included.
+  ...text(['button.secondaryForeground'], titleBar),
+  ...text(['button.secondaryHoverForeground'], hovered(...widget), hovered(...sideBar), hovered(...panel), hovered(...panelTitle), hovered(...editor), hovered(...dock),
+    hovered('editor.background', 'banner.errorBackground'), hovered('editor.background', 'banner.warningBackground'), hovered(...statusBar), hovered('statusBar.executingBackground'),
+    hovered('statusBar.disconnectedBackground'), hovered('statusBar.errorBackground'), hovered(...activeSelection)),
+  // A saved connection's row keeps its button text when selected; the dock's Move list sits on the tab strip.
+  ...text(['button.secondaryForeground'], activeSelection),
+  ...text(['input.foreground'], ['editorGroupHeader.tabsBackground']),
+  // The query context bar, the empty workspace and the closed-panels note are drawn on the dock group.
+  ...text(['breadcrumb.foreground', 'breadcrumb.separatorForeground', 'emptyState.foreground', 'button.secondaryForeground'], dock),
+  // The Output title bar's Cancel; errors in Messages and the results strip; the grid's truncation marker and lost overlay.
+  ...text(['foreground'], panelTitle),
+  ...text(['errorForeground'], panel),
+  ...text(['resultsGrid.truncationForeground', 'emptyState.foreground'], grid),
+  // Hovered column and row headers.
+  ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground', 'resultsGrid.rowNumberForeground'], headerHover),
+  // Dialogs: the Filter dialog's problems, the layout notice, and Tools › Options' selected page and focused row.
+  ...text(['inputValidation.errorForeground', 'successForeground'], widget),
+  ...text(['list.inactiveSelectionForeground', 'editorWidget.foreground'], widgetInactiveSelection),
+  // Monaco's widgets: suggestions (editor text; the focused row and its matches) and the find widget's No results.
+  ...text(['editor.foreground', 'errorForeground'], widget),
+  ...text(['quickInputList.focusForeground', 'list.focusHighlightForeground'], suggestFocus),
 
   // On the active quick input row it is the edge that marks the row.
   ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, strip, input, quickInputActive, ...dockTabBackgrounds.map(dockTabs)),

@@ -200,7 +200,9 @@ bidirectional-text characters are removed from names, and the window chrome only
   is used.
 - To add a key, add it to the registry with a default, a description, and its consumers, give text and indicator colors
   a pair in `contrast-pairs.ts`, then regenerate the docs with `npx vitest run tests/theme-schema.test.ts -u`.
-- `tests/theme-contrast.test.ts` holds both built-ins to WCAG AA (4.5:1 for text, 3:1 for indicators), and
-  `tests/theme-fidelity.test.ts` keeps Varia Dark within a small distance of the colors it replaced.
+- `tests/theme-contrast.test.ts` holds both built-ins to WCAG AA (4.5:1 for text, 3:1 for indicators) on every
+  surface each text color is drawn on, Monaco's widgets included, and fails when a `styles.css` rule sets a text color
+  and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` keeps
+  Varia Dark within a small distance of the colors it replaced.
 - `scripts/theme-smoke.mjs`, part of `npm run test:smoke`, switches themes in the real app and saves
   `artifacts/theme-dark.png` and `artifacts/theme-light.png`.

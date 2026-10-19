@@ -91,6 +91,7 @@ const groups = {
     'list.inactiveSelectionForeground': ['V', '$textAccent', 'Text of the selected row of an unfocused list.', 'css monaco'],
     'list.focusOutline': ['V', '@focusBorder', 'Outline of the focused list row, such as the selected Object Explorer row while the tree has focus.', 'css'],
     'list.highlightForeground': ['V', '$accent', 'Characters that match a filter, such as in the command palette.', 'css monaco'],
+    'list.focusHighlightForeground': ['V', '@quickInputList.focusForeground', 'Matching characters on the focused row of the editor\'s suggestions. The row\'s own text color by default, as the command palette\'s active row does: the match color is faint on that fill.', 'monaco'],
     'list.filterMatchBackground': ['V', '$accent/20', 'Rows that match a filter.', '', { reserved: searchable }],
     'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides.', '', { reserved: tree }],
     'objectExplorer.activeConnectionBackground': ['X', '$accentSurface', 'Row of the active query\'s server.', 'css'],
