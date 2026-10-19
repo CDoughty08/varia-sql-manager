@@ -12,7 +12,7 @@ import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
-import { validateRequest } from './validation'
+import { validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, saveFileSchema } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
@@ -525,6 +525,7 @@ app.whenReady().then(async () => {
       try {
         result = await backend.request(method as RpcMethod, validated as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
       } finally { load?.end() }
+      result = validateResult(method as RpcMethod, result)
       if (queryId !== undefined) results.own((result as QueryResult).resultSets)
       if (method === 'connections.connect') {
         try { await connectionStore.remember(validated as RpcMethods['connections.connect']['params']) }

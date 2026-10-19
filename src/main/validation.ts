@@ -18,6 +18,7 @@ export const requestSchemas = {
   'connections.preview': connectionOptionsSchema,
   'connections.discover': z.object({ scope: z.enum(['local', 'network']) }).strict(),
   'connections.disconnect': z.object({ connectionId }).strict(),
+  'connections.identity': z.object({}).strict(),
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
   'query.execute': z.object({
@@ -31,6 +32,21 @@ export const requestSchemas = {
   'explorer.children': explorerChildrenParamsSchema,
   'scripting.script': scriptRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
+
+// Shown as the dialog's User Name: one line of at most 256 characters without control or formatting characters (C#: KerberosProbe.Bounded).
+const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
+/** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
+export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
+  'connections.identity': z.object({ principal: principal.optional() }).strict()
+}
+
+export function validateResult(method: RpcMethod, value: unknown): unknown {
+  const schema = resultSchemas[method]
+  if (!schema) return value
+  const parsed = schema.safeParse(value)
+  if (!parsed.success) throw new Error('The backend sent an invalid answer.')
+  return parsed.data
+}
 
 export function validateRequest(method: string, params: unknown): unknown {
   if (typeof method !== 'string' || !Object.hasOwn(requestSchemas, method)) throw new Error('Unsupported backend method.')

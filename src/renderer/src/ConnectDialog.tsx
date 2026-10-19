@@ -56,6 +56,8 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const [options, setOptions] = useState<ConnectionOptions>({ ...initial, password: '' })
   const [library, setLibrary] = useState<ConnectionLibrary>({ version: 1, profiles: [] })
   const [identity, setIdentity] = useState('Current Windows user')
+  // Off Windows: the Kerberos principal Windows Authentication signs in with, while there is a valid ticket.
+  const [principal, setPrincipal] = useState<string>()
   const [loaded, setLoaded] = useState(false)
   const [selectedId, setSelectedId] = useState<string>()
   const [tab, setTab] = useState<'history' | 'browse'>('history')
@@ -73,6 +75,8 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const [databases, setDatabases] = useState<DatabaseInfo[]>([])
   const [dbBusy, setDbBusy] = useState(false)
   const [dbNote, setDbNote] = useState('')
+  // A failed Load databases' details, shown under its note as a failed Connect shows them under its error.
+  const [dbDetails, setDbDetails] = useState<ErrorDetails>()
   const [properties, setProperties] = useState<'properties' | 'string'>('properties')
   const [preview, setPreview] = useState('')
   const [advanced, setAdvanced] = useState(false)
@@ -88,6 +92,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const selected = library.profiles.find(profile => profile.id === selectedId)
   const locked = busy || saving
   const authReady = options.authentication === 'windows' || !!options.username?.trim()
+  // SSMS shows the identity integrated authentication uses: DOMAIN\user on Windows, the ticket's principal elsewhere
+  // (the OS user name without one).
+  const integratedUser = principal ?? identity
 
   useEffect(() => {
     alive.current = true
@@ -104,7 +111,14 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     return () => { if (active instanceof HTMLElement && active.isConnected) active.focus() }
   }, [])
   useEffect(() => {
-    dbRequest.current++; dbLoadedKey.current = ''; setDatabases([]); setDbNote(''); setDbBusy(false)
+    // Asked again each time Windows Authentication is chosen, so a kinit or kdestroy since the last answer shows.
+    if (platform === 'win32' || options.authentication !== 'windows') return
+    let current = true
+    void window.varia.integratedIdentity().then(result => { if (current && alive.current) setPrincipal(result.ok ? result.value.principal : undefined) }).catch(() => { if (current && alive.current) setPrincipal(undefined) })
+    return () => { current = false }
+  }, [platform, options.authentication])
+  useEffect(() => {
+    dbRequest.current++; dbLoadedKey.current = ''; setDatabases([]); setDbNote(''); setDbDetails(undefined); setDbBusy(false)
   }, [options.server, options.authentication, options.username, options.password, options.encrypt, options.trustServerCertificate, options.hostNameInCertificate, options.advanced])
   useEffect(() => {
     if (tab !== 'browse' || scope === 'registered') return
@@ -146,17 +160,22 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     if (dbBusy || !authReady || !options.server.trim()) return
     const key = JSON.stringify({ ...options, database: '', displayName: '', color: '' })
     const request = ++dbRequest.current
-    setDbBusy(true); setDbNote('')
+    setDbBusy(true); setDbNote(''); setDbDetails(undefined)
+    // Remember failures too: focusing the field again must not retry a rejected login (lockout policies). Refresh retries.
+    const failed = (reason: string, details?: ErrorDetails) => {
+      dbLoadedKey.current = key
+      setDbNote('Could not load databases: ' + reason + ' You can enter a database name manually.'); setDbDetails(details)
+    }
     try {
-      const values = unwrap(await window.varia.discoverDatabases(options))
+      const result = await window.varia.discoverDatabases(options)
       if (!alive.current || request !== dbRequest.current) return
+      if (!result.ok) { failed(result.error, result.details); return }
+      const values = result.value
       setDatabases(values); dbLoadedKey.current = key
       setDbNote(values.length ? `${values.length} databases available.` : 'No databases are visible to this login. You can still enter a database name.')
     } catch (reason) {
       if (!alive.current || request !== dbRequest.current) return
-      // Remember failures too: focusing the field again must not retry a rejected login (lockout policies). Refresh retries.
-      dbLoadedKey.current = key
-      setDbNote('Could not load databases: ' + message(reason) + ' You can enter a database name manually.')
+      failed(message(reason))
     }
     finally { if (alive.current && request === dbRequest.current) setDbBusy(false) }
   }
@@ -193,7 +212,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const favorite = filtered.filter(profile => profile.favorite)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><strong>{profile.options.displayName || profile.options.server}</strong><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {profile.options.authentication === 'windows' ? identity : profile.options.username}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><strong>{profile.options.displayName || profile.options.server}</strong><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {profile.options.authentication === 'windows' ? integratedUser : profile.options.username}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}>{profile.favorite ? '★' : '☆'}</button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>
@@ -225,12 +244,12 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
         <div id="connection-properties" role="tabpanel" aria-label={properties === 'properties' ? 'Connection Properties' : 'Connection String'}>
           <div className="property-grid" hidden={properties !== 'properties'}>
             <div className="property-row"><label htmlFor="connect-server">Server Name</label><input id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
-            <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as ConnectionOptions['authentication'], password: '' })}><option value="windows">{platform === 'win32' ? 'Windows authentication' : 'Windows authentication (Kerberos)'}</option><option value="sql">SQL Server authentication</option></select></div>
-            <div className="property-row"><label htmlFor="connect-user">User Name</label><input id="connect-user" required={options.authentication === 'sql'} disabled={locked || options.authentication === 'windows'} autoComplete="off" maxLength={128} value={options.authentication === 'windows' ? identity : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
+            <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as ConnectionOptions['authentication'], password: '' })}><option value="windows">Windows Authentication</option><option value="sql">SQL Server Authentication</option></select></div>
+            <div className="property-row"><label htmlFor="connect-user">User Name</label><input id="connect-user" required={options.authentication === 'sql'} disabled={locked || options.authentication === 'windows'} autoComplete="off" maxLength={128} value={options.authentication === 'windows' ? integratedUser : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
             <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked || options.authentication === 'windows'} maxLength={1024} value={options.password ?? ''} onChange={event => update({ password: event.target.value })} /></div>
             <div className="property-row"><span /><p className="field-note">Passwords are used for this connection only.</p></div>
             <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { const key = JSON.stringify({ ...currentOptions.current, database: '', displayName: '', color: '' }); if (dbLoadedKey.current !== key) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}>{dbBusy ? '…' : '↻'}</button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
-            {(dbBusy || dbNote) && <div className="property-row"><span /><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p></div>}
+            {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
             <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>
             <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={options.encrypt !== 'strict' && options.trustServerCertificate} disabled={locked || options.encrypt === 'strict'} onChange={event => update({ trustServerCertificate: event.target.checked })} />Trust server certificate</label></div>
             <div className="property-row"><label htmlFor="connect-hostname">Host Name in Certificate</label><input id="connect-hostname" maxLength={256} disabled={locked} value={options.hostNameInCertificate ?? ''} onChange={event => update({ hostNameInCertificate: event.target.value })} /></div>

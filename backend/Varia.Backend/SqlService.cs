@@ -18,6 +18,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
+        "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close",
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script"
@@ -162,6 +163,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
         "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
         "connections.disconnect" => Disconnect(Read<ConnectionArgs>(parameters, json)),
+        "connections.identity" => await IdentityAsync(Read<IdentityArgs>(parameters, json), Token(context)),
         "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
@@ -241,6 +243,27 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         {
             throw failure;
         }
+    }
+
+    /// <summary>Reads the default credential cache's principal for connections.identity (KerberosProbe.Identity); the checks
+    /// replace it.</summary>
+    internal Func<KerberosIdentity> IdentityProbe { get; set; } = KerberosProbe.Identity;
+    private readonly Lock identityGate = new();
+    private Task<KerberosIdentity>? identityLookup;
+
+    /// <summary>The Connect dialog's User Name under Windows Authentication off Windows. Each dialog asks, so a credential
+    /// cache that does not answer (a stuck KCM daemon) holds one pool thread, every caller waits on that one lookup, and
+    /// each request still ends (and frees its metadata slot) at its deadline.</summary>
+    internal async Task<IntegratedIdentity> IdentityAsync(IdentityArgs _, CancellationToken token)
+    {
+        Task<KerberosIdentity> lookup;
+        lock (identityGate)
+        {
+            if (identityLookup is not { IsCompleted: false }) identityLookup = Task.Run(IdentityProbe, CancellationToken.None);
+            lookup = identityLookup;
+        }
+        var identity = await lookup.WaitAsync(token);
+        return new(identity.State == KerberosState.Valid ? KerberosProbe.Bounded(identity.Principal) : null);
     }
 
     private object Disconnect(ConnectionArgs args)

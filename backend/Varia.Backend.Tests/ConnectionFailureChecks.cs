@@ -112,10 +112,66 @@ internal static class ConnectionFailureChecks
         if (!OperatingSystem.IsWindows()) await NativeProbeAsync(check);
     }
 
-    /// <summary>Runs KerberosProbe.Inspect's native path (dlopen, then gss_acquire_cred through a delegate) in a child
-    /// process whose KRB5CCNAME names a cache that cannot exist: .NET does not pass its own environment changes to native
-    /// code, and a wrong signature or library path crashes only the child. Linux and macOS CI run it with the other offline
-    /// checks.</summary>
+    /// <summary>The argument that makes the check program print KerberosProbe.Identity() as State|Principal and exit.</summary>
+    internal const string IdentityArgument = "--kerberos-identity";
+
+    /// <summary>The Connect dialog's User Name under Windows Authentication off Windows: the principal, bounded, from one
+    /// lookup at a time, through a stubbed probe.</summary>
+    internal static async Task IdentityAsync(Action<bool, string> check)
+    {
+        check(KerberosProbe.Bounded("  alice@CONTOSO.COM ") == "alice@CONTOSO.COM" && KerberosProbe.Bounded(null) is null && KerberosProbe.Bounded(" ") is null,
+            "a principal is shown trimmed, and an empty one is none");
+        check(KerberosProbe.Bounded("alice\n@CONTOSO.COM") is null && KerberosProbe.Bounded("‮alice@CONTOSO.COM") is null && KerberosProbe.Bounded("al​ice@X") is null,
+            "a principal with control or formatting characters (line breaks, bidi overrides, zero-width spaces) is not shown");
+        var cut = KerberosProbe.Bounded(new string('a', 300) + "@CONTOSO.COM");
+        check(cut?.Length == KerberosProbe.MaxPrincipalLength && cut.EndsWith('…') && cut.StartsWith(new string('a', 255)), "a principal over 256 characters is cut to 256, with an ellipsis");
+        var pair = KerberosProbe.Bounded(new string('a', 254) + "\U0001F600" + new string('b', 10));
+        check(pair == new string('a', 254) + "…", "a cut never splits a surrogate pair");
+        check(KerberosProbe.Bounded(new string('a', 256)) == new string('a', 256), "a principal of exactly 256 characters is shown whole");
+        if (OperatingSystem.IsWindows()) check(KerberosProbe.Identity() == new KerberosIdentity(KerberosState.Unknown, null), "Windows never asks GSSAPI for a principal");
+
+        // The backend's own options (Program.cs).
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
+        };
+        using var service = new SqlService();
+        async Task<IntegratedIdentity> Ask(string parameters = "{}") => (IntegratedIdentity)await service.DispatchAsync("connections.identity", JsonDocument.Parse(parameters).RootElement, json);
+        service.IdentityProbe = () => new(KerberosState.Valid, "alice@CONTOSO.COM");
+        check(await Ask() == new IntegratedIdentity("alice@CONTOSO.COM") && service.LaneOf("connections.identity") == Protocol.RequestLane.Metadata,
+            "connections.identity answers the ticket's principal, on the metadata lane");
+        try { await Ask("""{"user":"alice"}"""); check(false, "connections.identity accepted an unknown member"); }
+        catch (JsonException) { check(true, "connections.identity refuses unknown members, as every method does"); }
+        service.IdentityProbe = () => new(KerberosState.Expired, "alice@CONTOSO.COM");
+        check((await Ask()).Principal is null, "an expired ticket names no principal: integrated authentication cannot use it");
+        service.IdentityProbe = () => new(KerberosState.NoTicket, null);
+        var none = await Ask();
+        check(none.Principal is null && JsonSerializer.Serialize(none, json) == "{}", "without a ticket the answer has no principal, and the dialog shows the OS user name");
+        service.IdentityProbe = () => new(KerberosState.Valid, new string('x', 5000));
+        check((await Ask()).Principal?.Length == KerberosProbe.MaxPrincipalLength, "the answer's principal is bounded whatever the probe returns");
+        using var release = new ManualResetEventSlim();
+        var lookups = 0;
+        service.IdentityProbe = () => { Interlocked.Increment(ref lookups); release.Wait(TimeSpan.FromSeconds(30)); return new(KerberosState.Valid, "bob@CONTOSO.COM"); };
+        var waiting = Enumerable.Range(0, 5).Select(_ => Ask()).ToList();
+        var asked = SpinWait.SpinUntil(() => Volatile.Read(ref lookups) == 1, 5000);
+        // A request whose deadline passes stops waiting (freeing its slot) while the lookup goes on for the others.
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            try { await service.IdentityAsync(new IdentityArgs(), deadline.Token); check(false, "an identity request outlived its deadline"); }
+            catch (OperationCanceledException) { check(timer.Elapsed < TimeSpan.FromSeconds(10) && !release.IsSet, "an identity request ends at its deadline while the lookup it waits on is stuck"); }
+        }
+        release.Set();
+        var answers = await Task.WhenAll(waiting);
+        check(asked && lookups == 1 && answers.All(answer => answer.Principal == "bob@CONTOSO.COM"), "dialogs asking while a lookup runs share it: a cache that does not answer holds one thread");
+        check((await Ask()).Principal == "bob@CONTOSO.COM" && lookups == 2, "a finished lookup is not reused: the next dialog reads the cache again, after kinit or kdestroy");
+    }
+
+    /// <summary>Runs KerberosProbe's native paths (dlopen, then gss_acquire_cred, gss_inquire_cred and gss_display_name
+    /// through delegates) in child processes whose KRB5CCNAME names the cache to read: .NET does not pass its own environment
+    /// changes to native code, and a wrong signature or library path crashes only the child. Linux and macOS CI run them with
+    /// the other offline checks; the caches with a ticket are written in MIT's file format, so they run on Linux only.</summary>
     private static async Task NativeProbeAsync(Action<bool, string> check)
     {
         var present = KerberosProbe.Libraries.Any(name =>
@@ -124,21 +180,90 @@ internal static class ConnectionFailureChecks
             NativeLibrary.Free(handle);
             return true;
         });
+        var missing = "FILE:/nonexistent/varia-no-ticket-" + Guid.NewGuid().ToString("N");
+        var (exit, answer, errors) = await ChildAsync(ProbeArgument, missing);
+        var expected = present ? nameof(KerberosState.NoTicket) : nameof(KerberosState.LibraryMissing);
+        check(exit == 0 && answer == expected, "GSSAPI's own answer for a credential cache that does not exist is " + expected + " (got '" + answer + "', exit " + exit + ", " + errors + ")");
+        (exit, answer, errors) = await ChildAsync(IdentityArgument, missing);
+        check(exit == 0 && answer == expected + "|", "without a ticket GSSAPI names no principal (got '" + answer + "', exit " + exit + ", " + errors + ")");
+        if (!OperatingSystem.IsLinux() || !present) return;
+
+        var directory = Directory.CreateTempSubdirectory("varia-krb5-");
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            foreach (var (name, end, state) in new[] { ("valid", now.AddHours(1), KerberosState.Valid), ("expired", now.AddHours(-1), KerberosState.Expired) })
+            {
+                var cache = Path.Combine(directory.FullName, name);
+                await File.WriteAllBytesAsync(cache, CredentialCache("varia-probe", "VARIA.TEST", end));
+                (exit, answer, errors) = await ChildAsync(IdentityArgument, "FILE:" + cache, directory.FullName);
+                check(exit == 0 && answer == state + (state == KerberosState.Valid ? "|varia-probe@VARIA.TEST" : "|"),
+                    (state == KerberosState.Valid ? "GSSAPI names the principal of a cache with a ticket" : "a cache whose ticket expired is Expired, with no principal")
+                    + " (got '" + answer + "', exit " + exit + ", " + errors + ")");
+            }
+        }
+        finally { directory.Delete(true); }
+    }
+
+    /// <summary>Runs the check program with one argument and KRB5CCNAME set; with a directory, an empty KRB5_CONFIG there keeps
+    /// the machine's own Kerberos configuration out.</summary>
+    private static async Task<(int Exit, string Output, string Errors)> ChildAsync(string argument, string cache, string? directory = null)
+    {
         var path = Environment.ProcessPath ?? throw new Exception("The check program's path is unknown");
         var start = new ProcessStartInfo(path) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         if (Path.GetFileNameWithoutExtension(path) == "dotnet") start.ArgumentList.Add(typeof(ConnectionFailureChecks).Assembly.Location);
-        start.ArgumentList.Add(ProbeArgument);
-        start.Environment["KRB5CCNAME"] = "FILE:/nonexistent/varia-no-ticket-" + Guid.NewGuid().ToString("N");
+        start.ArgumentList.Add(argument);
+        start.Environment["KRB5CCNAME"] = cache;
+        if (directory is not null)
+        {
+            var config = Path.Combine(directory, "krb5.conf");
+            await File.WriteAllTextAsync(config, "");
+            start.Environment["KRB5_CONFIG"] = config;
+        }
         using var child = Process.Start(start) ?? throw new Exception("The Kerberos probe did not start");
         var output = child.StandardOutput.ReadToEndAsync();
         var errors = child.StandardError.ReadToEndAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         try { await child.WaitForExitAsync(deadline.Token); }
         catch (OperationCanceledException) { child.Kill(true); throw new Exception("The Kerberos probe did not finish in 60 seconds"); }
-        var answer = (await output).Trim();
-        var expected = present ? nameof(KerberosState.NoTicket) : nameof(KerberosState.LibraryMissing);
-        check(child.ExitCode == 0 && answer == expected,
-            "GSSAPI's own answer for a credential cache that does not exist is " + expected + " (got '" + answer + "', exit " + child.ExitCode + ", " + (await errors).Trim() + ")");
+        return (child.ExitCode, (await output).Trim(), (await errors).Trim());
+    }
+
+    /// <summary>A FILE credential cache in MIT's format version 4 (ccache_file_format) whose default principal is client@realm
+    /// and which holds that client's ticket-granting ticket, ending at <paramref name="end"/>. The ticket's own bytes are
+    /// filler: acquiring and inquiring a credential reads the cache's principal and the ticket's times, not the ticket.</summary>
+    internal static byte[] CredentialCache(string client, string realm, DateTimeOffset end)
+    {
+        var buffer = new MemoryStream();
+        void U16(int value) { buffer.WriteByte((byte)(value >> 8)); buffer.WriteByte((byte)value); }
+        void U32(long value) { for (var shift = 24; shift >= 0; shift -= 8) buffer.WriteByte((byte)(value >> shift)); }
+        void Data(byte[] value) { U32(value.Length); buffer.Write(value); }
+        void Principal(int type, params string[] components)
+        {
+            U32(type);
+            U32(components.Length);
+            Data(System.Text.Encoding.UTF8.GetBytes(realm));
+            foreach (var component in components) Data(System.Text.Encoding.UTF8.GetBytes(component));
+        }
+        U16(0x0504);
+        U16(0); // No header fields (the KDC time offset is optional).
+        Principal(1, client); // KRB5_NT_PRINCIPAL
+        Principal(1, client);
+        Principal(2, "krbtgt", realm); // KRB5_NT_SRV_INST
+        U16(18); // aes256-cts-hmac-sha1-96
+        Data(new byte[32]);
+        var seconds = end.ToUnixTimeSeconds();
+        U32(seconds - 36_000); // authtime
+        U32(seconds - 36_000); // starttime
+        U32(seconds); // endtime
+        U32(0); // renew_till
+        buffer.WriteByte(0); // is_skey
+        U32(0x00400000); // ticket flags: initial
+        U32(0); // addresses
+        U32(0); // authdata
+        Data([0x61, 0x03, 0x02, 0x01, 0x05]); // ticket
+        Data([]); // second ticket
+        return buffer.ToArray();
     }
 
     /// <summary>Live: two failed opens with connect's settings both reach the server. Under SqlClient's default pool blocking the

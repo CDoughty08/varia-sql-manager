@@ -25,6 +25,7 @@ const api: VariaApi = {
   discoverServers: scope => request('connections.discover', { scope }),
   previewConnection: options => request('connections.preview', options),
   loadConnectionLibrary: () => ipcRenderer.invoke('varia:connections-load'),
+  integratedIdentity: () => request('connections.identity', {}),
   saveConnectionProfile: profile => ipcRenderer.invoke('varia:connections-save', profile),
   removeConnectionProfile: id => ipcRenderer.invoke('varia:connections-remove', id),
   disconnect: connectionId => request('connections.disconnect', { connectionId }),

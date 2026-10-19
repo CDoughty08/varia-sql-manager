@@ -2,10 +2,16 @@ using System.Text.Json;
 using Varia.Backend;
 using Varia.Backend.Tests;
 
-// The child process of ConnectionFailureChecks' native Kerberos probe check.
+// The child processes of ConnectionFailureChecks' native Kerberos checks.
 if (args is [ConnectionFailureChecks.ProbeArgument])
 {
     Console.WriteLine(KerberosProbe.Inspect());
+    return;
+}
+if (args is [ConnectionFailureChecks.IdentityArgument])
+{
+    var identity = KerberosProbe.Identity();
+    Console.WriteLine(identity.State + "|" + identity.Principal);
     return;
 }
 
@@ -90,6 +96,7 @@ ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
 await ConnectionFailureChecks.RunAsync(Check);
+await ConnectionFailureChecks.IdentityAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);

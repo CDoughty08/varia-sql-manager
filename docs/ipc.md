@@ -190,10 +190,11 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 | --- | --- | --- | --- | --- |
 | `system.health` | invoke | unary | control | 10 s |
 | `connections.connect` | invoke | unary | metadata | (connect timeout, default 15) + 30 s; 0 means none. Password zeroed. A failed open carries error `details`. |
-| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. A failed open carries error `details` (the Connect dialog shows only the message for it). |
+| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. A failed open carries error `details`. |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Password zeroed. |
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or a failed backend |
+| `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}`; main checks the answer (integrated identity, below). |
 | `databases.list` | invoke | unary | metadata | 45 s |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend also stops its own query after 30 s |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
@@ -215,6 +216,19 @@ behalf: they are in no renderer schema (`requestSchemas`) and no port schema (`p
 is usually one `metadata` line); a preload or `ResultClient` method; and a `SqlService.DispatchAsync` case with its
 `MethodNames` entry and record in `Contracts.cs`. A backend whose HELLO lacks a method main may call is refused, and
 lists that could exceed 16 MiB must be paged (`RESPONSE_TOO_LARGE`).
+
+**Integrated identity.** Under Windows Authentication the Connect dialog's User Name shows who will sign in, as SSMS
+does: `DOMAIN\user` on Windows (main answers it with the connection library), and off Windows the principal of the
+default credential cache's ticket, from `connections.identity`. The renderer asks each time Windows Authentication is
+chosen. The backend acquires the default initiator credential (`gss_acquire_cred`), names it (`gss_inquire_cred`,
+`gss_display_name`), and releases everything; none of it contacts the KDC. Only a valid ticket answers a principal (MIT
+will not inquire an expired credential); Windows, a missing or expired ticket, a missing library, or any GSSAPI failure
+answer `{}`, and the dialog shows the OS user name. One lookup runs at a time and concurrent requests share it, so a
+credential cache that does not answer holds one thread pool thread, and each request still ends at its deadline. The
+answer is `{ principal?: str ≤ 256 }`: the backend drops a principal with control or formatting characters (Unicode
+categories Cc and Cf) and cuts a longer one to 256 characters with an ellipsis, never inside a surrogate pair; main
+checks the same bounds (`resultSchemas` in `src/main/validation.ts`) and answers an invalid one as a failure. Showing
+principals over 256 characters whole is still to do.
 
 **Object Explorer cancellation** has no backend method. Each `explorer.children` load carries the renderer's
 `requestId`; main (`ExplorerRequests`) maps it to the REQUEST frame it went out as, and `explorerCancel(requestIds)`
@@ -730,7 +744,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
 
 `details` comes only with a failed `connections.connect` or `connections.databases` open. The Connect dialog shows them in
-**Error details** under a failed Connect; a failed **Load databases** shows only its message as the field's note. They are
+**Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does for both. They are
 `{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
 server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
 Main refuses (as a contained violation) details with any other member or out of these bounds.

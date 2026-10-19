@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
+import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -8,7 +9,8 @@ const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TES
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'connections-profile-'))
-const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
+// A credential cache that does not exist: off Windows, Windows Authentication's User Name is then the OS user name.
+const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, KRB5CCNAME: 'FILE:' + join(profile, 'no-kerberos-ticket') }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
@@ -43,12 +45,18 @@ try {
   await expect(dialog.getByText('recent-server', { exact: true })).toHaveCount(0)
   await dialog.getByLabel('Filter connections').fill('')
   // Integrated authentication needs a Kerberos ticket off Windows, so the dialog opens, and Reset returns, to SQL Server
-  // authentication there, and labels the integrated option as Kerberos.
+  // authentication there. The options read as SSMS's on every platform.
   const defaultAuthentication = process.platform === 'win32' ? 'windows' : 'sql'
   const authentication = dialog.getByLabel('Authentication', { exact: true })
+  const userName = dialog.getByLabel('User Name', { exact: true })
   await expect(authentication).toHaveValue(defaultAuthentication)
-  await expect(authentication.locator('option[value="windows"]')).toHaveText(process.platform === 'win32' ? 'Windows authentication' : 'Windows authentication (Kerberos)')
-  await expect(authentication.locator('option[value="sql"]')).toHaveText('SQL Server authentication')
+  await expect(authentication.locator('option')).toHaveText(['Windows Authentication', 'SQL Server Authentication'])
+  // User Name shows, greyed, the identity Windows Authentication uses, as SSMS does: DOMAIN\user on Windows; elsewhere the
+  // Kerberos principal, or the OS user name without a ticket (this suite's KRB5CCNAME names no cache).
+  const windowsIdentity = process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username
+  await authentication.selectOption('windows')
+  await expect(userName).toHaveValue(windowsIdentity)
+  await expect(userName).toBeDisabled()
   await authentication.selectOption(defaultAuthentication === 'windows' ? 'sql' : 'windows')
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
   await expect(authentication).toHaveValue(defaultAuthentication)
@@ -163,6 +171,15 @@ try {
     expect(['18456 14', '233 20']).toContain(number + ' ' + severity)
     expect(answered).toBe(process.env.VARIA_TEST_SQL_SERVER)
     expect((await dialog.locator('.connect-error, .connect-error-details').allTextContents()).join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
+    // Load databases with the same login fails the same way, and shows the same details under its note.
+    const liveDatabaseDetails = dialog.locator('.property-row .connect-error-details')
+    await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
+    await expect(dialog.getByText(/Could not load databases/)).toBeVisible({ timeout: 35000 })
+    await liveDatabaseDetails.getByText('Error details', { exact: true }).click()
+    const [databaseNumber, databaseSeverity, , databaseServer] = await liveDatabaseDetails.locator('dd').allTextContents()
+    expect(['18456 14', '233 20']).toContain(databaseNumber + ' ' + databaseSeverity)
+    expect(databaseServer).toBe(process.env.VARIA_TEST_SQL_SERVER)
+    expect(await liveDatabaseDetails.textContent()).not.toMatch(/never-store-this-marker|Password=/i)
     if (liveUser) {
       await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
       await dialog.getByLabel('User Name', { exact: true }).fill(liveUser)
@@ -189,7 +206,8 @@ try {
       if (method === 'connections.discover') return { ok: true, value: { servers: [{ server: params.scope + '-server', version: '17.0', source: params.scope }], warning: 'Discovery can be incomplete.' } }
       if (method === 'connections.databases') {
         if (params.server === 'slow-server') return new Promise(resolve => { globalThis.dbPending.push(resolve) })
-        if (params.server === 'db-error') return { ok: false, error: 'Login failed.' }
+        if (params.server === 'db-error') return { ok: false, error: 'Login failed.', code: 'SQL_ERROR', details: { number: 18456, state: 1, class: 14, server: 'db-error' } }
+        if (params.server === 'db-error-plain') return { ok: false, error: 'Discovery failed without details.' }
         return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
       }
       if (method === 'connections.connect') {
@@ -197,6 +215,7 @@ try {
         if (params.server === 'connect-error-plain') return { ok: false, error: 'Server unavailable without details.' }
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
+      if (method === 'connections.identity') return { ok: true, value: { principal: 'alice@CONTOSO.COM' } }
       if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }] }
       // Object Explorer expands each new server: the catalogue's static folders.
       if (method === 'explorer.children') {
@@ -208,6 +227,14 @@ try {
       return { ok: false, error: 'Unsupported fixture method.' }
     })
   }, explorerStatics())
+  // Off Windows the dialog asks for the ticket's principal each time Windows Authentication is chosen; Windows never asks.
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  if (process.platform === 'win32') {
+    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    expect(await app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.identity').length)).toBe(0)
+  } else await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('alice@CONTOSO.COM')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await dialog.getByLabel('Server source', { exact: true }).selectOption('network')
   await expect(dialog.getByRole('button', { name: /network-server/ })).toBeVisible()
@@ -223,6 +250,13 @@ try {
   await app.evaluate(() => { globalThis.dbPending.splice(0).forEach(resolve => resolve({ ok: true, value: [{ name: 'StaleDb', isSystem: false, isSnapshot: false }] })) })
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: Login failed/)).toBeVisible()
+  // A failed Load databases shows the same Error details expander as a failed Connect, under the database note.
+  const databaseDetails = dialog.locator('.property-row .connect-error-details')
+  await expect(databaseDetails).toHaveCount(1)
+  await expect(databaseDetails).not.toHaveAttribute('open', '')
+  await databaseDetails.getByText('Error details', { exact: true }).click()
+  expect(await databaseDetails.locator('dt').allTextContents()).toEqual(['Error number', 'Severity', 'State', 'Server'])
+  expect(await databaseDetails.locator('dd').allTextContents()).toEqual(['18456', '14', '1', 'db-error'])
   // Refocusing the database field must not retry a rejected login (account lockout); only Refresh retries.
   const discoveryAttempts = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.databases').length)
   const attempts = await discoveryAttempts()
@@ -231,6 +265,12 @@ try {
   await page.waitForTimeout(300)
   expect(await discoveryAttempts()).toBe(attempts)
   expect(await dialog.locator('#available-databases option').evaluateAll(options => options.map(option => option.value))).not.toContain('StaleDb')
+  // The details go with the note once the form changes, and a failure without details shows none.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('db-error-plain')
+  await expect(databaseDetails).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
+  await expect(dialog.getByText(/Could not load databases: Discovery failed without details/)).toBeVisible()
+  await expect(databaseDetails).toHaveCount(0)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable')
@@ -271,7 +311,7 @@ try {
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect.poll(() => app.evaluate(() => globalThis.connectionCalls.find(call => call.method === 'query.execute')?.params.timeoutSeconds)).toBe(7)
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection failure details, colors in the query and Object Explorer, timeout routing, compact sizing, and keyboard focus.')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, and keyboard focus.')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())

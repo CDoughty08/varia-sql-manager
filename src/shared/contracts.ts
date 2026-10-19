@@ -225,6 +225,9 @@ export interface ExplorerChildrenResult {
   readonly total?: number
   readonly error?: ExplorerError
 }
+/** The Kerberos principal (such as alice@CONTOSO.COM, at most 256 characters) that integrated authentication would use off
+ *  Windows, while the default credential cache holds a valid ticket; absent on Windows and without a ticket or GSSAPI. */
+export interface IntegratedIdentity { principal?: string }
 export interface RpcMethods {
   'system.health': { params: Record<string, never>; result: BackendHealth }
   'connections.connect': { params: ConnectionOptions; result: ConnectionInfo }
@@ -232,6 +235,7 @@ export interface RpcMethods {
   'connections.discover': { params: { scope: 'local' | 'network' }; result: { servers: DiscoveredServer[]; warning?: string } }
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
+  'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
@@ -309,6 +313,8 @@ export interface VariaApi {
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
   loadConnectionLibrary(): Promise<ApiResult<{ library: ConnectionLibrary; windowsIdentity: string; warning?: string }>>
+  /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User Name). */
+  integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
   saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibrary>>
   removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibrary>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>

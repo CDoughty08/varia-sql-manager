@@ -59,6 +59,12 @@ await import(${JSON.stringify(core)})`
     expect(spec).toContain('delete copy.VARIA_BACKEND_TEST_HOOKS')
     expect(spec).toContain('delete copy.VARIA_RESULT_BUDGET_BYTES')
   })
+  it('checks the backend answers that have a result schema before the renderer sees them', () => {
+    const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
+    const handler = main.slice(main.indexOf("ipcMain.handle('varia:request'"), main.indexOf("handle('varia:explorer-cancel'"))
+    expect(handler.indexOf('result = validateResult(method as RpcMethod, result)')).toBeGreaterThan(handler.indexOf('result = await backend.request('))
+    expect(handler.indexOf('result = validateResult(method as RpcMethod, result)')).toBeLessThan(handler.indexOf('return { ok: true, value: result }'))
+  })
   it('offers developer tools only in unpackaged builds', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
     // The window itself cannot open them when packaged, whatever the page or a role asks.
