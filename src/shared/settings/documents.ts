@@ -1,10 +1,25 @@
 import type { SettingDef } from './types'
 
 /**
- * Environment › Documents, as SSMS 22 (the Visual Studio 2022 shell) names it. Later document settings (changes outside
- * the environment, AutoRecover, recently used lists) join this file.
+ * Environment › Documents, as SSMS 22 (the Visual Studio 2022 shell) names it, and Environment › General's recently used
+ * lists. Later document settings (AutoRecover) join this file.
  */
 export const documentSettings = [
+  {
+    key: 'environment.recentFiles.count', page: 'environment.general', label: 'Items shown in recently used file lists', type: 'integer', min: 1, max: 24, default: 10,
+    keywords: ['recent', 'recently used', 'most recently used', 'mru', 'file menu'],
+    description: 'How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again.'
+  },
+  {
+    key: 'environment.documents.detectExternalChanges', page: 'environment.documents', label: 'Detect when file is changed outside the environment', type: 'boolean', default: true,
+    keywords: ['reload', 'external', 'modified', 'changed on disk', 'deleted'],
+    description: 'When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes.'
+  },
+  {
+    key: 'environment.documents.autoReload', page: 'environment.documents', label: 'Reload modified files unless there are unsaved changes', type: 'boolean', default: false,
+    enabledBy: 'environment.documents.detectExternalChanges', keywords: ['reload', 'external', 'modified', 'automatic'],
+    description: 'Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks.'
+  },
   {
     key: 'environment.documents.saveWithSpecificEncoding', page: 'environment.documents', label: 'Save files with a specific encoding', type: 'boolean', default: false,
     keywords: ['encoding', 'unicode', 'utf-8', 'utf-16', 'bom', 'signature', 'byte order mark'],

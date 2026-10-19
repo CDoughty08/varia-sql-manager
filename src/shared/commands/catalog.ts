@@ -52,7 +52,8 @@ export const codicons = [
   'file-code',
   'edit',
   'save-all',
-  'lock'
+  'lock',
+  'history'
 ] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
@@ -157,6 +158,12 @@ export const commandCatalog = {
     title: 'Save All', category: 'File', icon: 'save-all', precondition: 'anyDocumentDirty && !documentBusy', unavailableHint: 'No query has unsaved changes.',
     keybindings: [{ win: 'ctrl+shift+s', linux: 'ctrl+shift+s', mac: 'alt+mod+s' }], menus: [{ menu: 'file', group: '1_file', order: 5, mnemonic: 'l' }]
   },
+  // File › Recent Files' items run this with their entry (`recentFile`); without one, it picks from the list.
+  'file.openRecent': {
+    title: 'Open Recent File…', category: 'File', icon: 'history', keywords: ['recent', 'mru'], precondition: 'hasRecentFiles && !documentBusy',
+    unavailableHint: 'No files were opened recently.'
+  },
+  'file.clearRecent': { title: 'Clear Recent Files', category: 'File', keywords: ['recent', 'mru'], precondition: 'hasRecentFiles', unavailableHint: 'No files were opened recently.' },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }],

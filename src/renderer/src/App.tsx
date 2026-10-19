@@ -134,9 +134,11 @@ export default function App() {
     // Registering the shell commands and subscribing to main in one effect keeps main's exit flow (which waits for the
     // subscription) from ever sending window.close before its handler exists.
     const contribution = shellContribution(workbench, shellHost)
+    // Main hands over files from the command line and drops once the page subscribes to commands, so this comes first.
+    const opened = window.varia.onFilesOpened(files => { void workbench.files.adopt(files) })
     const unsubscribe = window.varia.onCommand(id => { if (isCommandId(id)) void workbench.commands.execute(id, undefined, 'menu') })
     const publishing = workbench.menuState.start()
-    return () => { publishing.dispose(); unsubscribe(); contribution.dispose() }
+    return () => { publishing.dispose(); unsubscribe(); opened(); contribution.dispose() }
   }, [workbench, shellHost])
   useEffect(() => {
     const subscription = workbench.events.subscribe(event => {

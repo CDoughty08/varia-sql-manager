@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { BackendState, ConnectionInfo, ConnectionOptions, ExplorerChildrenResult, ExplorerNode as WireNode, QueryResult, VariaApi } from '../../src/shared/contracts'
+import type { BackendState, ConnectionInfo, ConnectionOptions, ExplorerChildrenResult, ExplorerNode as WireNode, QueryResult, RecentFile, VariaApi } from '../../src/shared/contracts'
 import { folderSpecs, kindSpecs, type FolderId } from '../../src/shared/explorer/catalog'
 import type { ExplorerChildrenParams, ObjectRef } from '../../src/shared/explorer/refs'
 import type { Platform } from '../../src/shared/commands/keybindings'
@@ -13,6 +13,7 @@ import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
 import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
+import { RecentFilesService } from '../../src/renderer/src/services/recent-files'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
 import { TargetService } from '../../src/renderer/src/services/targets'
 import { PaneService } from '../../src/renderer/src/services/panes'
@@ -107,6 +108,17 @@ export function settingsApi(seed: Partial<SettingsValues> = {}) {
     get state() { return state }
   }
 }
+/** Main's half of Recent Files: `push` stands in for main's pushes; opening an entry opens nothing unless a test says so. */
+export function recentFilesApi(initial: RecentFile[] = []) {
+  const listeners = new Set<(files: RecentFile[]) => void>()
+  return {
+    recentFiles: vi.fn<VariaApi['recentFiles']>(async () => ({ ok: true, value: initial })),
+    onRecentFiles: vi.fn<VariaApi['onRecentFiles']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
+    openRecentFile: vi.fn<VariaApi['openRecentFile']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
+    clearRecentFiles: vi.fn<VariaApi['clearRecentFiles']>(async () => { listeners.forEach(listener => listener([])); return { ok: true, value: undefined } }),
+    pushRecent: (files: RecentFile[]) => { listeners.forEach(listener => listener(files)) }
+  }
+}
 /** Storage backed by a Map, for the command history. */
 export function memoryStorage(initial: Record<string, string> = {}): HistoryStorage & { readonly values: Map<string, string> } {
   const values = new Map(Object.entries(initial))
@@ -190,6 +202,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       return { ok: true, value: { text: `-- ${params.verb} ${[object.schema, object.name].filter(Boolean).join('.')}`, database: object.database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 } }
     }),
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
+    reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
+    confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' })),
+    ...recentFilesApi(),
     ...settingsApi(options.settings),
     ...backendApi()
   }
@@ -204,7 +220,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const resultClient = fakeResultClient()
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
-  const files = new FileService(documents, queries, api)
+  const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
+  const recentFiles = new RecentFilesService(api)
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
@@ -230,6 +247,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     explorer: explorer.context,
     results: results.context,
     scripting: scripting.running,
+    recentFiles,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -246,7 +264,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
-  const menus = new MenuService({ platform, commands, context, keybindings, theme, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const workbench = {
     platform,
     commands,
@@ -254,6 +272,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     documents,
     queries,
     files,
+    recentFiles,
     editorOptions,
     inputMode,
     connections,
@@ -305,6 +324,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     commands.dispose()
     context.dispose()
     files.dispose()
+    recentFiles.dispose()
     queries.dispose()
     resultSelection.dispose()
     results.dispose()
@@ -332,6 +352,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     focusEditor,
     queries,
     files,
+    recentFiles,
     targets,
     context,
     commands,

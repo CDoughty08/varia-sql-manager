@@ -1,10 +1,13 @@
 // Files and status bars on the fake backend: encodings and line endings kept on save, the Save as Unicode and Save of
 // Read-Only File prompts, Save files with a specific encoding, Save All, the IDE status bar's Ln/Col/Ch, INS/OVR, line ending and encoding, and the query
-// status bar with its Options. Native dialogs are stubbed in main, as electron-smoke does; files live under artifacts/.
+// status bar with its Options; then files from the command line and a second instance, File › Recent Files, changes
+// made outside, and drops. Native dialogs are stubbed in main, as electron-smoke does; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { join, resolve } from 'node:path'
+import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
 
 await mkdir('artifacts', { recursive: true })
@@ -15,7 +18,10 @@ await mkdir(join(control, 'hold'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
 const windows = process.platform === 'win32', mac = process.platform === 'darwin'
-const application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+// A file named on the command line opens once the workbench is ready.
+const launched = join(folder, 'launched.sql')
+await writeFile(launched, 'SELECT 42')
+const application = await electron.launch({ args: ['.', launched], env, chromiumSandbox: process.getuid?.() !== 0 })
 const watchdog = setTimeout(() => { console.error('Files suite exceeded its time limit.'); application.process()?.kill(); process.exit(1) }, 300_000)
 const failures = []
 let page
@@ -66,6 +72,14 @@ try {
   await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await stubDialogs()
+
+  // 0. The command line's file opens in its own tab, after the first query; closing it leaves that query active.
+  await expect(tabs()).toHaveCount(2)
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'launched.sql')
+  await expect(page.locator('.monaco-editor .view-lines')).toContainText('SELECT 42')
+  await page.keyboard.press(mac ? 'Meta+W' : 'Control+W')
+  await expect(tabs()).toHaveCount(1)
+  console.log('Files checks: a file named on the command line opens once the workbench is ready.')
 
   // 1. Main has a strict decoder for every ANSI code page Varia reads (Electron's ICU), so no table is bundled.
   const labels = [...new Set(['en-US', 'cs', 'ru', 'el', 'tr', 'he', 'ar', 'lt', 'vi', 'th', 'ja', 'zh-CN', 'zh-TW', 'ko'].map(legacyCodePage))]
@@ -315,6 +329,119 @@ try {
   expect(await layout()).toEqual({ inside: true, whole: ['time', 'rows'], page: true })
   await queryBar().screenshot({ path: resolve('artifacts', 'files-query-status-small.png') })
   console.log('Files checks: in a small window the server, then the login and database, give way in the query status bar, and the time and rows stay whole.')
+
+  // 11. A second instance, started with a file, hands it to this one and quits; the file opens here.
+  const second = join(folder, 'second.sql')
+  await writeFile(second, 'SELECT 2 AS second')
+  const instance = spawn(electronPath, ['.', second, ...process.getuid?.() === 0 ? ['--no-sandbox'] : []], { env, stdio: 'ignore' })
+  const exitCode = await new Promise((resolve, reject) => { instance.once('exit', resolve); instance.once('error', reject) })
+  expect(exitCode).toBe(0)
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'second.sql')
+  console.log('Files checks: a second instance hands its file to the first and quits.')
+
+  // 12. File › Recent Files lists what was opened and saved, newest first, as many as Options says, in the title-bar
+  // menu and the native one, and reopens an entry; one that no longer exists offers to leave the list.
+  const nativeRecent = () => application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('file.recent').submenu.items.map(item => ({ id: item.id, label: item.label, enabled: item.enabled })))
+  const nativeFiles = async () => (await nativeRecent()).filter(item => /^file\.recent\.\d+$/.test(item.id))
+  await expect.poll(async () => (await nativeRecent())[0]?.label ?? '').toMatch(/second\.sql$/)
+  // More than ten files were opened or saved so far; the menu shows the default ten until Options shows more.
+  expect(await nativeFiles()).toHaveLength(10)
+  expect((await nativeRecent()).some(item => item.label.endsWith('launched.sql'))).toBe(false)
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.recentFiles.count': 24 }))).toMatchObject({ ok: true })
+  await expect.poll(async () => (await nativeFiles()).length).toBeGreaterThan(10)
+  const recentLabels = (await nativeRecent()).map(item => item.label)
+  expect(recentLabels.at(-1)).toBe('Clear Recent Files')
+  expect(recentLabels.some(label => label.endsWith('launched.sql'))).toBe(true)
+  if (!mac) {
+    expect(recentLabels[0]).toMatch(/^&1 /)
+    await page.getByRole('menubar', { name: 'Application menu' }).getByRole('menuitem', { name: 'File', exact: true }).click({ force: true })
+    await page.getByRole('menu', { name: 'File', exact: true }).getByRole('menuitem', { name: 'Recent Files', exact: true }).hover({ force: true })
+    const recentMenu = page.getByRole('menu', { name: 'Recent Files', exact: true })
+    await expect(recentMenu.getByRole('menuitem').first()).toContainText('second.sql')
+    await recentMenu.getByRole('menuitem', { name: /launched\.sql/ }).click({ force: true })
+    await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'launched.sql')
+    await page.keyboard.press('Control+W')
+  }
+  // The native menu (macOS's menu bar) opens an entry through main.
+  const launchedItem = (await nativeRecent()).find(item => item.label.endsWith('launched.sql'))
+  await application.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).click(), launchedItem.id)
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'launched.sql')
+  await page.keyboard.press(mac ? 'Meta+W' : 'Control+W')
+  await expect.poll(async () => (await nativeRecent())[0].label).toMatch(/launched\.sql$/)
+  // A deleted entry: Remove takes it off the list.
+  await rm(launched)
+  await prompts()
+  await queue('answers', 0)
+  const removed = (await nativeRecent()).find(item => item.label.endsWith('launched.sql'))
+  await application.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).click(), removed.id)
+  await expect.poll(prompts).toEqual([{ title: 'Recent Files', message: 'launched.sql cannot be opened.', detail: `${launched} no longer exists. Remove it from the Recent Files list?`, buttons: ['Remove', 'Keep'] }])
+  await expect.poll(async () => (await nativeRecent()).some(item => item.label.endsWith('launched.sql'))).toBe(false)
+  console.log('Files checks: File › Recent Files lists opened and saved files, reopens one from either menu, and offers to remove a missing one.')
+
+  // 13. A change made outside: focus asks File changed, and Yes reloads the query, clean. With unsaved changes, No keeps
+  // them, and the next Save asks before replacing the outside change.
+  const focusWindow = () => page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.locator('.query-tabs').getByRole('tab', { name: 'second.sql', exact: true }).click()
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'second.sql')
+  await writeFile(second, 'SELECT 3 AS changed')
+  await utimes(second, new Date(Date.now() + 10_000), new Date(Date.now() + 10_000))
+  await queue('answers', 0)
+  await focusWindow()
+  await expect.poll(prompts).toEqual([{ title: 'File changed', message: second, detail: 'This file has been modified outside of the source editor. Do you want to reload it?', buttons: ['Yes', 'No'] }])
+  await expect(page.locator('.monaco-editor .view-lines')).toContainText('SELECT 3 AS changed')
+  await expect(activeTab().locator('.dirty-dot')).toHaveCount(0)
+  await typeAtEnd(' -- mine')
+  await writeFile(second, 'SELECT 4 AS outside')
+  await utimes(second, new Date(Date.now() + 20_000), new Date(Date.now() + 20_000))
+  await queue('answers', 1)
+  await focusWindow()
+  await expect.poll(prompts).toEqual([{ title: 'File changed', message: second, detail: 'This file has been modified outside of the source editor. Do you want to reload it and lose the changes made in the source editor?', buttons: ['Yes', 'No'] }])
+  await expect(page.locator('.monaco-editor .view-lines')).toContainText('-- mine')
+  await save()
+  await expect.poll(prompts).toEqual([{ title: 'File changed', message: `The file ${second} was changed outside Varia SQL Manager.`, detail: 'Saving replaces those changes with this query.', buttons: ['Save', 'Cancel'] }])
+  expect(await readFile(second, 'utf8')).toBe('SELECT 4 AS outside')
+  await expect(activeTab().locator('.dirty-dot')).toHaveCount(1)
+  // A file deleted outside makes its query unsaved, with a notice; Save writes it again.
+  await rm(second)
+  await focusWindow()
+  await expect(banner()).toHaveText('second.sql was deleted or moved outside Varia SQL Manager. Save it to keep it.')
+  await save()
+  await expect(activeTab().locator('.dirty-dot')).toHaveCount(0)
+  expect(await readFile(second, 'utf8')).toBe('SELECT 3 AS changed -- mine')
+  console.log('Files checks: a file changed outside is reloaded on Yes, kept on No with Save asking first, and a deleted one is saved again.')
+
+  // 14. Drops: a synthetic drop that page script makes opens nothing; a real drop of a file (Chromium's input, through
+  // the DevTools protocol) opens it.
+  const count = await tabs().count()
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.items.add(new File(['SELECT 1'], 'forged.sql'))
+    document.querySelector('.monaco-editor').dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
+  })
+  await page.waitForTimeout(500)
+  await expect(tabs()).toHaveCount(count)
+  const dropped = join(folder, 'dropped.sql')
+  await writeFile(dropped, 'SELECT 5 AS dropped')
+  const cdp = await application.context().newCDPSession(page)
+  const box = await page.locator('.monaco-editor').boundingBox()
+  const at = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) }
+  const data = { items: [], files: [dropped], dragOperationsMask: 1 }
+  const dropFile = async () => { for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', { type, ...at, data }) }
+  await dropFile()
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'dropped.sql')
+  await expect(page.locator('.monaco-editor .view-lines')).toContainText('SELECT 5 AS dropped')
+  // Dropped again on its own query, the file keeps that tab, and Monaco, which never saw the drag, shows no drop caret
+  // (one it started on dragover would stay, as only the drop it never gets ends it).
+  const opened = await tabs().count()
+  await dropFile()
+  // Monaco draws on an animation frame, which a hidden or locked window delays: the caret must never show for 2 s.
+  const carets = []
+  for (let sample = 0; sample < 8; sample++) { await page.waitForTimeout(250); carets.push(await page.locator('.monaco-editor .dnd-target').count()) }
+  expect(carets).toEqual(Array(8).fill(0))
+  await expect(tabs()).toHaveCount(opened)
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'dropped.sql')
+  await cdp.detach()
+  console.log('Files checks: a dropped file opens, and a drop page script makes opens nothing.')
 
   expect(failures).toEqual([])
   console.log('Files suite passed.')

@@ -3,9 +3,9 @@ import type { ApiResult, OpenSqlFile, VariaApi } from '../src/shared/contracts'
 import { FileService } from '../src/renderer/src/services/files'
 import type { QueryService } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
-import { filesContribution } from '../src/renderer/src/contributions/files'
+import { filesContribution, watchExternalChanges } from '../src/renderer/src/contributions/files'
 import { deferred, documentFixture, type SaveResponse } from './fixtures/documents'
-import { connectionInfo, connectionOptions } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, manualTimers } from './fixtures/workbench'
 import { contextRecord } from '../src/shared/commands/context-keys'
 
 const cleanups: (() => void)[] = []
@@ -19,11 +19,17 @@ function fixture() {
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
-    closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>()
+    closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
+    openRecentFile: vi.fn<VariaApi['openRecentFile']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
+    checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
+    reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this test.' })),
+    confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' }))
   }
+  // Reload modified files unless there are unsaved changes.
+  const options = { autoReload: false }
   // Nothing to ask about unless a test says otherwise: every session ends plainly.
   const queries = { isRunning: vi.fn<(id: string) => boolean>(() => false), mayHaveTransaction: vi.fn<(id: string) => Promise<boolean>>(async () => false), confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map()) }
-  const files = new FileService(doc.documents, queries, api), commands = new CommandService()
+  const files = new FileService(doc.documents, queries, api, { autoReload: () => options.autoReload }), commands = new CommandService()
   // Focus is in Object Explorer when `explorer.panel` says so; its selection is `explorer.target`.
   const explorer: { panel: '' | 'explorer'; target?: { connectionId: string; database?: string } } = { panel: '' }
   const context = { get: () => contextRecord('win32', { activePanel: explorer.panel }) }
@@ -31,7 +37,7 @@ function fixture() {
   const contribution = filesContribution({ files, commands, documents: doc.documents, context, connections, explorer: { queryTarget: () => explorer.target } }, { writeClipboardText: async () => ({ ok: true, value: undefined }), revealSqlFile: async () => ({ ok: true, value: undefined }) })
   doc.documents.create('SQLQuery1.sql', '', 'master', 'server-a')
   cleanups.push(() => { contribution.dispose(); commands.dispose(); files.dispose(); doc.documents.dispose() })
-  return { ...doc, api, queries, files, commands, contribution, explorer }
+  return { ...doc, api, queries, files, commands, contribution, explorer, options }
 }
 
 describe('file commands', () => {
@@ -526,5 +532,173 @@ describe('Save All, line endings and file metadata', () => {
     const value = windows.documents.openText({ name: 'v.xml', text: '<a>\n</a>', kind: 'xml' })
     expect(windows.model(value.id).getEOL()).toBe('\n')
     windows.documents.dispose(); linux.documents.dispose()
+  })
+})
+
+describe('files main opened, Recent Files and changes made outside', () => {
+  const registered = (id: string, name: string) => ({ id, name, path: 'C:/' + name, encoding: 'utf8' as const, readOnly: false })
+  /** A query open on a file, after the query the fixture starts with. */
+  const withFile = (documents: ReturnType<typeof fixture>['documents'], id: string, name: string, text = 'SELECT 1') => documents.create(name, text, 'master', undefined, false, registered(id, name))
+  it('adopts files from the command line or a drop on the active query\'s connection, activating a file already open', async () => {
+    const { documents, api, files } = fixture()
+    const open = withFile(documents, 'kept', 'kept.sql')
+    documents.activate(documents.getSnapshot().documents[0].id)
+    await files.adopt({ files: [openedFile('new', 'C:/new.sql'), openedFile('kept', 'C:/kept.sql')], errors: [] })
+    const created = documents.getSnapshot().documents.find(document => document.file?.id === 'new')!
+    expect(created).toMatchObject({ connectionId: 'server-a', database: 'master', dirty: false })
+    // The open file's tab is activated, keeps its text, and its id stays registered: the tab owns it.
+    expect(documents.active?.id).toBe(open.id)
+    expect(api.releaseSqlFile).not.toHaveBeenCalled()
+    expect(documents.getSnapshot().documents).toHaveLength(3)
+  })
+  it('reports what main could not open, with the files it could', async () => {
+    const { documents, files } = fixture()
+    await files.adopt({ files: [openedFile('a', 'C:/a.sql')], errors: ['b.sql: The file does not exist.', 'c.sql: Access to the file was denied.'] })
+    expect(documents.getSnapshot().documents.some(document => document.file?.id === 'a')).toBe(true)
+    expect(files.getSnapshot()).toEqual({ error: 'b.sql: The file does not exist. c.sql: Access to the file was denied.', kind: 'error' })
+  })
+  it('waits behind a file task, as a script saved to a file does, instead of dropping the files', async () => {
+    const { documents, files } = fixture()
+    const pending = deferred<void>(), busy = documents.runTask(() => pending.promise)
+    const adopting = files.adopt({ files: [openedFile('late', 'C:/late.sql')], errors: [] })
+    await Promise.resolve()
+    expect(documents.getSnapshot().documents.some(document => document.file?.id === 'late')).toBe(false)
+    pending.resolve(); await busy; await adopting
+    expect(documents.active?.file?.id).toBe('late')
+  })
+  it('opens a Recent Files entry by its id, finding the tab of a file already open and releasing nothing it owns', async () => {
+    const { documents, api, files } = fixture()
+    const open = withFile(documents, 'kept', 'kept.sql')
+    documents.activate(documents.getSnapshot().documents[0].id)
+    api.openRecentFile.mockResolvedValueOnce({ ok: true, value: { files: [openedFile('kept', 'C:/kept.sql')], errors: [] } })
+    await files.openRecent('6f7f1d7a-3c0e-4b8e-9d55-2f0f0a6f0b11')
+    expect(api.openRecentFile).toHaveBeenCalledWith('6f7f1d7a-3c0e-4b8e-9d55-2f0f0a6f0b11')
+    expect(documents.active?.id).toBe(open.id)
+    expect(documents.getSnapshot().documents).toHaveLength(2)
+    expect(api.releaseSqlFile).not.toHaveBeenCalled()
+    // A new file opens in a tab; one that is not claimed (the page went away meanwhile) is released.
+    api.openRecentFile.mockResolvedValueOnce({ ok: true, value: { files: [openedFile('other', 'C:/other.sql')], errors: [] } })
+    await files.openRecent('6f7f1d7a-3c0e-4b8e-9d55-2f0f0a6f0b12')
+    expect(documents.active?.file?.id).toBe('other')
+  })
+  it('reloads a changed file only when the user says so, and Yes to All and No to All answer the rest of the check', async () => {
+    const { documents, api, files, model } = fixture()
+    const one = withFile(documents, 'f1', 'one.sql'), two = withFile(documents, 'f2', 'two.sql'), three = withFile(documents, 'f3', 'three.sql')
+    model(two.id).edit('SELECT 2 -- edited here')
+    api.checkSqlFiles.mockResolvedValue({ ok: true, value: [{ fileId: 'f3', change: 'modified' }, { fileId: 'f1', change: 'modified' }, { fileId: 'f2', change: 'modified' }] })
+    api.reloadSqlFile.mockImplementation(async fileId => ({ ok: true, value: { ...openedFile(fileId, 'C:/' + fileId + '.sql'), content: `SELECT '${fileId} from disk'` } }))
+    // Tab order: one (clean, more to ask), then Yes to All reloads two (dirty) and three without asking.
+    api.confirmReload.mockResolvedValueOnce({ ok: true, value: 'yesToAll' })
+    await files.checkExternalChanges()
+    expect(api.confirmReload.mock.calls.map(([prompt]) => prompt)).toEqual([{ fileId: 'f1', dirty: false, more: true }])
+    expect([one, two, three].map(document => [model(document.id).getValue(), documents.get(document.id)?.dirty])).toEqual([["SELECT 'f1 from disk'", false], ["SELECT 'f2 from disk'", false], ["SELECT 'f3 from disk'", false]])
+    // No to All keeps every file as it is, asking once.
+    api.confirmReload.mockClear(); api.reloadSqlFile.mockClear()
+    api.confirmReload.mockResolvedValueOnce({ ok: true, value: 'noToAll' })
+    await files.checkExternalChanges()
+    expect(api.confirmReload).toHaveBeenCalledTimes(1)
+    expect(api.reloadSqlFile).not.toHaveBeenCalled()
+    // The last file asked about has no "All" buttons; No keeps the query's own text.
+    api.confirmReload.mockClear()
+    api.checkSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ fileId: 'f2', change: 'modified' }] })
+    model(two.id).edit('SELECT 2 -- edited again')
+    api.confirmReload.mockResolvedValueOnce({ ok: true, value: 'no' })
+    await files.checkExternalChanges()
+    expect(api.confirmReload.mock.calls.map(([prompt]) => prompt)).toEqual([{ fileId: 'f2', dirty: true, more: false }])
+    expect(model(two.id).getValue()).toBe('SELECT 2 -- edited again')
+  })
+  it('reloads a clean file without asking under Reload modified files unless there are unsaved changes, and still asks for a dirty one', async () => {
+    const { documents, api, files, model, options } = fixture()
+    options.autoReload = true
+    const clean = withFile(documents, 'f1', 'clean.sql'), dirty = withFile(documents, 'f2', 'dirty.sql')
+    model(dirty.id).edit('SELECT 2 -- mine')
+    api.checkSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ fileId: 'f1', change: 'modified' }, { fileId: 'f2', change: 'modified' }] })
+    api.reloadSqlFile.mockImplementation(async fileId => ({ ok: true, value: { ...openedFile(fileId, 'C:/x.sql'), content: 'SELECT 9' } }))
+    await files.checkExternalChanges()
+    expect(model(clean.id).getValue()).toBe('SELECT 9')
+    expect(api.confirmReload.mock.calls.map(([prompt]) => prompt)).toEqual([{ fileId: 'f2', dirty: true, more: false }])
+    expect(model(dirty.id).getValue()).toBe('SELECT 2 -- mine')
+  })
+  it('reloads as one undoable edit of what changed, with the file\'s line ending, leaving the query clean', async () => {
+    const { documents, api, files, model } = fixture()
+    const query = withFile(documents, 'f1', 'one.sql', 'SELECT 1\nFROM a\nWHERE x = 1')
+    api.checkSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ fileId: 'f1', change: 'modified' }] })
+    api.confirmReload.mockResolvedValueOnce({ ok: true, value: 'yes' })
+    const reread = { ...openedFile('f1', 'C:/one.sql'), content: 'SELECT 1\r\nFROM b\r\nWHERE x = 1', eol: 'crlf' as const, encoding: 'utf8bom' as const }
+    api.reloadSqlFile.mockResolvedValueOnce({ ok: true, value: reread })
+    await files.checkExternalChanges()
+    expect(model(query.id).getValue()).toBe('SELECT 1\r\nFROM b\r\nWHERE x = 1')
+    expect(documents.get(query.id)).toMatchObject({ dirty: false, file: { encoding: 'utf8bom' } })
+    model(query.id).undo()
+    expect(model(query.id).getValue()).toBe('SELECT 1\nFROM a\nWHERE x = 1')
+    expect(documents.get(query.id)?.dirty).toBe(true)
+  })
+  it('replaces only the part that changed, never splitting a line break or a surrogate pair', () => {
+    const { documents, model } = fixture()
+    const query = withFile(documents, 'f1', 'one.sql', 'A\r\nB 😀\r\nC')
+    model(query.id).eol = '\r\n'
+    const edits = vi.spyOn(model(query.id), 'pushEditOperations')
+    documents.reload(query.id, 'A\r\nB 😁\r\nC', 'crlf', registered('f1', 'one.sql'))
+    const [, [{ range, text }]] = edits.mock.calls[0] as unknown as [unknown, { range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }; text: string }[]]
+    expect(text).toBe('😁')
+    expect(range).toEqual({ startLineNumber: 2, startColumn: 3, endLineNumber: 2, endColumn: 5 })
+    expect(model(query.id).getValue()).toBe('A\r\nB 😁\r\nC')
+  })
+  it('marks a query whose file was deleted as unsaved, with a notice and no question', async () => {
+    const { documents, api, files } = fixture()
+    const gone = withFile(documents, 'f1', 'gone.sql')
+    api.checkSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ fileId: 'f1', change: 'deleted' }] })
+    await files.checkExternalChanges()
+    expect(api.confirmReload).not.toHaveBeenCalled()
+    expect(documents.get(gone.id)).toMatchObject({ dirty: true, file: { id: 'f1' } })
+    expect(files.getSnapshot()).toEqual({ error: 'gone.sql was deleted or moved outside Varia SQL Manager. Save it to keep it.', kind: 'warning' })
+  })
+  it('asks about the rest of the files when one cannot be reloaded, and reports it with the deleted ones', async () => {
+    const { documents, api, files, model } = fixture()
+    const locked = withFile(documents, 'f1', 'locked.sql'), other = withFile(documents, 'f2', 'other.sql'), gone = withFile(documents, 'f3', 'gone.sql')
+    // main has already moved every reported file's stamp: a file not asked about now is never asked about again.
+    api.checkSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ fileId: 'f1', change: 'modified' }, { fileId: 'f2', change: 'modified' }, { fileId: 'f3', change: 'deleted' }] })
+    api.confirmReload.mockResolvedValue({ ok: true, value: 'yes' })
+    api.reloadSqlFile.mockImplementation(async fileId => fileId === 'f1' ? { ok: false, error: 'EBUSY: resource busy or locked' } : { ok: true, value: { ...openedFile(fileId, 'C:/other.sql'), content: 'SELECT 9' } })
+    await files.checkExternalChanges()
+    expect(api.confirmReload.mock.calls.map(([prompt]) => prompt.fileId)).toEqual(['f1', 'f2'])
+    expect(model(locked.id).getValue()).not.toBe('SELECT 9')
+    expect(model(other.id).getValue()).toBe('SELECT 9')
+    expect(documents.get(gone.id)?.dirty).toBe(true)
+    expect(files.getSnapshot()).toEqual({ error: 'locked.sql was not reloaded: EBUSY: resource busy or locked gone.sql was deleted or moved outside Varia SQL Manager. Save it to keep it.', kind: 'error' })
+  })
+  it('checks only when a query has a file, once at a time, after a running file task', async () => {
+    const { documents, api, files } = fixture()
+    await files.checkExternalChanges()
+    expect(api.checkSqlFiles).not.toHaveBeenCalled()
+    withFile(documents, 'f1', 'one.sql')
+    const pending = deferred<void>(), busy = documents.runTask(() => pending.promise)
+    const first = files.checkExternalChanges(), second = files.checkExternalChanges()
+    expect(second).toBe(first)
+    await Promise.resolve()
+    expect(api.checkSqlFiles).not.toHaveBeenCalled()
+    pending.resolve(); await busy; await first
+    expect(api.checkSqlFiles).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('window focus checks', () => {
+  it('checks once focus has settled for 500 ms, and only while Detect when file is changed outside the environment is on', () => {
+    const { timers, advance } = manualTimers()
+    const listeners = new Set<() => void>()
+    const target = { addEventListener: (_type: string, listener: () => void) => { listeners.add(listener) }, removeEventListener: (_type: string, listener: () => void) => { listeners.delete(listener) } }
+    const files = { checkExternalChanges: vi.fn(async () => {}) }
+    let enabled = true
+    const watch = watchExternalChanges(target as unknown as Window, files, () => enabled, timers)
+    const focus = () => listeners.forEach(listener => listener())
+    focus(); advance(300); focus(); advance(499)
+    expect(files.checkExternalChanges).not.toHaveBeenCalled()
+    advance(1)
+    expect(files.checkExternalChanges).toHaveBeenCalledTimes(1)
+    enabled = false
+    focus(); advance(500)
+    expect(files.checkExternalChanges).toHaveBeenCalledTimes(1)
+    watch.dispose()
+    expect(listeners.size).toBe(0)
   })
 })

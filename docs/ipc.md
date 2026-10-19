@@ -763,6 +763,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
+| Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
+| Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
@@ -893,6 +895,11 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Backend → renderer.** Unary responses and events are decoded in main under the control limits; pages are opaque to
   main, size- and credit-checked, copied exactly, decoded only in the results worker, and rendered as text.
 - **SQL Server data is untrusted content**, bounded by the cell, row, page and budget limits.
+- **Paths.** The renderer never names a file: main takes paths from its own dialogs, the command line, a second
+  instance's handover, macOS's open-file and its Recent Files store, and the page refers to files by opaque ids. A drop
+  is read in the preload's isolated world, from trusted events only, and sent on `varia:files-dropped`, which
+  `window.varia` does not expose; main still accepts only absolute paths to regular files, at most 32, and reads them
+  as Open does (5 MB).
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password.

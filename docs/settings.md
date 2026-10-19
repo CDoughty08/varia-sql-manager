@@ -41,12 +41,16 @@ page titles, setting labels, descriptions and keywords.
 
 Its first row is a note: Color theme: View › Theme (stored in `appearance.json`).
 
-_No settings yet._
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
 
 ### Environment › Documents
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.documents.detectExternalChanges` | Detect when file is changed outside the environment | Boolean | True |  | All | At once | When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes. |
+| `environment.documents.autoReload` | Reload modified files unless there are unsaved changes | Boolean | False |  | All | At once | Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks. Greyed while `environment.documents.detectExternalChanges` is False. |
 | `environment.documents.saveWithSpecificEncoding` | Save files with a specific encoding | Boolean | False |  | All | At once | Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none. |
 | `environment.documents.saveEncoding` | Save encoding | One of `utf8bom` (Unicode (UTF-8 with signature)), `utf8` (Unicode (UTF-8 without signature)), `utf16le` (Unicode), `utf16be` (Unicode (Big-Endian)) | Unicode (UTF-8 with signature) |  | All | At once | The encoding every file is saved in while Save files with a specific encoding is True. Unicode is UTF-16 little-endian. Greyed while `environment.documents.saveWithSpecificEncoding` is False. |
 
@@ -200,4 +204,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (58 today).
+A patch holds at most one entry per setting (61 today).

@@ -11,6 +11,9 @@
   {"type":"separator"}
   {"accelerator":"Ctrl+W","id":"file.close","label":"Close Query","registerAccelerator":false,"type":"normal","click":[["command","file.close"]]}
   {"type":"separator"}
+  {"id":"file.recent","label":"Recent Files"}
+    {"enabled":false,"id":"file.recent.empty","label":"No Recent Files"}
+  {"type":"separator"}
   {"accelerator":"Alt+F4","id":"window.close","label":"Exit","role":"quit"}
 {"id":"menu.edit","label":"Edit"}
   {"accelerator":"Ctrl+Z","id":"edit.undo","label":"Undo","registerAccelerator":false,"type":"normal","click":[["command","edit.undo"]]}

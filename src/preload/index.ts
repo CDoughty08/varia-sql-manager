@@ -1,10 +1,12 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import type { ApiResult, BackendState, ResultsJobProgress, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { ApiResult, BackendState, OpenedFiles, RecentFile, ResultsJobProgress, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
 import type { SettingsState } from '../shared/settings/schema'
+// Bundled into this one file: a sandboxed preload can require only electron and a few Node built-ins.
+import { installFileDrop } from './drop'
 
 const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params)
 
@@ -68,6 +70,22 @@ const api: VariaApi = {
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),
   revealSqlFile: fileId => ipcRenderer.invoke('varia:files-reveal', fileId),
+  onFilesOpened: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, opened: OpenedFiles) => callback(opened)
+    ipcRenderer.on('varia:files-opened', listener)
+    return () => { ipcRenderer.removeListener('varia:files-opened', listener) }
+  },
+  checkSqlFiles: () => ipcRenderer.invoke('varia:files-check'),
+  reloadSqlFile: fileId => ipcRenderer.invoke('varia:files-reload', fileId),
+  confirmReload: prompt => ipcRenderer.invoke('varia:confirm-reload', prompt),
+  recentFiles: () => ipcRenderer.invoke('varia:recent-files'),
+  openRecentFile: id => ipcRenderer.invoke('varia:recent-files-open', id),
+  clearRecentFiles: () => ipcRenderer.invoke('varia:recent-files-clear'),
+  onRecentFiles: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, files: RecentFile[]) => callback(files)
+    ipcRenderer.on('varia:recent-files-changed', listener)
+    return () => { ipcRenderer.removeListener('varia:recent-files-changed', listener) }
+  },
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),
@@ -100,6 +118,9 @@ const api: VariaApi = {
   }
 }
 contextBridge.exposeInMainWorld('varia', api)
+// Files dropped on the window open as queries. The paths go straight to main: window.varia has no drop or path method,
+// so page script can name no path.
+installFileDrop(window, { pathForFile: file => webUtils.getPathForFile(file), send: paths => { ipcRenderer.send('varia:files-dropped', paths) } })
 // The results port goes to the page itself (window message, then ResultClient hands it to the results worker); no port,
 // postMessage or invoke is ever exposed on window.varia.
 ipcRenderer.on('varia:results-port', event => { window.postMessage({ type: 'varia:results-port' }, '*', event.ports) })

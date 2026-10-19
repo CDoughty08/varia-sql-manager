@@ -6,6 +6,7 @@ import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
+import { RecentFilesService } from '../services/recent-files'
 import { EditorOptionsService } from '../services/editor-options'
 import { EditorStatusService } from '../services/editor-status'
 import { TargetService } from '../services/targets'
@@ -21,7 +22,7 @@ import { DatabaseListService } from '../services/database-list'
 import { ResultSelectionService } from '../services/result-selection'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
-import { filesContribution } from '../contributions/files'
+import { filesContribution, watchExternalChanges } from '../contributions/files'
 import { editorContribution } from '../contributions/editor'
 import { paletteContribution } from '../contributions/palette'
 import { themeContribution } from '../contributions/theme'
@@ -76,6 +77,8 @@ export interface Workbench extends Disposable {
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
   readonly files: FileService
+  /** File › Recent Files, as main last sent it. */
+  readonly recentFiles: RecentFilesService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
   /** The editor caret's Ln, Col and Ch and the line ending, for the IDE status bar. */
@@ -130,7 +133,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const resultMemory = new ResultMemoryService(resultClient, events)
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
-  const files = new FileService(documents, queries, api)
+  const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
+  const recentFiles = new RecentFilesService(api)
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files)
   const focus = domFocusAdapter(documents)
@@ -152,6 +156,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     results: results.context,
     scripting: scripting.running,
     inputMode,
+    recentFiles,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -160,7 +165,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
-  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, settings: () => settings.getSnapshot().values, focus, modalOpen,
+  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
     findWidgetFocused: () => !!document.activeElement?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
@@ -189,6 +194,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultMemory,
     ...gridStats ? { gridStats } : {},
     files,
+    recentFiles,
     targets,
     editorOptions,
     editorStatus,
@@ -211,6 +217,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       commands.dispose()
       context.dispose()
       files.dispose()
+      recentFiles.dispose()
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
@@ -247,7 +254,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     settingsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
-  const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
+  const listeners = [
+    keybindings.attach(window),
+    menus.attach(window),
+    trackWindowFocus(window, document.documentElement),
+    watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
+  ]
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))

@@ -12,6 +12,9 @@ File
   ---
   &Close Query  Ctrl+W  +++-
   ---
+  Recent &Files >
+    No Recent Files  ----
+  ---
   &Quit  Ctrl+Q  ++++
 Edit
   &Undo  Ctrl+Z  ++++

@@ -22,7 +22,8 @@ function describeTemplate(platform: NodeJS.Platform): string {
     command: id => calls.push(['command', id]), isChecked: id => id === 'editor.toggleWordWrap', setTheme: patch => calls.push(['setTheme', patch]),
     // An item that asks shows it, so the snapshot names the items that act elsewhere when the page lacks the keyboard.
     pageHasKeyFocus: () => { calls.push(['pageHasKeyFocus']); return true }, sendActionToFirstResponder: action => calls.push(['sendActionToFirstResponder', action]),
-    createTheme: () => calls.push(['createTheme']), openThemesFolder: () => calls.push(['openThemesFolder']), reloadThemes: () => calls.push(['reloadThemes'])
+    createTheme: () => calls.push(['createTheme']), openThemesFolder: () => calls.push(['openThemesFolder']), reloadThemes: () => calls.push(['reloadThemes']),
+    openRecent: id => calls.push(['openRecent', id]), clearRecent: () => calls.push(['clearRecent'])
   }
   const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'system', darkTheme: 'dusk', lightTheme: 'gone' }, themes } }, actions, platform)
   // One line per item, indented by depth, so a diff names the items that changed.
@@ -46,7 +47,7 @@ describe('native application menu template', () => {
   it.each(platforms)('is pinned on %s', async platform => {
     await expect(describeTemplate(platform)).toMatchFileSnapshot(`fixtures/application-menu.${platform}.txt`)
   })
-  const actions: ApplicationMenuActions = { command: () => {}, isChecked: () => false, pageHasKeyFocus: () => true, sendActionToFirstResponder: () => {}, setTheme: () => {}, createTheme: () => {}, openThemesFolder: () => {}, reloadThemes: () => {} }
+  const actions: ApplicationMenuActions = { command: () => {}, isChecked: () => false, pageHasKeyFocus: () => true, sendActionToFirstResponder: () => {}, setTheme: () => {}, createTheme: () => {}, openThemesFolder: () => {}, reloadThemes: () => {}, openRecent: () => {}, clearRecent: () => {} }
   const items = (platform: NodeJS.Platform, menu: string, menuActions: ApplicationMenuActions = actions) => {
     const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, menuActions, platform)
     return template.find(item => item.id === 'menu.' + menu)!.submenu as MenuItemConstructorOptions[]
