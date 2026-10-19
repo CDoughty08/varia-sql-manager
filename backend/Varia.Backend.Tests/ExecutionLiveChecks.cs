@@ -93,11 +93,29 @@ internal static class ExecutionLiveChecks
             var severe = await Run("RAISERROR('sev18', 18, 1);\nGO\nPRINT 'next';");
             check(severe.Status == "completedWithErrors" && severe.CompletedBatches == 2 && Texts(severe).SequenceEqual(["Msg 50000, Level 18, State 1, Line 1\nsev18", "Batch 1 raised an error; execution continued with the next batch.", "next"]),
                 "a severity 18 error ends its batch and the next batch runs: " + string.Join(" | ", Texts(severe)));
-            // SQL Server does not stop a batch at them, and SqlClient raises them only after reading the rest of the batch, so
-            // its later statements have run (even after a wait, which an attention would have cut short) and it counts as completed.
+            // SQL Server does not stop a batch at them, and no attention follows them, so the batch's later statements run (even
+            // after a wait, which an attention would have cut short) and it counts as completed.
             var ranOn = await Run("CREATE TABLE #sev (n int);\nGO\nSELECT 1 AS a; RAISERROR('sev18', 18, 1); WAITFOR DELAY '00:00:01'; INSERT #sev VALUES (1);\nGO\nSELECT COUNT(*) AS c FROM #sev; DROP TABLE #sev;");
             check(ranOn.Status == "completedWithErrors" && ranOn.CompletedBatches == 3 && ranOn.ResultSets.Count == 2 && LiveResultChecks.RowsOf(store, ranOn.ResultSets[1])[0][0] == "1",
                 "a batch with a severity 18 error runs to its end on the server: " + string.Join(", ", ranOn.ResultSets.Select(set => set.Columns[0].Name)));
+            // After the batch's first result set, SqlClient raises a severity 17 to 19 error where SQL Server sent it and keeps
+            // the reader, so the batch's later result sets and messages follow it in order, as SSMS shows them.
+            var ordered = await Run("SELECT 1 AS a; PRINT 'p1'; RAISERROR('sev18', 18, 1); PRINT 'p2'; SELECT 2 AS b; RAISERROR('sev17', 17, 1); SELECT 3 AS c; PRINT 'p3';\nGO\nPRINT 'next';");
+            check(ordered.Status == "completedWithErrors" && ordered.CompletedBatches == 2 && ordered.TotalBatches == 2
+                && ordered.ResultSets.Select(set => set.Columns[0].Name + set.BatchNumber).SequenceEqual(["a1", "b1", "c1"]) && ordered.ResultSets.All(set => !set.Incomplete)
+                && LiveResultChecks.RowsOf(store, ordered.ResultSets[2])[0][0] == "3",
+                "result sets after a severity 17 or 18 error in the same batch are shown, in order: " + string.Join(", ", ordered.ResultSets.Select(set => set.Columns[0].Name + set.BatchNumber)));
+            check(Texts(ordered).SequenceEqual(["(1 row affected)", "p1", "Msg 50000, Level 18, State 1, Line 1\nsev18", "p2", "(1 row affected)", "Msg 50000, Level 17, State 1, Line 1\nsev17",
+                    "(1 row affected)", "p3", "Batch 1 raised an error; execution continued with the next batch.", "next"])
+                && ordered.Error is { Code: "SQL_ERROR", BatchNumber: 1 } && ordered.Error.Message.Contains("sev18") && ordered.Error.Message.Contains("sev17"),
+                "messages after a severity 17 or 18 error keep their order around it: " + string.Join(" | ", Texts(ordered)));
+            // Before the batch's first result set SqlClient cannot do that: ExecuteReader reads the rest of the batch, discarding
+            // its result sets and delivering its messages, and only then raises the error (README, docs/ipc.md). SQL Server still
+            // ran the whole batch. This pins SqlClient 7.1's behaviour; a SqlClient that changes it fails here.
+            var early = await Run("PRINT 'p1'; RAISERROR('sev18', 18, 1); PRINT 'p2'; SELECT 2 AS b; PRINT 'p3';\nGO\nPRINT 'next';");
+            check(early.Status == "completedWithErrors" && early.CompletedBatches == 2 && early.ResultSets.Count == 0
+                && Texts(early).SequenceEqual(["p1", "p2", "(1 row affected)", "p3", "Msg 50000, Level 18, State 1, Line 1\nsev18", "Batch 1 raised an error; execution continued with the next batch.", "next"]),
+                "before a batch's first result set, a severity 18 error comes after the batch's messages (its SELECT counted, but its rows lost) (SqlClient): " + string.Join(" | ", Texts(early)));
             var after = await Options();
             check(after == Defaults, "the session survives batches that raised errors: " + after);
 
@@ -130,6 +148,12 @@ internal static class ExecutionLiveChecks
                     "a severity 20 error that closes the session ends the script: " + string.Join(" | ", Texts(fatal)));
                 var restored = await Options();
                 check(restored == Defaults, "the session reopened after a severity 20 error has SSMS's SET options again: " + restored);
+                // Still so after the batch's first result set, where severity 17 to 19 errors let the batch go on.
+                var fatalLater = await Run("SELECT 1 AS a; RAISERROR('Varia live check: severity 20 closes the session.', 20, 1) WITH LOG; SELECT 2 AS b;\nGO\nPRINT 'SHOULD_NOT_RUN';");
+                check(fatalLater.Status == "failed" && fatalLater.CompletedBatches == 0 && fatalLater.ResultSets.Select(set => set.Columns[0].Name).SequenceEqual(["a"])
+                    && !Texts(fatalLater).Contains("SHOULD_NOT_RUN") && Texts(fatalLater).Contains(ClosedNote),
+                    "a severity 20 error after a result set still ends the script: " + string.Join(" | ", Texts(fatalLater)));
+                check(await Options() == Defaults, "the session reopens after it");
             }
             else Console.WriteLine("Severity 20 check skipped: the login is neither sysadmin nor granted ALTER TRACE.");
 

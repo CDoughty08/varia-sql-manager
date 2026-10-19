@@ -536,92 +536,117 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                         // Sequential access streams each value once, in column order, so a huge value is never materialised
                         // (ColumnPlan reads past the rest of a truncated one).
                         reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, token);
-                        do
+                        // Positioned on a result set not yet read, or on the batch's end.
+                        var unread = true;
+                        while (true)
                         {
-                            ColumnPlan? plan = null;
-                            bool? hasLong = null;
-                            var skipped = false;
-                            if (reader.FieldCount > 0)
+                            try
                             {
-                                if (sets.Count >= args.MaxResultSets) overflowSets++;
-                                else if (oversizeSets > 0) oversizeSets++;
-                                else if ((plan = ColumnPlan.From(reader)).DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
-                                else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires) is { } opened)
+                                if (unread)
                                 {
-                                    descriptorBytes += plan.DescriptorBytes;
-                                    currentSet = opened;
-                                    sets.Add(opened);
-                                    events.Opened(opened);
-                                }
-                                else { budgetSets++; plan = null; }
-                            }
-                            if (plan?.ForXml is not null && currentSet is not null)
-                            {
-                                // FOR XML and FOR JSON output: every row is a chunk of one value, stored as the set's one row.
-                                using var collector = new ForXmlCollector(store, budget!);
-                                while (await reader.ReadAsync(token)) collector.AppendRow(reader, token);
-                                if (collector.Rows > 0)
-                                {
-                                    currentSet.CountRow();
-                                    events.RowsChanged();
-                                    if (args.MaxRows > 0 && storedRows >= args.MaxRows) currentSet.Skip(TruncationReason.RowLimit);
-                                    else if (collector.Stopped is not TruncationReason.None and var refused) { currentSet.Skip(refused); budget!.Stop(refused); }
-                                    else if (currentSet.BeginRow() is { } row)
+                                    unread = false;
+                                    ColumnPlan? plan = null;
+                                    bool? hasLong = null;
+                                    var skipped = false;
+                                    if (reader.FieldCount > 0)
                                     {
-                                        bool cut;
-                                        try { cut = collector.Write(row); }
+                                        if (sets.Count >= args.MaxResultSets) overflowSets++;
+                                        else if (oversizeSets > 0) oversizeSets++;
+                                        else if ((plan = ColumnPlan.From(reader)).DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
+                                        else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires) is { } opened)
+                                        {
+                                            descriptorBytes += plan.DescriptorBytes;
+                                            currentSet = opened;
+                                            sets.Add(opened);
+                                            events.Opened(opened);
+                                        }
+                                        else { budgetSets++; plan = null; }
+                                    }
+                                    if (plan?.ForXml is not null && currentSet is not null)
+                                    {
+                                        // FOR XML and FOR JSON output: every row is a chunk of one value, stored as the set's one row.
+                                        using var collector = new ForXmlCollector(store, budget!);
+                                        while (await reader.ReadAsync(token)) collector.AppendRow(reader, token);
+                                        if (collector.Rows > 0)
+                                        {
+                                            currentSet.CountRow();
+                                            events.RowsChanged();
+                                            if (args.MaxRows > 0 && storedRows >= args.MaxRows) currentSet.Skip(TruncationReason.RowLimit);
+                                            else if (collector.Stopped is not TruncationReason.None and var refused) { currentSet.Skip(refused); budget!.Stop(refused); }
+                                            else if (currentSet.BeginRow() is { } row)
+                                            {
+                                                bool cut;
+                                                try { cut = collector.Write(row); }
+                                                catch { currentSet.AbortRow(); throw; }
+                                                if (currentSet.TryCommitRow(cut ? 1 : 0)) storedRows++;
+                                            }
+                                        }
+                                    }
+                                    else while (true)
+                                    {
+                                        // A row is not stored only for reasons that last for the rest of the set, so once one has been
+                                        // skipped the rest of a set with a long column is read past in one go; rows already stored
+                                        // become readable first.
+                                        if (skipped && (hasLong ??= plan?.HasLong ?? ColumnPlan.HasLongColumns(reader)))
+                                        {
+                                            if (currentSet?.SealDelay is not null)
+                                            {
+                                                currentSet.Seal();
+                                                events.Sealed(currentSet);
+                                            }
+                                            await SkipRowsAsync(reader, command, currentSet, events, token);
+                                            break;
+                                        }
+                                        var read = reader.ReadAsync(token);
+                                        // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
+                                        // pages after 200 ms without a row, so a slow statement's rows become readable.
+                                        if (!read.IsCompleted && currentSet?.SealDelay is { } delay
+                                            && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
+                                        {
+                                            currentSet.Seal();
+                                            events.Sealed(currentSet);
+                                        }
+                                        if (!await read) break;
+                                        skipped = true;
+                                        if (currentSet is null) continue;
+                                        currentSet.CountRow();
+                                        events.RowsChanged();
+                                        if (args.MaxRows > 0 && storedRows >= args.MaxRows) { currentSet.Skip(TruncationReason.RowLimit); continue; }
+                                        var builder = currentSet.BeginRow();
+                                        if (builder is null) continue;
+                                        skipped = false;
+                                        int truncatedCells;
+                                        try { truncatedCells = plan!.ReadRow(reader, builder, text => messages.Add(text), token); }
                                         catch { currentSet.AbortRow(); throw; }
-                                        if (currentSet.TryCommitRow(cut ? 1 : 0)) storedRows++;
+                                        var sealedBefore = currentSet.SealedPages;
+                                        if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
+                                        if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                                     }
-                                }
-                            }
-                            else while (true)
-                            {
-                                // A row is not stored only for reasons that last for the rest of the set, so once one has been
-                                // skipped the rest of a set with a long column is read past in one go; rows already stored
-                                // become readable first.
-                                if (skipped && (hasLong ??= plan?.HasLong ?? ColumnPlan.HasLongColumns(reader)))
-                                {
-                                    if (currentSet?.SealDelay is not null)
+                                    if (currentSet is not null)
                                     {
-                                        currentSet.Seal();
-                                        events.Sealed(currentSet);
+                                        currentSet.Complete();
+                                        events.Closed(currentSet);
+                                        currentSet = null;
                                     }
-                                    await SkipRowsAsync(reader, command, currentSet, events, token);
-                                    break;
                                 }
-                                var read = reader.ReadAsync(token);
-                                // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
-                                // pages after 200 ms without a row, so a slow statement's rows become readable.
-                                if (!read.IsCompleted && currentSet?.SealDelay is { } delay
-                                    && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
-                                {
-                                    currentSet.Seal();
-                                    events.Sealed(currentSet);
-                                }
-                                if (!await read) break;
-                                skipped = true;
-                                if (currentSet is null) continue;
-                                currentSet.CountRow();
-                                events.RowsChanged();
-                                if (args.MaxRows > 0 && storedRows >= args.MaxRows) { currentSet.Skip(TruncationReason.RowLimit); continue; }
-                                var builder = currentSet.BeginRow();
-                                if (builder is null) continue;
-                                skipped = false;
-                                int truncatedCells;
-                                try { truncatedCells = plan!.ReadRow(reader, builder, text => messages.Add(text), token); }
-                                catch { currentSet.AbortRow(); throw; }
-                                var sealedBefore = currentSet.SealedPages;
-                                if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
-                                if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
+                                if (!await reader.NextResultAsync(token)) break;
+                                unread = true;
                             }
-                            if (currentSet is not null)
+                            catch (SqlException error) when (!reader.IsClosed && Continues(error, connection))
                             {
-                                currentSet.Complete();
-                                events.Closed(currentSet);
-                                currentSet = null;
+                                // A severity 17 to 19 error after the batch's first result set: SqlClient raises it when it
+                                // reaches it but keeps the reader, so the batch's later result sets and messages follow it
+                                // in order, as SQL Server sent them and SSMS shows them.
+                                Report(error);
+                                if (currentSet is not null)
+                                {
+                                    currentSet.Incomplete = true;
+                                    currentSet.Complete();
+                                    events.Closed(currentSet);
+                                    currentSet = null;
+                                }
                             }
-                        } while (await reader.NextResultAsync(token));
+                        }
                         if (reader.RecordsAffected >= 0) recordsAffected = Math.Max(0, recordsAffected) + reader.RecordsAffected;
                     }
                     catch (Exception error)
@@ -629,8 +654,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                         // Do not drain a failed command into later statements unnecessarily.
                         try { command.Cancel(); } catch (Exception cancel) when (cancel is InvalidOperationException or SqlException) { }
                         if (error is not SqlException sql || !Continues(sql, connection)) throw;
-                        // SQL Server does not stop a batch for a severity 17 to 19 error, but SqlClient raises it as an exception, which
-                        // ends what is read of the batch; the script goes on with the next one.
+                        // A severity 17 to 19 error before the batch's first result set: SqlClient reads the rest of the batch
+                        // inside ExecuteReader, discarding its result sets and delivering its messages, and only then raises
+                        // the error. SQL Server ran the whole batch; what SqlClient discarded cannot be recovered short of
+                        // forking it (docs/ipc.md, Batches). The script goes on with the next batch.
                         Report(sql);
                         if (currentSet is not null)
                         {

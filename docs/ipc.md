@@ -268,8 +268,15 @@ lost.
   Messages gets "Batch {b} raised an error; execution continued with the next batch." ("Batch {b}, repetition {k},
   raised an error; execution continued with the next repetition." or "… next batch." for `GO n`) when any batch remains.
   SQL Server decides how much of a batch runs after an error (most errors end only their statement). Severity 17–19
-  errors do not stop the batch on the server either, but SqlClient raises them as an exception, usually once it has read
-  the rest of the batch: result sets and messages after the error in that batch may be missing, or listed before it.
+  errors do not stop the batch on the server either, but SqlClient raises them as exceptions. After the batch's first
+  result set, SqlClient raises one where SQL Server sent it and keeps the reader, so the batch's later result sets and
+  messages follow it in order, as in SSMS. Before the batch's first result set it cannot: SqlClient reads the rest of
+  the batch inside `ExecuteReader` (SqlClient 7.1.1, seen with a minimal live probe), discarding the batch's later
+  result sets (their row counts still appear) and delivering its later messages, and only then raises the error, so
+  those messages are listed before it. SQL Server ran the whole batch either way. `FireInfoMessageEventOnUserErrors`
+  routes only severity 16 and below, and no SqlClient switch changes this; recovering those result sets would take a
+  fork of SqlClient's TDS reader, so it is a known difference from SSMS, pinned by a live check that fails if a
+  SqlClient update changes it.
   With `stopOnError: true` (for SQLCMD's `:on error exit`), the first batch that raised an error ends the script
   instead. Nothing runs after a cancel, the script's deadline, an error of severity 20 or more, or any failure that
   closes the session.
@@ -283,7 +290,8 @@ lost.
 | `timedOut` | `timeoutSeconds` passed, or main's backstop cancelled the request | "Query timed out." |
 
 `completedBatches` counts the batch executions that finished, including those that raised errors (a batch whose output a
-severity 17–19 error cut short counts too); with `stopOnError`, the batch that stopped the script is not counted.
+severity 17–19 error raised before its first result set cut short counts too); with `stopOnError`, the batch that
+stopped the script is not counted.
 Validation errors and a missing, busy or invalid session or connection use the error envelope instead of a summary, and
 nothing runs.
 
@@ -957,7 +965,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
-| Live: `SELECT 1` in a warm tab, with its session probe, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.7 ms (Windows, 24 CPUs, local SQL Server; 0.6 ms without the probe) | not measured |
+| Live: `SELECT 1` in a warm tab, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.6 ms, p99 1.3 ms (Windows, 24 CPUs, local SQL Server; 0.7 ms when every execution was followed by a session probe) | not measured |
 | Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 56 ms | 57 ms |
 | Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 8 % | 9 % |
 | Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |
