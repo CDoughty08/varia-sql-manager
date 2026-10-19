@@ -78,10 +78,12 @@ let windowActive = true
 let userActivation = new UserActivation()
 let layouts: LayoutStore
 let appearance: AppearanceService
-// Tools › Options; created with the window's other stores. Code that acts on a value awaits load(); current() is for menu titles.
-let settings: SettingsStore | undefined
+// Tests use their own profile so layout checks never modify the user's workspace preferences.
+if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
+// Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
+const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
 /** A command's title with its setting filled in (Select Top <n> Rows), from validated settings only. */
-const menuTitle = (id: CommandId, title: string) => commandTitle(id, settings?.current(), title)
+const menuTitle = (id: CommandId, title: string) => commandTitle(id, settings.current(), title)
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
 let previewTheme: ResolvedTheme | null = null
 let previewSeq = 0
@@ -97,8 +99,6 @@ const contextMenus = new ContextMenuPopups<BrowserWindow>({
   style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent(), build: template => Menu.buildFromTemplate(template),
   title: (id, title) => menuTitle(id, title)
 })
-// Tests use their own profile so layout checks never modify the user's workspace preferences.
-if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // A second instance would overwrite this instance's layouts and connection library.
 const primaryInstance = app.requestSingleInstanceLock()
 if (!primaryInstance) app.quit()
@@ -439,10 +439,9 @@ app.whenReady().then(async () => {
   })
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
   const explorerRequests = new ExplorerRequests(backend)
-  const store = settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
-  void store.load().catch(() => {})
-  store.onDidChange(state => {
+  void settings.load().catch(() => {})
+  settings.onDidChange(state => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:settings-changed', state)
     buildMenu()
   })
@@ -452,7 +451,7 @@ app.whenReady().then(async () => {
     showSaveDialog: options => pageDialog<{ canceled: boolean; filePath?: string }>(window => dialog.showSaveDialog(window, options), { canceled: true }),
     progress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:results-job', progress) },
     // While settings.json cannot be read, Options cannot open either, so the defaults apply.
-    exportHeaders: async () => (await store.load().catch(() => ({ values: store.current() }))).values['queryResults.grid.includeColumnHeaders']
+    exportHeaders: async () => (await settings.load().catch(() => ({ values: settings.current() }))).values['queryResults.grid.includeColumnHeaders']
   })
   const scriptingRequests = new ScriptingRequests(backend)
   backend.onState(state => {
@@ -502,8 +501,8 @@ app.whenReady().then(async () => {
   handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
   handle('varia:connections-save', value => connectionStore.save(connectionProfileInputSchema.parse(value)))
   handle('varia:connections-remove', value => connectionStore.remove(z.uuid().parse(value)))
-  handle('varia:settings-get', () => store.load({ showsWarning: true }))
-  handle('varia:settings-update', value => store.update(value))
+  handle('varia:settings-get', () => settings.load({ showsWarning: true }))
+  handle('varia:settings-update', value => settings.update(value))
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
   handle('varia:layout-import', async () => {

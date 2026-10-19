@@ -48,7 +48,9 @@ const sameOverrides = (a: Overrides, b: Overrides) => Object.keys(a).length === 
  * the path) is not cached and nothing is written. Every update reads the file again first, so a file it cannot read is
  * never replaced and hand edits made meanwhile are merged, not lost.
  *
- * Only while settings.json is missing, an earlier version's scripting-options.json is imported; it is left as it was.
+ * Only while settings.json has never been seen, an earlier version's scripting-options.json is imported; it is left as
+ * it was. A quarantined file is replaced at once (an invalid one by an empty file), so the legacy file is not imported
+ * again, now or on the next start; when that write fails, the next update writes the values held instead.
  *
  * `current()` is the last values known, synchronously: the defaults until the first load. It is only for menu titles.
  * Main code that acts on a value (Save Results As headers, and later AutoRecover and file encodings) awaits `load()`,
@@ -61,6 +63,10 @@ export class SettingsStore {
   private values: SettingsValues = defaultSettings
   private revision = 0
   private listeners = new Set<(state: SettingsState) => void>()
+  /** settings.json was read or written in this session: from then on a missing file holds nothing, not the legacy file. */
+  private established = false
+  /** What the store moved settings.json away from (quarantine, salvage) and could not write back. */
+  private unsaved?: Content
   constructor(private readonly path: string, private readonly legacyPath: string) {}
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
@@ -103,8 +109,12 @@ export class SettingsStore {
       let content: Content, rewrite = false
       try {
         const read = await readJsonFile(this.path, settingsLimits.fileBytes)
-        if (read.kind === 'missing') content = await this.legacyContent()
-        else {
+        if (read.kind === 'missing') {
+          content = this.unsaved ?? (this.established ? empty : await this.legacyContent())
+          rewrite = !!this.unsaved
+        } else {
+          this.established = true
+          this.unsaved = undefined
           const parsed = read.kind === 'ok' ? parseStoredSettings(read.value) : undefined
           // What a load would quarantine is kept the same way before the file is replaced.
           if (!parsed || parsed.invalidKeys.length) { await quarantine(this.path); rewrite = true }
@@ -112,7 +122,11 @@ export class SettingsStore {
         }
       } catch { throw new Error(unreadableSettings) }
       const next: Content = { overrides: merged(content.overrides, patch), unknown: content.unknown }
-      if (rewrite || !sameOverrides(next.overrides, content.overrides)) await this.write(next)
+      if (rewrite || !sameOverrides(next.overrides, content.overrides)) {
+        // The file may be quarantined by now: what it held stays for the next update, without this patch.
+        try { await this.write(next) } catch (error) { if (rewrite) this.unsaved = content; throw error }
+        this.unsaved = undefined
+      }
       this.loading = Promise.resolve({})
       if (!this.apply(next)) return this.state()
       this.revision++
@@ -131,8 +145,13 @@ export class SettingsStore {
     if (this.revision === 0) this.revision = 1
     return changed
   }
-  private write(content: Content): Promise<void> {
-    return writeJsonAtomic(this.path, storedSettings(content.overrides, content.unknown), settingsLimits.fileBytes, 'Settings exceed their size limit.')
+  private async write(content: Content): Promise<void> {
+    await writeJsonAtomic(this.path, storedSettings(content.overrides, content.unknown), settingsLimits.fileBytes, 'Settings exceed their size limit.')
+    this.established = true
+  }
+  /** Replaces a file the store quarantined; a failed write leaves the content for the next update. */
+  private async writeBack(content: Content): Promise<void> {
+    try { await this.write(content); this.unsaved = undefined } catch { this.unsaved = content }
   }
   /** The legacy file's values for an update while settings.json is missing; an invalid one counts as none. */
   private async legacyContent(): Promise<Content> {
@@ -144,10 +163,12 @@ export class SettingsStore {
   private async read(): Promise<{ warning?: string }> {
     const read = await readJsonFile(this.path, settingsLimits.fileBytes)
     if (read.kind === 'missing') return this.migrate()
+    this.established = true
     const parsed = read.kind === 'ok' ? parseStoredSettings(read.value) : undefined
     if (!parsed) {
       await quarantine(this.path)
       this.apply(empty)
+      await this.writeBack(empty)
       const reason = reasons(settingsLimits.fileBytes)[read.kind === 'invalid' ? read.reason ?? 'json' : 'values']
       return { warning: `Settings were invalid (${reason}) and were reset; the original file was kept.` }
     }
@@ -155,8 +176,7 @@ export class SettingsStore {
     this.apply(content)
     if (!parsed.invalidKeys.length) return {}
     await quarantine(this.path)
-    // A failed write keeps the salvaged values in memory; the next update writes them.
-    await this.write(content).catch(() => {})
+    await this.writeBack(content)
     return { warning: salvageWarning(parsed.invalidKeys) }
   }
   /** settings.json is missing: import scripting-options.json once, if there is one, and leave it as it was. */

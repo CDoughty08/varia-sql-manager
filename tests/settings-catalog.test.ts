@@ -121,6 +121,12 @@ describe('settings catalogue', () => {
     expect(visibleSettings('darwin', fixtures).map(def => def.key)).toEqual(['fixture.everywhere'])
     expect(visibleSettings('linux').length).toBe(settingDefs.length)
   })
+  it('names a key or modifier in a description shown on every platform only with what macOS uses', () => {
+    // macOS has no Alt+Z for Word Wrap, and its Monaco copies a drag with Option, not Ctrl.
+    const keyed = [...settingDefs, ...settingPages].filter(item => /\b(Ctrl|Alt)\b/.test(item.description ?? '') && !('platforms' in item && item.platforms))
+    expect(keyed.filter(item => !/macOS|Windows and Linux/.test(item.description ?? '')).map(item => 'key' in item ? item.key : item.id)).toEqual([])
+    expect(keyed.length).toBeGreaterThan(0)
+  })
   it('titles Select Top Rows from its setting, and leaves other commands and invalid values alone', () => {
     expect(commandTitle('explorer.selectTopRows')).toBe('Select Top 1000 Rows')
     expect(commandTitle('explorer.selectTopRows', { ...defaultSettings, 'objectExplorer.selectTopRows': 50 })).toBe('Select Top 50 Rows')

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { salvageWarning, SettingsStore, unreadableSettings } from '../src/main/settings-store'
@@ -7,12 +7,20 @@ import { defaultScriptingOptions } from '../src/shared/scripting/options'
 import { defaultSettings, settingsLimits, type SettingsValues } from '../src/shared/settings/catalog'
 import type { SettingsState } from '../src/shared/settings/schema'
 
+// Writes fail while `failWrites` is set, as they do when the user-data folder cannot be written.
+let failWrites = false
+vi.mock('../src/main/json-file', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/main/json-file')>()
+  return { ...actual, writeJsonAtomic: (...args: Parameters<typeof actual.writeJsonAtomic>) => failWrites ? Promise.reject(new Error('EACCES')) : actual.writeJsonAtomic(...args) }
+})
+
 let directory: string
 beforeEach(async () => {
   await mkdir('artifacts', { recursive: true })
   directory = await mkdtemp(join(resolve('artifacts'), 'settings-test-'))
 })
 afterEach(async () => {
+  failWrites = false
   expect(directory.startsWith(resolve('artifacts') + sep)).toBe(true)
   await rm(directory, { recursive: true, force: true })
 })
@@ -49,13 +57,15 @@ describe('settings file', () => {
       // Main's own read at startup does not use the warning up.
       expect(await settings.load()).toEqual({ revision: 1, values: defaultSettings })
       expect(await settings.load({ showsWarning: true })).toEqual({ revision: 1, values: defaultSettings, warning: `Settings were invalid (${reason}) and were reset; the original file was kept.` })
-      const [kept, ...rest] = await readdir(directory)
+      const [kept, ...rest] = await quarantined('settings.json')
       expect(rest).toEqual([])
       expect(kept).toMatch(/^settings\.json\.invalid-[0-9a-f-]{36}\.json$/)
       expect(await readFile(join(directory, kept))).toEqual(Buffer.from(content))
+      // An empty file replaces it at once, so an earlier version's scripting options are never imported after this.
+      expect(await onDisk()).toEqual({ version: 1, values: {} })
       // A reloaded window asks again: nothing is read again, and the warning is not repeated.
       expect(await settings.load({ showsWarning: true })).toEqual({ revision: 1, values: defaultSettings })
-      expect(await readdir(directory)).toEqual([kept])
+      expect((await readdir(directory)).sort()).toEqual([kept, 'settings.json'].sort())
     }
   })
   it('salvages a file with unsupported values: the original is kept, the rest written back', async () => {
@@ -75,7 +85,7 @@ describe('settings file', () => {
     const settings = store()
     const [first, second] = await Promise.all([settings.load({ showsWarning: true }), settings.load({ showsWarning: true })])
     expect([first.warning, second.warning].filter(Boolean)).toHaveLength(2)
-    expect(await readdir(directory)).toHaveLength(1)
+    expect(await quarantined('settings.json')).toHaveLength(1)
   })
   it('does not cache a read that failed, and the next load reads again', async () => {
     for (const blocked of [path, legacyPath]) {
@@ -113,6 +123,58 @@ describe('migration from scripting-options.json', () => {
     await rm(directory, { recursive: true, force: true }); await mkdir(directory)
     await writeFile(legacyPath(), ' '.repeat(scriptLimits.prefsBytes + 1))
     expect((await store().load({ showsWarning: true })).warning).toBe('Scripting options were invalid (larger than 16 KiB) and were reset; the original file was kept.')
+  })
+  it('never imports it after settings.json was reset, in this session or the next', async () => {
+    const scriptUseDatabase = 'objectExplorer.scripting.scriptUseDatabase'
+    // A newer version's file, which this one cannot read.
+    for (const invalid of [JSON.stringify({ version: 2, values: {} }), '{']) {
+      await rm(directory, { recursive: true, force: true }); await mkdir(directory)
+      await writeFile(legacyPath(), legacy)
+      await writeFile(path(), invalid)
+      const settings = store()
+      expect((await settings.load()).values[scriptUseDatabase]).toBe(true)
+      expect((await settings.update({ 'textEditor.sql.tabSize': 2 })).values[scriptUseDatabase]).toBe(true)
+      expect(await onDisk()).toEqual({ version: 1, values: { 'textEditor.sql.tabSize': 2 } })
+      expect((await store().load()).values[scriptUseDatabase]).toBe(true)
+    }
+    // Restarted straight after the reset.
+    await rm(path())
+    await writeFile(path(), '{')
+    await store().load()
+    expect((await store().load()).values[scriptUseDatabase]).toBe(true)
+    expect(await readFile(legacyPath(), 'utf8')).toBe(legacy)
+  })
+  it('writes the values it holds, not the legacy file\'s, when replacing a quarantined file failed', async () => {
+    await writeFile(legacyPath(), legacy)
+    await writeFile(path(), file({ 'textEditor.sql.tabSize': 0, 'queryExecution.executionTimeout': 30 }))
+    const settings = store()
+    failWrites = true
+    expect((await settings.load()).values).toEqual(values({ 'queryExecution.executionTimeout': 30 }))
+    expect(await quarantined('settings.json')).toHaveLength(1)
+    failWrites = false
+    // A patch that changes nothing still writes the salvaged values back.
+    await settings.update({ 'queryExecution.executionTimeout': 30 })
+    expect(await onDisk()).toEqual({ version: 1, values: { 'queryExecution.executionTimeout': 30 } })
+    await rm(directory, { recursive: true, force: true }); await mkdir(directory)
+    await writeFile(legacyPath(), legacy)
+    await writeFile(path(), '{')
+    const reset = store()
+    failWrites = true
+    await reset.load()
+    failWrites = false
+    expect((await reset.update({ 'textEditor.sql.wordWrap': true })).values['objectExplorer.scripting.scriptUseDatabase']).toBe(true)
+    expect(await onDisk()).toEqual({ version: 1, values: { 'textEditor.sql.wordWrap': true } })
+  })
+  it('keeps the imported values when settings.json cannot be written, and imports again on the next start', async () => {
+    await writeFile(legacyPath(), legacy)
+    failWrites = true
+    const imported = values({ 'objectExplorer.scripting.scriptUseDatabase': false, 'objectExplorer.scripting.targetServerVersion': '130' })
+    expect(await store().load({ showsWarning: true })).toEqual({ revision: 1, values: imported })
+    expect(await readdir(directory)).toEqual(['scripting-options.json'])
+    expect(await readFile(legacyPath(), 'utf8')).toBe(legacy)
+    failWrites = false
+    expect((await store().load()).values).toEqual(imported)
+    expect(Object.keys((await onDisk()).values)).toEqual(['objectExplorer.scripting.scriptUseDatabase', 'objectExplorer.scripting.targetServerVersion'])
   })
   it('imports the legacy file into an update made while settings.json is missing', async () => {
     const settings = store()
@@ -166,6 +228,22 @@ describe('settings updates', () => {
     expect(await readFile(join(directory, kept), 'utf8')).toBe('{"version":1,')
     expect(await onDisk()).toEqual({ version: 1, values: { 'textEditor.sql.wordWrap': true } })
   })
+  it('writes a file it quarantined back even when the patch changes nothing in it', async () => {
+    const settings = store()
+    await settings.update({ 'queryExecution.executionTimeout': 30 })
+    // Edited by hand while the app runs: one value this version does not support.
+    await writeFile(path(), file({ 'textEditor.sql.tabSize': 0, 'textEditor.sql.wordWrap': true, 'queryExecution.executionTimeout': 30 }))
+    await settings.update({ 'textEditor.sql.wordWrap': true })
+    expect(await onDisk()).toEqual({ version: 1, values: { 'queryExecution.executionTimeout': 30, 'textEditor.sql.wordWrap': true } })
+    expect(await quarantined('settings.json')).toHaveLength(1)
+    // When the write after that quarantine fails, the next update still has what the file held, without the failed patch.
+    await writeFile(path(), file({ 'textEditor.sql.tabSize': 0, 'queryExecution.executionTimeout': 30 }))
+    failWrites = true
+    await expect(settings.update({ 'textEditor.sql.wordWrap': true })).rejects.toThrow('EACCES')
+    failWrites = false
+    await settings.update({ 'textEditor.sql.lineNumbers': false })
+    expect(await onDisk()).toEqual({ version: 1, values: { 'queryExecution.executionTimeout': 30, 'textEditor.sql.lineNumbers': false } })
+  })
   it('keeps the values it last stored when a later write fails', async () => {
     const settings = store()
     await settings.update({ 'textEditor.sql.wordWrap': true })
@@ -184,5 +262,14 @@ describe('settings updates', () => {
     expect((await lstat(path())).isSymbolicLink()).toBe(true)
     expect((await readdir(directory)).sort()).toEqual(['elsewhere', 'settings.json'])
     expect(await readdir(join(directory, 'elsewhere'))).toEqual([])
+  })
+})
+
+describe('main', () => {
+  // Main's consumers (Save Results As headers, and later AutoRecover and file encodings) await `settings.load()`.
+  it('holds one module-level store named settings, created before anything uses it', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8')
+    expect(source.match(/new SettingsStore\(/g)).toHaveLength(1)
+    expect(source).toMatch(/^const settings = new SettingsStore\(/m)
   })
 })

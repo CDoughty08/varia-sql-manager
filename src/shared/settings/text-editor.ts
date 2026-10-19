@@ -4,7 +4,7 @@ import type { SettingDef } from './types'
 export const textEditorSettings = [
   {
     key: 'textEditor.dragAndDrop', page: 'textEditor.general', group: 'Settings', label: 'Enable mouse click to perform drag-and-drop text editing', type: 'boolean', default: true,
-    keywords: ['drag', 'drop'], description: 'Selected text can be dragged to move it, or copied with Ctrl held.'
+    keywords: ['drag', 'drop'], description: 'Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS).'
   },
   {
     key: 'textEditor.delimiterHighlighting', page: 'textEditor.general', group: 'Settings', label: 'Automatic delimiter highlighting', type: 'boolean', default: true,
@@ -16,7 +16,7 @@ export const textEditorSettings = [
   },
   {
     key: 'textEditor.sql.wordWrap', page: 'textEditor.transactSql.general', group: 'Settings', label: 'Word wrap', type: 'boolean', default: false,
-    keywords: ['wrap', 'alt+z'], description: 'Wraps long lines at the edge of the editor instead of scrolling. View › Word Wrap (Alt+Z) changes it too.'
+    keywords: ['wrap', 'alt+z'], description: 'Wraps long lines at the edge of the editor instead of scrolling. View › Word Wrap changes it too (Alt+Z on Windows and Linux).'
   },
   {
     key: 'textEditor.sql.lineNumbers', page: 'textEditor.transactSql.general', group: 'Display', label: 'Line numbers', type: 'boolean', default: true,

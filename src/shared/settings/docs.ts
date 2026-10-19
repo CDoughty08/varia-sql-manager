@@ -92,12 +92,14 @@ ${settingPages.filter(page => page.layout).map(pageSection).join('\n\n')}
   strictly; main reads the file again before each write, merges, and writes atomically. A change that changes nothing
   writes nothing.
 - An invalid file (too large, not UTF-8, not JSON, or not that shape) is renamed to
-  \`settings.json.invalid-<uuid>.json\` and the defaults apply, with a warning. A file with values this version does not
-  support is salvaged: the original is kept the same way, the other values are written back, and the warning names the
-  reset settings. A file that cannot be read (permissions, a folder at the path) is never replaced: Options does not
+  \`settings.json.invalid-<uuid>.json\` and an empty file replaces it, so the defaults apply, with a warning. A file with
+  values this version does not support is salvaged: the original is kept the same way, the other values are written
+  back, and the warning names the reset settings. When that write fails, the values stay in memory and the next change
+  writes them. A file that cannot be read (permissions, a folder at the path) is never replaced: Options does not
   open, and changes are refused.
 - Migration: when \`settings.json\` does not exist, a \`scripting-options.json\` from an earlier version is imported into
-  the \`objectExplorer.scripting.*\` keys and left untouched; it is not read again once \`settings.json\` exists.
+  the \`objectExplorer.scripting.*\` keys and left untouched; it is not read again once \`settings.json\` exists or was
+  reset. When the import cannot be written, its values apply for the session and the next start imports again.
 - The color theme stays in \`appearance.json\` (View › Theme); connection profiles keep their own Advanced properties.
 
 ## Limits

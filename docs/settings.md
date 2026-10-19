@@ -59,7 +59,7 @@ _No settings yet._
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.dragAndDrop` | Enable mouse click to perform drag-and-drop text editing | Boolean | True |  | All | At once | Selected text can be dragged to move it, or copied with Ctrl held. |
+| `textEditor.dragAndDrop` | Enable mouse click to perform drag-and-drop text editing | Boolean | True |  | All | At once | Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS). |
 | `textEditor.delimiterHighlighting` | Automatic delimiter highlighting | Boolean | True |  | All | At once | Highlights the bracket or parenthesis that matches the one at the caret. Large values opened from the results never match brackets. |
 | `textEditor.highlightCurrentLine` | Highlight current line | Boolean | True |  | All | At once | Highlights the line that holds the caret. |
 
@@ -67,7 +67,7 @@ _No settings yet._
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. View › Word Wrap (Alt+Z) changes it too. |
+| `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. View › Word Wrap changes it too (Alt+Z on Windows and Linux). |
 | `textEditor.sql.lineNumbers` | Line numbers | Boolean | True | False (SSMS 18–20; SSMS 22 not verified) | All | At once | Shows line numbers beside the query text. |
 
 ### Text Editor › Transact-SQL › Tabs
@@ -157,12 +157,14 @@ A property grid: True/False lists, values that differ from their default in bold
   strictly; main reads the file again before each write, merges, and writes atomically. A change that changes nothing
   writes nothing.
 - An invalid file (too large, not UTF-8, not JSON, or not that shape) is renamed to
-  `settings.json.invalid-<uuid>.json` and the defaults apply, with a warning. A file with values this version does not
-  support is salvaged: the original is kept the same way, the other values are written back, and the warning names the
-  reset settings. A file that cannot be read (permissions, a folder at the path) is never replaced: Options does not
+  `settings.json.invalid-<uuid>.json` and an empty file replaces it, so the defaults apply, with a warning. A file with
+  values this version does not support is salvaged: the original is kept the same way, the other values are written
+  back, and the warning names the reset settings. When that write fails, the values stay in memory and the next change
+  writes them. A file that cannot be read (permissions, a folder at the path) is never replaced: Options does not
   open, and changes are refused.
 - Migration: when `settings.json` does not exist, a `scripting-options.json` from an earlier version is imported into
-  the `objectExplorer.scripting.*` keys and left untouched; it is not read again once `settings.json` exists.
+  the `objectExplorer.scripting.*` keys and left untouched; it is not read again once `settings.json` exists or was
+  reset. When the import cannot be written, its values apply for the session and the next start imports again.
 - The color theme stays in `appearance.json` (View › Theme); connection profiles keep their own Advanced properties.
 
 ## Limits
