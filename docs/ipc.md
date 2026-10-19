@@ -219,15 +219,16 @@ lists that could exceed 16 MiB must be paged (`RESPONSE_TOO_LARGE`).
 
 **Integrated identity.** Under Windows Authentication the Connect dialog's User Name shows who will sign in, as SSMS
 does: `DOMAIN\user` on Windows (main answers it with the connection library), and off Windows the principal of the
-default credential cache's ticket, from `connections.identity`. The renderer asks each time Windows Authentication is
-chosen. The backend acquires the default initiator credential (`gss_acquire_cred`), names it (`gss_inquire_cred`,
+default credential cache's ticket, from `connections.identity`. The renderer asks when the dialog opens, as SSMS reads
+the identity then, so saved Windows Authentication connections show it too, and again each time Windows Authentication is
+chosen; a new question clears the last answer, so a principal since destroyed never shows while it is pending. The backend acquires the default initiator credential (`gss_acquire_cred`), names it (`gss_inquire_cred`,
 `gss_display_name`), and releases everything; none of it contacts the KDC. Only a valid ticket answers a principal (MIT
 will not inquire an expired credential); Windows, a missing or expired ticket, a missing library, or any GSSAPI failure
 answer `{}`, and the dialog shows the OS user name. One lookup runs at a time and concurrent requests share it, so a
 credential cache that does not answer holds one thread pool thread, and each request still ends at its deadline. The
 answer is `{ principal?: str ≤ 256 }`: the backend drops a principal with control or formatting characters (Unicode
 categories Cc and Cf) and cuts a longer one to 256 characters with an ellipsis, never inside a surrogate pair; main
-checks the same bounds (`resultSchemas` in `src/main/validation.ts`) and answers an invalid one as a failure. Showing
+checks the same bounds, by code point as the backend does (`resultSchemas` in `src/main/validation.ts`) and answers an invalid one as a failure. Showing
 principals over 256 characters whole is still to do.
 
 **Object Explorer cancellation** has no backend method. Each `explorer.children` load carries the renderer's

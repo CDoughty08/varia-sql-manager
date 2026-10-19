@@ -5,6 +5,7 @@ import { connectionPickerColor, connectionPresets } from '../../shared/theme/con
 import Icon from './Icon'
 import { trapFocus } from './trap-focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
+import { IntegratedIdentityLookup } from './services/integrated-identity'
 
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
@@ -95,6 +96,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   // SSMS shows the identity integrated authentication uses: DOMAIN\user on Windows, the ticket's principal elsewhere
   // (the OS user name without one).
   const integratedUser = principal ?? identity
+  const [identityLookup] = useState(() => new IntegratedIdentityLookup(platform, () => window.varia.integratedIdentity(), value => { if (alive.current) setPrincipal(value) }))
 
   useEffect(() => {
     alive.current = true
@@ -110,13 +112,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     dialog.current?.querySelector<HTMLInputElement>('#connect-server')?.focus()
     return () => { if (active instanceof HTMLElement && active.isConnected) active.focus() }
   }, [])
-  useEffect(() => {
-    // Asked again each time Windows Authentication is chosen, so a kinit or kdestroy since the last answer shows.
-    if (platform === 'win32' || options.authentication !== 'windows') return
-    let current = true
-    void window.varia.integratedIdentity().then(result => { if (current && alive.current) setPrincipal(result.ok ? result.value.principal : undefined) }).catch(() => { if (current && alive.current) setPrincipal(undefined) })
-    return () => { current = false }
-  }, [platform, options.authentication])
+  useEffect(() => { identityLookup.authenticationChanged(options.authentication) }, [identityLookup, options.authentication])
   useEffect(() => {
     dbRequest.current++; dbLoadedKey.current = ''; setDatabases([]); setDbNote(''); setDbDetails(undefined); setDbBusy(false)
   }, [options.server, options.authentication, options.username, options.password, options.encrypt, options.trustServerCertificate, options.hostNameInCertificate, options.advanced])

@@ -215,7 +215,8 @@ try {
         if (params.server === 'connect-error-plain') return { ok: false, error: 'Server unavailable without details.' }
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
-      if (method === 'connections.identity') return { ok: true, value: { principal: 'alice@CONTOSO.COM' } }
+      // alice@CONTOSO.COM, unless the suite holds the answer back (identityPending) to look at the dialog while it waits.
+      if (method === 'connections.identity') return globalThis.identityPending ? new Promise(resolve => { globalThis.identityResolve = resolve }) : { ok: true, value: { principal: 'alice@CONTOSO.COM' } }
       if (method === 'databases.list') return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }] }
       // Object Explorer expands each new server: the catalogue's static folders.
       if (method === 'explorer.children') {
@@ -227,12 +228,39 @@ try {
       return { ok: false, error: 'Unsupported fixture method.' }
     })
   }, explorerStatics())
-  // Off Windows the dialog asks for the ticket's principal each time Windows Authentication is chosen; Windows never asks.
+  // Off Windows the dialog asks for the ticket's principal when it opens, as SSMS reads the identity on open, so the saved
+  // Windows Authentication rows show it whichever authentication the form starts on (SQL Server Authentication there), and
+  // asks again each time Windows Authentication is chosen. Windows shows DOMAIN\user and never asks.
+  const integratedRows = async () => [...new Set(await dialog.locator('.connection-choice', { hasText: 'recent-server' }).locator('small').allTextContents())]
+  const identityCalls = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.identity').length)
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  dialog = await open()
+  if (process.platform === 'win32') await expect.poll(integratedRows).toEqual(['master · ' + windowsIdentity])
+  else {
+    await expect.poll(integratedRows).toEqual(['master · alice@CONTOSO.COM'])
+    expect(await identityCalls()).toBe(1)
+  }
+  await dialog.getByText('Development', { exact: true }).click()
+  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   if (process.platform === 'win32') {
     await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
-    expect(await app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.identity').length)).toBe(0)
-  } else await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('alice@CONTOSO.COM')
+    expect(await identityCalls()).toBe(0)
+  } else {
+    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('alice@CONTOSO.COM')
+    // After a kdestroy, choosing Windows Authentication again never shows the old principal, not even while the new lookup
+    // waits (a stuck cache holds it until the deadline): User Name and the rows show the OS user name.
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+    await app.evaluate(() => { globalThis.identityPending = true; globalThis.identityResolve = undefined })
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    await expect.poll(() => app.evaluate(() => typeof globalThis.identityResolve)).toBe('function')
+    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    expect(await integratedRows()).toEqual(['master · ' + windowsIdentity])
+    expect(await identityCalls()).toBe(3)
+    await app.evaluate(() => { globalThis.identityPending = false; globalThis.identityResolve({ ok: true, value: {} }) })
+    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    expect(await integratedRows()).toEqual(['master · ' + windowsIdentity])
+  }
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
