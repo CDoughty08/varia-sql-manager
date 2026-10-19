@@ -169,12 +169,12 @@ describe('default keybindings', () => {
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs']
     for (const platform of ['win32', 'linux'] as const) {
-      expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
+      expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh',
-        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', ...native, ...display, ...output])
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...display, ...output])
     }
-    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
+    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
       'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'query.changeDatabase', 'document.next', 'document.previous', ...native,
       'preferences.options', ...display, ...output])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
@@ -205,7 +205,9 @@ describe('default keybindings', () => {
   // letters it left alone stay unbound, except the keys PR2 and PR3 add: the palette, Change Database, and the results
   // pane toggle (SSMS) everywhere, and the SSMS Execute key in the editor on Windows and Linux.
   it('match the legacy file shortcuts and editor actions', () => {
-    const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close', 'shift+s': 'file.saveAs' }
+    const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close' }
+    // SSMS's Save All took Ctrl+Shift+S from Save As, which keeps ⇧⌘S on macOS (where Save All is ⌥⌘S).
+    const saveKeys: Readonly<Record<Platform, CommandId>> = { win32: 'file.saveAll', linux: 'file.saveAll', darwin: 'file.saveAs' }
     const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane' }
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute' }, linux: { e: 'query.execute' }, darwin: {} }
     for (const platform of platforms) {
@@ -213,10 +215,12 @@ describe('default keybindings', () => {
       for (const character of 'abcdefghijklmnopqrstuvwxyz') for (const shiftKey of [false, true]) {
         const input = event(shiftKey ? character.toUpperCase() : character, letter(character), { [primary]: true, shiftKey })
         const name = `${shiftKey ? 'shift+' : ''}${character}`
-        expect(commandFor(input, platform), `${platform} ${name}`).toBe(legacy[name] ?? palette[name])
+        expect(commandFor(input, platform), `${platform} ${name}`).toBe(name === 'shift+s' ? saveKeys[platform] : legacy[name] ?? palette[name])
         if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? palette[name] ?? added[platform][name])
         for (const extra of ['altKey', platform === 'darwin' ? 'ctrlKey' : 'metaKey']) {
-          expect(commandFor(event(character, letter(character), { [primary]: true, shiftKey, [extra]: true }), platform), `${platform} ${extra} ${character}`).toBeUndefined()
+          // ⌥⌘S is Save All on macOS.
+          const saveAll = platform === 'darwin' && extra === 'altKey' && character === 's' && !shiftKey ? 'file.saveAll' : undefined
+          expect(commandFor(event(character, letter(character), { [primary]: true, shiftKey, [extra]: true }), platform), `${platform} ${extra} ${character}`).toBe(saveAll)
         }
       }
       const enter = event('Enter', 'Enter', { [primary]: true }), f5 = event('F5', 'F5')

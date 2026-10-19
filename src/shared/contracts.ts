@@ -290,8 +290,15 @@ export type BackendState =
   | { status: 'stopped' }
 export type BackendStatus = BackendState['status']
 
-export interface SqlFile { id: string; name: string; path: string }
-export interface OpenSqlFile extends SqlFile { content: string }
+/** How a file's text is stored: Unicode with or without a byte order mark (`utf16le` and `utf16be` have one), or the
+ *  system's ANSI code page (`legacy`, read only). */
+export const fileEncodings = ['utf8', 'utf8bom', 'utf16le', 'utf16be', 'utf16leNoBom', 'utf16beNoBom', 'legacy'] as const
+export type FileEncoding = typeof fileEncodings[number]
+export type LineEnding = 'crlf' | 'lf'
+/** A file main registered: `codePage` names a `legacy` encoding ('Windows-1252'); `readOnly` is what the last read or save saw. */
+export interface SqlFile { id: string; name: string; path: string; encoding: FileEncoding; codePage?: string; readOnly: boolean }
+/** `eol` is the file's dominant line ending (the platform's when it has none); `mixedEol` says it had more than one. */
+export interface OpenSqlFile extends SqlFile { content: string; eol: LineEnding; mixedEol: boolean }
 /** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
 export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
 export type DocumentKind = typeof documentKinds[number]

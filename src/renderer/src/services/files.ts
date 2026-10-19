@@ -1,12 +1,16 @@
-import type { ApiResult, SqlFile, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, OpenSqlFile, SqlFile, VariaApi } from '../../../shared/contracts'
+import { lineEndingLabel } from '../../../shared/files/encoding'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
 
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
-export interface FileSnapshot { readonly error: string }
+/** The file banner: an error, or a warning that changes nothing (a file whose line endings were mixed). */
+export interface FileSnapshot { readonly error: string; readonly kind: 'error' | 'warning' }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
+/** What a document keeps of an opened file: everything but its text and line endings, which the model holds. */
+export const registeredFile = ({ id, name, path, encoding, codePage, readOnly }: OpenSqlFile | SqlFile): SqlFile => ({ id, name, path, encoding, ...codePage ? { codePage } : {}, readOnly })
 /** Queries that were running when the prompt opened, and finished since with a transaction: they were not asked about,
  *  so they stay (`open` or `connected`) rather than have it rolled back without asking. */
 export const unfinished = (count: number, stayed: 'open' | 'connected'): string => !count ? ''
@@ -19,14 +23,17 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private closing: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>, private api: FileApi) { super({ error: '' }) }
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>, private api: FileApi) { super({ error: '', kind: 'error' }) }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
   canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
   /** A query still executing can close too: main asks to cancel it first. */
   canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canSave(id) }
-  reportError(error: string): void {
-    if (!this.disposed && error !== this.getSnapshot().error) this.publish({ error })
+  reportError(error: string, kind: FileSnapshot['kind'] = 'error'): void {
+    const current = this.getSnapshot()
+    if (!this.disposed && (error !== current.error || kind !== current.kind)) this.publish({ error, kind })
   }
+  /** Save All: a document task, and some query has unsaved changes. */
+  canSaveAll(): boolean { return this.canRun() && this.documents.getSnapshot().documents.some(document => document.dirty) }
   clearError(): void { this.reportError('') }
   /** Resolves once no file task runs, or on disposal. */
   private idle(): Promise<void> {
@@ -56,19 +63,38 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     const target = this.documents.active
     await this.perform(async () => {
       const opened = unwrap(await this.api.openSqlFiles())
+      const mixed: string[] = []
       try {
         if (this.disposed) return
         for (const file of opened) {
-          const existing = this.documents.getSnapshot().documents.find(document => document.file?.path === file.path)
+          // Main gives a file one id, however its path was spelled or linked.
+          const existing = this.documents.getSnapshot().documents.find(document => document.file?.id === file.id)
           if (existing) { this.documents.activate(existing.id); continue }
-          this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, { id: file.id, name: file.name, path: file.path })
+          this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, registeredFile(file), file.eol)
+          if (file.mixedEol) mixed.push(`Line endings in ${file.name} were mixed; it will be saved with ${lineEndingLabel(file.eol)} line endings.`)
         }
       } finally { await this.releaseUnclaimed(opened) }
+      // Visual Studio asks; this is a notice, and the text opens with one kind of line ending, which Save writes.
+      if (mixed.length) this.reportError(mixed.join(' '), 'warning')
     })
   }
   async save(id = this.documents.getSnapshot().activeId, saveAs = false): Promise<void> {
     if (!this.canSave(id)) return
     await this.perform(async () => { await this.documents.save(id, saveAs) })
+  }
+  /**
+   * File › Save All: the queries with unsaved changes, in tab order, as one task. A query never saved asks for its file
+   * in turn, as SSMS does; cancelling that dialog stops the rest, and so does a save that fails.
+   */
+  async saveAll(): Promise<void> {
+    if (!this.canSaveAll()) return
+    await this.perform(async () => {
+      for (const { id } of this.documents.getSnapshot().documents) {
+        if (this.disposed) return
+        if (!this.documents.get(id)?.dirty) continue
+        if (!await this.documents.save(id)) return
+      }
+    })
   }
   /**
    * Saves text to a file the user picks (Script … to File…), without opening it as a query. Resolves with the saved
@@ -187,6 +213,6 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     this.disposed = true
     for (const done of [...this.waiters]) done()
     this.clearListeners()
-    this.publish({ error: '' })
+    this.publish({ error: '', kind: 'error' })
   }
 }

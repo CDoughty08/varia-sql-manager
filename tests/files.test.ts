@@ -10,7 +10,7 @@ import { contextRecord } from '../src/shared/commands/context-keys'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
-const openedFile = (id = 'opened', path = 'C:/opened.sql'): OpenSqlFile => ({ id, path, name: path.split('/').at(-1)!, content: 'SELECT 1' })
+const openedFile = (id = 'opened', path = 'C:/opened.sql'): OpenSqlFile => ({ id, path, name: path.split('/').at(-1)!, content: 'SELECT 1', encoding: 'utf8', readOnly: false, eol: 'lf', mixedEol: false })
 function fixture() {
   const doc = documentFixture()
   const api = {
@@ -94,6 +94,16 @@ describe('file commands', () => {
     expect(activate).toHaveBeenCalledWith(tab.id)
     expect(api.releaseSqlFile).not.toHaveBeenCalled()
   })
+  it('finds an open file\'s tab by the id main gave it, whatever path spelling main returns', async () => {
+    const { documents, api, commands, events } = fixture()
+    const tab = documents.create('Orders.sql', 'SELECT 1', 'master', 'server-a', false, openedFile('orders', 'C:/Orders.sql'))
+    const activate = vi.fn()
+    events.subscribe(event => { if (event.type === 'documents.activated') activate(event.tabId) })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [openedFile('orders', 'C:/ORDERS.SQL')] })
+    await commands.run('file.open')
+    expect(documents.getSnapshot().documents.filter(document => document.file?.id === 'orders')).toHaveLength(1)
+    expect(activate).toHaveBeenCalledWith(tab.id)
+  })
   it('saves an explicit document and keeps that target when activation changes during Save As', async () => {
     const { documents, model, api, commands } = fixture()
     const left = documents.active!
@@ -136,7 +146,7 @@ describe('file commands', () => {
   it('closes many queries in tab order, stops at Cancel, and releases their files', async () => {
     const { documents, model, api, commands, files } = fixture()
     const [first] = documents.getSnapshot().documents
-    const saved = documents.create('saved.sql', 'SELECT 1', 'master', undefined, false, { id: 'saved-file', name: 'saved.sql', path: 'C:/saved.sql' })
+    const saved = documents.create('saved.sql', 'SELECT 1', 'master', undefined, false, { id: 'saved-file', name: 'saved.sql', path: 'C:/saved.sql', encoding: 'utf8', readOnly: false })
     const dirty = documents.create('dirty.sql', '', 'master'), kept = documents.create('kept.sql', '', 'master'), last = documents.create('last.sql', '', 'master')
     model(dirty.id).edit('SELECT dirty')
     model(kept.id).edit('SELECT kept')
@@ -415,7 +425,7 @@ describe('file commands', () => {
     const closing = files.closeWindow(flush)
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(api.confirmClose).not.toHaveBeenCalled()
-    save.resolve({ ok: true, value: { id: 'file-id', name: 'dbo.Orders.sql', path: 'C:/dbo.Orders.sql' } })
+    save.resolve({ ok: true, value: { id: 'file-id', name: 'dbo.Orders.sql', path: 'C:/dbo.Orders.sql', encoding: 'utf8', readOnly: false } })
     await copy
     await closing
     expect(api.confirmClose).toHaveBeenCalledTimes(1)
@@ -439,5 +449,82 @@ describe('file commands', () => {
     contribution.dispose()
     expect(commands.canRun('file.new')).toBe(false)
     await expect(commands.run('file.new')).rejects.toThrow('Unknown command')
+  })
+})
+
+describe('Save All, line endings and file metadata', () => {
+  const saved = (id: string, name: string): SaveResponse => ({ ok: true, value: { id, name, path: 'C:/' + name, encoding: 'utf8', readOnly: false } })
+  it('saves the queries with unsaved changes in tab order, asking for an untitled query\'s file in turn', async () => {
+    const { documents, api, commands, files, model } = fixture()
+    const first = documents.active!
+    const file = documents.create('saved.sql', 'SELECT 1', 'master', undefined, false, { id: 'file-1', name: 'saved.sql', path: 'C:/saved.sql', encoding: 'utf16le', readOnly: false })
+    const clean = documents.create('clean.sql', 'SELECT 3', 'master', undefined, false, { id: 'file-3', name: 'clean.sql', path: 'C:/clean.sql', encoding: 'utf8', readOnly: false })
+    expect(files.canSaveAll()).toBe(false)
+    model(file.id).edit('SELECT 2')
+    model(first.id).edit('SELECT 0')
+    expect(files.canSaveAll()).toBe(true)
+    api.saveSqlFile.mockImplementation(async options => saved(options.fileId ?? 'new-file', options.fileId ? 'saved.sql' : 'SQLQuery1.sql'))
+    await commands.run('file.saveAll')
+    // Tab order: the untitled first query (Save As, no file id), then the saved one; the clean one is left alone.
+    expect(api.saveSqlFile.mock.calls.map(([options]) => [options.fileId, options.name, options.saveAs])).toEqual([[undefined, 'SQLQuery1.sql', false], ['file-1', 'saved.sql', false]])
+    expect(documents.getSnapshot().documents.map(document => document.dirty)).toEqual([false, false, false])
+    expect(documents.get(clean.id)?.file?.id).toBe('file-3')
+    expect(files.canSaveAll()).toBe(false)
+  })
+  it('stops at a cancelled Save dialog, as SSMS does, and reports a failed save', async () => {
+    const { documents, api, files, model } = fixture()
+    const first = documents.active!, second = documents.newQuery('SELECT 2', undefined, undefined, 'master', true), third = documents.newQuery('SELECT 3', undefined, undefined, 'master', true)
+    model(first.id).edit('SELECT 1')
+    api.saveSqlFile.mockResolvedValueOnce({ ok: true, value: null })
+    await files.saveAll()
+    expect(api.saveSqlFile).toHaveBeenCalledTimes(1)
+    expect([first, second, third].map(document => documents.get(document.id)?.dirty)).toEqual([true, true, true])
+    api.saveSqlFile.mockResolvedValueOnce(saved('f1', 'one.sql')).mockResolvedValueOnce({ ok: false, error: 'Access is denied.' })
+    await files.saveAll()
+    expect(api.saveSqlFile).toHaveBeenCalledTimes(3)
+    expect([first, second, third].map(document => documents.get(document.id)?.dirty)).toEqual([false, true, true])
+    expect(files.getSnapshot()).toEqual({ error: 'Access is denied.', kind: 'error' })
+  })
+  it('opens a file with its line ending and keeps its encoding, and says when line endings were mixed', async () => {
+    const { documents, api, commands, models } = fixture()
+    const crlf = { ...openedFile('crlf', 'C:/crlf.sql'), content: 'SELECT 1\r\nGO\r\n', eol: 'crlf' as const, encoding: 'utf16be' as const, readOnly: true }
+    const mixed = { ...openedFile('mixed', 'C:/mixed.sql'), content: 'SELECT 1\nGO\r\n', eol: 'lf' as const, mixedEol: true, encoding: 'legacy' as const, codePage: 'Windows-1252' }
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [crlf, mixed] })
+    await commands.run('file.open')
+    const [, first, second] = documents.getSnapshot().documents
+    expect(first).toMatchObject({ dirty: false, file: { id: 'crlf', encoding: 'utf16be', readOnly: true } })
+    expect(first.file).not.toHaveProperty('content')
+    expect(second.file).toEqual({ id: 'mixed', name: 'mixed.sql', path: 'C:/mixed.sql', encoding: 'legacy', codePage: 'Windows-1252', readOnly: false })
+    const modelOf = (id: string) => models.get(`varia-sql://query/${id}`)!
+    expect([modelOf(first.id).getEOL(), modelOf(second.id).getEOL()]).toEqual(['\r\n', '\n'])
+    // The line ending is set before the document counts as saved, so it opens clean and undoing an edit makes it clean
+    // again; Monaco normalizes mixed text to it.
+    expect(first.dirty).toBe(false)
+    expect(second.dirty).toBe(false)
+    modelOf(first.id).edit('SELECT 2\r\n')
+    expect(documents.get(first.id)?.dirty).toBe(true)
+    modelOf(first.id).undo()
+    expect(documents.get(first.id)?.dirty).toBe(false)
+    expect(documents.getSnapshot().busy).toBe(false)
+  })
+  it('shows the mixed line endings notice as a warning the next file task clears', async () => {
+    const { api, commands, files } = fixture()
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ ...openedFile('mixed', 'C:/mixed.sql'), eol: 'crlf', mixedEol: true }] })
+    await commands.run('file.open')
+    expect(files.getSnapshot()).toEqual({ error: 'Line endings in mixed.sql were mixed; it will be saved with CRLF line endings.', kind: 'warning' })
+    await commands.run('file.save')
+    expect(files.getSnapshot()).toEqual({ error: '', kind: 'error' })
+  })
+  it('gives a new query the platform\'s line ending', () => {
+    const windows = documentFixture({ newLineEnding: 'crlf' }), linux = documentFixture()
+    const query = windows.documents.newQuery('SELECT 1\nGO')
+    expect(windows.model(query.id).getEOL()).toBe('\r\n')
+    expect(windows.model(query.id).getValue()).toBe('SELECT 1\r\nGO')
+    expect(windows.documents.get(query.id)?.dirty).toBe(false)
+    expect(linux.model(linux.documents.newQuery('SELECT 1').id).getEOL()).toBe('\n')
+    // A value opened from the results keeps its own text.
+    const value = windows.documents.openText({ name: 'v.xml', text: '<a>\n</a>', kind: 'xml' })
+    expect(windows.model(value.id).getEOL()).toBe('\n')
+    windows.documents.dispose(); linux.documents.dispose()
   })
 })

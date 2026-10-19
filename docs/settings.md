@@ -12,10 +12,12 @@ from Microsoft's documentation, so Varia keeps its own.
 
 - Environment
   - General (`environment.general`)
+  - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
   - Keyboard (`environment.keyboard`)
 - Text Editor
   - General (`textEditor.general`)
+  - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
   - Transact-SQL
     - General (`textEditor.transactSql.general`)
     - Tabs (`textEditor.transactSql.tabs`)
@@ -41,6 +43,13 @@ Its first row is a note: Color theme: View › Theme (stored in `appearance.json
 
 _No settings yet._
 
+### Environment › Documents
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.documents.saveWithSpecificEncoding` | Save files with a specific encoding | Boolean | False |  | All | At once | Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none. |
+| `environment.documents.saveEncoding` | Save encoding | One of `utf8bom` (Unicode (UTF-8 with signature)), `utf8` (Unicode (UTF-8 without signature)), `utf16le` (Unicode), `utf16be` (Unicode (Big-Endian)) | Unicode (UTF-8 with signature) |  | All | At once | The encoding every file is saved in while Save files with a specific encoding is True. Unicode is UTF-16 little-endian. Greyed while `environment.documents.saveWithSpecificEncoding` is False. |
+
 ### Environment › Fonts and Colors
 
 Colors come from the color theme (View › Theme).
@@ -62,6 +71,19 @@ _No settings yet._
 | `textEditor.dragAndDrop` | Enable mouse click to perform drag-and-drop text editing | Boolean | True |  | All | At once | Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS). |
 | `textEditor.delimiterHighlighting` | Automatic delimiter highlighting | Boolean | True |  | All | At once | Highlights the bracket or parenthesis that matches the one at the caret. Large values opened from the results never match brackets. |
 | `textEditor.highlightCurrentLine` | Highlight current line | Boolean | True |  | All | At once | Highlights the line that holds the caret. |
+
+### Text Editor › Editor Tab and Status Bar
+
+The query window's status bar: where it is, and what it shows. A property grid: True/False lists, values that differ from their default in bold.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `textEditor.statusBar.executionTime` | Display execution time | One of `elapsed` (Elapsed), `end` (End), `none` (None) | Elapsed |  | All | At once | Select type of time display to include on the status bar: how long the query has run or ran (Elapsed), or the time its last execution ended (End). |
+| `textEditor.statusBar.showDatabase` | Include database name | Boolean | True |  | All | At once | Include the database name on the status bar. |
+| `textEditor.statusBar.showLogin` | Include login name | Boolean | True |  | All | At once | Include login information on the status bar: the login and session id, `login (SPID)`, of the query's last execution. |
+| `textEditor.statusBar.showRowCount` | Include row count | Boolean | True |  | All | At once | Include count of returned rows on the status bar. |
+| `textEditor.statusBar.showServer` | Include server name | Boolean | True |  | All | At once | Include server name on the status bar, with the server's major and minor version. |
+| `textEditor.statusBar.location` | Status bar location | One of `bottom` (Bottom), `top` (Top) | Bottom |  | All | At once | Select the location of the status bar for the editor: below the query text, or above it. |
 
 ### Text Editor › Transact-SQL › General
 
@@ -178,4 +200,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (50 today).
+A patch holds at most one entry per setting (58 today).

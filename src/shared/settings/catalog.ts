@@ -4,11 +4,13 @@ import { commandDescriptor, type CommandId } from '../commands/catalog'
 import type { Platform } from '../commands/keybindings'
 import type { ScriptingOptions } from '../scripting/options.ts'
 import { scriptingOptionKeys } from '../scripting/options.ts'
+import { documentSettings } from './documents'
 import { environmentSettings } from './environment'
 import { objectExplorerSettings, scriptingSettingPrefix } from './object-explorer'
 import { settingPages as pages } from './pages'
 import { queryExecutionSettings } from './query-execution'
 import { queryResultsSettings } from './query-results'
+import { statusBarSettings } from './status-bar'
 import { textEditorSettings } from './text-editor'
 import type { SettingDef, SettingPage } from './types'
 
@@ -17,7 +19,9 @@ export type { SettingDef, SettingPage } from './types'
 /** One import and one entry a line: each area belongs to the PR that owns it. */
 const settingAreas = [
   environmentSettings,
+  documentSettings,
   textEditorSettings,
+  statusBarSettings,
   queryExecutionSettings,
   queryResultsSettings,
   objectExplorerSettings

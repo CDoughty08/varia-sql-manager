@@ -22,10 +22,10 @@ describe('menu model', () => {
     const windowMenu = ['window.explorer', 'window.editor', 'window.output', 'view.toggleResultsPane', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
     for (const platform of ['win32', 'linux'] as const) {
       // Exit (Windows) and Quit (Linux): macOS quits from its app menu.
-      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close', '-', 'window.close'])
+      expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close', '-', 'window.close'])
       expect(outline('window', platform)).toEqual(windowMenu)
     }
-    expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', '-', 'file.close'])
+    expect(outline('file', 'darwin')).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close'])
     expect(outline('window', 'darwin')).toEqual([...windowMenu, '-', 'role:minimize', 'role:zoom'])
     for (const platform of platforms) {
       expect(outline('edit', platform)).toEqual(['edit.undo', 'edit.redo', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', '-', 'edit.find', 'edit.replace', '-', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines'])
@@ -307,7 +307,7 @@ describe('menu state', () => {
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', ...scriptCommandIds,
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
-      'output.saveResultsAs', 'output.closeResults', 'output.openValue']
+      'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -315,7 +315,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap', 'editor.toggleOvertype'])
   })
   it('accepts unique catalogue ids only', () => {
     expect(menuStateSchema.parse({ disabled: ['file.save', 'query.cancel'], checked: ['editor.toggleWordWrap'] })).toEqual({ disabled: ['file.save', 'query.cancel'], checked: ['editor.toggleWordWrap'] })

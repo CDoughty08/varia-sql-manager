@@ -13,7 +13,8 @@ import { ScriptingRequests } from './backend/scripting-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest, validateResult } from './validation'
-import { SqlFileStore, fileKinds, saveFileSchema } from './sql-files'
+import { SqlFileStore, fileKinds, saveDocument, saveFileSchema } from './sql-files'
+import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { SettingsStore } from './settings-store'
@@ -52,7 +53,8 @@ const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged
 let testHooks: BackendTestHooks | undefined
 // How long a reload waits for Chromium to see a renderer only the watchdog saw go before the page gets a new window.
 const lostRendererGraceMs = 5000
-const files = new SqlFileStore()
+// The ANSI code page is read when a file needs it: the system locale is known only once the app is ready.
+const files = new SqlFileStore({ legacyLabel: () => legacyCodePage(app.getSystemLocale()) })
 // Main's file dialogs and prompts, one at a time: a dialog asked for while another is open waits for it. A renderer reset
 // drops those not yet shown, and `rendererGeneration` tells a handler whose dialog was open then that its page is gone.
 const oneDialog = dialogQueue()
@@ -161,6 +163,26 @@ function pageDialog<T>(show: (window: BrowserWindow, signal?: AbortSignal) => Pr
   const asked = rendererGeneration
   return oneDialog(signal => mainWindow && !mainWindow.isDestroyed() ? show(mainWindow, signal) : Promise.resolve(cancelled), cancelled, abortable)
     .then(answer => asked === rendererGeneration ? answer : cancelled)
+}
+
+/** Visual Studio's Save of Read-Only File, for a plain Save. Cancel, and a page that reloads meanwhile, save nothing. */
+async function askReadOnly(path: string): Promise<'saveAs' | 'overwrite' | 'cancel'> {
+  const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+    type: 'warning', title: 'Save of Read-Only File', message: `The file ${path} cannot be saved because it is write-protected.`,
+    detail: 'You can either save the file in a different location or Varia SQL Manager can attempt to remove the write-protection and overwrite the file in its current location.',
+    buttons: ['Save As…', 'Overwrite', 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal
+  }), { response: 2, checkboxChecked: false }, true)
+  return response === 0 ? 'saveAs' : response === 1 ? 'overwrite' : 'cancel'
+}
+
+/** A file read in the ANSI code page is saved only as Unicode, and only once the user agrees. */
+async function askUnicode(name: string, codePage: string): Promise<boolean> {
+  const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+    type: 'question', title: 'Save as Unicode', message: `${name} was read as ${codePage}.`,
+    detail: 'Varia SQL Manager saves only Unicode. Save it as UTF-8 with a byte order mark, which SSMS and other tools read correctly?',
+    buttons: ['Save as UTF-8', 'Cancel'], defaultId: 0, cancelId: 1, noLink: true, signal
+  }), { response: 1, checkboxChecked: false }, true)
+  return response === 0
 }
 
 /** Asks the page to close, as the window's close button and a quit do; the request outlives a reload or crash. */
@@ -561,15 +583,17 @@ app.whenReady().then(async () => {
   })
   handle('varia:files-save', async value => {
     const options = saveFileSchema.parse(value), kind = fileKinds[options.kind ?? 'sql']
-    let selectedPath: string | undefined
-    if (!options.fileId || options.saveAs) {
-      const safeName = sanitizeFileName(options.name)
-      const defaultPath = options.fileId ? files.get(options.fileId).path : join(app.getPath('documents'), safeName)
-      const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
-      if (selection.canceled || !selection.filePath) return null
-      selectedPath = selection.filePath
-    }
-    return files.save(options.content, options.fileId, selectedPath, options.kind)
+    // While settings.json cannot be read, Options cannot open either, so the defaults apply.
+    const values = (await settings.load().catch(() => ({ values: settings.current() }))).values
+    const encoding = values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined
+    return saveDocument(files, options, encoding, {
+      readOnly: askReadOnly, unicode: askUnicode,
+      saveDialog: async registeredPath => {
+        const defaultPath = registeredPath ?? join(app.getPath('documents'), sanitizeFileName(options.name))
+        const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
+        return selection.canceled || !selection.filePath ? undefined : selection.filePath
+      }
+    })
   })
   handle('varia:files-release', value => { files.release(z.uuid().parse(value)) })
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })

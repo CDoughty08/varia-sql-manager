@@ -263,12 +263,28 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-select { display: flex; align-items: center; gap: 8px; height: 35px; border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tab-readonly { font-size: 12px; margin-left: -4px; }
 .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
 .tab-close .icon { width: 12px; height: 12px; flex-basis: 12px; }
 .tab-close:focus-visible { outline-offset: -2px; }
 .sql-icon { font-size: 8px; line-height: 16px; color: var(--varia-documentTabs-iconForeground); font-weight: 700; }
-.query-context { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 20px; color: var(--varia-breadcrumb-foreground); font-size: 10px; line-height: 16px; flex-shrink: 0; }
-.breadcrumb { margin: 0 9px; color: var(--varia-breadcrumb-separatorForeground); }
+/* SSMS's query window status bar: the run's state, then server (version), login (SPID), database, time and rows. The
+   server gives way first when the bar is narrow; the tooltip holds the whole text. A value's document names its kind. */
+.query-status-bar { display: flex; align-items: center; gap: 16px; height: 24px; padding: 0 12px; flex-shrink: 0; overflow: hidden; white-space: nowrap; font-size: 10px; line-height: 16px; background: var(--varia-queryStatusBar-background); color: var(--varia-queryStatusBar-foreground); }
+.query-status-bar[data-tone="value"] { background: none; color: var(--varia-breadcrumb-foreground); padding: 0 20px; }
+.query-status-bar[data-tone="executing"] { background: var(--varia-queryStatusBar-executingBackground); color: var(--varia-queryStatusBar-executingForeground); }
+.query-status-bar[data-tone="error"] { background: var(--varia-queryStatusBar-errorBackground); color: var(--varia-queryStatusBar-errorForeground); }
+.query-status-state { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.query-status-state .codicon { font-size: 12px; }
+.query-status-segments { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-left: auto; }
+.query-status-segment { flex-shrink: 0; }
+.query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
+/* Short of room, the server gives way first, then the login, then the database (each whole in the bar's tooltip); the
+   time and rows keep their size. The weights make the shrinking all but sequential. */
+.query-status-server, .query-status-login, .query-status-database { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.query-status-server { flex-shrink: 1000000; }
+.query-status-login { flex-shrink: 1000; }
+.query-status-database { flex-shrink: 1; }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .workspace-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: 13px; }
@@ -383,12 +399,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
 .status-bar > span:first-child { display: flex; align-items: center; gap: 8px; }
 .status-bar > span:nth-child(2) { margin-left: auto; }
-.status-divider { margin: 0 12px; color: var(--varia-statusBar-separatorForeground); }
 /* The outer segments keep their size. Scripting, in the middle, takes the space left over down to a floor that keeps
    Cancel and the start of its text; past that the server and database give way. The bar itself never widens the page.
    The segment clips what still does not fit, and its padding and full height leave room for a focus ring. */
 .status-bar > :not(.status-scripting) { flex-shrink: 0; white-space: nowrap; }
-.status-bar > .status-place { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin: 0 12px; }
+.editor-status-position { display: flex; gap: 10px; }
+.editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
+.editor-status-readonly { display: flex; align-items: center; gap: 4px; }
+.editor-status .codicon { font-size: 12px; }
 .status-scripting { display: flex; align-items: center; align-self: stretch; justify-content: safe center; gap: 8px; flex: 1 1 0; min-width: 0; overflow: hidden; margin: 0 8px; padding: 0 4px; }
 .status-scripting:not(:empty) { min-width: 20em; }
 /* Its own left gap: the status bar's second child otherwise loses it to the auto margin above. */

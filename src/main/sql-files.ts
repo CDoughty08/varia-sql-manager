@@ -1,8 +1,11 @@
-import { open, readFile, rename, rm, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, chmod, lstat, open, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { documentKinds, type DocumentKind, type OpenSqlFile, type SqlFile } from '../shared/contracts'
+import { documentKinds, type DocumentKind, type FileEncoding, type OpenSqlFile, type SaveSqlFile, type SqlFile } from '../shared/contracts'
+import { readRegularFile, replaceFile } from './json-file'
+import { detectAndDecode, detectEol, encodeText, type DecoderFactory } from './text-encoding'
 
 export const maxSqlFileBytes = 5_000_000
 interface FileKind { readonly title: string; readonly filters: { name: string; extensions: string[] }[]; readonly maxChars: number; readonly maxBytes: number; readonly tooLarge: string }
@@ -17,67 +20,193 @@ export const fileKinds: Readonly<Record<DocumentKind, FileKind>> = {
 /** varia:files-save: the content's limit depends on the kind (a query by default). */
 export const saveFileSchema = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxSqlFileBytes), saveAs: z.boolean(), kind: z.enum(documentKinds).optional() }).strict()
   .refine(value => value.content.length <= fileKinds[value.kind ?? 'sql'].maxChars, 'The document is too large to save.')
-type Encoding = 'utf8' | 'utf8-bom' | 'utf16le'
-interface RegisteredFile { file: SqlFile; encoding: Encoding }
 // Windows paths are case-insensitive; one file must map to one registration and one tab.
-const samePath = (left: string, right: string) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+export const samePath = (left: string, right: string, platform: NodeJS.Platform = process.platform) => platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+
+const posix = process.platform !== 'win32'
+const readOnlyCodes = new Set(['EACCES', 'EPERM', 'EROFS'])
+/** Whether the file at `path` exists and cannot be written: a read-only attribute on Windows, no write permission or a
+ *  read-only file system elsewhere. A missing file is not read-only. */
+export async function isReadOnly(path: string): Promise<boolean> {
+  try { await access(path, constants.W_OK); return false }
+  catch (error) { return readOnlyCodes.has((error as NodeJS.ErrnoException).code ?? '') }
+}
+const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
+// A file system that cannot change a file's group (or a user outside the group) leaves the saver's.
+const ownershipCodes = new Set(['EPERM', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS'])
+
+export interface SqlFileStoreOptions {
+  /** The ANSI code page's WHATWG label for files that are neither UTF-8 nor UTF-16 (`legacyCodePage`); read when needed. */
+  readonly legacyLabel?: () => string
+  readonly decoder?: DecoderFactory
+  readonly platform?: NodeJS.Platform
+  /** The rename that replaces a file; tests watch it. */
+  readonly replace?: typeof replaceFile
+  /** Resolves symbolic links; tests make it fail as it does on some volumes. */
+  readonly realpath?: (path: string) => Promise<string>
+}
+export interface SaveOptions {
+  /** Overrides the file's own encoding: Save files with a specific encoding, or a legacy file the user agreed to convert. */
+  readonly encoding?: Exclude<FileEncoding, 'legacy'>
+  /** Overwrite in Save of Read-Only File: a read-only file gets write permission just before it is replaced (which clears
+   *  Windows' read-only attribute), and its mode back if the save fails. */
+  readonly overwriteReadOnly?: boolean
+}
 
 /** Paths are granted by native dialogs, never accepted from renderer requests. */
 export class SqlFileStore {
-  private files = new Map<string, RegisteredFile>()
+  private files = new Map<string, SqlFile>()
+  constructor(private readonly options: SqlFileStoreOptions = {}) {}
 
   async read(path: string): Promise<OpenSqlFile> {
-    if ((await stat(path)).size > maxSqlFileBytes) throw new Error('SQL files must be smaller than 5 MB.')
-    const bytes = await readFile(path)
-    if (bytes.length > maxSqlFileBytes) throw new Error('SQL files must be smaller than 5 MB.')
-    let content: string
-    let encoding: Encoding = 'utf8'
-    if (bytes[0] === 0xff && bytes[1] === 0xfe) {
-      content = new TextDecoder('utf-16le', { fatal: true }).decode(bytes.subarray(2))
-      encoding = 'utf16le'
-    } else {
-      content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-      if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) encoding = 'utf8-bom'
-    }
-    if (content.includes('\0')) throw new Error('This file is not a supported SQL text file. Use UTF-8 or UTF-16 LE.')
     const absolutePath = resolve(path)
-    const existing = this.find(absolutePath)
-    const file = existing?.file ?? { id: randomUUID(), name: basename(absolutePath), path: absolutePath }
-    this.files.set(file.id, { file, encoding })
-    return { ...file, content }
+    // A FIFO or device is refused without blocking; only a regular file is read, and at most one byte past the limit.
+    const bytes = await readRegularFile(absolutePath, maxSqlFileBytes)
+    if (!bytes) throw new Error(`${basename(absolutePath)} is not a file.`)
+    if (bytes.length > maxSqlFileBytes) throw new Error('SQL files must be smaller than 5 MB.')
+    const decoded = detectAndDecode(bytes, this.options.legacyLabel?.() ?? 'windows-1252', this.options.decoder)
+    const { eol, mixed } = detectEol(decoded.text, this.platform)
+    // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
+    // its tab instead of opening a second one that would save over the first.
+    const existing = await this.owner(absolutePath)
+    const file: SqlFile = {
+      id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
+      ...decoded.codePage ? { codePage: decoded.codePage } : {}, readOnly: await isReadOnly(absolutePath)
+    }
+    this.files.set(file.id, file)
+    return { ...file, content: decoded.text, eol, mixedEol: mixed }
   }
 
   get(fileId: string): SqlFile {
     const entry = this.files.get(fileId)
     if (!entry) throw new Error('This SQL file is no longer open. Use Save As to select a file.')
-    return entry.file
+    return entry
   }
 
-  async save(content: string, fileId?: string, selectedPath?: string, kind: DocumentKind = 'sql'): Promise<SqlFile> {
+  /** Whether the registered file cannot be written now: its attribute may have changed since it was read. */
+  async readOnly(fileId: string): Promise<boolean> {
+    return isReadOnly(await this.writeTarget(this.get(fileId).path))
+  }
+
+  /**
+   * Writes `content` to a temporary file beside the real target (a symbolic link's target, so the link survives), with
+   * the existing file's permissions and group on POSIX, then replaces the target with it: a failed save leaves the file
+   * as it was. A read-only target is refused without `overwriteReadOnly`, since POSIX's rename would replace it regardless.
+   */
+  async save(content: string, fileId?: string, selectedPath?: string, kind: DocumentKind = 'sql', options: SaveOptions = {}): Promise<SqlFile> {
     const existing = fileId ? this.files.get(fileId) : undefined
     if (fileId && !existing) throw new Error('Unknown SQL file.')
     if (!selectedPath && !existing) throw new Error('Select a file using Save As first.')
-    const path = resolve(selectedPath ?? existing!.file.path)
-    const owner = this.find(path)
-    if (owner && owner.file.id !== existing?.file.id) throw new Error(`${owner.file.name} is open in another query tab. Close that tab before saving over it.`)
-    const encoding = existing?.encoding ?? 'utf8'
-    const bytes = encoding === 'utf16le'
-      ? Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, 'utf16le')])
-      : Buffer.concat([encoding === 'utf8-bom' ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0), Buffer.from(content, 'utf8')])
+    const path = resolve(selectedPath ?? existing!.path)
+    const owner = await this.owner(path, existing?.id)
+    if (owner) throw new Error(`${owner.name} is open in another query tab. Close that tab before saving over it.`)
+    const encoding = options.encoding ?? existing?.encoding ?? 'utf8'
+    if (encoding === 'legacy') throw new Error(`${existing?.name ?? basename(path)} was read as ${existing?.codePage ?? 'ANSI'}, which Varia SQL Manager does not write. Save it as Unicode.`)
+    const bytes = encodeText(content, encoding)
     if (bytes.length > fileKinds[kind].maxBytes) throw new Error(fileKinds[kind].tooLarge)
-    const temporaryPath = join(dirname(path), `.varia-${randomUUID()}.tmp`)
+    const target = await this.writeTarget(path)
+    let current: { mode: number; uid: number; gid: number } | undefined
+    try {
+      const info = await stat(target)
+      if (!info.isFile()) throw new Error(`${basename(path)} is not a file.`)
+      current = { mode: info.mode & 0o7777, uid: info.uid, gid: info.gid }
+    } catch (error) { if (!missing(error)) throw error }
+    let restore: number | undefined
+    if (current && await isReadOnly(target)) {
+      if (!options.overwriteReadOnly) throw new Error(`${basename(path)} is read-only.`)
+      restore = current.mode
+      current.mode |= 0o200
+      await chmod(target, current.mode)
+    }
+    const temporaryPath = join(dirname(target), `.varia-${randomUUID()}.tmp`)
+    let replaced = false
     try {
       const temporaryFile = await open(temporaryPath, 'wx')
-      try { await temporaryFile.writeFile(bytes); await temporaryFile.sync() }
-      finally { await temporaryFile.close() }
-      await rename(temporaryPath, path)
-    } finally { await rm(temporaryPath, { force: true }) }
-    const file = { id: existing?.file.id ?? randomUUID(), name: basename(path), path }
-    this.files.set(file.id, { file, encoding })
+      try {
+        await temporaryFile.writeFile(bytes)
+        if (posix && current) {
+          // The new file is the saver's: a group-shared file keeps its group, and root keeps the owner too. Before chmod,
+          // since a change of owner clears set-user-ID and set-group-ID.
+          await temporaryFile.chown(process.getuid?.() === 0 ? current.uid : -1, current.gid).catch((error: NodeJS.ErrnoException) => { if (!ownershipCodes.has(error.code ?? '')) throw error })
+          // A 0600 file must not become 0644 (the umask's default) when it is replaced.
+          await temporaryFile.chmod(current.mode)
+        }
+        await temporaryFile.sync()
+      } finally { await temporaryFile.close() }
+      // Retries Windows' brief holds (antivirus, indexer, OneDrive) instead of failing the save.
+      await (this.options.replace ?? replaceFile)(temporaryPath, target)
+      replaced = true
+    } finally {
+      await rm(temporaryPath, { force: true })
+      if (!replaced && restore !== undefined) await chmod(target, restore).catch(() => {})
+    }
+    const file: SqlFile = { id: existing?.id ?? randomUUID(), name: basename(path), path, encoding, readOnly: false }
+    this.files.set(file.id, file)
     return file
   }
 
   release(fileId: string): void { this.files.delete(fileId) }
   clear(): void { this.files.clear() }
-  private find(path: string): RegisteredFile | undefined { return [...this.files.values()].find(entry => samePath(entry.file.path, path)) }
+  private get platform(): NodeJS.Platform { return this.options.platform ?? process.platform }
+  /** Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. */
+  private async writeTarget(path: string): Promise<string> {
+    try { return await (this.options.realpath ?? realpath)(path) }
+    catch (error) {
+      if (missing(error)) return path
+      // Windows' realpath fails on some volumes (RAM disks, some virtual drives); only a link needs resolving.
+      if (!(await lstat(path)).isSymbolicLink()) return path
+      throw error
+    }
+  }
+  /**
+   * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the same
+   * file reached through a symbolic link, which a save would write too.
+   */
+  private async owner(path: string, except?: string): Promise<SqlFile | undefined> {
+    const others = [...this.files.values()].filter(entry => entry.id !== except)
+    const literal = others.find(entry => samePath(entry.path, path, this.platform))
+    if (literal || !others.length) return literal
+    const resolved = async (candidate: string) => this.writeTarget(candidate).catch(() => candidate)
+    const target = await resolved(path)
+    for (const entry of others) if (samePath(await resolved(entry.path), target, this.platform)) return entry
+    return undefined
+  }
+}
+
+/** The questions a save may ask, as main's native dialogs. */
+export interface SavePrompts {
+  /** Save of Read-Only File, for the registered file at `path`. */
+  readOnly(path: string): Promise<'saveAs' | 'overwrite' | 'cancel'>
+  /** Save as Unicode, for a file read in the ANSI code page. */
+  unicode(name: string, codePage: string): Promise<boolean>
+  /** The Save dialog, at the registered file's path (undefined for a document never saved); undefined when cancelled. */
+  saveDialog(registeredPath: string | undefined): Promise<string | undefined>
+}
+
+/**
+ * varia:files-save once validated: Save of Read-Only File, Save as Unicode and the Save dialog, in that order, then the
+ * write. A Cancel at any of them writes and changes nothing, so Overwrite's write permission waits for the save itself.
+ * `specificEncoding` is Save files with a specific encoding's Save encoding while that is on: every file is converted
+ * without asking, a legacy one too.
+ */
+export async function saveDocument(files: SqlFileStore, request: SaveSqlFile, specificEncoding: SaveOptions['encoding'], prompts: SavePrompts): Promise<SqlFile | null> {
+  let saveAs = !request.fileId || request.saveAs, overwriteReadOnly = false
+  if (!saveAs && request.fileId && await files.readOnly(request.fileId)) {
+    const answer = await prompts.readOnly(files.get(request.fileId).path)
+    if (answer === 'cancel') return null
+    if (answer === 'saveAs') saveAs = true
+    else overwriteReadOnly = true
+  }
+  const registered = request.fileId ? files.get(request.fileId) : undefined
+  let encoding = specificEncoding
+  if (!encoding && registered?.encoding === 'legacy') {
+    if (!await prompts.unicode(registered.name, registered.codePage ?? 'ANSI')) return null
+    encoding = 'utf8bom'
+  }
+  let selectedPath: string | undefined
+  if (saveAs) {
+    selectedPath = await prompts.saveDialog(registered?.path)
+    if (!selectedPath) return null
+  }
+  return files.save(request.content, request.fileId, selectedPath, request.kind, { ...encoding ? { encoding } : {}, ...overwriteReadOnly ? { overwriteReadOnly } : {} })
 }

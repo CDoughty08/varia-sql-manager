@@ -50,7 +50,9 @@ export const codicons = [
   'warning',
   'settings-gear',
   'file-code',
-  'edit'
+  'edit',
+  'save-all',
+  'lock'
 ] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
@@ -144,10 +146,16 @@ export const commandCatalog = {
     // In a results grid, Ctrl+S saves its results (SSMS).
     keybindings: [{ key: 'mod+s', when: '!outputGridFocus' }], menus: [{ menu: 'file', group: '1_file', order: 3, mnemonic: 's' }, { menu: 'documentTab.context', group: '1_save', order: 1, mnemonic: 's' }]
   },
+  // SSMS's Save As has no key on Windows: Ctrl+Shift+S is Save All there. macOS keeps ⇧⌘S, its Save As key.
   'file.saveAs': {
     title: 'Save As…', category: 'File', icon: 'save-as', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+shift+s' }],
+    keybindings: [{ mac: 'mod+shift+s' }],
     menus: [{ menu: 'file', group: '1_file', order: 4, mnemonic: 'a' }, { menu: 'documentTab.context', group: '1_save', order: 2, mnemonic: 'a' }]
+  },
+  // The queries with unsaved changes, in tab order; a query never saved asks for its file. ⌥⌘S on macOS, where ⇧⌘S is Save As.
+  'file.saveAll': {
+    title: 'Save All', category: 'File', icon: 'save-all', precondition: 'anyDocumentDirty && !documentBusy', unavailableHint: 'No query has unsaved changes.',
+    keybindings: [{ win: 'ctrl+shift+s', linux: 'ctrl+shift+s', mac: 'alt+mod+s' }], menus: [{ menu: 'file', group: '1_file', order: 5, mnemonic: 'l' }]
   },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
@@ -381,6 +389,11 @@ export const commandCatalog = {
     title: 'Toggle Word Wrap', category: 'View', icon: 'word-wrap', toggled: 'editorWordWrap',
     // ⌥Z types Ω on macOS.
     keybindings: [{ win: 'alt+z', linux: 'alt+z' }], menus: [{ menu: 'view', group: '2_editor', order: 1, title: 'Word Wrap', mnemonic: 'w' }]
+  },
+  // Visual Studio's Insert key: overtype replaces the character after the caret. macOS keyboards have no Insert key.
+  'editor.toggleOvertype': {
+    title: 'Toggle Insert/Overtype Mode', category: 'Edit', keywords: ['insert', 'overtype', 'overwrite', 'ins', 'ovr'], toggled: 'editorOvertype',
+    precondition: 'hasActiveDocument', unavailableHint: openFirst, keybindings: [{ win: 'insert', linux: 'insert', when: 'editorTextFocus' }]
   },
   'edit.find': {
     title: 'Find', category: 'Edit', icon: 'search', precondition: 'hasActiveDocument', unavailableHint: openFirst,
