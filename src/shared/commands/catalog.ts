@@ -4,10 +4,53 @@ import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalo
 
 export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
-export const codicons = ['new-file', 'folder-opened', 'save', 'save-as', 'close', 'discard', 'redo', 'play', 'debug-stop', 'plug', 'debug-disconnect', 'debug-restart', 'refresh',
-  'database', 'server', 'search', 'replace', 'comment', 'word-wrap', 'layout', 'list-tree', 'output', 'window', 'go-to-file', 'symbol-color', 'copy', 'clippy',
-  'zoom-in', 'zoom-out', 'screen-full', 'tools', 'close-all', 'check', 'circle-filled', 'chevron-right', 'multiple-windows', 'table', 'collapse-all', 'filter',
-  'filter-filled', 'clear-all', 'warning', 'settings-gear', 'file-code', 'edit'] as const
+export const codicons = [
+  'new-file',
+  'folder-opened',
+  'save',
+  'save-as',
+  'close',
+  'discard',
+  'redo',
+  'play',
+  'debug-stop',
+  'plug',
+  'debug-disconnect',
+  'debug-restart',
+  'refresh',
+  'database',
+  'server',
+  'search',
+  'replace',
+  'comment',
+  'word-wrap',
+  'layout',
+  'list-tree',
+  'output',
+  'window',
+  'go-to-file',
+  'symbol-color',
+  'copy',
+  'clippy',
+  'zoom-in',
+  'zoom-out',
+  'screen-full',
+  'tools',
+  'close-all',
+  'check',
+  'circle-filled',
+  'chevron-right',
+  'multiple-windows',
+  'table',
+  'collapse-all',
+  'filter',
+  'filter-filled',
+  'clear-all',
+  'warning',
+  'settings-gear',
+  'file-code',
+  'edit'
+] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'

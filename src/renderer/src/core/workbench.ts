@@ -126,7 +126,20 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scriptingOptions = new ScriptingOptionsService(api, (message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, scripting: scripting.running, editor: () => documents.boundEditor })
+  const context = new ContextKeyService({
+    platform,
+    documents,
+    queries,
+    connections,
+    backend,
+    editorOptions,
+    panes,
+    quickInput: quickInput.visibility,
+    explorer: explorer.context,
+    results: results.context,
+    scripting: scripting.running,
+    editor: () => documents.boundEditor
+  })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
@@ -142,16 +155,77 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
-  const workbench: Workbench = { platform, monaco, events, commands, context, keybindings, menuState, menus, menuTargets, quickInput, documents, queries, connections, backend, resultClient, results, resultMemory, ...gridStats ? { gridStats } : {}, files, targets, editorOptions, panes, explorer, databaseList, resultSelection, scriptingOptions, scripting, theme, dispose: () => {
-    if (disposed) return
-    disposed = true
-    // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
-    listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
-    contributions.forEach(contribution => contribution.dispose())
-    cleanup.dispose(); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); results.dispose(); resultMemory.dispose(); resultClient.dispose(); documents.dispose(); backend.dispose(); explorer.dispose(); databaseList.dispose(); scripting.dispose(); connections.dispose(); editorOptions.dispose(); panes.dispose(); resultSelection.dispose(); scriptingOptions.dispose(); theme.dispose(); events.dispose()
-  } }
-  const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), paletteContribution(workbench), themeContribution(workbench, api), backendContribution(workbench), scriptingContribution(workbench)]
+  const workbench: Workbench = {
+    platform,
+    monaco,
+    events,
+    commands,
+    context,
+    keybindings,
+    menuState,
+    menus,
+    menuTargets,
+    quickInput,
+    documents,
+    queries,
+    connections,
+    backend,
+    resultClient,
+    results,
+    resultMemory,
+    ...gridStats ? { gridStats } : {},
+    files,
+    targets,
+    editorOptions,
+    panes,
+    explorer,
+    databaseList,
+    resultSelection,
+    scriptingOptions,
+    scripting,
+    theme,
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
+      listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
+      contributions.forEach(contribution => contribution.dispose())
+      cleanup.dispose()
+      commands.dispose()
+      context.dispose()
+      files.dispose()
+      queries.dispose()
+      results.dispose()
+      resultMemory.dispose()
+      resultClient.dispose()
+      documents.dispose()
+      backend.dispose()
+      explorer.dispose()
+      databaseList.dispose()
+      scripting.dispose()
+      connections.dispose()
+      editorOptions.dispose()
+      panes.dispose()
+      resultSelection.dispose()
+      scriptingOptions.dispose()
+      theme.dispose()
+      events.dispose()
+    }
+  }
+  const contributions = [
+    queryContribution(workbench, api),
+    filesContribution(workbench, api),
+    editorContribution(workbench),
+    editContribution(workbench, api),
+    windowContribution(workbench, api),
+    menusContribution(workbench),
+    explorerContribution(workbench, api),
+    outputContribution(workbench, api),
+    paletteContribution(workbench),
+    themeContribution(workbench, api),
+    backendContribution(workbench),
+    scriptingContribution(workbench)
+  ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [keybindings.attach(window), menus.attach(window), trackWindowFocus(window, document.documentElement)]
   // Requests carry the defaults until main's stored options arrive; a warning about the file shows in the command banner.

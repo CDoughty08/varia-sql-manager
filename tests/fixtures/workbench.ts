@@ -174,7 +174,20 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scriptingOptions = new ScriptingOptionsService(api, message => commands.reportError(message))
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
-  const context = new ContextKeyService({ platform, documents, queries, connections, backend, editorOptions, panes, quickInput: quickInput.visibility, explorer: explorer.context, results: results.context, scripting: scripting.running, activeElement })
+  const context = new ContextKeyService({
+    platform,
+    documents,
+    queries,
+    connections,
+    backend,
+    editorOptions,
+    panes,
+    quickInput: quickInput.visibility,
+    explorer: explorer.context,
+    results: results.context,
+    scripting: scripting.running,
+    activeElement
+  })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
@@ -190,10 +203,46 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, packaged: options.packaged, commands, context, keybindings, theme, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
-  const workbench = { platform, commands, context, documents, queries, files, editorOptions, connections, backend, targets, quickInput, keybindings, events, theme, panes, menus, explorer, databaseList, menuTargets, resultSelection, results, scriptingOptions, scripting }
-  const contributions = [queryContribution(workbench, api), filesContribution(workbench, api), editorContribution(workbench), editContribution(workbench, api), windowContribution(workbench, api),
-    menusContribution(workbench), explorerContribution(workbench, api), outputContribution(workbench, api), shellContribution(workbench, host), paletteContribution(workbench, history),
-    themeContribution(workbench, api, options.timers), backendContribution(workbench), scriptingContribution(workbench)]
+  const workbench = {
+    platform,
+    commands,
+    context,
+    documents,
+    queries,
+    files,
+    editorOptions,
+    connections,
+    backend,
+    targets,
+    quickInput,
+    keybindings,
+    events,
+    theme,
+    panes,
+    menus,
+    explorer,
+    databaseList,
+    menuTargets,
+    resultSelection,
+    results,
+    scriptingOptions,
+    scripting
+  }
+  const contributions = [
+    queryContribution(workbench, api),
+    filesContribution(workbench, api),
+    editorContribution(workbench),
+    editContribution(workbench, api),
+    windowContribution(workbench, api),
+    menusContribution(workbench),
+    explorerContribution(workbench, api),
+    outputContribution(workbench, api),
+    shellContribution(workbench, host),
+    paletteContribution(workbench, history),
+    themeContribution(workbench, api, options.timers),
+    backendContribution(workbench),
+    scriptingContribution(workbench)
+  ]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
     const pending = deferred<Awaited<ReturnType<QueryApi['execute']>>>()
@@ -204,8 +253,53 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
-    menus.dispose(); quickInput.dispose(); contributions.forEach(contribution => contribution.dispose()); commands.dispose(); context.dispose(); files.dispose(); queries.dispose(); resultSelection.dispose(); results.dispose()
-    explorer.dispose(); databaseList.dispose(); scripting.dispose(); scriptingOptions.dispose(); documents.dispose(); backend.dispose()
+    menus.dispose()
+    quickInput.dispose()
+    contributions.forEach(contribution => contribution.dispose())
+    commands.dispose()
+    context.dispose()
+    files.dispose()
+    queries.dispose()
+    resultSelection.dispose()
+    results.dispose()
+    explorer.dispose()
+    databaseList.dispose()
+    scripting.dispose()
+    scriptingOptions.dispose()
+    documents.dispose()
+    backend.dispose()
   }
-  return { ...doc, api, connections, backend, editorOptions, panes, explorer, databaseList, resultSelection, results, resultClient, scriptingOptions, scripting, focusEditor, queries, files, targets, context, commands, keybindings, menus, menuTargets, quickInput, focus: focus.state, focused, history, host, theme, startQuery, connect, dispose }
+  return {
+    ...doc,
+    api,
+    connections,
+    backend,
+    editorOptions,
+    panes,
+    explorer,
+    databaseList,
+    resultSelection,
+    results,
+    resultClient,
+    scriptingOptions,
+    scripting,
+    focusEditor,
+    queries,
+    files,
+    targets,
+    context,
+    commands,
+    keybindings,
+    menus,
+    menuTargets,
+    quickInput,
+    focus: focus.state,
+    focused,
+    history,
+    host,
+    theme,
+    startQuery,
+    connect,
+    dispose
+  }
 }
