@@ -8,10 +8,12 @@ import type { SettingPage } from './types'
 export const settingPages = [
   { id: 'environment', title: 'Environment' },
   { id: 'environment.general', title: 'General', parent: 'environment', layout: 'form', provider: 'theme' },
+  { id: 'environment.documents', title: 'Documents', parent: 'environment', layout: 'form' },
   { id: 'environment.fontsAndColors', title: 'Fonts and Colors', parent: 'environment', layout: 'form', description: 'Colors come from the color theme (View › Theme).' },
   { id: 'environment.keyboard', title: 'Keyboard', parent: 'environment', layout: 'keyboard', description: 'Shortcuts follow SSMS\'s defaults and cannot be changed yet. The command palette (F1) shows each command\'s shortcut.' },
   { id: 'textEditor', title: 'Text Editor' },
   { id: 'textEditor.general', title: 'General', parent: 'textEditor', layout: 'form' },
+  { id: 'textEditor.editorTabAndStatusBar', title: 'Editor Tab and Status Bar', parent: 'textEditor', layout: 'propertyGrid', description: 'The query window\'s status bar: where it is, and what it shows.' },
   { id: 'textEditor.transactSql', title: 'Transact-SQL', parent: 'textEditor' },
   { id: 'textEditor.transactSql.general', title: 'General', parent: 'textEditor.transactSql', layout: 'form' },
   { id: 'textEditor.transactSql.tabs', title: 'Tabs', parent: 'textEditor.transactSql', layout: 'form' },

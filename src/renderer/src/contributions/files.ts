@@ -27,6 +27,7 @@ export function filesContribution({ files, commands, documents, context, explore
     commands.register('file.open', { when: () => files.canRun(), run: () => files.open() }),
     commands.register('file.save', { when: context => files.canSave(context?.tabId), run: context => files.save(context?.tabId) }),
     commands.register('file.saveAs', { when: context => files.canSave(context?.tabId), run: context => files.save(context?.tabId, true) }),
+    commands.register('file.saveAll', { when: () => files.canSaveAll(), run: () => files.saveAll() }),
     commands.register('file.close', { when: context => files.canClose(context?.tabId), run: context => files.close(context?.tabId) }),
     commands.register('file.closeOthers', {
       when: context => files.canRun() && !!documents.get(tabOf(context)),

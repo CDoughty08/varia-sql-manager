@@ -46,7 +46,8 @@ describe('keybinding dispatch', () => {
     expect(press(key('Slash', '/', mod(platform))).consumed).toBe(false)
     expect(press(key('KeyN', 'n')).consumed).toBe(false)
     expect(press(key('F8', 'F8')).consumed).toBe(true)
-    expect(ran()).toEqual(['file.new', 'file.saveAs', 'window.explorer'])
+    // Ctrl+Shift+S is Save All on Windows and Linux, as in SSMS; ⇧⌘S stays Save As on macOS.
+    expect(ran()).toEqual(['file.new', platform === 'darwin' ? 'file.saveAs' : 'file.saveAll', 'window.explorer'])
   })
   it('adds the SSMS keys on Windows and Linux only', () => {
     for (const platform of ['win32', 'linux'] as const) {

@@ -7,6 +7,8 @@ import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/Wo
 import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
 import type { CommandArgs, CommandId } from './core/types'
 import QueryEditor from './QueryEditor'
+import QueryStatusBar from './QueryStatusBar'
+import EditorStatus from './EditorStatus'
 import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
@@ -57,6 +59,7 @@ export default function App() {
   const databaseLists = useServiceSnapshot(workbench.databaseList)
   const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
   const optionsDialog = useServiceSnapshot(workbench.settings.dialog)
+  const { values: settings } = useServiceSnapshot(workbench.settings)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
@@ -64,14 +67,14 @@ export default function App() {
   const [reconnecting, setReconnecting] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.
   const [pendingExecute, setPendingExecute] = useState<string>()
-  const { error: fileError } = useServiceSnapshot(files)
+  const { error: fileError, kind: fileKind } = useServiceSnapshot(files)
   const { error: commandError, kind: commandKind } = useServiceSnapshot(commands)
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
   const enabled = {
-    connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'),
+    connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'), saveAll: useCommandEnabled('file.saveAll'),
     execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel')
   }
-  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), execute: useKeybindingLabel('query.execute') }
+  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
   // An XML, JSON or plan value opened from the results: no server, database, or results of its own.
@@ -79,19 +82,17 @@ export default function App() {
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
-  // The status bar's server and database, cut short when the bar is too narrow; its tooltip holds the whole text.
-  const place = connection ? connection.server + (connection.lost ? ' (connection lost)' : '') : 'Disconnected'
-  const placeContext = !active.id ? 'No query' : isQuery ? active.database : kindInfo[activeKind].label
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
-  // SSMS's "login (SPID)": the session the active query's last execution ran in, while it is still that query's.
-  const activeSession = queryState[active.id]?.session
-  const sessionText = liveConnection && activeSession?.spid !== undefined && activeSession.connectionId === liveConnection.id ? `${activeSession.login ?? ''} (${activeSession.spid})`.trim() : ''
   // Also re-renders App when the theme changes, which the per-tab accents below rely on.
   const accent = useConnectionAccent(connection?.color)
   const databases = liveConnection ? databaseLists.get(liveConnection.id) ?? [] : []
   const availableDatabases = databases.some(value => value.name === active.database) ? databases : [{ name: active.database, isSystem: false }, ...databases]
+
+  // SSMS's query window status bar, below the query unless Options puts it above; its tooltip names the SMO and SqlClient versions.
+  const statusTop = settings['textEditor.statusBar.location'] === 'top'
+  const statusBar = active.id ? <QueryStatusBar tab={active} connection={connection} versions={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined} /> : null
 
   function activate(id: string) { documents.activate(id) }
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
@@ -218,6 +219,7 @@ export default function App() {
         <button disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="plus" />New query</button>
         <button disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="open" />Open</button>
         <button disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
+        <button disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
         <span className="toolbar-divider" />
         <button className="execute" disabled={!enabled.execute} title={connection?.lost ? lostHint : undefined} onClick={() => run('query.execute')}><Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
         <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="stop" />Cancel</button>
@@ -230,23 +232,25 @@ export default function App() {
       </div>
     </div>
     <BackendBanner />
-    {fileError && <div className="global-error" role="alert"><span>{fileError}</span><button aria-label="Dismiss file error" onClick={() => files.clearError()}><Icon name="close" /></button></div>}
+    {fileError && (fileKind === 'warning'
+      ? <div className="global-error warning" role="status"><span>{fileError}</span><button aria-label="Dismiss file notice" onClick={() => files.clearError()}><Icon name="close" /></button></div>
+      : <div className="global-error" role="alert"><span>{fileError}</span><button aria-label="Dismiss file error" onClick={() => files.clearError()}><Icon name="close" /></button></div>)}
     {commandError && (commandKind === 'warning'
       ? <div className="global-error warning" role="status"><span>{commandError}</span><button aria-label="Dismiss warning" onClick={() => commands.clearError()}><Icon name="close" /></button></div>
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
         <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><span className="sql-icon">{kindInfo[documentKind(tab)].badge}</span><span className="tab-name">{tab.name}</span>{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
+          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><span className="sql-icon">{kindInfo[documentKind(tab)].badge}</span><span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <span className="tab-readonly codicon codicon-lock" aria-label="Read-only" />}{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div>)}</div>
         {active.id ? <>
-          {isQuery ? <div className="query-context" style={{ borderBottom: accent ? `3px solid ${accent}` : undefined }}><span>{connection?.displayName || connection?.server || 'Disconnected'}{connection?.lost ? ' (connection lost)' : ''} <span className="breadcrumb">/</span> {active.database}</span><span>Transact-SQL · {activeRunning ? 'Executing…' : connection?.lost ? 'Connection lost' : 'Ready'}</span></div>
-            : <div className="query-context"><span>{kindInfo[activeKind].label}</span></div>}
+          {statusTop && statusBar}
           <div className="editor-container"><QueryEditor /></div>
+          {!statusTop && statusBar}
         </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><span className="status-place" title={[[place, sessionText, placeContext].filter(Boolean).join(' | '), health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : ''].filter(Boolean).join('\n')}>{place}{sessionText && <><span className="status-divider">|</span><span className="status-session">{sessionText}</span></>}<span className="status-divider">|</span>{placeContext}</span><MemoryIndicator /></footer>
+    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}

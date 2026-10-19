@@ -1,5 +1,5 @@
 import type { editor } from 'monaco-editor'
-import type { DocumentKind, VariaApi } from '../../../shared/contracts'
+import type { DocumentKind, LineEnding, VariaApi } from '../../../shared/contracts'
 import type { SessionEnd } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import { afterClose, isQueryDocument, kindInfo, type QueryDocument } from '../documents'
@@ -28,9 +28,11 @@ export interface DocumentOptions {
   readonly modelOptions?: () => ModelOptions
   /** Automatic delimiter highlighting; large values never match brackets, whatever it says. */
   readonly matchBrackets?: () => boolean
+  /** A new query's line ending (the platform's); without it, Monaco's default (LF). */
+  readonly newLineEnding?: LineEnding
 }
 /** The document options Tools › Options sets. Keep tabs (SSMS's default) inserts tab characters. */
-export function settingsDocumentOptions(values: () => SettingsValues): Required<DocumentOptions> {
+export function settingsDocumentOptions(values: () => SettingsValues): Required<Pick<DocumentOptions, 'modelOptions' | 'matchBrackets'>> {
   return {
     modelOptions: () => {
       const current = values()
@@ -67,8 +69,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database = this.active?.database || 'master', unsaved = false): QueryDocument {
     return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database, connectionId, unsaved)
   }
-  create(name: string, sql: string, database: string, connectionId?: string, unsaved = false, file?: QueryDocument['file']): QueryDocument {
-    return this.add(name, sql, database, connectionId, unsaved, file)
+  /** `eol` is an opened file's line ending: the model takes it, normalizing a file whose line endings were mixed. */
+  create(name: string, sql: string, database: string, connectionId?: string, unsaved = false, file?: QueryDocument['file'], eol?: LineEnding): QueryDocument {
+    return this.add(name, sql, database, connectionId, unsaved, file, undefined, false, eol ?? this.options.newLineEnding)
   }
   /**
    * Opens a value from the results as a text document: no connection, not dirty, in its language. A long text opens
@@ -82,12 +85,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (first < o.text.length) this.fill(document.id, o.text, first)
     return document
   }
-  private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false): QueryDocument {
+  private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
     if (this.options.modelOptions) model.updateOptions(this.options.modelOptions())
     if (plain) model.updateOptions({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } })
+    // Before the saved version is read: setting the line ending is a change, though not one Undo reverts.
+    if (eol) model.setEOL(eol === 'crlf' ? 1 : 0)
     const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {} }
     const subscription = model.onDidChangeContent(() => {
       const current = this.get(id), fill = this.entries.get(id)?.fill

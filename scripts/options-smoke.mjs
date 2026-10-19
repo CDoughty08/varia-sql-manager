@@ -95,7 +95,7 @@ try {
   await expect(dialog().locator('.options-note').first()).toHaveText('Color theme: View › Theme')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click(fast)
   expect(await treeNames()).toEqual([
-    'Environment', '  General', '  Fonts and Colors', '  Keyboard', 'Text Editor', '  General', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
+    'Environment', '  General', '  Documents', '  Fonts and Colors', '  Keyboard', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
     'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting'
   ])
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
@@ -116,7 +116,7 @@ try {
   await field('Size').focus()
   await expect(dialog().locator('.options-note')).toHaveText('Colors come from the color theme (View › Theme).')
   await expect(dialog().locator('.options-description')).toContainText('Size')
-  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, and the tree has SSMS\'s 19 nodes and keys.')
+  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, and the tree has SSMS\'s 21 nodes and keys.')
 
   // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.
   await node('Keyboard').focus()

@@ -35,7 +35,7 @@ describe('menu resolution', () => {
     expect(marked(resolveMenu('window', options({ platform: 'linux' })))).toEqual(windowMenu)
     // macOS's Minimize and Zoom are bare Electron roles: only its native menu shows them.
     expect(marked(resolveMenu('window', options({ platform: 'darwin' })))).toEqual(windowMenu)
-    expect(marked(resolveMenu('file', options()))).toEqual(['Conn&ect to Server…', '&Disconnect from Server…', '&Reconnect…', '-', '&New Query', '&Open…', '&Save', 'Save &As…', '-', '&Close Query', '-', 'E&xit'])
+    expect(marked(resolveMenu('file', options()))).toEqual(['Conn&ect to Server…', '&Disconnect from Server…', '&Reconnect…', '-', '&New Query', '&Open…', '&Save', 'Save &As…', 'Save A&ll', '-', '&Close Query', '-', 'E&xit'])
     expect(marked(resolveMenu('file', options({ platform: 'linux' }))).at(-1)).toBe('&Quit')
     expect(resolveMenu('file', options({ platform: 'linux' })).at(-1)).toMatchObject({ id: 'window.close', keybinding: { text: 'Ctrl+Q' } })
     expect(resolveMenu('file', options()).at(-1)).toMatchObject({ id: 'window.close', keybinding: { text: 'Alt+F4' } })

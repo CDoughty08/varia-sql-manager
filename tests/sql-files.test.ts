@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { join, resolve, sep } from 'node:path'
-import { fileKinds, saveFileSchema, SqlFileStore } from '../src/main/sql-files'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve, sep } from 'node:path'
+import { fileKinds, isReadOnly, saveFileSchema, SqlFileStore } from '../src/main/sql-files'
 
 let directory: string
 beforeEach(async () => {
@@ -53,7 +53,7 @@ describe('SQL documents', () => {
     await writeFile(path, 'original')
     const store = new SqlFileStore()
     const opened = await store.read(path)
-    await expect(store.save('replacement', opened.id, directory)).rejects.toThrow()
+    await expect(store.save('replacement', opened.id, directory)).rejects.toThrow('is not a file.')
     expect(await readFile(path, 'utf8')).toBe('original')
     expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
@@ -84,5 +84,102 @@ describe('SQL documents', () => {
     const saved = await store.save(wide, undefined, join(directory, 'wide.xml'), 'xml')
     expect((await readFile(saved.path, 'utf8')).length).toBe(2_000_000)
     await expect(store.save('日'.repeat(5_600_000), undefined, join(directory, 'huge.xml'), 'xml')).rejects.toThrow('Files must be smaller than 16 MB.')
+  })
+})
+
+describe('SQL file encodings and save hardening', () => {
+  it('reports each file\'s encoding, line endings and read-only state, and writes the encoding it read', async () => {
+    const store = new SqlFileStore({ platform: 'linux' })
+    const path = join(directory, 'big-endian.sql')
+    const text = "SELECT N'Grüße';\r\nGO\r\n"
+    await writeFile(path, Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]))
+    const opened = await store.read(path)
+    expect(opened).toMatchObject({ content: text, encoding: 'utf16be', eol: 'crlf', mixedEol: false, readOnly: false })
+    expect(opened).not.toHaveProperty('codePage')
+    const saved = await store.save("SELECT N'Français';\r\n", opened.id)
+    expect(saved).toEqual({ id: opened.id, name: 'big-endian.sql', path: opened.path, encoding: 'utf16be', readOnly: false })
+    expect([...(await readFile(path))]).toEqual([0xfe, 0xff, ...Buffer.from("SELECT N'Français';\r\n", 'utf16le').swap16()])
+    await writeFile(path, 'a\nb\r\nc\n')
+    expect(await store.read(path)).toMatchObject({ id: opened.id, encoding: 'utf8', eol: 'lf', mixedEol: true })
+  })
+  it('reads a file in the ANSI code page, and writes it only as Unicode it was told to use', async () => {
+    const store = new SqlFileStore({ legacyLabel: () => 'windows-1252' })
+    const path = join(directory, 'ansi.sql')
+    await writeFile(path, Buffer.from([0x53, 0xe9, 0x80]))
+    const opened = await store.read(path)
+    expect(opened).toMatchObject({ content: 'Sé€', encoding: 'legacy', codePage: 'Windows-1252' })
+    await expect(store.save('Sé€', opened.id)).rejects.toThrow('ansi.sql was read as Windows-1252, which Varia SQL Manager does not write. Save it as Unicode.')
+    expect([...await readFile(path)]).toEqual([0x53, 0xe9, 0x80])
+    expect(await store.save('Sé€', opened.id, undefined, 'sql', { encoding: 'utf8bom' })).toMatchObject({ encoding: 'utf8bom' })
+    expect(await readFile(path)).toEqual(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('Sé€')]))
+    // Save files with a specific encoding converts any file.
+    expect(await store.save('Sé€', opened.id, undefined, 'sql', { encoding: 'utf16le' })).toMatchObject({ encoding: 'utf16le' })
+    expect(await readFile(path)).toEqual(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Sé€', 'utf16le')]))
+  })
+  it('refuses a directory and files over the limit before decoding them', async () => {
+    const store = new SqlFileStore()
+    await expect(store.read(directory)).rejects.toThrow(/is not a file\.$/)
+    const big = join(directory, 'big.sql')
+    await writeFile(big, Buffer.alloc(5_000_001, 0x41))
+    await expect(store.read(big)).rejects.toThrow('SQL files must be smaller than 5 MB.')
+  })
+  // Root can write any file, so the attribute means nothing there (cloud sessions).
+  it.skipIf(process.getuid?.() === 0)('never replaces a read-only file without Overwrite, which clears the attribute first', async () => {
+    const store = new SqlFileStore()
+    const path = join(directory, 'locked.sql')
+    await writeFile(path, 'SELECT 1')
+    await chmod(path, 0o444)
+    try {
+      const opened = await store.read(path)
+      expect(opened.readOnly).toBe(true)
+      expect(await store.readOnly(opened.id)).toBe(true)
+      await expect(store.save('SELECT 2', opened.id)).rejects.toThrow('locked.sql is read-only.')
+      expect(await readFile(path, 'utf8')).toBe('SELECT 1')
+      expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([])
+      await store.makeWritable(opened.id)
+      expect(await store.readOnly(opened.id)).toBe(false)
+      expect(await store.save('SELECT 2', opened.id)).toMatchObject({ readOnly: false })
+      expect(await readFile(path, 'utf8')).toBe('SELECT 2')
+    } finally { await chmod(path, 0o644).catch(() => {}) }
+    expect(await isReadOnly(join(directory, 'missing.sql'))).toBe(false)
+  })
+  it('replaces the file through replaceFile, which retries Windows\' brief holds', async () => {
+    const calls: [string, string][] = []
+    const store = new SqlFileStore({ replace: async (from, to) => { calls.push([from, to]); await rename(from, to) } })
+    const path = join(directory, 'held.sql')
+    await writeFile(path, 'SELECT 1')
+    const opened = await store.read(path)
+    await store.save('SELECT 2', opened.id)
+    expect(calls).toHaveLength(1)
+    expect(dirname(calls[0][0])).toBe(dirname(await realpath(path)))
+    expect(calls[0][1]).toBe(await realpath(path))
+    expect(await readFile(path, 'utf8')).toBe('SELECT 2')
+  })
+  it.skipIf(process.platform === 'win32')('keeps a POSIX file\'s permissions', async () => {
+    const store = new SqlFileStore()
+    const path = join(directory, 'private.sql')
+    await writeFile(path, 'SELECT 1')
+    await chmod(path, 0o600)
+    const opened = await store.read(path)
+    await store.save('SELECT 2', opened.id)
+    expect((await stat(path)).mode & 0o777).toBe(0o600)
+    await chmod(path, 0o640)
+    await store.save('SELECT 3', opened.id)
+    expect((await stat(path)).mode & 0o777).toBe(0o640)
+  })
+  it('saves through a symbolic link to its target and keeps the link', async ({ skip }) => {
+    const store = new SqlFileStore()
+    await mkdir(join(directory, 'real'))
+    const target = join(directory, 'real', 'query.sql'), link = join(directory, 'link.sql')
+    await writeFile(target, 'SELECT 1')
+    // Windows creates symbolic links only for administrators or in Developer Mode.
+    try { await symlink(target, link, 'file') } catch { skip() }
+    const opened = await store.read(link)
+    expect(opened).toMatchObject({ name: 'link.sql', path: link, content: 'SELECT 1' })
+    const saved = await store.save('SELECT 2', opened.id)
+    expect(saved.path).toBe(link)
+    expect((await lstat(link)).isSymbolicLink()).toBe(true)
+    expect(await readFile(target, 'utf8')).toBe('SELECT 2')
+    expect((await readdir(join(directory, 'real'))).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
 })

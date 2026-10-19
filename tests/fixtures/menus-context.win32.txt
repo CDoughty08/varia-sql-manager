@@ -18,7 +18,7 @@ editor.context, for the query editor
   Comm&and Palette…  Ctrl+Shift+P  ++++
 documentTab.context, for a saved query's tab
   &Save  Ctrl+S  +++-
-  Save &As…  Ctrl+Shift+S  +++-
+  Save &As…  +++-
   ---
   &Close  Ctrl+W  +++-
   Close All &But This  +++-
@@ -28,7 +28,7 @@ documentTab.context, for a saved query's tab
   &Open Containing Folder  ++++
 documentTab.context, for an unsaved query's tab
   &Save  Ctrl+S  +++-
-  Save &As…  Ctrl+Shift+S  +++-
+  Save &As…  +++-
   ---
   &Close  Ctrl+W  +++-
   Close All &But This  +++-

@@ -1135,8 +1135,9 @@ try {
   await rm(join(control, 'hold', 'results.copy'))
   await rm(join(control, 'hold', 'results.export'))
   await expect(strips).toHaveCount(0, { timeout: 30000 })
-  // A long server name is cut short, whole in its tooltip; the backend status and the memory indicator keep their size
-  // inside the status bar, and the page never scrolls.
+  // A long server name is cut short in the query status bar, whole in its tooltip; its other segments keep their size
+  // inside the bar, as the backend status, the editor's segments and the memory indicator do in the IDE status bar, and
+  // the page never scrolls.
   const longServer = 'sqlprod-analytics-warehouse-cluster-01.' + 'reporting-'.repeat(10) + 'corp.contoso.com\\INSTANCE01,1433'
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
   await page.getByLabel('Server Name', { exact: true }).fill(longServer)
@@ -1146,16 +1147,17 @@ try {
   await server().selectOption({ label: longServer })
   await run('-- varia-fake: sets=W1*10 memory=0.5')
   await expect(page.locator('.memory-indicator')).toHaveText(/^Results 128 MB/)
-  await expect(page.locator('.status-place')).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')} \\| \\S`))
+  await expect(page.locator('.query-status-bar')).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')}( \\(\\d+\\.\\d+\\))? \\| \\S`))
   expect(await page.evaluate(() => {
-    const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect(), place = bar.querySelector('.status-place')
+    const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, .query-status-segment')].every(child => { const part = child.getBoundingClientRect(); return part.left >= box.left - 0.5 && part.right <= box.right + 0.5 && part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 }) }
+    const server = document.querySelector('.query-status-server')
     return {
-      fits: [...bar.children].every(child => { const part = child.getBoundingClientRect(); return part.left >= box.left - 0.5 && part.right <= box.right + 0.5 && part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 }),
-      overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: place.scrollWidth > place.clientWidth
+      fits: fits(document.querySelector('.status-bar')) && fits(document.querySelector('.query-status-bar')), rows: document.querySelector('.query-status-rows')?.textContent,
+      overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: server.scrollWidth > server.clientWidth
     }
-  })).toEqual({ fits: true, overflow: false, cut: true })
+  })).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
-  // Script As requests held in the backend keep Cancel and the start of their text: the server and database give way,
+  // Script As requests held in the backend keep Cancel and the start of their text: the editor's segments give way,
   // no segment covers another, and the text keeps a gap from the backend status even when it fills its segment (two
   // requests), so the two do not read as one phrase.
   await writeFile(join(control, 'hold', 'scripting.script'), '')
@@ -1170,7 +1172,7 @@ try {
   }
   const statusLayout = () => page.evaluate(() => {
     const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect()
-    const parts = { backend: bar.firstElementChild, cancel: bar.querySelector('button[aria-label="Cancel scripting"]'), place: bar.querySelector('.status-place'), memory: bar.querySelector('.memory-indicator') }
+    const parts = { backend: bar.firstElementChild, cancel: bar.querySelector('button[aria-label="Cancel scripting"]'), place: bar.querySelector('.editor-status'), memory: bar.querySelector('.memory-indicator') }
     const boxes = Object.entries(parts).map(([name, part]) => [name, part.getBoundingClientRect()])
     const overlaps = boxes.flatMap(([name, a], i) => boxes.slice(i + 1).filter(([, b]) => a.left < b.right - 0.5 && b.left < a.right - 0.5).map(([other]) => name + '/' + other))
     const text = bar.querySelector('.status-scripting-text').getBoundingClientRect(), gap = text.left - parts.backend.getBoundingClientRect().right

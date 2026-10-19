@@ -16,6 +16,7 @@ export class TestModel {
   private listeners = new Set<() => void>()
   private history: { value: string; alternative: number }[]
   readonly options: Record<string, unknown> = {}
+  eol: '\n' | '\r\n' = '\n'
   private index = 0
   private version = 1
   constructor(value: string, readonly uri: string, readonly language = 'sql') { this.history = [{ value, alternative: 1 }] }
@@ -41,6 +42,15 @@ export class TestModel {
   }
   onDidChangeContent(listener: () => void) { this.listeners.add(listener); return { dispose: () => { this.listeners.delete(listener) } } }
   pushStackElement(): void {}
+  getEOL(): string { return this.eol }
+  /** Monaco's setEOL: the text takes the new line ending, and the version changes, without an undo stop. */
+  setEOL(sequence: 0 | 1): void {
+    const eol = sequence === 1 ? '\r\n' : '\n'
+    if (eol === this.eol) return
+    this.eol = eol
+    this.history[this.index] = { value: this.getValue().replace(/\r?\n/g, eol), alternative: ++this.version }
+    this.emit()
+  }
   updateOptions(options: Record<string, unknown>): void { Object.assign(this.options, options) }
   edit(value: string): void {
     this.history = this.history.slice(0, this.index + 1)
@@ -76,7 +86,7 @@ export class TestEditor {
 export function documentFixture(options: DocumentOptions = {}) {
   const events = new EventBus(), models = new Map<string, TestModel>()
   const api = {
-    saveSqlFile: vi.fn<VariaApi['saveSqlFile']>(async () => ({ ok: true, value: { id: 'file-id', name: 'saved.sql', path: 'C:/saved.sql' } })),
+    saveSqlFile: vi.fn<VariaApi['saveSqlFile']>(async () => ({ ok: true, value: { id: 'file-id', name: 'saved.sql', path: 'C:/saved.sql', encoding: 'utf8', readOnly: false } })),
     closeQuerySession: vi.fn<VariaApi['closeQuerySession']>(async () => ({ ok: true, value: { closed: true } }))
   }
   const frames: (() => void)[] = []

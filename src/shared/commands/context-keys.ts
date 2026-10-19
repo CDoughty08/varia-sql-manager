@@ -51,6 +51,8 @@ export const contextKeys = {
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
+  anyDocumentDirty: { type: 'boolean', scope: 'state', description: 'Some open document has unsaved changes.' },
+  editorOvertype: { type: 'boolean', scope: 'state', description: 'The editor is in overtype mode (OVR): typing replaces the character after the caret.' },
   explorerHasSelection: { type: 'boolean', scope: 'state', description: 'A node is selected in Object Explorer (a loading, error, or progress row is not a node).' },
   explorerSelectionKind: {
     type: 'enum', scope: 'state', values: ['', 'folder', ...nodeKinds],

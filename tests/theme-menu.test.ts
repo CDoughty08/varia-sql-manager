@@ -35,7 +35,7 @@ describe('application menu', () => {
   it('keeps the existing menus and commands, with Theme after the layout and editor items', () => {
     const handlers = actions(), template = applicationMenuTemplate(model(), handlers, 'linux')
     expect(template.map(item => item.id)).toEqual(['menu.file', 'menu.edit', 'menu.view', 'menu.query', 'menu.tools', 'menu.window'])
-    expect(submenu(template, 'menu.file').map(item => item.id ?? item.role ?? item.type)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', 'separator', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'separator', 'file.close', 'separator', 'window.close'])
+    expect(submenu(template, 'menu.file').map(item => item.id ?? item.role ?? item.type)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', 'separator', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'separator', 'file.close', 'separator', 'window.close'])
     expect(submenu(template, 'menu.view').map(item => item.id ?? item.role ?? item.type)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'separator', 'layout.save', 'layout.load', 'layout.reset', 'separator', 'editor.toggleWordWrap', 'separator', 'view.theme', 'separator',
       'view.zoomIn', 'zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'separator', 'developer.reloadWindow', 'developer.toggleDevTools'])
     expect(submenu(template, 'view.theme').map(item => item.id ?? item.type)).toEqual(['preferences.colorTheme', 'separator', 'theme.mode.dark', 'theme.mode.light', 'theme.mode.system', 'separator', 'theme.dark', 'theme.light', 'separator', 'theme.create', 'theme.openFolder', 'theme.reload'])

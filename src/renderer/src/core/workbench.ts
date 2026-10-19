@@ -1,11 +1,13 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
+import { platformLineEnding } from '../../../shared/files/encoding'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
 import { EditorOptionsService } from '../services/editor-options'
+import { EditorStatusService } from '../services/editor-status'
 import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
@@ -42,6 +44,7 @@ import { CommandService } from './commands'
 import { ContextKeyService } from './contextkeys'
 import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
+import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
 import { MenuStatePublisher } from './menu-state'
 import { modalOpen } from './modal'
@@ -75,6 +78,10 @@ export interface Workbench extends Disposable {
   readonly files: FileService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
+  /** The editor caret's Ln, Col and Ch and the line ending, for the IDE status bar. */
+  readonly editorStatus: EditorStatusService
+  /** Insert or overtype (the Insert key). */
+  readonly inputMode: InputModeService
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
@@ -115,7 +122,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
-    settingsDocumentOptions(() => settings.getSnapshot().values))
+    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
+  const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
@@ -143,6 +151,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer: explorer.context,
     results: results.context,
     scripting: scripting.running,
+    inputMode,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -182,6 +191,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     files,
     targets,
     editorOptions,
+    editorStatus,
+    inputMode,
     panes,
     explorer,
     databaseList,
@@ -211,6 +222,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       scripting.dispose()
       connections.dispose()
       editorOptions.dispose()
+      editorStatus.dispose()
+      inputMode.dispose()
       panes.dispose()
       resultSelection.dispose()
       settings.dispose()

@@ -5,6 +5,7 @@ import type { ExplorerChildrenParams, ObjectRef } from '../../src/shared/explore
 import type { Platform } from '../../src/shared/commands/keybindings'
 import { CommandService } from '../../src/renderer/src/core/commands'
 import { ContextKeyService } from '../../src/renderer/src/core/contextkeys'
+import { InputModeService, type InputModeName, type MonacoInputMode } from '../../src/renderer/src/core/input-mode'
 import { KeybindingService } from '../../src/renderer/src/core/keybindings'
 import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
@@ -136,6 +137,15 @@ export function manualTimers() {
   return { timers, pending, advance }
 }
 
+/** A stand-in for Monaco's InputMode, which every editor in a page shares, so tests never change the real one. */
+export function fakeInputMode(): MonacoInputMode {
+  const listeners = new Set<(mode: InputModeName) => void>()
+  const target: MonacoInputMode = {
+    _inputMode: 'insert', _onDidChangeInputMode: { fire: mode => listeners.forEach(listener => listener(mode)) }, getInputMode: () => target._inputMode,
+    onDidChangeInputMode: listener => { listeners.add(listener); return { dispose: () => { listeners.delete(listener) } } }
+  }
+  return target
+}
 /**
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
@@ -206,6 +216,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
+  const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
     platform,
     documents,
@@ -213,6 +224,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    inputMode,
     panes,
     quickInput: quickInput.visibility,
     explorer: explorer.context,
@@ -243,6 +255,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     queries,
     files,
     editorOptions,
+    inputMode,
     connections,
     backend,
     targets,
