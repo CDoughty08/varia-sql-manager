@@ -1,35 +1,24 @@
 import { describe, expect, it, vi } from 'vitest'
+import { Range } from 'monaco-editor/editor/common/core/range.js'
+import { PieceTreeTextBufferBuilder } from 'monaco-editor/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBufferBuilder.js'
 import { applyTextOp, caseEdits, indentEdits, textOpLimits, tooLargeMessage, type TextEdit, type TextModelLike, type TextRange, type TextSelection } from '../src/renderer/src/editor/text-ops'
 
-/** A model over plain text, and Monaco's applyEdits with its inverse ranges, so end selections can be checked. */
+/**
+ * A model over Monaco's own text buffer, so edits apply as the editor applies them: touching ranges keep their reverse
+ * edits in document order, and 1,000 or more edits merge into one.
+ */
 function model(text: string) {
-  let lines = text.split('\n')
-  const offset = (line: number, column: number) => lines.slice(0, line - 1).reduce((total, value) => total + value.length + 1, 0) + column - 1
-  const position = (at: number, value = lines.join('\n')) => {
-    const before = value.slice(0, at).split('\n')
-    return { lineNumber: before.length, column: before.at(-1)!.length + 1 }
-  }
-  const value: TextModelLike & { text(): string; apply(edits: readonly TextEdit[]): { range: TextRange }[] } = {
-    getLineCount: () => lines.length,
-    getLineContent: line => lines[line - 1],
-    getValueInRange: range => lines.join('\n').slice(offset(range.startLineNumber, range.startColumn), offset(range.endLineNumber, range.endColumn)),
-    getValueLengthInRange: range => offset(range.endLineNumber, range.endColumn) - offset(range.startLineNumber, range.startColumn),
-    text: () => lines.join('\n'),
-    apply: edits => {
-      // Edits never overlap; applied last first, the inverse ranges are where each new text ends up.
-      let current = lines.join('\n')
-      const sorted = edits.map((edit, index) => ({ edit, index, start: offset(edit.range.startLineNumber, edit.range.startColumn), end: offset(edit.range.endLineNumber, edit.range.endColumn) }))
-        .sort((a, b) => b.start - a.start)
-      for (const { edit, start, end } of sorted) current = current.slice(0, start) + edit.text + current.slice(end)
-      const inverse: { range: TextRange }[] = []
-      for (const item of sorted) {
-        const shift = sorted.filter(other => other.start < item.start).reduce((total, other) => total + other.edit.text.length - (other.end - other.start), 0)
-        const start = position(item.start + shift, current), end = position(item.start + shift + item.edit.text.length, current)
-        inverse[item.index] = { range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column } }
-      }
-      lines = current.split('\n')
-      return inverse
-    }
+  const builder = new PieceTreeTextBufferBuilder()
+  builder.acceptChunk(text)
+  const buffer = builder.finish(true).create(1).textBuffer
+  const range = (value: TextRange) => new Range(value.startLineNumber, value.startColumn, value.endLineNumber, value.endColumn)
+  const value: TextModelLike & { text(): string; apply(edits: readonly TextEdit[]): void } = {
+    getLineCount: () => buffer.getLineCount(),
+    getLineContent: line => buffer.getLineContent(line),
+    getValueInRange: value => buffer.getValueInRange(range(value)),
+    getValueLengthInRange: value => buffer.getValueLengthInRange(range(value)),
+    text: () => buffer.getLinesContent().join('\n'),
+    apply: edits => { buffer.applyEdits(edits.map(edit => ({ range: range(edit.range), text: edit.text })), false, true) }
   }
   return value
 }
@@ -38,8 +27,8 @@ const selection = (startLine: number, startColumn: number, endLine = startLine, 
 /** Runs an operation as the editor would and returns the text and selections afterwards. */
 function run(text: string, op: (target: ReturnType<typeof model>) => ReturnType<typeof caseEdits>) {
   const target = model(text), result = op(target)
-  const selections = result.selections(target.apply(result.edits))
-  return { text: target.text(), selections, edits: result.edits }
+  target.apply(result.edits)
+  return { text: target.text(), selections: result.selections, edits: result.edits }
 }
 
 describe('Make Uppercase and Make Lowercase', () => {
@@ -69,6 +58,34 @@ describe('Make Uppercase and Make Lowercase', () => {
     expect(result.selections).toEqual([selection(1, 1, 1, 8)])
     const caret = run('ßa', target => caseEdits(target, [selection(1, 1)], 'upper'))
     expect([caret.text, caret.selections]).toEqual(['SSa', [selection(1, 3)]])
+  })
+  // Monaco keeps the reverse edits of touching ranges in document order, not in the order the edits were given.
+  it('place each selection by its own text when the ranges touch', () => {
+    // The primary selection is 'bc', and a second caret sits before 'a'.
+    const result = run('abcd', target => caseEdits(target, [selection(1, 2, 1, 4), selection(1, 1)], 'upper'))
+    expect(result.text).toBe('ABCd')
+    expect(result.selections).toEqual([selection(1, 2, 1, 4), selection(1, 2)])
+  })
+  it('move a selection that needs no change past an earlier one that grew', () => {
+    const result = run('ß ABC', target => caseEdits(target, [selection(1, 1, 1, 2), selection(1, 3, 1, 6)], 'upper'))
+    expect(result.text).toBe('SS ABC')
+    expect(result.selections).toEqual([selection(1, 1, 1, 3), selection(1, 4, 1, 7)])
+    const carets = run('ß1', target => caseEdits(target, [selection(1, 1), selection(1, 2)], 'upper'))
+    expect([carets.text, carets.selections]).toEqual(['SS1', [selection(1, 3), selection(1, 4)]])
+    // Across lines: only the columns on the lines that changed move.
+    const lines = run('aß\nßB c', target => caseEdits(target, [selection(1, 2, 2, 2), selection(2, 2, 2, 4), selection(2, 4)], 'upper'))
+    expect(lines.text).toBe('aSS\nSSB C')
+    expect(lines.selections).toEqual([selection(1, 2, 2, 3), selection(2, 3, 2, 5), selection(2, 6)])
+    // A CRLF model: a selection's text holds the model's line break.
+    const crlf = run('ß\r\nßb', target => caseEdits(target, [selection(1, 1, 2, 2), selection(2, 3)], 'upper'))
+    expect([crlf.text, crlf.selections]).toEqual(['SS\nSSb', [selection(1, 1, 2, 3), selection(2, 4)]])
+  })
+  // Monaco merges 1,000 or more edits into one, with a single reverse edit.
+  it('keep a column selection over 1,000 lines as 1,000 selections', () => {
+    const count = 1_000, columns = Array.from({ length: count }, (_, index) => selection(index + 1, 1, index + 1, 5))
+    const result = run(Array(count).fill('abcdef').join('\n'), target => caseEdits(target, columns, 'upper'))
+    expect(result.text).toBe(Array(count).fill('ABCDef').join('\n'))
+    expect(result.selections).toEqual(columns)
   })
   it('leave surrogate pairs whole and unchanged', () => {
     const result = run('𝒶b', target => caseEdits(target, [selection(1, 1)], 'upper'))
@@ -130,7 +147,7 @@ describe('applying a text operation', () => {
     const target = model('select'), calls: string[] = []
     const editor = {
       pushUndoStop: () => { calls.push('stop'); return true },
-      executeEdits: (source: string, edits: { range: TextRange; text: string }[], end: (inverse: { range: TextRange }[]) => null) => { calls.push(source); end(target.apply(edits)); return true },
+      executeEdits: (source: string, edits: { range: TextRange; text: string }[], end: () => null) => { calls.push(source); target.apply(edits); end(); return true },
       setSelections: (value: readonly TextSelection[]) => { calls.push(JSON.stringify(value)) }
     }
     applyTextOp(editor, 'varia.makeUppercase', caseEdits(target, [selection(1, 1, 1, 7)], 'upper'))

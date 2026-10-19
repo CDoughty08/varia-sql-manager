@@ -15,3 +15,24 @@ declare module 'monaco-editor/editor/common/standalone/standaloneEnums.js' {
 declare module 'monaco-editor/base/common/keyCodes.js' {
   export function KeyChord(firstPart: number, secondPart: number): number
 }
+declare module 'monaco-editor/editor/common/core/range.js' {
+  export class Range {
+    constructor(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number)
+    readonly startLineNumber: number; readonly startColumn: number; readonly endLineNumber: number; readonly endColumn: number
+  }
+}
+declare module 'monaco-editor/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBufferBuilder.js' {
+  import type { Range } from 'monaco-editor/editor/common/core/range.js'
+  export interface PieceTreeTextBuffer {
+    getLineCount(): number
+    getLineContent(lineNumber: number): string
+    getValueInRange(range: Range): string
+    getValueLengthInRange(range: Range): number
+    getLinesContent(): string[]
+    applyEdits(operations: { range: Range; text: string }[], recordTrimAutoWhitespace: boolean, computeUndoEdits: boolean): { reverseEdits: { range: Range }[] | null }
+  }
+  export class PieceTreeTextBufferBuilder {
+    acceptChunk(chunk: string): void
+    finish(normalizeEOL?: boolean): { create(defaultEOL: number): { textBuffer: PieceTreeTextBuffer } }
+  }
+}

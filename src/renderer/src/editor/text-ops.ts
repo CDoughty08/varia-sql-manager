@@ -14,8 +14,11 @@ export interface TextModelLike {
 }
 export interface TextOp {
   readonly edits: readonly TextEdit[]
-  /** The selections afterwards, from the inverse edits Monaco reports (in `edits` order). */
-  selections(inverse: readonly { readonly range: TextRange }[]): TextSelection[]
+  /**
+   * The selections afterwards, worked out from the edits themselves: Monaco's inverse edits are not in `edits` order
+   * when ranges touch, and 1,000 or more edits merge into one.
+   */
+  readonly selections: readonly TextSelection[]
 }
 export interface IndentOptions { readonly indentSize: number; readonly insertSpaces: boolean }
 
@@ -57,30 +60,54 @@ export function caseEdits(model: TextModelLike, selections: readonly TextSelecti
   checkSelectionSize(model, selections)
   const convert = (text: string) => mode === 'upper' ? text.toUpperCase() : text.toLowerCase()
   const edits: TextEdit[] = []
-  // Each selection's result: the index of its edit, or the selection to keep when nothing changes.
-  const plan: ({ edit: number; backwards: boolean; caret: boolean } | { keep: TextSelection })[] = []
+  // Each selection's result, in the coordinates from before the edits.
+  const plan: ({ range: TextRange; backwards: boolean } | { caret: TextSelection })[] = []
+  // Case mapping never adds or removes a line break, so each changed line only shifts the columns after a changed
+  // segment, by the segment's change in length.
+  const shifts = new Map<number, { column: number; delta: number }[]>()
   for (const selection of selections) {
     let range = rangeOf(selection), wasCaret = false
     if (isEmpty(range)) {
       const line = model.getLineContent(range.startLineNumber), offset = range.startColumn - 1
-      if (offset >= line.length) { plan.push({ keep: selection }); continue }
+      if (offset >= line.length) { plan.push({ caret: selection }); continue }
       // A whole code point, so a surrogate pair is never split.
       const length = String.fromCodePoint(line.codePointAt(offset)!).length
       range = { ...range, endColumn: range.startColumn + length }
       wasCaret = true
     }
     const text = model.getValueInRange(range), next = convert(text)
-    if (next === text) { plan.push({ keep: wasCaret ? caret(range.endLineNumber, range.endColumn) : selection }); continue }
-    plan.push({ edit: edits.length, backwards: reversed(selection), caret: wasCaret })
+    plan.push(wasCaret ? { caret: caret(range.endLineNumber, range.endColumn) } : { range, backwards: reversed(selection) })
+    if (next === text) continue
     edits.push({ range, text: next })
+    const before = text.split(/\r\n|\r|\n/), after = next.split(/\r\n|\r|\n/)
+    before.forEach((segment, index) => {
+      const delta = after[index].length - segment.length
+      if (!delta) return
+      const lineNumber = range.startLineNumber + index, column = (index ? 1 : range.startColumn) + segment.length
+      const line = shifts.get(lineNumber) ?? []
+      line.push({ column, delta })
+      shifts.set(lineNumber, line)
+    })
+  }
+  // Prefix sums per line, so up to Monaco's 10,000 cursors on one line each move in O(log n).
+  const sums = new Map([...shifts].map(([lineNumber, line]) => {
+    line.sort((a, b) => a.column - b.column)
+    let total = 0
+    return [lineNumber, { columns: line.map(shift => shift.column), totals: line.map(shift => (total += shift.delta)) }]
+  }))
+  const move = (lineNumber: number, column: number) => {
+    const line = sums.get(lineNumber)
+    if (!line) return column
+    let low = 0, high = line.columns.length
+    while (low < high) { const middle = (low + high) >> 1; if (line.columns[middle] <= column) low = middle + 1; else high = middle }
+    return low ? column + line.totals[low - 1] : column
   }
   return {
     edits,
-    selections: inverse => plan.map(item => {
-      if ('keep' in item) return item.keep
-      const range = inverse[item.edit]?.range
-      if (!range) return caret(1, 1)
-      return item.caret ? caret(range.endLineNumber, range.endColumn) : select(range, item.backwards)
+    selections: plan.map(item => {
+      if ('caret' in item) return caret(item.caret.positionLineNumber, move(item.caret.positionLineNumber, item.caret.positionColumn))
+      const { range } = item
+      return select({ startLineNumber: range.startLineNumber, startColumn: move(range.startLineNumber, range.startColumn), endLineNumber: range.endLineNumber, endColumn: move(range.endLineNumber, range.endColumn) }, item.backwards)
     })
   }
 }
@@ -126,7 +153,7 @@ export function indentEdits(model: TextModelLike, selections: readonly TextSelec
   }
   return {
     edits,
-    selections: () => selections.map(selection => {
+    selections: selections.map(selection => {
       const range = rangeOf(selection), whole = !isEmpty(range)
       const start = { lineNumber: range.startLineNumber, column: move(range.startLineNumber, range.startColumn, whole) }
       const end = { lineNumber: range.endLineNumber, column: move(range.endLineNumber, range.endColumn, false) }
@@ -138,16 +165,15 @@ export function indentEdits(model: TextModelLike, selections: readonly TextSelec
 /** The editor calls `applyTextOp` makes. */
 export interface TextOpEditor {
   pushUndoStop(): boolean
-  executeEdits(source: string, edits: { range: TextRange; text: string }[], endCursorState: (inverse: { readonly range: TextRange }[]) => null): boolean
+  executeEdits(source: string, edits: { range: TextRange; text: string }[], endCursorState: () => null): boolean
   setSelections(selections: readonly TextSelection[]): void
 }
 /** Applies `op` as one undo step, then selects what it says; with no edits, only the selections change. */
 export function applyTextOp(editor: TextOpEditor, source: string, op: TextOp): void {
-  let after = op.edits.length ? undefined : op.selections([])
   if (op.edits.length) {
     editor.pushUndoStop()
-    editor.executeEdits(source, op.edits.map(edit => ({ range: edit.range, text: edit.text })), inverse => { after = op.selections(inverse); return null })
+    editor.executeEdits(source, op.edits.map(edit => ({ range: edit.range, text: edit.text })), () => null)
     editor.pushUndoStop()
   }
-  if (after?.length) editor.setSelections(after)
+  if (op.selections.length) editor.setSelections(op.selections)
 }

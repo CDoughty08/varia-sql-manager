@@ -221,7 +221,17 @@ try {
   await advanced('w')
   console.log('Editor checks: View White Space and Word Wrap are still on after a relaunch.')
 
-  // 10. Quick Find with two lines selected searches in the selection; F3 and Shift+F3 move between matches.
+  // 10. Quick Find with the caret in a word searches for that word, as Varia's did before; with two lines selected it
+  // searches in the selection; F3 and Shift+F3 move between matches.
+  await setText('select * from Orders')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('Control+F')
+  const findInput = page.locator('.find-widget .find-part textarea')
+  await expect(findInput).toBeFocused()
+  await expect(findInput).toHaveValue('Orders')
+  await page.keyboard.press('Escape')
+  await expect(textbox()).toBeFocused()
   await setText('a b a\na b a\na')
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Shift+ArrowDown')
@@ -238,7 +248,7 @@ try {
   await expect(count).toHaveText(first)
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
-  console.log('Editor checks: Ctrl+F on a multi-line selection finds in it (4 of the 5 a\'s), and F3 and Shift+F3 move between matches.')
+  console.log('Editor checks: Ctrl+F with the caret in a word searches for it; Ctrl+F on a multi-line selection finds in it (4 of the 5 a\'s), and F3 and Shift+F3 move between matches.')
 
   // 11. Ctrl+K with nothing after it for 6 s: Monaco has left chord mode, and the next key types.
   await setText('')
