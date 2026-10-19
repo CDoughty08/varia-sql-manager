@@ -859,7 +859,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   planning, and the shared window cache (full, so every insert evicts).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
-  `maxRows: 0`.
+  `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab, each with its session probe.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
   while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
@@ -894,6 +894,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
+| Live: `SELECT 1` in a warm tab, with its session probe, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.7 ms (Windows, 24 CPUs, local SQL Server; 0.6 ms without the probe) | not measured |
 | Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 56 ms | 57 ms |
 | Grid: UI thread busy while 1,000,000 W1 rows stream (250,000 a second) | ≤ 10 % | ≤ 25 % | 8 % | 9 % |
 | Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |
