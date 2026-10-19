@@ -2,10 +2,10 @@ import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { triggerEditorAction } from '../editor/actions'
 
-// Monaco actions behind the Edit menu's editor commands. Monaco keeps dispatching their keys; the catalogue only labels them.
+// Monaco actions behind the Edit menu's editor commands. Monaco keeps dispatching their keys; the catalogue only labels
+// them. Quick Find and Quick Replace choose their search text first, so they are editing commands (contributions/editing.ts).
 const editorActions = [
-  ['edit.find', 'actions.find'], ['edit.replace', 'editor.action.startFindReplaceAction'], ['edit.toggleLineComment', 'editor.action.commentLine'],
-  ['edit.commentLines', 'editor.action.addCommentLine'], ['edit.uncommentLines', 'editor.action.removeCommentLine']
+  ['edit.toggleLineComment', 'editor.action.commentLine'], ['edit.commentLines', 'editor.action.addCommentLine'], ['edit.uncommentLines', 'editor.action.removeCommentLine']
 ] as const
 
 /** Query editor commands: the Monaco action wrappers, word wrap, insert or overtype, and moving between open queries in tab-strip order. */

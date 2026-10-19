@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
 // across queries, Insert Snippet and Surround With, View White Space and Word Wrap kept across a relaunch, Quick Find in a
-// selection with F3, and Ctrl+K's chord timeout. Windows and Linux; macOS's menus and keys are checked by hand.
+// selection with F3 and its search text from the caret, and Ctrl+K's chord timeout. Windows and Linux; macOS's menus and keys are checked by hand.
 if (process.platform === 'darwin') {
   console.log('Editor suite skipped on macOS.')
   process.exit(0)
@@ -221,17 +221,35 @@ try {
   await advanced('w')
   console.log('Editor checks: View White Space and Word Wrap are still on after a relaunch.')
 
-  // 10. Quick Find with the caret in a word searches for that word, as Varia's did before; with two lines selected it
-  // searches in the selection; F3 and Shift+F3 move between matches.
+  // 10. Quick Find and Quick Replace seed as SSMS's: the word the caret is inside or at the start of, selected so typing
+  // replaces it; with the caret just after a word (where Monaco would take that word), the find box keeps its text. With
+  // two lines selected Quick Find searches in the selection; F3 and Shift+F3 move between matches.
   await setText('select * from Orders')
-  await page.keyboard.press('ArrowLeft')
-  await page.keyboard.press('ArrowLeft')
-  await page.keyboard.press('Control+F')
-  const findInput = page.locator('.find-widget .find-part textarea')
-  await expect(findInput).toBeFocused()
-  await expect(findInput).toHaveValue('Orders')
-  await page.keyboard.press('Escape')
-  await expect(textbox()).toBeFocused()
+  const findInput = page.locator('.find-widget .find-part textarea'), replaceInput = page.locator('.find-widget .replace-part textarea')
+  /**
+   * Ctrl+F or Ctrl+H with the caret where `moves` take it from Home: the find box's text, focused and selected after
+   * Ctrl+F, then Escape to the editor. Monaco's Quick Replace focuses the find or the replace box depending on whether it
+   * still counts the find box as focused from before Escape, so after Ctrl+H either may have focus.
+   */
+  async function seeded(key, moves, expected) {
+    await page.keyboard.press('Home')
+    for (const move of moves) await page.keyboard.press(move)
+    await page.keyboard.press(key)
+    await expect(key === 'Control+F' ? findInput : page.locator('.find-widget textarea:focus')).toBeFocused()
+    await expect(findInput).toHaveValue(expected)
+    if (key === 'Control+F') expect(await findInput.evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, expected.length])
+    await expect(replaceInput).toBeVisible({ visible: key === 'Control+H' })
+    await page.keyboard.press('Escape')
+    await expect(textbox()).toBeFocused()
+  }
+  const right = count => Array(count).fill('ArrowRight')
+  await seeded('Control+F', ['End', 'ArrowLeft', 'ArrowLeft'], 'Orders')
+  await seeded('Control+F', [], 'select')
+  // After "Orders" at the end of the line, and after "from" before a space: the previous search stays.
+  await seeded('Control+F', ['End'], 'select')
+  await seeded('Control+H', right(13), 'select')
+  // Monaco's own Ctrl+H seeds no word, so "from" shows that the key runs Varia's Quick Replace.
+  await seeded('Control+H', right(9), 'from')
   await setText('a b a\na b a\na')
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Shift+ArrowDown')
@@ -248,7 +266,7 @@ try {
   await expect(count).toHaveText(first)
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
-  console.log('Editor checks: Ctrl+F with the caret in a word searches for it; Ctrl+F on a multi-line selection finds in it (4 of the 5 a\'s), and F3 and Shift+F3 move between matches.')
+  console.log('Editor checks: Ctrl+F and Ctrl+H seed the word the caret is in or at the start of, and keep the previous search after a word; Ctrl+F on a multi-line selection finds in it (4 of the 5 a\'s), and F3 and Shift+F3 move between matches.')
 
   // 11. Ctrl+K with nothing after it for 6 s: Monaco has left chord mode, and the next key types.
   await setText('')

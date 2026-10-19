@@ -1,7 +1,9 @@
 import type { editor } from 'monaco-editor'
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
+import { defaultRules, type Platform, type ResolvedRule } from '../../../shared/commands/keybindings'
 import { focusedEditor, triggerEditorAction } from '../editor/actions'
+import { caretFindSeed } from '../editor/find-seed'
 import { registerEditorBridge, type BridgeMonaco } from '../editor/keybinding-bridge'
 import { snippetById, snippets, type Snippet } from '../editor/snippets'
 import { applyTextOp, caseEdits, checkSelectionSize, indentEdits, type TextSelection } from '../editor/text-ops'
@@ -15,10 +17,22 @@ function snippetController(target: editor.IStandaloneCodeEditor): SnippetInserte
   return controller
 }
 
+/** The part of Monaco's FindController that sets the search text, as its own seeding does (escaped under regular expressions). */
+interface SearchStringSetter { setSearchString(searchString: string): void }
+
+/** Quick Find and Quick Replace, with the Monaco actions they open the find widget with. */
+const quickFindActions = [['edit.find', 'actions.find'], ['edit.replace', 'editor.action.startFindReplaceAction']] as const
 /**
- * SSMS's editing commands in the query editor: Find Next and Previous, Go To Line, Edit › Advanced's case, indent and
- * View White Space commands, Bookmarks, and IntelliSense's snippets. Each acts on the bound editor, focused first; with
- * no editor or document it does nothing. Varia's own editor chords reach Monaco through the keybinding bridge.
+ * Their keys (Ctrl+F, Ctrl+H; ⌘F, ⌥⌘F), which Monaco dispatches, run them in editor text instead of Monaco's actions,
+ * so the keys seed as the menus and the palette do. In the find widget Monaco's own actions still have them.
+ */
+const quickFindRules = (platform: Platform): ResolvedRule[] => defaultRules(platform).filter(rule => quickFindActions.some(([id]) => id === rule.command))
+
+/**
+ * SSMS's editing commands in the query editor: Quick Find and Replace, Find Next and Previous, Go To Line, Edit ›
+ * Advanced's case, indent and View White Space commands, Bookmarks, and IntelliSense's snippets. Each acts on the bound
+ * editor, focused first; with no editor or document it does nothing. Varia's own editor chords reach Monaco through the
+ * keybinding bridge.
  */
 export function editingContribution(workbench: Pick<Workbench, 'commands' | 'documents' | 'editorOptions' | 'bookmarks' | 'editorDialogs' | 'quickInput' | 'platform'>, monaco: BridgeMonaco): Disposable {
   const { commands, documents, editorOptions, bookmarks, editorDialogs, quickInput } = workbench
@@ -26,6 +40,16 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     const target = focusedEditor(documents), model = target?.getModel()
     if (target && model) run(target, model)
   }
+  // With nothing selected, the find box takes the word the caret is at the start of or inside (caretFindSeed), or keeps
+  // its text; Monaco seeds from a single-line selection itself (seedSearchStringFromSelection: 'selection'). The word is
+  // set after the action starts: Monaco creates the find widget then, synchronously, and a new widget does not read a
+  // search text set before it; it focuses and selects the find box a microtask later, so typing replaces the word.
+  const quickFind = (action: string) => withEditor((target, model) => {
+    const selection = target.getSelection(), seed = selection ? caretFindSeed(model, selection) : undefined
+    target.trigger('menu', action, null)
+    const controller = target.getContribution('editor.contrib.findController') as unknown as Partial<SearchStringSetter> | null
+    if (seed !== undefined && typeof controller?.setSearchString === 'function') controller.setSearchString(seed)
+  })
   const selections = (target: editor.IStandaloneCodeEditor): TextSelection[] => target.getSelections() ?? []
   const changeCase = (mode: 'upper' | 'lower') => withEditor((target, model) =>
     applyTextOp(target, mode === 'upper' ? 'varia.makeUppercase' : 'varia.makeLowercase', caseEdits(model, selections(target), mode)))
@@ -62,6 +86,8 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
   })
   const registrations = [
     registerEditorBridge(monaco, commands, workbench.platform),
+    registerEditorBridge(monaco, commands, workbench.platform, quickFindRules(workbench.platform)),
+    ...quickFindActions.map(([id, action]) => commands.register(id, { run: quickFind(action) })),
     commands.register('edit.findNext', { run: () => triggerEditorAction(documents, 'editor.action.nextMatchFindAction') }),
     commands.register('edit.findPrevious', { run: () => triggerEditorAction(documents, 'editor.action.previousMatchFindAction') }),
     commands.register('edit.goToLine', { run: goToLine }),
