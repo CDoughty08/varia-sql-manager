@@ -1,12 +1,13 @@
 // Files and status bars on the fake backend: encodings and line endings kept on save, the Save as Unicode and Save of
 // Read-Only File prompts, Save files with a specific encoding, Save All, the IDE status bar's Ln/Col/Ch, INS/OVR, line ending and encoding, and the query
 // status bar with its Options; then files from the command line and a second instance, File › Recent Files, changes
-// made outside, drops, and AutoRecover across a renderer crash and a killed app. Native dialogs are stubbed in main, as
+// made outside, drops, and AutoRecover across a renderer crash, a reload and a killed app. Native dialogs are stubbed in main, as
 // electron-smoke does; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
@@ -517,6 +518,21 @@ try {
   await expect(recoverDialog()).toHaveCount(0)
   expect(await readdir(recoveryFolder)).toEqual([])
   console.log('Files checks: a killed app offers AutoRecover\'s copies at the next start, and Discard Selected deletes them.')
+  // A copy the page writes while a reload replaces it (the next query of a flush under way) is that page's: the reloaded
+  // workbench offers it. The page's pagehide stands in for the flush, as it runs after the navigation started.
+  const late = randomUUID()
+  await page.evaluate(id => { addEventListener('pagehide', () => { void window.varia.writeRecovery({ id, name: 'late.sql', kind: 'sql', eol: 'lf', text: 'SELECT 17 AS late' }) }) }, late)
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())
+  await expect(recoverDialog()).toBeVisible({ timeout: 30000 })
+  await expect(recoverDialog().locator('.recovery-grid tbody tr')).toHaveCount(1)
+  await expect(recoverDialog().locator('.recovery-grid tbody tr').filter({ hasText: 'late.sql' })).toHaveCount(1)
+  expect(await readdir(recoveryFolder)).toEqual([late + '.json'])
+  expect(await prompts()).toEqual([])
+  await recoverDialog().getByRole('button', { name: 'Discard Selected', exact: true }).click()
+  await recoverDialog().getByRole('button', { name: 'Discard', exact: true }).click()
+  await expect(recoverDialog()).toHaveCount(0)
+  expect(await readdir(recoveryFolder)).toEqual([])
+  console.log('Files checks: a copy written as a reload replaces the page is offered by the reloaded workbench.')
   // A normal exit (Don't Save) deletes the window's copies before the app quits.
   await page.getByRole('button', { name: 'New query', exact: true }).click()
   await textbox().focus()

@@ -22,7 +22,7 @@ import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { SettingsStore } from './settings-store'
-import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema } from './recovery-store'
+import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
 import { AppearanceService, windowChromeFor } from './appearance'
@@ -65,6 +65,9 @@ const files = new SqlFileStore({ legacyLabel: () => legacyCodePage(app.getSystem
 // drops those not yet shown, and `rendererGeneration` tells a handler whose dialog was open then that its page is gone.
 const oneDialog = dialogQueue()
 let rendererGeneration = 0
+// The generation of the page the main frame shows. A reload's reset moves `rendererGeneration` as navigation starts, but
+// the page being replaced runs until the next one commits, and what it sends then (an AutoRecover write) is still its own.
+let pageGeneration = 0
 // Restart SQL Backend while one is pending (a double-click on the banner's Restart) shares it.
 let restarting: Promise<boolean> | undefined
 // The answer to "Workbench not responding", while it waits or shows; repeated closes share it.
@@ -319,7 +322,7 @@ function restartBackend(): Promise<boolean> {
  *  under way. */
 function confirmUnresponsiveClose(window: BrowserWindow, quit: boolean): void {
   unresponsivePrompt ??= oneDialog(async () => window.isDestroyed() ? { response: 1 } : !rendererUnresponsive ? { response: -1 }
-    : dialog.showMessageBox(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: lossDetailsFor(rendererGeneration).unresponsive, buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }),
+    : dialog.showMessageBox(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: lossDetailsFor(pageGeneration).unresponsive, buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }),
   { response: 1 }).then(({ response }) => {
     if (window.isDestroyed() || response === 1) return
     if (response === 0) closeApproved = true
@@ -449,12 +452,13 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   contents.on('did-start-navigation', details => {
     if (details.isMainFrame && !details.isSameDocument && rendererLoaded && details.url === contents.getURL()) resetRendererState()
   })
+  contents.on('did-navigate', () => { pageGeneration = rendererGeneration })
   // The renderer blocks unload only while queries are unsaved or servers are connected. This reload waits; the prompt
   // takes its turn after any open dialog, and Reload starts it again, allowed this time.
   contents.on('will-prevent-unload', event => {
     if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
     const generation = rendererGeneration
-    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: lossDetailsFor(generation).reload, buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: lossDetailsFor(pageGeneration).reload, buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
       if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) return
       reloadApproved = true
@@ -476,9 +480,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     // backend while Chromium launches the new renderer, and on Windows the backend then inherits that renderer's channel
     // handle, so Chromium never sees the new renderer die and its crash leaves the window frozen.
     rendererLoaded = false
-    const lostGeneration = rendererGeneration
+    const lostPage = pageGeneration
     resetRendererState()
-    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostGeneration).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
+    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
       if (response === 0) reloadLostRenderer(window)
@@ -573,8 +577,9 @@ app.whenReady().then(async () => {
   const loaded = settings.load()
   loaded.catch(() => {})
   // AutoRecover's copies older than Keep AutoRecover information for go before the page can list them; with settings
-  // unreadable, nothing is deleted under a retention the user may have changed.
-  void recovery.purge(loaded.then(state => state.values['environment.autoRecover.keepDays']))
+  // unreadable, or a retention reset because settings.json was invalid, nothing is deleted under a retention the user
+  // may have changed.
+  void recovery.purge(retentionDays(settings))
   settings.onDidChange(state => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:settings-changed', state)
     buildMenu()
@@ -746,17 +751,17 @@ app.whenReady().then(async () => {
   // AutoRecover. Main adds the path from its own registration of the query's file; nothing is written while AutoRecover is
   // off (settings that cannot be read leave it on, as Options shows), or once the window is closing.
   handle('varia:recovery-write', async value => {
-    const request = recoveryWriteSchema.parse(value), generation = rendererGeneration
+    const request = recoveryWriteSchema.parse(value), generation = pageGeneration
     const values = (await settings.load().catch(() => ({ values: settings.current() }))).values
     if (!values['environment.autoRecover.enabled'] || closeApproved) return
     let path: string | undefined
     try { path = request.fileId ? files.get(request.fileId).path : undefined } catch { /* Released: kept without a file. */ }
     await recovery.write({ ...request, ...path ? { path } : {} }, generation)
   })
-  handle('varia:recovery-discard', value => recovery.discard(recoveryDiscardSchema.parse(value).ids, rendererGeneration))
-  handle('varia:recovery-list', () => recovery.list(rendererGeneration))
+  handle('varia:recovery-discard', value => recovery.discard(recoveryDiscardSchema.parse(value).ids, pageGeneration))
+  handle('varia:recovery-list', () => recovery.list(pageGeneration))
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
-    const generation = rendererGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
+    const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
     const file = record.path && generation === rendererGeneration ? await files.register(record.path) : undefined
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {} }
   })
@@ -786,7 +791,7 @@ app.whenReady().then(async () => {
     if (!trusted(event)) return
     closeApproved = true
     // Every query was saved or discarded, so AutoRecover's copies of this page's go, before the app can exit.
-    await recovery.discardOwned(rendererGeneration).catch(() => {})
+    await recovery.discardOwned(pageGeneration).catch(() => {})
     if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
     else app.quit()
   })

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema } from '../src/main/recovery-store'
+import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from '../src/main/recovery-store'
+import { SettingsStore } from '../src/main/settings-store'
 import { writeJsonAtomic } from '../src/main/json-file'
 import { SqlFileStore } from '../src/main/sql-files'
 import { lossDetails, recoveryCapMessage, recoveryLimits, type RecoveryWrite } from '../src/shared/files/recovery'
@@ -141,6 +142,71 @@ describe('the AutoRecover store', () => {
     await purged
     expect(await listed).toEqual([])
     expect(await records()).toEqual(['notes.txt'])
+  })
+
+  it('keeps the purge from deleting under a retention reset because settings.json was invalid', async () => {
+    const now = Date.now(), settingsPath = join(directory, 'settings.json'), legacy = join(directory, 'scripting-options.json')
+    const writer = new RecoveryStore(folder), old = query(), kept = old.id + '.json'
+    await writer.write(old, 1)
+    await utimes(join(folder, kept), new Date(now - 30 * day), new Date(now - 30 * day))
+    const purgeWith = async (content: string) => {
+      await writeFile(settingsPath, content)
+      await new RecoveryStore(folder, { now: () => new Date(now) }).purge(retentionDays(new SettingsStore(settingsPath, legacy)))
+    }
+    // The user keeps copies 90 days; a trailing comma makes the file invalid, so it loads as the defaults (7).
+    await purgeWith('{"version":1,"values":{"environment.autoRecover.keepDays":90},}')
+    expect(await records()).toContain(kept)
+    // Only that value is unsupported: salvaged, it is the default too.
+    await purgeWith('{"version":1,"values":{"environment.autoRecover.keepDays":500}}')
+    expect(await records()).toContain(kept)
+    // Read intact, 90 days keeps it, and the default (only another value salvaged) does not.
+    await purgeWith('{"version":1,"values":{"environment.autoRecover.keepDays":90}}')
+    expect(await records()).toContain(kept)
+    await purgeWith('{"version":1,"values":{"environment.autoRecover.intervalMinutes":500}}')
+    expect(await records()).not.toContain(kept)
+    // A setting the user chooses again is theirs, whatever the file held before.
+    await writeFile(settingsPath, '{"version":1,"values":{"environment.autoRecover.keepDays":"x"}}')
+    const settings = new SettingsStore(settingsPath, legacy)
+    await settings.load()
+    expect(settings.wasReset('environment.autoRecover.keepDays')).toBe(true)
+    expect(settings.wasReset('environment.autoRecover.intervalMinutes')).toBe(false)
+    await settings.update({ 'environment.autoRecover.keepDays': 7 })
+    expect(settings.wasReset('environment.autoRecover.keepDays')).toBe(false)
+    expect(await retentionDays(settings)).toBe(7)
+  })
+
+  it('names records only by lower-case ids, and counts, quarantines and purges a file named in upper case', async () => {
+    const upper = randomUUID().toUpperCase()
+    expect(recoveryWriteSchema.safeParse({ ...query(), id: upper }).success).toBe(false)
+    expect(recoveryTakeSchema.safeParse({ id: upper }).success).toBe(false)
+    expect(recoveryDiscardSchema.safeParse({ ids: [upper] }).success).toBe(false)
+    const store = new RecoveryStore(folder, { caps: { records: 2, totalBytes: 1_000_000 }, now: () => new Date(Date.now() + 8 * day) })
+    const kept = query()
+    await store.write(kept, 1)
+    // An upper-case record, as an earlier build or a hand could leave it, takes a place under the caps.
+    await writeFile(join(folder, upper + '.json'), (await readFile(join(folder, kept.id + '.json'), 'utf8')).replace(kept.id, upper))
+    await expect(store.write(query(), 1)).rejects.toThrow(recoveryCapMessage)
+    // It is never offered: list quarantines it, and the purge deletes it with the other leftovers.
+    expect(await store.list(2)).toEqual([expect.objectContaining({ id: kept.id })])
+    expect((await records()).filter(name => name.startsWith(upper + '.json.invalid-'))).toHaveLength(1)
+    await store.purge(Promise.resolve(7))
+    expect(await records()).toEqual([kept.id + '.json'])
+    // One never listed is purged as it is.
+    await writeFile(join(folder, upper + '.json'), 'SELECT 1')
+    await store.purge(Promise.resolve(7))
+    expect(await records()).toEqual([kept.id + '.json'])
+  })
+
+  it('hands a record over once: a second take by the same page is refused', async () => {
+    const earlier = new RecoveryStore(folder), kept = query()
+    await earlier.write(kept, 1)
+    const store = new RecoveryStore(folder)
+    await store.list(1)
+    expect((await store.take(kept.id, 1)).text).toBe('SELECT 1')
+    await expect(store.take(kept.id, 1)).rejects.toThrow('This query is no longer offered for recovery.')
+    // Nor once it wrote its own copy since.
+    await store.write({ ...kept, text: 'SELECT 2' }, 1)
+    await expect(store.take(kept.id, 1)).rejects.toThrow('This query is no longer offered for recovery.')
   })
 
   it.skipIf(!posix)('makes the folder 0700 and each record 0600', async () => {

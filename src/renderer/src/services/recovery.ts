@@ -171,6 +171,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
       try {
         for (const id of ids) {
           if (this.disposed) return
+          // Already open (a second Recover Selected that waited for the first): one record, one tab.
+          if ([...this.kept.values()].some(kept => kept.id === id)) continue
           let taken
           try { taken = unwrap(await this.options.api.takeRecovery(id)) } catch (error) { problems.push(failed(error)); continue }
           if (taken.file) files.push(taken.file)

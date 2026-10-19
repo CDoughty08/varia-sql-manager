@@ -904,15 +904,19 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   `window.varia` does not expose; main still accepts only absolute paths to regular files, at most 32, and reads them
   as Open does (5 MB).
 - **AutoRecover** (`varia:recovery-write`, `-list`, `-take`, `-discard`, main's channels with strict zod schemas)
-  writes query text, never results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json`: the folder is
+  writes query text, never results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json` (a lower-case uuid;
+  a file named in upper case still counts against the caps, is quarantined rather than offered, and is purged): the folder is
   0700 and each record 0600 on POSIX, written to a temporary file that is chmodded, synced and renamed, and never logged.
   The page names a record only by uuid and its file only by its opaque id; main adds the path from its own
-  registration. Each record is owned by the main process and renderer generation that wrote it: a page may write only
+  registration. Each record is owned by the main process and renderer generation that wrote it (the page the main frame
+  had committed when the message arrived, so a page being replaced by a reload still writes as itself): a page may write only
   a new record or one its generation owns, and is offered every other (an earlier run's after a crash, kill or power
-  loss; an earlier generation's after the renderer stopped or reloaded), which taking moves to it. Writes stop while
+  loss; an earlier generation's after the renderer stopped or reloaded), which taking moves to it, once: a record is
+  handed over only while it is offered, so it never backs two tabs. Writes stop while
   AutoRecover is off and once a close is approved; an approved close deletes the page's records first. An invalid
   record is quarantined and never offered; records, quarantined records and interrupted writes older than Keep
-  AutoRecover information for are deleted at startup, only once settings were read.
+  AutoRecover information for are deleted at startup, only once settings were read, and not when settings.json held a
+  retention that was reset because the file or that value was invalid.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password.

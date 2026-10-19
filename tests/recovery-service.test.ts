@@ -222,6 +222,21 @@ describe('AutoRecover in the workbench', () => {
     } finally { fixture.dispose() }
   })
 
+  it('opens a copy once when Recover Selected runs again for a query it already opened', async () => {
+    const fixture = workbenchFixture({ recovery: [entry('r1', 'a.sql')] })
+    try {
+      const { api, documents, recovery } = fixture
+      await recovery.refresh()
+      // Main hands the record over every time it is asked, and the second Recover Selected was chosen from the same list
+      // while the first waited behind a file task.
+      api.takeRecovery.mockResolvedValue({ ok: true, value: { text: '-- a.sql', name: 'a.sql', kind: 'sql', eol: 'crlf' } })
+      const first = recovery.recover(['r1']), second = recovery.recover(['r1'])
+      await Promise.all([first, second])
+      expect(documents.getSnapshot().documents.map(document => document.name)).toEqual(['a.sql'])
+      expect(api.takeRecovery).toHaveBeenCalledTimes(1)
+    } finally { fixture.dispose() }
+  })
+
   it('says when a copy was saved as SSMS-style relative time', () => {
     const now = Date.parse('2026-10-19T12:00:00Z')
     expect(['2026-10-19T11:59:30Z', '2026-10-19T11:55:00Z', '2026-10-19T09:00:00Z', '2026-10-18T11:00:00Z', '2026-10-16T12:00:00Z', 'x'].map(at => savedAgo(at, now)))

@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { recoveryCapMessage, recoveryLimits, type RecoveryEntry, type RecoveryWrite } from '../shared/files/recovery'
 import { quarantine, readJsonFile, writeBytesAtomic } from './json-file'
+import type { SettingsStore } from './settings-store'
 import { fileKinds, maxSqlFileBytes } from './sql-files'
 
 const fits = (value: { kind: DocumentKind; text: string }) => value.text.length <= fileKinds[value.kind].maxChars
@@ -12,24 +13,28 @@ const eol = z.enum(['crlf', 'lf'])
 const name = z.string().min(1).max(recoveryLimits.nameChars)
 const server = z.string().min(1).max(recoveryLimits.serverChars)
 const database = z.string().min(1).max(recoveryLimits.databaseChars)
+// Lower-case, as crypto.randomUUID() makes them: a record has one file name, so the caps, the list and the purge all see it.
+const recordId = z.uuid().regex(/^[0-9a-f-]{36}$/, 'An AutoRecover id is a lower-case uuid.')
 /** varia:recovery-write: the query's text, at most its kind's limit, and what the dialog shows about it. */
 export const recoveryWriteSchema = z.object({
-  id: z.uuid(), name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes)
+  id: recordId, name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes)
 }).strict().refine(fits, 'The query is too large for AutoRecover.')
-export const recoveryDiscardSchema = z.object({ ids: z.array(z.uuid()).min(1).max(recoveryLimits.discardIds) }).strict()
-export const recoveryTakeSchema = z.object({ id: z.uuid() }).strict()
+export const recoveryDiscardSchema = z.object({ ids: z.array(recordId).min(1).max(recoveryLimits.discardIds) }).strict()
+export const recoveryTakeSchema = z.object({ id: recordId }).strict()
 
 /** One record, `<id>.json`. `owner` is the main process (`instance`) and renderer generation that wrote or took it. */
 const recordSchema = z.object({
-  version: z.literal(1), id: z.uuid(), owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
+  version: z.literal(1), id: recordId, owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
   name, kind: z.enum(documentKinds), path: z.string().min(1).max(recoveryLimits.pathChars).optional(), eol, server: server.optional(), database: database.optional(),
   savedAt: z.iso.datetime(), text: z.string().max(maxSqlFileBytes)
 }).strict().refine(fits)
 export type RecoveryRecord = z.infer<typeof recordSchema>
 
-const recordName = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/
+// In any case: this version names records only in lower case, but one in upper case (written by hand, or by a build
+// before that rule) still counts against the caps and is purged; `list` quarantines it rather than offer it.
+const recordName = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/i
 /** What a quarantine (`readJsonFile`'s callers' `quarantine`) leaves of an invalid record, and an interrupted write's temporary file. */
-const leftover = /^([0-9a-f-]{36}\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/
+const leftover = /^([0-9a-f-]{36}\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
 const dayMs = 86_400_000
 const posix = process.platform !== 'win32'
 
@@ -40,6 +45,7 @@ export interface RecoveryStoreOptions {
   /** Smaller caps, for tests: records and bytes in all. */
   readonly caps?: { readonly records: number; readonly totalBytes: number }
 }
+interface RecordFile { readonly id: string; readonly file: string; readonly canonical: boolean; readonly size: number; readonly mtimeMs: number }
 interface Listed { readonly size: number; readonly mtimeMs: number; readonly entry: RecoveryEntry; readonly owner: RecoveryRecord['owner'] }
 
 /**
@@ -85,20 +91,21 @@ export class RecoveryStore {
     if (posix) await chmod(this.dir, 0o700)
     this.prepared = true
   }
-  /** Record files and their sizes, other than `except`; none while the folder does not exist. */
-  private async records(except?: string): Promise<{ id: string; size: number; mtimeMs: number }[]> {
+  /** Record files and their sizes, other than `except`'s own file; none while the folder does not exist. `id` is lower-case,
+   *  and `canonical` says whether the file is named so. */
+  private async records(except?: string): Promise<RecordFile[]> {
     let names: string[]
     try { names = await readdir(this.dir) } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw error
     }
-    const found: { id: string; size: number; mtimeMs: number }[] = []
+    const found: RecordFile[] = []
     for (const file of names) {
-      const id = recordName.exec(file)?.[1]
-      if (!id || id === except) continue
+      const id = recordName.exec(file)?.[1]?.toLowerCase()
+      if (!id || (except !== undefined && file === except + '.json')) continue
       try {
         const info = await stat(join(this.dir, file))
-        if (info.isFile()) found.push({ id, size: info.size, mtimeMs: info.mtimeMs })
+        if (info.isFile()) found.push({ id, file, canonical: file === id + '.json', size: info.size, mtimeMs: info.mtimeMs })
       } catch { /* Removed meanwhile. */ }
     }
     return found
@@ -138,6 +145,7 @@ export class RecoveryStore {
     return this.serial(async () => {
       const entries: RecoveryEntry[] = []
       for (const file of await this.records()) {
+        if (!file.canonical) { await quarantine(join(this.dir, file.file)).catch(() => {}); continue }
         let listed = this.listed.get(file.id)
         if (!listed || listed.size !== file.size || listed.mtimeMs !== file.mtimeMs) {
           // One record that cannot be read now (locked, access denied) is left for a later list.
@@ -155,10 +163,11 @@ export class RecoveryStore {
     })
   }
 
-  /** A record offered to `generation`, with its text, moved to that generation. */
+  /** A record offered to `generation`, with its text, moved to that generation. One the generation already took (or wrote)
+   *  is not offered to it again: two tabs would share one record, and closing either would delete the other's copy. */
   take(id: string, generation: number): Promise<RecoveryRecord> {
     return this.serial(async () => {
-      if (this.offered.get(id) !== generation && this.owned.get(id) !== generation) throw new Error('This query is no longer offered for recovery.')
+      if (this.offered.get(id) !== generation) throw new Error('This query is no longer offered for recovery.')
       const record = await this.read(id)
       if (!record) throw new Error('The AutoRecover copy of this query could not be read.')
       this.owned.set(id, generation)
@@ -194,8 +203,8 @@ export class RecoveryStore {
       try { names = await readdir(this.dir) } catch { return }
       const cutoff = this.now().getTime() - days * dayMs
       for (const file of names) {
-        const id = recordName.exec(file)?.[1], temporary = file.startsWith('.varia-')
-        if ((!id && !leftover.test(file)) || (id && this.owned.has(id))) continue
+        const id = recordName.exec(file)?.[1]?.toLowerCase(), temporary = file.startsWith('.varia-')
+        if ((!id && !leftover.test(file)) || (id && file === id + '.json' && this.owned.has(id))) continue
         try {
           const info = await stat(join(this.dir, file))
           if (info.isFile() && (temporary || info.mtimeMs < cutoff)) await rm(join(this.dir, file), { force: true })
@@ -221,6 +230,18 @@ export class RecoveryStore {
     this.listed.delete(id)
     return undefined
   }
+}
+
+const retentionKey = 'environment.autoRecover.keepDays'
+/**
+ * Keep AutoRecover information for, for the startup purge, once settings load. It rejects (and the purge deletes nothing)
+ * when settings.json cannot be read, or held a retention that was reset to the default because the file or that value
+ * was invalid: the user may have chosen to keep copies longer.
+ */
+export async function retentionDays(settings: Pick<SettingsStore, 'load' | 'wasReset'>): Promise<number> {
+  const { values } = await settings.load()
+  if (settings.wasReset(retentionKey)) throw new Error('Keep AutoRecover information for was reset.')
+  return values[retentionKey]
 }
 
 const entryOf = (record: RecoveryRecord): RecoveryEntry => ({
