@@ -229,8 +229,7 @@ answer `{}`, and the dialog shows the OS user name. One lookup runs at a time an
 credential cache that does not answer holds one thread pool thread, and each request still ends at its deadline. The
 answer is `{ principal?: str ≤ 256 }`: the backend drops a principal with control or formatting characters (Unicode
 categories Cc and Cf) and cuts a longer one to 256 characters with an ellipsis, never inside a surrogate pair; main
-checks the same bounds, by code point as the backend does (`resultSchemas` in `src/main/validation.ts`) and answers an invalid one as a failure. Showing
-principals over 256 characters whole is still to do.
+checks the same bounds, by code point as the backend does (`resultSchemas` in `src/main/validation.ts`) and answers an invalid one as a failure.
 
 **Object Explorer cancellation** has no backend method. Each `explorer.children` load carries the renderer's
 `requestId`; main (`ExplorerRequests`) maps it to the REQUEST frame it went out as, and `explorerCancel(requestIds)`
