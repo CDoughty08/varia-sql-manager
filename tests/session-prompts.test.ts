@@ -31,10 +31,10 @@ describe('session prompts', () => {
       expect(answers(action, tabs)).toEqual(expected)
       const prompt = sessionPrompt({ action, tabs })
       if (!prompt) return
-      // Escape is Cancel (Keep Running). As in SSMS, Enter commits an open transaction (Yes); with only executing queries
-      // it keeps them running.
+      // Escape is Cancel (Keep Running). As in SSMS, Enter commits an open transaction (Yes); with an executing query among
+      // the tabs it keeps everything as it is, so Enter never cancels a running query.
       expect(prompt.buttons[prompt.cancelId].answer).toBe('cancel')
-      expect(prompt.buttons[prompt.defaultId].answer).toBe(prompt.title === 'Uncommitted transactions' ? 'commit' : 'cancel')
+      expect(prompt.buttons[prompt.defaultId].answer).toBe(prompt.title === 'Uncommitted transactions' && !tabs.some(tab => tab.running) ? 'commit' : 'cancel')
     })
   }
   it('asks SSMS\'s question, naming the queries and what is about to happen', () => {
@@ -60,8 +60,8 @@ describe('session prompts', () => {
       detail: `• a.sql (not checked)\n• b.sql (2 nested levels)\n\n${notChecked}\n\nYes commits every nesting level; No rolls back.`
     })
     expect(sessionPrompt({ action: 'disconnect', tabs: [open('a.sql'), open('b.sql', 2)] })?.message).toBe('There are uncommitted transactions in 2 queries. Do you wish to commit these transactions before disconnecting the server?')
-    expect(sessionPrompt({ action: 'exit', tabs: [open('a.sql'), running('b.sql')] })?.detail).toBe('• a.sql\n\nYes commits every nesting level; No rolls back.\n\n'
-      + 'Still executing:\n• b.sql\nThe executing query is cancelled, and anything it left uncommitted is rolled back.')
+    expect(sessionPrompt({ action: 'exit', tabs: [open('a.sql'), running('b.sql')] })).toMatchObject({ detail: '• a.sql\n\nYes commits every nesting level; No rolls back.\n\n'
+      + 'Still executing:\n• b.sql\nThe executing query is cancelled, and anything it left uncommitted is rolled back.', defaultId: 2, cancelId: 2 })
     expect(sessionPrompt({ action: 'close', tabs: [running('a.sql')] })).toMatchObject({
       title: 'Query executing', message: 'a.sql is still executing.', detail: 'Cancel it and close the query? Anything it left uncommitted is rolled back.', defaultId: 1, cancelId: 1
     })

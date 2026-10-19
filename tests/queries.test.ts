@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/shared/contracts'
-import { cancelSettleMs, newSessionMessage, QueryService, stateReads, type QueryApi } from '../src/renderer/src/services/queries'
+import { cancelSettleMs, lostSessionMessage, newSessionMessage, QueryService, sessionRequests, stateBudgetMs, type QueryApi } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { EventBus } from '../src/renderer/src/core/events'
@@ -149,10 +149,10 @@ describe('query orchestration', () => {
   })
   it('says once that a query runs in a new session after a reconnect, before its own messages', async () => {
     const { documents, queries, tab, results } = fixture()
-    documents.update(tab.id, { sessionNotice: true })
+    documents.update(tab.id, { sessionNotice: 'restarted' })
     await queries.execute()
     expect(results.finish.mock.calls[0][2]).toMatchObject({ notice: newSessionMessage })
-    expect(documents.get(tab.id)?.sessionNotice).toBe(false)
+    expect(documents.get(tab.id)?.sessionNotice).toBeUndefined()
     await queries.execute()
     expect(results.finish.mock.calls[1][2]).toMatchObject({ notice: undefined })
   })
@@ -245,7 +245,7 @@ describe('query orchestration', () => {
     queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'rollback' })
     expect(await queries.confirmSessions('closeAll', tabs.map(tab => tab.id))).toEqual(new Map([[tabs[3].id, 'rollback'], [tabs[7].id, 'rollback']]))
     expect(queryApi.querySessionState).toHaveBeenCalledTimes(20)
-    expect(most).toBe(stateReads)
+    expect(most).toBe(sessionRequests)
     expect(queryApi.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'closeAll', tabs: [{ name: 'q3.sql', transactions: 1, running: false }, { name: 'q7.sql', transactions: 0, running: false, unchecked: true }] })
   })
   it('hands a run that settles after its tab closed to the results, so its sets are released', async () => {
@@ -277,9 +277,11 @@ describe('query orchestration', () => {
     const run = queries.execute(other.id)
     // The cancel lands, and the query stops with a transaction it had opened: it is rolled back, never committed.
     queryApi.cancel.mockImplementationOnce(async () => { pending.resolve({ ok: true, value: output({ status: 'cancelled' }) }); return { ok: true, value: { cancelled: true } } })
-    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'commit' })
+    // As SSMS asks each window, the executing query is asked about first (Keep Running is the default) and the open
+    // transaction then (Yes is the default), so Enter never cancels a running query.
+    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' }).mockResolvedValueOnce({ ok: true, value: 'commit' })
     const plan = await queries.confirmSessions('exit', [tab.id, other.id, idle.id, 'gone'])
-    expect(queryApi.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'exit', tabs: [{ name: 'query.sql', transactions: 1, running: false }, { name: 'other.sql', transactions: 0, running: true }] })
+    expect(queryApi.confirmSessions.mock.calls).toEqual([[{ action: 'exit', tabs: [{ name: 'other.sql', transactions: 0, running: true }] }], [{ action: 'exit', tabs: [{ name: 'query.sql', transactions: 1, running: false }] }]])
     expect(queryApi.cancel).toHaveBeenCalledOnce()
     // An executing query's session is not read: it is busy, and is cancelled and rolled back whatever it holds.
     expect(queryApi.querySessionState.mock.calls.map(([id]) => id)).toEqual([tab.id, idle.id])
@@ -296,6 +298,77 @@ describe('query orchestration', () => {
     expect(queryApi.confirmSessions).toHaveBeenLastCalledWith({ action: 'changeConnection', tabs: [{ name: 'query.sql', transactions: 1, running: false }] })
     queryApi.confirmSessions.mockResolvedValueOnce({ ok: false, error: 'Untrusted IPC sender.' })
     await expect(queries.confirmSessions('changeConnection', [tab.id])).rejects.toThrow('Untrusted IPC sender.')
+  })
+  it('cancels nothing until both prompts are answered: Keep Running, or Cancel on the transactions, keeps everything', async () => {
+    const { queries, queryApi, tab, documents } = fixture()
+    const other = documents.create('other.sql', 'SELECT 2', 'master', 'server-a')
+    queryApi.querySessionState.mockResolvedValue({ ok: true, value: { transactionCount: 1, checked: true } })
+    const pending = deferred<ApiResult<QueryResult>>()
+    queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = queries.execute(other.id)
+    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'cancel' })
+    expect(await queries.confirmSessions('exit', [tab.id, other.id])).toBeUndefined()
+    expect(queryApi.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'exit', tabs: [{ name: 'other.sql', transactions: 0, running: true }] })
+    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' }).mockResolvedValueOnce({ ok: true, value: 'cancel' })
+    expect(await queries.confirmSessions('exit', [tab.id, other.id])).toBeUndefined()
+    expect(queryApi.confirmSessions).toHaveBeenCalledTimes(3)
+    expect(queryApi.cancel).not.toHaveBeenCalled()
+    expect(queries.isRunning(other.id)).toBe(true)
+    pending.resolve({ ok: true, value: output() }); await run
+  })
+  it('keeps only a few cancels in flight, so main\'s reserve for the control lane is never exceeded', async () => {
+    const { queries, queryApi, documents } = fixture(undefined, async () => {})
+    const tabs = Array.from({ length: 20 }, (_, index) => documents.create(`q${index}.sql`, 'WAITFOR DELAY', 'master', 'server-a'))
+    const runs = tabs.map(tab => {
+      const pending = deferred<ApiResult<QueryResult>>()
+      queryApi.execute.mockReturnValueOnce(pending.promise)
+      return { run: queries.execute(tab.id), pending }
+    })
+    let cancelling = 0, most = 0
+    queryApi.cancel.mockImplementation(async () => {
+      most = Math.max(most, ++cancelling)
+      await new Promise(resolve => { setTimeout(resolve, 1) })
+      cancelling--
+      return { ok: true, value: { cancelled: true } }
+    })
+    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    expect(await queries.confirmSessions('closeAll', tabs.map(tab => tab.id))).toEqual(new Map(tabs.map(tab => [tab.id, 'rollback'])))
+    expect(queryApi.cancel).toHaveBeenCalledTimes(20)
+    expect(most).toBe(sessionRequests)
+    for (const { run, pending } of runs) { pending.resolve({ ok: true, value: output({ status: 'cancelled' }) }); await run }
+  })
+  it('asks once the state reads\' time budget is spent, treating the sessions not read as ones that may be open', async () => {
+    const budget = deferred<void>(), waited: number[] = []
+    const { queries, queryApi, documents, tab } = fixture(undefined, ms => { waited.push(ms); return budget.promise })
+    const tabs = [tab, ...Array.from({ length: 11 }, (_, index) => documents.create(`q${index}.sql`, 'SELECT 1', 'master', 'server-a'))]
+    // An unresponsive backend or server: no read ever answers.
+    queryApi.querySessionState.mockImplementation(() => new Promise(() => {}))
+    const asking = queries.confirmSessions('exit', tabs.map(item => item.id))
+    await new Promise(resolve => { setTimeout(resolve, 1) })
+    expect(waited).toEqual([stateBudgetMs])
+    expect(queryApi.querySessionState).toHaveBeenCalledTimes(sessionRequests)
+    expect(queryApi.confirmSessions).not.toHaveBeenCalled()
+    budget.resolve()
+    expect(await asking).toBeUndefined()
+    expect(queryApi.querySessionState).toHaveBeenCalledTimes(sessionRequests)
+    expect(queryApi.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'exit', tabs: tabs.map(item => ({ name: item.name, transactions: 0, running: false, unchecked: true })) })
+  })
+  it('says that a query runs in a new session when a state read found its session lost', async () => {
+    const { queries, queryApi, tab, documents, results } = fixture()
+    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 53, login: 'sa' }) })
+    await queries.execute()
+    // Killed, or the server failed over: Close All reads it (nothing open), and the user keeps the query.
+    queryApi.querySessionState.mockResolvedValueOnce({ ok: false, error: 'The SQL session was lost, so SQL Server rolled back its transaction.', code: 'SESSION_LOST' })
+    expect(await queries.confirmSessions('closeAll', [tab.id])).toEqual(new Map())
+    expect(documents.get(tab.id)?.sessionNotice).toBe('lost')
+    await queries.execute()
+    expect(results.finish.mock.calls[1][2]).toMatchObject({ notice: lostSessionMessage })
+    expect(documents.get(tab.id)?.sessionNotice).toBeUndefined()
+    // A notice already waiting (a Reconnect after the backend restarted) is the one shown.
+    documents.update(tab.id, { sessionNotice: 'restarted' })
+    queryApi.querySessionState.mockResolvedValueOnce({ ok: false, error: 'lost', code: 'SESSION_LOST' })
+    await queries.transactionState(tab.id)
+    expect(documents.get(tab.id)?.sessionNotice).toBe('restarted')
   })
   it('stops waiting for a cancelled query that does not stop, so its session still closes', async () => {
     const waited: number[] = []

@@ -270,7 +270,9 @@ lost.
   SQL Server decides how much of a batch runs after an error (most errors end only their statement). Severity 17–19
   errors do not stop the batch on the server either, but SqlClient raises them as exceptions. After the batch's first
   result set, SqlClient raises one where SQL Server sent it and keeps the reader, so the batch's later result sets and
-  messages follow it in order, as in SSMS. Before the batch's first result set it cannot: SqlClient reads the rest of
+  messages follow it in order, as in SSMS; one raised partway through a result set's rows (a resource error such as
+  701) ends that set as `incomplete` with the rows read so far (a live check raises it through a test hook, since no
+  statement raises one there on demand). Before the batch's first result set it cannot: SqlClient reads the rest of
   the batch inside `ExecuteReader` (SqlClient 7.1.1, seen with a minimal live probe), discarding the batch's later
   result sets (their row counts still appear) and delivering its later messages, and only then raises the error, so
   those messages are listed before it. SQL Server ran the whole batch either way. `FireInfoMessageEventOnUserErrors`
@@ -312,8 +314,10 @@ closed and answers `SESSION_LOST` ("The SQL session was lost, so SQL Server roll
 `SESSION_LOST` itself for a session of an ended generation. Under `SET SHOWPLAN_XML`, `_TEXT`, `_ALL`, `NOEXEC`,
 `PARSEONLY` or `FMTONLY ON` the SELECT returns a plan or no row: the answer is then `{ transactionCount: 0, checked:
 false }`, and the options are left as they are, since the user may still keep the session (a commit turns them off
-first, below). The read is a statement in the session, so a session the user then keeps (Cancel) sees `@@ROWCOUNT` 1,
-as after SSMS's own check. A cancel does not roll back, so a cancelled script's open transaction is still there; an error
+first, below). The read is a statement in the session, as SSMS's own check is, and the renderer reads every idle
+connected query a flow covers, not only those it then asks about: a session the user keeps (Cancel, or nothing to ask
+about it) then sees `@@ROWCOUNT` 1 and `@@ERROR` 0, and other sessions see `SELECT @@TRANCOUNT;` as its most recent
+SQL (`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`); the live checks pin these. A cancel does not roll back, so a cancelled script's open transaction is still there; an error
 that dooms a transaction (`XACT_ABORT`) ends it by the batch's end (3998), and the read says 0.
 
 **Ending a session.** `query.session.close` takes `{ sessionId, transaction? }`. Without `transaction` it cancels the tab's
@@ -332,18 +336,25 @@ closed session left open, and the close does not wait for it (an explicit `ROLLB
 waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
 
 **Session limit.** SSMS has no cap on query windows. The backend keeps at most 1,000 query sessions (each one unpooled
-connection) only as a backstop on connections; scripts running at once are bounded by main's 256 pending requests, and
-cancels use the control lane's reserve. The next session is refused with `SESSION_LIMIT`: "This query was not executed:
+connection) only as a backstop on connections; scripts running at once are bounded by main's 256 pending requests.
+Main keeps a reserve of only 32 more for control-lane requests (cancels, state reads, closes), so with 256 scripts
+running at most 32 of those can be outstanding; the renderer therefore sends a flow's state reads and cancels 8 at a
+time, and ends sessions one at a time. The next session is refused with `SESSION_LIMIT`: "This query was not executed:
 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or
 disconnect idle ones (Query > Connection > Disconnect), then execute again." Idle sessions are never reclaimed to make
 room: a session's SET options, temporary objects and open transaction cannot be seen from outside (an empty temporary
 table allocates no pages, so tempdb's space views miss it), and closing it would lose them silently.
 
 **Prompts.** Before sessions end, the renderer reads the transaction state of each idle query among them that is on a live
-connection (`query.session.state`, 8 at a time). A count above 0 is an open transaction; `checked: false`, or any
+connection (`query.session.state`, 8 at a time, within 5 s in all: one not read by then, because the backend or the
+server does not answer, is treated as unchecked, so an unresponsive backend delays the prompt by 5 s, not by every
+read's deadline in turn). A count above 0 is an open transaction; `checked: false`, or any
 failure other than a session that is gone (`SESSION_CLOSED`, `SESSION_LOST`, `NOT_CONNECTED`, `CONNECTION_LOST`,
 `BACKEND_LOST`), such as `SESSION_BUSY`, `TIMEOUT` or `TOO_MANY_REQUESTS`, is one that may be open (`unchecked`).
-Executing queries are not read. It then sends main `varia:confirm-sessions` with `{ action, tabs }` (`action`: `close`,
+A read that finds the session lost (`SESSION_LOST`) makes the query's next execution say, before its own messages,
+that it runs in a new SQL session and that SQL Server rolled back the previous one's transaction, unless the query
+moves to another connection or disconnects first. Executing queries are not read. It then sends main
+`varia:confirm-sessions` with `{ action, tabs }` (`action`: `close`,
 `closeAll`, `changeConnection`, `disconnectQuery` (Disconnect, or Change Connection to Disconnected), `disconnect` (the
 server), `disconnectAll` or `exit`; at most 1,024 tabs, each `{ name ≤ 512, transactions, running, unchecked? }` and only
 those with an open or unchecked transaction or a running script). Main composes the message box from these facts
@@ -356,8 +367,11 @@ report it; Microsoft's documentation does not show this dialog. SSMS asks per wi
 once ("There are uncommitted transactions in 3 queries. …"), listing up to 10 by name with their nesting. A session
 that could not be read is worded "There may be uncommitted transactions", and is listed as "not checked". A query
 still executing is never committed: it is cancelled (the renderer waits up to 15 s for it to stop) and its session
-rolls back, and when only executing queries are involved the box asks **Cancel Query and Close** or **Keep Running**,
-with Keep Running the default and the Escape answer. The renderer then ends each session with `query.session.close` and
+rolls back. Executing queries are asked about in a box of their own, **Cancel Query and Close** or **Keep Running**,
+with Keep Running the default and the Escape answer; when a flow also has open transactions, as SSMS asks each window,
+the renderer sends the executing queries first and the open transactions in a second request only after Cancel Query
+and Close, and cancels nothing until both are answered, so Enter never cancels a running query. (A request that mixes
+both lists the executing queries under "Still executing" and defaults to Cancel.) The renderer then ends each session with `query.session.close` and
 the chosen `transaction`; a commit that fails is shown and the close, move, disconnect or quit stops there. Close All and
 Disconnect All Queries leave running queries alone; one that was running when their prompt opened and has finished
 since is read then, and if its session may hold a transaction it stays open (or connected) and is reported, rather than

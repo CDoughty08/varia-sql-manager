@@ -89,6 +89,17 @@ describe('query targets', () => {
     await targets.changeConnection(tab.id, 'server-a')
     expect(documents.get(tab.id)).toMatchObject({ connectionId: 'server-a', database: 'Sales' })
   })
+  it('drop a notice about the old session when a query moves or disconnects, but keep it when only the database changes', async () => {
+    const { targets, documents, tab } = await fixture()
+    documents.update(tab.id, { sessionNotice: 'lost' })
+    targets.changeDatabase(tab.id, 'master')
+    expect(documents.get(tab.id)?.sessionNotice).toBe('lost')
+    await targets.changeConnection(tab.id, 'server-b')
+    expect(documents.get(tab.id)?.sessionNotice).toBeUndefined()
+    documents.update(tab.id, { sessionNotice: 'lost' })
+    await targets.changeConnection(tab.id, undefined)
+    expect(documents.get(tab.id)?.sessionNotice).toBeUndefined()
+  })
   it('report a failed session close in the file banner and leave the target alone', async () => {
     const { targets, documents, files, api, tab } = await fixture()
     files.reportError('Earlier failure.')

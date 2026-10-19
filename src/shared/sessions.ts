@@ -65,7 +65,8 @@ const queries = (count: number) => count === 1 ? '1 query' : `${count} queries`
  * (commit), No (roll back) and Cancel, and Yes as the default, as in SSMS; Escape is Cancel. Several queries are asked
  * about once (SSMS asks per window). A query still executing is cancelled, never committed: what it left uncommitted
  * rolls back when its session closes, so a query that is only executing asks to cancel it or keep it running, and Keep
- * Running is the default.
+ * Running is the default. The renderer asks about executing queries and open transactions in separate prompts, as SSMS
+ * asks each window; a request that mixes them defaults to Cancel, so Enter never cancels a running query.
  */
 export function sessionPrompt({ action, tabs }: SessionPromptRequest): SessionPrompt | undefined {
   const open = tabs.filter(tab => !tab.running && mayBeOpen(tab)), running = tabs.filter(tab => tab.running)
@@ -84,7 +85,7 @@ export function sessionPrompt({ action, tabs }: SessionPromptRequest): SessionPr
       running.length ? `Still executing:\n${listed(running, () => '')}\n${runningNote}` : ''
     ].filter(Boolean).join('\n\n')
     return {
-      title: 'Uncommitted transactions', message, detail, defaultId: 0, cancelId: 2,
+      title: 'Uncommitted transactions', message, detail, defaultId: running.length ? 2 : 0, cancelId: 2,
       buttons: [{ label: 'Yes', answer: 'commit' }, { label: 'No', answer: 'rollback' }, { label: 'Cancel', answer: 'cancel' }]
     }
   }

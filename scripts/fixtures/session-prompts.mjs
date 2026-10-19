@@ -4,8 +4,9 @@
 // execution reads the session's transaction; closing a query with an open transaction reads it then and asks SSMS's
 // question (Yes commits, No rolls back, Cancel), and a commit that fails keeps it open; disconnecting the query (where SET
 // NOEXEC ON leaves the transaction unchecked, so it asks whether there may be one) and disconnecting the server ask too;
-// an executing query is cancelled only on Cancel Query and Close; a quit asks once for every query and commits each
-// before the app exits; and a crash closes the open prompt, so a dead page cannot hold it.
+// an executing query is cancelled only on Cancel Query and Close; a quit asks first about an executing query, then once
+// about every open transaction, and commits each before the app exits; and a crash closes the open prompt, so a dead
+// page cannot hold it.
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
@@ -184,7 +185,7 @@ export async function sessionPrompts(launchOptions) {
     expect(await sessionCloses()).toEqual(['commit', 'commit', 'rollback', 'rollback', 'commit'])
     console.log('Session checks: disconnecting a server asks about its queries\' open transactions, and commits them first.')
 
-    // 6. A quit asks once for every query: Cancel keeps the app; Yes commits each in its session, then it exits.
+    // 6. A quit asks once for every open transaction: Cancel keeps the app; Yes commits each in its session, then it exits.
     await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
     await connectDialog()
     await run('BEGIN TRAN')
@@ -202,12 +203,33 @@ export async function sessionPrompts(launchOptions) {
     expect(await lastPrompt(application)).toEqual({ title: 'Uncommitted transactions', message: 'There are uncommitted transactions in 2 queries. Do you wish to commit these transactions before closing Varia SQL Manager?',
       detail: `• ${third}\n• ${fourth} (2 nested levels)\n\nYes commits every nesting level; No rolls back.`, buttons: ['Yes', 'No', 'Cancel'], defaultId: 0, cancelId: 2 })
     await idle()
-    await answerNext(application, 'Yes')
+    // With a query also executing, it is asked about first, as SSMS asks each window: Keep Running (the default) keeps
+    // the app; Cancel Query and Close then asks about the transactions, whose Cancel still cancels nothing.
+    await newQuery()
+    await run('WAIT_FOR_CANCEL')
+    await expect(page.locator('.query-tabs .online')).toHaveCount(1)
+    const executing = await activeName()
+    const cancels = (await calls(control, 'query.cancel')).length
+    await quit(application, child)
+    await expect.poll(async () => (await messages(application)).length).toBe(asked + 2)
+    expect(await lastPrompt(application)).toMatchObject({ title: 'Query executing', message: `${executing} is still executing.`, buttons: ['Cancel Query and Close', 'Keep Running'], defaultId: 1, cancelId: 1 })
+    await idle()
+    expect((await messages(application)).length).toBe(asked + 2)
+    await answerNext(application, 'Cancel Query and Close')
+    await quit(application, child)
+    await expect.poll(async () => (await messages(application)).length).toBe(asked + 4)
+    expect(await lastPrompt(application)).toMatchObject({ title: 'Uncommitted transactions', detail: `• ${third}\n• ${fourth} (2 nested levels)\n\nYes commits every nesting level; No rolls back.`, defaultId: 0, cancelId: 2 })
+    await idle()
+    expect((await calls(control, 'query.cancel')).length).toBe(cancels)
+    await expect(page.locator('.query-tabs .online')).toHaveCount(1)
+    expect(state.exited).toBe(false)
+    await answerNext(application, 'Cancel Query and Close', 'Yes')
     await quit(application, child)
     await expect.poll(() => state.exited, { timeout: 30000 }).toBe(true)
-    expect((await sessionCloses()).slice(5)).toEqual(['commit', 'commit'])
+    expect((await calls(control, 'query.cancel')).length).toBe(cancels + 1)
+    expect((await sessionCloses()).slice(5)).toEqual(['commit', 'commit', 'rollback'])
     expect(errors).toEqual([])
-    console.log('Session checks: a quit asks once about every open transaction, and Yes commits each before the app exits.')
+    console.log('Session checks: a quit asks first about an executing query, then once about every open transaction, and Yes commits each before the app exits.')
   } finally { await app.cleanup() }
 
   // 7. A crash while the prompt is open closes it, so the dead page cannot hold it open; the crash prompt follows.

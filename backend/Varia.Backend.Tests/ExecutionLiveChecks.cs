@@ -116,6 +116,22 @@ internal static class ExecutionLiveChecks
             check(early.Status == "completedWithErrors" && early.CompletedBatches == 2 && early.ResultSets.Count == 0
                 && Texts(early).SequenceEqual(["p1", "p2", "(1 row affected)", "p3", "Msg 50000, Level 18, State 1, Line 1\nsev18", "Batch 1 raised an error; execution continued with the next batch.", "next"]),
                 "before a batch's first result set, a severity 18 error comes after the batch's messages (its SELECT counted, but its rows lost) (SqlClient): " + string.Join(" | ", Texts(early)));
+            // Partway through a result set's rows (a resource error such as 701, which no statement raises on demand, so the
+            // backend's row hook throws what SqlClient would): the set ends as incomplete with the rows read so far, and the
+            // batch's later messages and result sets still follow it in order.
+            var rowsRead = 0;
+            service.RowFault = () => ++rowsRead == 2 ? ConnectionFailureChecks.Sql(701, 1, 17, "", "Varia live check: there is insufficient system memory.") : null;
+            QueryResult midSet;
+            try { midSet = await Run("SELECT n FROM (VALUES (1), (2), (3)) AS v (n); PRINT 'p1'; SELECT 2 AS b;\nGO\nPRINT 'next';"); }
+            finally { service.RowFault = null; }
+            var midTexts = Texts(midSet);
+            var faulted = midTexts.FindIndex(text => text.StartsWith("Msg 701, Level 17,"));
+            check(midSet.Status == "completedWithErrors" && midSet.CompletedBatches == 2 && midSet.ResultSets.Select(set => set.Columns[0].Name).SequenceEqual(["n", "b"])
+                && midSet.ResultSets[0] is { Incomplete: true, State: "complete", RowsStored: 1 } && midSet.ResultSets[1] is { Incomplete: false, State: "complete" }
+                && LiveResultChecks.RowsOf(store, midSet.ResultSets[1])[0][0] == "2"
+                && faulted >= 0 && midTexts.IndexOf("p1") > faulted && midTexts[^2] == "Batch 1 raised an error; execution continued with the next batch." && midTexts[^1] == "next",
+                "a severity 17 error partway through a result set leaves it incomplete, and the batch's later output follows in order: "
+                + string.Join(", ", midSet.ResultSets.Select(set => set.Columns[0].Name + (set.Incomplete ? "*" : "") + set.State)) + " | " + string.Join(" | ", midTexts));
             var after = await Options();
             check(after == Defaults, "the session survives batches that raised errors: " + after);
 

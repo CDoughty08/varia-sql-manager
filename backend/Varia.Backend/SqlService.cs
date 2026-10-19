@@ -69,7 +69,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <summary>The most query sessions the app keeps open at once (each holds its own unpooled connection). SSMS has no
     /// such cap; this is only a backstop on connections, far above what anyone keeps open. Scripts running at once are
-    /// bounded by main's 256 pending requests, and cancels use the control lane's reserve. Idle sessions are never
+    /// bounded by main's 256 pending requests, beyond which main keeps only 32 for control-lane requests (cancels, state
+    /// reads, closes), so the renderer sends a flow's cancels and state reads 8 at a time. Idle sessions are never
     /// reclaimed to make room: a session's SET options, temporary objects and open transaction are invisible from outside
     /// (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing it would lose them
     /// silently. Only the live checks change it.</summary>
@@ -92,6 +93,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>What a tab's session runs when it opens: <see cref="SessionPrologue"/>. Only the live checks change it, to
     /// make it fail.</summary>
     internal string Prologue { get; set; } = SessionPrologue;
+
+    /// <summary>Called after each row a script reads; an exception it returns is thrown there, as SqlClient raises an error
+    /// that arrives while a result set's rows stream. Only the live checks set it: no statement raises a severity 17 to 19
+    /// error partway through its rows on demand (those are resource errors such as 701 or 1105), and that path must still
+    /// end the set as incomplete and go on with the batch.</summary>
+    internal Func<Exception?>? RowFault { get; set; }
 
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
@@ -607,6 +614,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                             events.Sealed(currentSet);
                                         }
                                         if (!await read) break;
+                                        if (RowFault?.Invoke() is { } fault) throw fault;
                                         skipped = true;
                                         if (currentSet is null) continue;
                                         currentSet.CountRow();
