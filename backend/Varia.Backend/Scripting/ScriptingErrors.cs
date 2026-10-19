@@ -93,6 +93,8 @@ internal static class ScriptingErrors
             "UNREPRESENTABLE" => o + " could not be scripted exactly: a name contains an unpaired UTF-16 surrogate, which cannot be saved or copied without changing it.",
             "SMO_ERROR" => "Could not script " + o + ": " + Detail(detail ?? "", MaxDetail),
             "SQL_ERROR" => "Could not script " + o + ": Msg " + number.ToString(CultureInfo.InvariantCulture) + ": " + Detail(detail ?? "", MaxDetail),
+            // The detail is ConnectionFailures' advice (run kinit, install the library).
+            "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" => "Could not script " + o + ": " + Detail(detail ?? "", MaxDetail),
             _ => throw new InvalidOperationException("Unknown scripting error " + code)
         };
         return new(code, Clip(message, MaxMessage), catalog.Retryable(code));

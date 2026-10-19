@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
 import { contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
-import { colorKeys, sqlScopes, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
+import { colorKeys, cssVariable, sqlScopes, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 import type { ResolvedTheme, ThemeType } from '../src/shared/theme/types'
 
@@ -55,6 +56,19 @@ describe('built-in theme contrast', () => {
       for (const key of pair.background) expect(colorKeys).toContain(key)
       if (!pair.foreground.startsWith('syntax:')) expect(colorKeys).toContain(pair.foreground)
     }
+  })
+  it('pairs every text color styles.css draws on a background of its own rule with that background', () => {
+    // A rule that sets both is a surface and its text: the pair must be checked over that exact fill.
+    const css = readFileSync('src/renderer/src/styles.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const keyOf = new Map(colorKeys.map(key => [cssVariable(key), key]))
+    const single = (value: string | undefined) => value?.match(/^var\((--varia-[A-Za-z0-9-]+)\)$/)?.[1]
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, body]) => {
+      const declarations = new Map(body.split(';').map(part => part.split(':')).filter(parts => parts.length >= 2).map(([name, ...value]) => [name.trim(), value.join(':').trim()]))
+      return { selector: selector.trim(), color: keyOf.get(single(declarations.get('color')) ?? ''), background: keyOf.get(single(declarations.get('background') ?? declarations.get('background-color')) ?? '') }
+    }).filter(rule => rule.color && rule.background)
+    expect(rules.length).toBeGreaterThan(30)
+    const missing = rules.filter(({ color, background }) => !contrastExemptions[color!] && !contrastPairs.some(pair => pair.foreground === color && pair.background.at(-1) === background))
+    expect(missing.map(rule => `${rule.selector}: ${rule.color} on ${rule.background}`)).toEqual([])
   })
   it('composites translucent foregrounds and backgrounds before measuring', () => {
     const dark = resolveBuiltin('dark')

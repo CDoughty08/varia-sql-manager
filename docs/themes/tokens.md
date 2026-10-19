@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (196)
+## Color keys (197)
 
 ### Base
 
@@ -157,6 +157,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `list.inactiveSelectionForeground` | VS Code | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the selected row of an unfocused list. |
 | `list.focusOutline` | VS Code | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. |
 | `list.highlightForeground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Characters that match a filter, such as in the command palette. |
+| `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9e1ec` | `#1f2733` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8fb7ff33` | `#005fb833` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
 | `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
 | `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#1d2b40` | `#e3ebf5` | Row of the active query's server. |

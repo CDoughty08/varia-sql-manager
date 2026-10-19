@@ -12,7 +12,7 @@ import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
-import { validateRequest } from './validation'
+import { validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, saveFileSchema } from './sql-files'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
@@ -225,7 +225,7 @@ const menuActions: ApplicationMenuActions = {
 
 // The renderer owns enablement and checkboxes; it sends them on varia:menu-state and every rebuild re-applies them.
 const menuBridge = new NativeMenuBridge({
-  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state, title: menuTitle }, menuActions, process.platform, app.isPackaged)),
+  build: () => Menu.buildFromTemplate(applicationMenuTemplate({ theme: appearance.state, title: menuTitle }, menuActions, process.platform)),
   install: menu => Menu.setApplicationMenu(menu)
 })
 
@@ -287,9 +287,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(app.isPackaged ? [] : ['--varia-developer-tools'])],
-      // Developer tools are for unpackaged builds: a packaged one has neither the command nor the tools.
-      devTools: !app.isPackaged }
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : [])],
+      // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
+      devTools: true }
   })
   const window = mainWindow, contents = window.webContents
   if (place.maximized) window.maximize()
@@ -520,7 +520,7 @@ app.whenReady().then(async () => {
   // Paste needs the focused window (smoke-test windows are hidden, so never focused) and a click or key just before.
   handle('varia:run-role', value => {
     const window = mainWindow
-    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent(), { developerTools: !app.isPackaged })
+    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent())
   })
   handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
   ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {
@@ -538,6 +538,7 @@ app.whenReady().then(async () => {
       try {
         result = await backend.request(method as RpcMethod, validated as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
       } finally { load?.end() }
+      result = validateResult(method as RpcMethod, result)
       if (queryId !== undefined) results.own((result as QueryResult).resultSets)
       if (method === 'connections.connect') {
         try { await connectionStore.remember(validated as RpcMethods['connections.connect']['params']) }

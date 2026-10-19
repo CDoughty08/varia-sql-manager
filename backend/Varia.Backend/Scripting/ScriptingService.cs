@@ -16,7 +16,8 @@ internal interface IScriptingHost
     /// <summary>An unopened connection from the connection's scripting pool; with a database, a pool in that database
     /// (cloud editions, which cannot switch databases).</summary>
     SqlConnection Connection(string connectionId, string? database);
-    /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS, which answers the request.</summary>
+    /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), which the
+    /// job answers as its error value.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
 }
 
@@ -191,6 +192,12 @@ internal sealed class ScriptingService : IDisposable
             var text = sink.ToString();
             if (ScriptingErrors.UnpairedSurrogate(text) >= 0) return Result(null, [], ScriptingErrors.Create(catalog, "UNREPRESENTABLE", subject));
             return Result(text, [.. preflight.Warnings, .. warnings]);
+        }
+        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED")
+        {
+            // The pool connection could not sign in with Kerberos (an expired ticket, say): the advice is the job's error
+            // value, as Object Explorer shows it on the node, and Script As works again after kinit.
+            return Result(null, [], ScriptingErrors.Create(catalog, error.Code, subject, error.Message));
         }
         catch (Exception error) when (!token.IsCancellationRequested && ScriptingErrors.Classify(catalog, error, subject, resolved?.Encrypted == true, runner?.Target,
             target.Kind is "serverTrigger" or "databaseTrigger", connection.State is ConnectionState.Broken or ConnectionState.Closed && home is not null) is { } value)

@@ -75,14 +75,14 @@ function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: A
   }]
 }
 
-function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform, packaged: boolean): MenuItemConstructorOptions[] {
-  const entries = (id: MenuId) => buildMenuModel(id, toPlatform(platform), packaged)
+function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
+  const entries = (id: MenuId) => buildMenuModel(id, toPlatform(platform))
   // Menubar placements have no `when`, so pruning only leaves out submenus with nothing in them.
   return pruneMenu(entries(menu), () => true, entries).flatMap((entry): MenuItemConstructorOptions[] => {
     if (entry.kind === 'separator') return [{ type: 'separator' }]
     if (entry.kind === 'role') return [{ role: entry.role }]
     if (entry.kind === 'command') return commandItems(entry, actions, platform, model.title?.(entry.id, entry.title) ?? entry.title)
-    const commands = menuItems(entry.id, model, actions, platform, packaged)
+    const commands = menuItems(entry.id, model, actions, platform)
     const dynamic = entry.dynamic === 'theme' ? themeItems(themeMenuModel(model.theme), actions, platform) : []
     return [{ id: entry.nativeId, label: entry.title, submenu: [...commands, ...(commands.length && dynamic.length ? [{ type: 'separator' as const }] : []), ...dynamic] }]
   })
@@ -90,12 +90,11 @@ function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: Applicati
 
 /**
  * The application menu, generated from the command catalogue. On Windows and Linux the title bar shows its submenus as
- * popups; on macOS it is the menu bar, after the app menu. Labels are catalogue constants or sanitized theme names. A
- * packaged build has no development commands, so neither their items nor their keys.
+ * popups; on macOS it is the menu bar, after the app menu. Labels are catalogue constants or sanitized theme names.
  */
-export function applicationMenuTemplate(model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform, packaged = false): MenuItemConstructorOptions[] {
+export function applicationMenuTemplate(model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
   const menus = applicationMenus.map((menu): MenuItemConstructorOptions => ({
-    id: 'menu.' + menu.id, label: menu.label, ...(platform === 'darwin' && menu.id === 'window' ? { role: 'window' as const } : {}), submenu: menuItems(menu.id, model, actions, platform, packaged)
+    id: 'menu.' + menu.id, label: menu.label, ...(platform === 'darwin' && menu.id === 'window' ? { role: 'window' as const } : {}), submenu: menuItems(menu.id, model, actions, platform)
   }))
   return platform === 'darwin' ? [{ role: 'appMenu' }, ...menus] : menus
 }

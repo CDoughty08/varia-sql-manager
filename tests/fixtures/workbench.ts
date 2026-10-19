@@ -140,7 +140,7 @@ export function manualTimers() {
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; packaged?: boolean; settings?: Partial<SettingsValues> } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues> } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture(settingsDocumentOptions(() => settings.getSnapshot().values))
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
@@ -169,7 +169,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     createCustomTheme: vi.fn<VariaApi['createCustomTheme']>(async () => ({ ok: true, value: undefined })),
     runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
-    developerTools: !options.packaged,
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
     revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
     tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
@@ -235,7 +234,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
-  const menus = new MenuService({ platform, packaged: options.packaged, commands, context, keybindings, theme, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const menus = new MenuService({ platform, commands, context, keybindings, theme, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const workbench = {
     platform,
     commands,

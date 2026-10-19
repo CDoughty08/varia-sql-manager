@@ -260,8 +260,8 @@ describe('scripting catalogue', () => {
     expect(scriptLimits.budgetMs).toBeLessThan(scriptLimits.requestMs)
     expect(scriptLimits.maxScriptChars * 3).toBeLessThan(16 * 1024 * 1024)
     expect(scriptErrorCodes).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'ENCRYPTED', 'NO_DEFINITION', 'PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'TOO_LARGE', 'EMPTY', 'BLOCKED',
-      'TIMEOUT', 'CONNECTION_LOST', 'UNREPRESENTABLE', 'SMO_ERROR', 'SQL_ERROR'])
-    expect(scriptErrorCodes.filter(code => scriptErrorRetryable[code])).toEqual(['PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SMO_ERROR', 'SQL_ERROR'])
+      'TIMEOUT', 'CONNECTION_LOST', 'UNREPRESENTABLE', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED'])
+    expect(scriptErrorCodes.filter(code => scriptErrorRetryable[code])).toEqual(['PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED'])
   })
   it('loads in plain Node 24, so scripts and test fixtures can share it', () => {
     const files = ['catalog.ts', 'options.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'scripting', name))

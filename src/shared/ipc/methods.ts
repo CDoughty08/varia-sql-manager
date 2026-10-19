@@ -32,6 +32,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'connections.discover': metadata,
   'connections.preview': { ...control, lane: 'metadata', sensitive: true },
   'connections.disconnect': { ...control, deadlineMs: 30_000 },
+  // GSSAPI reads the credential cache without contacting the KDC; one lookup at a time (SqlService.IdentityAsync).
+  'connections.identity': { ...control, lane: 'metadata' },
   'databases.list': metadata,
   'tables.columns': metadata,
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.

@@ -66,6 +66,7 @@
     "list.inactiveSelectionForeground": "#0b4f99",
     "list.focusOutline": "#005fb8",
     "list.highlightForeground": "#005fb8",
+    "list.focusHighlightForeground": "#1f2733",
     "list.filterMatchBackground": "#005fb833",
     "tree.indentGuidesStroke": "#e3e7ed",
     "objectExplorer.activeConnectionBackground": "#e3ebf5",

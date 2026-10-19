@@ -2,10 +2,16 @@ using System.Text.Json;
 using Varia.Backend;
 using Varia.Backend.Tests;
 
-// The child process of ConnectionFailureChecks' native Kerberos probe check.
+// The child processes of ConnectionFailureChecks' native Kerberos checks.
 if (args is [ConnectionFailureChecks.ProbeArgument])
 {
     Console.WriteLine(KerberosProbe.Inspect());
+    return;
+}
+if (args is [ConnectionFailureChecks.IdentityArgument])
+{
+    var identity = KerberosProbe.Identity();
+    Console.WriteLine(identity.State + "|" + identity.Principal);
     return;
 }
 
@@ -90,6 +96,7 @@ ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
 await ConnectionFailureChecks.RunAsync(Check);
+await ConnectionFailureChecks.IdentityAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
@@ -186,10 +193,12 @@ try
         {
             await Refused(() => Run("SELECT 1;", session: signIn)),
             await Refused(() => Call<List<DatabaseInfo>>("databases.list", new ConnectionArgs(info.Id))),
-            await Refused(() => Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"))),
-            await Refused(() => Call<ScriptResult>("scripting.script", new ScriptArgs(info.Id, Guid.NewGuid().ToString(), [new ObjectRefDto("table", "master", "dbo", "VariaNoSuchTable")], "create", ScriptingLiveChecks.Defaults(json))))
+            await Refused(() => Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects")))
         };
-        Check(refusals.All(answer => answer == "kinit"), "a query session, database and column lists, and Script As say to run kinit when the ticket has expired: " + string.Join(", ", refusals));
+        Check(refusals.All(answer => answer == "kinit"), "a query session and database and column lists say to run kinit when the ticket has expired: " + string.Join(", ", refusals));
+        var script = await Call<ScriptResult>("scripting.script", new ScriptArgs(info.Id, Guid.NewGuid().ToString(), [new ObjectRefDto("table", "master", "dbo", "VariaNoSuchTable")], "create", ScriptingLiveChecks.Defaults(json)));
+        Check(script.Error is { Code: "AUTH_KERBEROS", Retryable: true } && script.Error.Message.EndsWith(ConnectionFailures.Messages.Expired, StringComparison.Ordinal) && script.Text is null,
+            "Script As shows an expired ticket's kinit advice as its error value, as Object Explorer does: " + script.Error?.Code);
         var node = await Call<ExplorerChildrenResult>("explorer.children", new ExplorerChildrenArgs(info.Id, Guid.NewGuid().ToString(), new NodeRefDto("folder", Owner: new ObjectRefDto("server"), Folder: "logins")));
         Check(node.Error is { Code: "AUTH_KERBEROS", Retryable: true } && node.Error.Message == ConnectionFailures.Messages.Expired && node.Nodes.Count == 0,
             "Object Explorer shows an expired ticket's kinit advice on the node, which Retry loads again");

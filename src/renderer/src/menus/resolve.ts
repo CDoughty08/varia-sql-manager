@@ -41,8 +41,6 @@ export type DynamicMenuItem =
 
 export interface ResolveOptions {
   readonly platform: Platform
-  /** A packaged build's menus leave out development commands. */
-  readonly packaged?: boolean
   /** The workbench's static and state keys (`ContextKeyService.getState()`); focus keys are not read. */
   readonly state: Partial<ContextKeys>
   /** What a context menu was opened for. */
@@ -59,11 +57,11 @@ export interface ResolveOptions {
 }
 
 const models = new Map<string, readonly MenuEntry[]>()
-/** The catalogue never changes while the app runs, so each menu's model is built once per platform and build. */
-function catalogueModel(menu: MenuId, platform: Platform, packaged: boolean): readonly MenuEntry[] {
-  const key = `${menu}\n${platform}\n${packaged}`
+/** The catalogue never changes while the app runs, so each menu's model is built once per platform. */
+function catalogueModel(menu: MenuId, platform: Platform): readonly MenuEntry[] {
+  const key = `${menu}\n${platform}`
   let entries = models.get(key)
-  if (!entries) models.set(key, entries = Object.freeze(buildMenuModel(menu, platform, packaged)))
+  if (!entries) models.set(key, entries = Object.freeze(buildMenuModel(menu, platform)))
   return entries
 }
 function guarded<T>(read: () => T, fallback: T): T {
@@ -83,7 +81,7 @@ const isEnabled = (item: ResolvedMenuItem) => item.kind !== 'separator' && item.
  */
 export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly ResolvedMenuItem[] {
   const { platform, commands, keybindings, args } = options
-  const model = options.model ?? ((id: MenuId) => catalogueModel(id, platform, options.packaged ?? false))
+  const model = options.model ?? ((id: MenuId) => catalogueModel(id, platform))
   const keys = contextRecord(platform, { ...options.state, ...options.target })
   const keep = (entry: MenuEntry) => entry.kind !== 'role' && (entry.kind === 'separator' || !entry.when || evaluateWhen(entry.when, keys))
   const children = (id: SubmenuId) => model(id)

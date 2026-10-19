@@ -59,15 +59,21 @@ await import(${JSON.stringify(core)})`
     expect(spec).toContain('delete copy.VARIA_BACKEND_TEST_HOOKS')
     expect(spec).toContain('delete copy.VARIA_RESULT_BUDGET_BYTES')
   })
-  it('offers developer tools only in unpackaged builds', () => {
+  it('checks the backend answers that have a result schema before the renderer sees them', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
-    // The window itself cannot open them when packaged, whatever the page or a role asks.
+    const handler = main.slice(main.indexOf("ipcMain.handle('varia:request'"), main.indexOf("handle('varia:explorer-cancel'"))
+    expect(handler.indexOf('result = validateResult(method as RpcMethod, result)')).toBeGreaterThan(handler.indexOf('result = await backend.request('))
+    expect(handler.indexOf('result = validateResult(method as RpcMethod, result)')).toBeLessThan(handler.indexOf('return { ok: true, value: result }'))
+  })
+  it('offers developer tools in every build, as VS Code does, and keeps the page sandboxed', () => {
+    const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
+    // One window setting, the same whether packaged or not; the page keeps its isolation and sandbox.
     expect(main.match(/devTools:/g)).toEqual(['devTools:'])
-    expect(main).toContain('devTools: !app.isPackaged }')
-    // The page offers Toggle Developer Tools only when main passes this argument, which it does only when unpackaged.
-    expect(main.match(/--varia-developer-tools/g)).toHaveLength(1)
-    expect(main).toContain("...(app.isPackaged ? [] : ['--varia-developer-tools'])")
-    expect(readFileSync(join('src', 'preload', 'index.ts'), 'utf8')).toContain("developerTools: process.argv.includes('--varia-developer-tools'),")
+    expect(main).toContain('devTools: true }')
+    expect(main).toContain('contextIsolation: true, nodeIntegration: false, sandbox: true')
+    // Nothing tells the page whether it may offer them: the command, its menu item and its key exist everywhere.
+    const sources = readdirSync('src', { recursive: true, encoding: 'utf8' }).filter(file => /\.tsx?$/.test(file)).map(file => readFileSync(join('src', file), 'utf8')).join('\n')
+    expect(sources).not.toMatch(/varia-developer-tools|developerTools|\.development\b/)
   })
   it('forwards result pages to the renderer only as exact-size ArrayBuffers', () => {
     const port = readFileSync(join('src', 'main', 'backend', 'results-port.ts'), 'utf8')

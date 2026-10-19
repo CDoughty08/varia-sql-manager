@@ -686,6 +686,11 @@
           "description": "(VS Code) Characters that match a filter, such as in the command palette. Default $accent (Dark #8fb7ff, Light #005fb8).",
           "markdownDescription": "(VS Code) Characters that match a filter, such as in the command palette. Default `$accent` (Dark `#8fb7ff`, Light `#005fb8`)."
         },
+        "list.focusHighlightForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. Default @quickInputList.focusForeground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(VS Code) Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. Default `@quickInputList.focusForeground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
         "list.filterMatchBackground": {
           "$ref": "#/definitions/value",
           "description": "(VS Code) Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. Default $accent/20 (Dark #8fb7ff33, Light #005fb833).",

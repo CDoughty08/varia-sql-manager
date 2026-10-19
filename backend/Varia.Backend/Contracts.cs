@@ -13,6 +13,11 @@ internal sealed record AdvancedConnectionOptions(
 /// <summary>ProductVersion, Login and EngineEdition come from the server profile probed at connect; they are absent when the probe failed.</summary>
 internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
     string? ProductVersion = null, string? Login = null, int? EngineEdition = null);
+/// <summary>connections.identity: the Kerberos principal integrated authentication would use off Windows, when the default
+/// credential cache holds a ticket (at most 256 characters). Windows, and Linux or macOS without a ticket, answer none.</summary>
+internal sealed record IntegratedIdentity(string? Principal);
+/// <summary>connections.identity takes no parameters; reading them into this record refuses unknown members.</summary>
+internal sealed record IdentityArgs;
 internal sealed record DiscoveryArgs(string Scope);
 internal sealed record DiscoveredServer(string Server, string Version, string Source);
 internal sealed record DiscoveryResult(List<DiscoveredServer> Servers, string? Warning = null);

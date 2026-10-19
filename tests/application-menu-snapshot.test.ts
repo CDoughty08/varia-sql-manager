@@ -56,15 +56,11 @@ describe('native application menu template', () => {
     const file = template.find(item => item.id === 'menu.file')!.submenu as MenuItemConstructorOptions[], edit = template.find(item => item.id === 'menu.edit')!.submenu as MenuItemConstructorOptions[]
     expect([file.find(item => item.id === 'file.new')?.label, edit.find(item => item.id === 'edit.copy')?.label, edit.find(item => item.id === 'edit.cut')?.label]).toEqual(['New Query (50)', 'Copy (50)', 'Cut'])
   })
-  it.each(platforms)('has no developer tools item, role or key in a packaged build on %s', platform => {
-    const roles = (packaged: boolean) => {
-      const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes } }, actions, platform, packaged)
-      const visit = (list: readonly MenuItemConstructorOptions[]): string[] => list.flatMap(item => [...item.role ? [item.role] : [], ...Array.isArray(item.submenu) ? visit(item.submenu) : []])
-      return visit(template)
-    }
-    expect(roles(false)).toContain('toggleDevTools')
-    expect(roles(true)).not.toContain('toggleDevTools')
-    expect(roles(true)).toContain('reload')
+  it.each(platforms)('has Toggle Developer Tools, with its role and key, in View on %s, as every build does', platform => {
+    // The template takes no build flag: a packaged build's menu is this one.
+    expect(applicationMenuTemplate.length).toBe(3)
+    const devTools = items(platform, 'view').find(item => item.role === 'toggleDevTools')
+    expect(devTools).toMatchObject({ id: 'developer.toggleDevTools', label: 'Toggle Developer Tools', accelerator: platform === 'darwin' ? 'Cmd+Alt+I' : 'Ctrl+Shift+I' })
   })
   it.each(platforms)('keeps Electron\'s own Zoom In key beside the catalogue\'s on %s', platform => {
     const zoomIn = items(platform, 'view').filter(item => item.role === 'zoomIn')

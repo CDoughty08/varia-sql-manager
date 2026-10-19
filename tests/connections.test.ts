@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConnectionStore } from '../src/main/connection-store'
 import { advancedDefaults, advancedToStore, connectionDefaults, connectionKey, defaultAuthentication, connectionLibrarySchema, connectionOptionsSchema, savedConnection } from '../src/shared/connections'
-import { validateRequest } from '../src/main/validation'
+import { validateRequest, validateResult } from '../src/main/validation'
 
 const directories: string[] = []
 async function store() {
@@ -29,6 +29,21 @@ describe('connection settings', () => {
     expect(connectionKey(sql)).not.toBe(connectionKey({ ...sql, username: 'other' }))
     expect(connectionKey(sql)).not.toBe(connectionKey({ ...sql, advanced: { applicationIntent: 'ReadOnly' } }))
     expect(connectionLibrarySchema.safeParse({ version: 1, profiles: [{ id: crypto.randomUUID(), options: sql, favorite: true, registered: false }] }).success).toBe(false)
+  })
+})
+describe('integrated identity', () => {
+  it('asks the backend with no parameters, and passes on only a bounded one-line principal', () => {
+    expect(validateRequest('connections.identity', {})).toEqual({})
+    expect(() => validateRequest('connections.identity', { user: 'alice' })).toThrow()
+    expect(validateResult('connections.identity', { principal: 'alice@CONTOSO.COM' })).toEqual({ principal: 'alice@CONTOSO.COM' })
+    expect(validateResult('connections.identity', { principal: 'é'.repeat(256) })).toEqual({ principal: 'é'.repeat(256) })
+    expect(validateResult('connections.identity', {})).toEqual({})
+    // Code points, not UTF-16 units, as the backend's Bounded reads them: a tag character (Cf) is refused, a script letter is not.
+    expect(validateResult('connections.identity', { principal: '\u{1D49C}lice@X' })).toEqual({ principal: '\u{1D49C}lice@X' })
+    for (const answer of [{ principal: 'a'.repeat(257) }, { principal: '' }, { principal: 'alice\n@CONTOSO.COM' }, { principal: '‮alice@CONTOSO.COM' }, { principal: 'al​ice' }, { principal: 'alice\u{E0041}@X' },
+      { principal: 7 }, { principal: 'alice@CONTOSO.COM', password: 'x' }, null]) expect(() => validateResult('connections.identity', answer), JSON.stringify(answer)).toThrow('The backend sent an invalid answer.')
+    // Other answers are passed on as they are.
+    expect(validateResult('databases.list', [{ name: 'master' }])).toEqual([{ name: 'master' }])
   })
 })
 describe('per-platform authentication defaults', () => {
