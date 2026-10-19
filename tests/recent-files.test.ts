@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import type { MenuItemConstructorOptions } from 'electron'
-import { RecentFilesStore } from '../src/main/recent-files-store'
+import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from '../src/main/recent-files-store'
+import type { OpenSqlFile } from '../src/shared/contracts'
 import { applicationMenuTemplate, type ApplicationMenuActions } from '../src/main/application-menu'
 import { recentFilesFileSchema, recentFilesMenuModel, shortenPath, type RecentFile } from '../src/shared/files/recent'
 import { recentFileMenuItems } from '../src/renderer/src/menus/MenuService'
@@ -105,6 +107,61 @@ describe('the recent files store', () => {
       { version: 2, files: [] }, { version: 1, files: [], extra: true }, { version: 1, files: [{ ...entry, id: 'x' }] }, { version: 1, files: [{ ...entry, path: '' }] },
       { version: 1, files: [{ ...entry, path: 'x'.repeat(4097) }] }, { version: 1, files: Array.from({ length: 51 }, () => entry) }
     ]) expect(recentFilesFileSchema.safeParse(value).success).toBe(false)
+  })
+  it('feeds only macOS\'s Dock menu: on Windows clearing would empty every application\'s recent items and jump lists', () => {
+    const app = { addRecentDocument: vi.fn(), clearRecentDocuments: vi.fn() }
+    expect(systemRecentDocuments('win32', app)).toBeUndefined()
+    expect(systemRecentDocuments('linux', app)).toBeUndefined()
+    const dock = systemRecentDocuments('darwin', app)
+    dock?.add('/q/a.sql')
+    dock?.clear()
+    expect(app.addRecentDocument).toHaveBeenCalledWith('/q/a.sql')
+    expect(app.clearRecentDocuments).toHaveBeenCalledTimes(1)
+    // main reaches the OS list only through it.
+    const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
+    expect(main).not.toMatch(/clearRecentDocuments|addRecentDocument/)
+    expect(main).toContain('systemRecentDocuments(process.platform, app)')
+  })
+})
+
+describe('opening a Recent Files entry', () => {
+  const failure = (code?: string, message = 'failed') => Object.assign(new Error(message), code ? { code } : {})
+  async function entry() {
+    const store = new RecentFilesStore(join(directory, 'recent-files.json'), { platform: 'linux' })
+    await store.add('/q/a.sql')
+    const [file] = store.list()
+    const askRemove = vi.fn(async () => true)
+    const steps = (open: () => Promise<OpenSqlFile | undefined>) => ({ open, askRemove, describe: (path: string, error: unknown) => `${path}: ${(error as Error).message}` })
+    return { store, id: file.id, askRemove, steps }
+  }
+  it('opens the file', async () => {
+    const { store, id, steps, askRemove } = await entry()
+    const opened = { id: crypto.randomUUID(), name: 'a.sql', path: '/q/a.sql', encoding: 'utf8', readOnly: false, content: 'SELECT 1', eol: 'lf', mixedEol: false } satisfies OpenSqlFile
+    expect(await openRecentEntry(store, id, steps(async () => opened))).toEqual({ files: [opened], errors: [] })
+    expect(askRemove).not.toHaveBeenCalled()
+  })
+  it('offers to remove only a file that no longer exists', async () => {
+    for (const code of ['ENOENT', 'ENOTDIR']) {
+      const { store, id, steps, askRemove } = await entry()
+      expect(await openRecentEntry(store, id, steps(async () => { throw failure(code) }))).toEqual({ files: [], errors: [] })
+      expect(askRemove).toHaveBeenCalledWith('/q/a.sql')
+      expect(store.list()).toEqual([])
+    }
+    const { store, id, steps, askRemove } = await entry()
+    askRemove.mockResolvedValueOnce(false)
+    await openRecentEntry(store, id, steps(async () => { throw failure('ENOENT') }))
+    expect(store.list()).toHaveLength(1)
+  })
+  it('says why any other file did not open, and keeps it in the list', async () => {
+    for (const error of [failure(undefined, 'SQL files must be smaller than 5 MB.'), failure('EBUSY', 'busy'), failure('EACCES', 'denied')]) {
+      const { store, id, steps, askRemove } = await entry()
+      expect(await openRecentEntry(store, id, steps(async () => { throw error }))).toEqual({ files: [], errors: [`/q/a.sql: ${error.message}`] })
+      expect(askRemove).not.toHaveBeenCalled()
+      expect(store.list()).toHaveLength(1)
+    }
+    const { store, id, steps } = await entry()
+    expect(await openRecentEntry(store, id, steps(async () => undefined))).toEqual({ files: [], errors: ['/q/a.sql: It is a folder, not a file.'] })
+    await expect(openRecentEntry(store, crypto.randomUUID(), steps(async () => undefined))).rejects.toThrow('no longer in the Recent Files list')
   })
 })
 

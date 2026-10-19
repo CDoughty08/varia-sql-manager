@@ -3,12 +3,13 @@ import { basename } from 'node:path'
 import { recentFilesFileSchema, recentFilesLimits, type RecentFile, type RecentFilesFile } from '../shared/files/recent'
 import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 import { samePath } from './sql-files'
+import type { OpenedFiles, OpenSqlFile } from '../shared/contracts'
 
 type Entry = RecentFilesFile['files'][number]
 export interface RecentFilesStoreOptions {
   readonly platform?: NodeJS.Platform
   readonly now?: () => Date
-  /** The OS's recent documents (macOS's Dock menu, Windows' jump list), which follow the list. */
+  /** The OS's recent documents (`systemRecentDocuments`), which follow the list. */
   readonly system?: { add(path: string): void; clear(): void }
 }
 
@@ -94,4 +95,40 @@ export class RecentFilesStore {
     return id
   }
   private changed(): void { for (const listener of [...this.listeners]) listener() }
+}
+
+/**
+ * The OS list that follows File › Recent Files: macOS's Dock menu, which belongs to this app alone. Not Windows: there
+ * Electron's clearRecentDocuments is SHAddToRecentDocs with no item, which clears every application's recent items and
+ * jump lists, and the app's own jump list comes with packaging. Linux has none.
+ */
+export function systemRecentDocuments(platform: NodeJS.Platform, app: { addRecentDocument(path: string): void; clearRecentDocuments(): void }): RecentFilesStoreOptions['system'] {
+  return platform === 'darwin' ? { add: path => app.addRecentDocument(path), clear: () => app.clearRecentDocuments() } : undefined
+}
+
+export interface RecentEntrySteps {
+  /** Reads and registers the file as Open does, and puts it first in the list; undefined for a folder. Throws why not. */
+  open(path: string): Promise<OpenSqlFile | undefined>
+  /** Why the file did not open, as the banner shows it. */
+  describe(path: string, error: unknown): string
+  /** Whether to remove the entry of a file that no longer exists. */
+  askRemove(path: string): Promise<boolean>
+}
+const goneCodes = new Set(['ENOENT', 'ENOTDIR'])
+/**
+ * Opens a Recent Files entry. Only a file that no longer exists offers to leave the list; one that is too large,
+ * locked, unreadable or a folder now says why and stays, since it may open later.
+ */
+export async function openRecentEntry(store: RecentFilesStore, id: string, steps: RecentEntrySteps): Promise<OpenedFiles> {
+  await store.load()
+  const path = store.pathOf(id)
+  if (path === undefined) throw new Error('This file is no longer in the Recent Files list.')
+  try {
+    const file = await steps.open(path)
+    return file ? { files: [file], errors: [] } : { files: [], errors: [steps.describe(path, new Error('It is a folder, not a file.'))] }
+  } catch (error) {
+    if (!goneCodes.has((error as NodeJS.ErrnoException | undefined)?.code ?? '')) return { files: [], errors: [steps.describe(path, error)] }
+    if (await steps.askRemove(path)) await store.remove(id)
+    return { files: [], errors: [] }
+  }
 }

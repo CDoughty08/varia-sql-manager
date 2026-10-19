@@ -40,9 +40,17 @@ const ownershipCodes = new Set(['EPERM', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'ENO
 /** What the last read or save saw of a registered file, so a change by another program is noticed, and reported once.
  *  `missing` keeps the last content's hash: a file deleted and then written back unchanged is no change. */
 interface Stamp { readonly size: number; readonly mtimeMs: number; readonly sha256: string; readonly missing?: true }
+type Comparison = { readonly change?: FileChange['change']; readonly stamp: Stamp } | undefined
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
-/** Files checked at once, and how long one may take: a slow network share counts as unchanged instead of stalling. */
-export const fileCheckLimits = { concurrency: 8, timeoutMs: 2000 } as const
+/**
+ * Comparisons running at once, counting those a check gave up on that have not settled, and how long one may take: a
+ * slow network share counts as unchanged instead of stalling. A comparison that hangs holds one of libuv's four threads
+ * (every fs call in main shares them), so at most two can ever be held, and a file whose comparison has not settled is
+ * not compared again.
+ */
+export const fileCheckLimits = { concurrency: 2, timeoutMs: 2000 } as const
+/** The largest file any document kind saves: a change check hashes up to this, so a large saved value is not misread. */
+const maxStampBytes = Math.max(...Object.values(fileKinds).map(kind => kind.maxBytes))
 
 export interface SqlFileStoreOptions {
   /** The ANSI code page's WHATWG label for files that are neither UTF-8 nor UTF-16 (`legacyCodePage`); read when needed. */
@@ -70,6 +78,8 @@ export class SqlFileStore {
   private stamps = new Map<string, Stamp>()
   /** Files a check reported changed that were not reloaded since: their next Save asks before replacing that change. */
   private conflicts = new Set<string>()
+  /** Change-check comparisons not settled yet, including ones a check stopped waiting for. */
+  private comparing = new Map<string, Promise<Comparison>>()
   constructor(private readonly options: SqlFileStoreOptions = {}) {}
 
   /**
@@ -87,7 +97,8 @@ export class SqlFileStore {
     // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
     // its tab instead of opening a second one that would save over the first.
     const existing = await this.owner(absolutePath)
-    const file: SqlFile = {
+    // The tab of a file opened again keeps the text it has, so its Save must keep writing what that text was read as.
+    const file: SqlFile = existing && !reload ? existing : {
       id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
       ...decoded.codePage ? { codePage: decoded.codePage } : {}, readOnly: await isReadOnly(absolutePath)
     }
@@ -184,14 +195,18 @@ export class SqlFileStore {
    * a file that cannot be read in time counts as unchanged and is checked again next time.
    */
   async check(limits: { concurrency: number; timeoutMs: number } = fileCheckLimits): Promise<FileChange[]> {
-    const ids = [...this.files.keys()], found = new Map<string, FileChange['change']>()
+    // A file still being compared (its share has not answered) counts as unchanged; it is compared once that settles.
+    const ids = [...this.files.keys()].filter(id => !this.comparing.has(id)), found = new Map<string, FileChange['change']>()
     let next = 0
     const worker = async () => {
-      while (next < ids.length) {
+      // Past the limit, the rest count as unchanged until a later check, rather than queue behind a hung call.
+      while (next < ids.length && this.comparing.size < limits.concurrency) {
         const id = ids[next++]
+        const comparing = this.compare(id).catch(() => undefined).finally(() => { if (this.comparing.get(id) === comparing) this.comparing.delete(id) })
+        this.comparing.set(id, comparing)
         let timer: NodeJS.Timeout | undefined
         const late = new Promise<undefined>(resolve => { timer = setTimeout(resolve, limits.timeoutMs, undefined) })
-        const result = await Promise.race([this.compare(id).catch(() => undefined), late])
+        const result = await Promise.race([comparing, late])
         clearTimeout(timer)
         // A comparison that finishes after its time is dropped with its stamp, so the change is reported next time.
         if (!result || !this.files.has(id)) continue
@@ -202,7 +217,7 @@ export class SqlFileStore {
         else if (result.change === 'deleted') this.conflicts.delete(id)
       }
     }
-    await Promise.all(Array.from({ length: Math.min(limits.concurrency, ids.length) }, worker))
+    await Promise.all(Array.from({ length: Math.min(Math.max(0, limits.concurrency - this.comparing.size), ids.length) }, worker))
     return ids.flatMap(fileId => { const change = found.get(fileId); return change ? [{ fileId, change }] : [] })
   }
 
@@ -215,7 +230,7 @@ export class SqlFileStore {
   }
 
   /** How the file differs from its stamp, and the stamp that records what was seen; undefined when it cannot tell. */
-  private async compare(fileId: string): Promise<{ change?: FileChange['change']; stamp: Stamp } | undefined> {
+  private async compare(fileId: string): Promise<Comparison> {
     const file = this.files.get(fileId), stamp = this.stamps.get(fileId)
     if (!file || !stamp) return undefined
     let info
@@ -226,7 +241,8 @@ export class SqlFileStore {
     }
     if (!info.isFile()) return undefined
     if (!stamp.missing && info.size === stamp.size && info.mtimeMs === stamp.mtimeMs) return undefined
-    const bytes = await readRegularFile(file.path, maxSqlFileBytes)
+    // Hashed up to the largest file a save writes: a 6 MB XML document touched by another program is no change.
+    const bytes = await readRegularFile(file.path, maxStampBytes)
     if (!bytes) return undefined
     const seen: Stamp = { size: info.size, mtimeMs: info.mtimeMs, sha256: sha256(bytes) }
     return seen.sha256 === stamp.sha256 ? { stamp: seen } : { change: 'modified', stamp: seen }

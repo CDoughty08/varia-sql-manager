@@ -135,7 +135,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     const changeOf = (document: QueryDocument | undefined) => document?.file ? changes.get(document.file.id) : undefined
     const silent = (document: QueryDocument) => !document.dirty && !!this.options.autoReload?.()
     const ids = this.documents.getSnapshot().documents.filter(document => changeOf(document)).map(document => document.id)
-    const deleted: string[] = []
+    const deleted: string[] = [], failed: string[] = []
     let all: 'yes' | 'no' | undefined
     for (const [index, id] of ids.entries()) {
       const document = this.documents.get(id), change = changeOf(document)
@@ -146,16 +146,21 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         deleted.push(`${document.name} was deleted or moved outside Varia SQL Manager. Save it to keep it.`)
         continue
       }
-      let reload = silent(document) || all === 'yes'
-      if (!reload && !all) {
-        const later = ids.slice(index + 1).map(other => this.documents.get(other)).some(other => !!other && changeOf(other) === 'modified' && !silent(other))
-        const answer = unwrap(await confirmReload({ fileId: document.file.id, dirty: document.dirty, more: later }))
-        if (answer === 'yesToAll') all = 'yes'
-        if (answer === 'noToAll') all = 'no'
-        reload = answer === 'yes' || answer === 'yesToAll'
-      }
-      if (reload) await this.reload(id)
+      // Main has moved every reported file's stamp, so a file left out here is not reported again: one that fails is
+      // reported and the rest are still asked about.
+      try {
+        let reload = silent(document) || all === 'yes'
+        if (!reload && !all) {
+          const later = ids.slice(index + 1).map(other => this.documents.get(other)).some(other => !!other && changeOf(other) === 'modified' && !silent(other))
+          const answer = unwrap(await confirmReload({ fileId: document.file.id, dirty: document.dirty, more: later }))
+          if (answer === 'yesToAll') all = 'yes'
+          if (answer === 'noToAll') all = 'no'
+          reload = answer === 'yes' || answer === 'yesToAll'
+        }
+        if (reload) await this.reload(id)
+      } catch (error) { failed.push(`${document.name} was not reloaded: ${error instanceof Error ? error.message : 'The file could not be read.'}`) }
     }
+    if (failed.length) throw new Error([...failed, ...deleted].join(' '))
     if (deleted.length) this.reportError(deleted.join(' '), 'warning')
   }
   /** Reads the query's file again into it, as one undoable edit that leaves it clean. */

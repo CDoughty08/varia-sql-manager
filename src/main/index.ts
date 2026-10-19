@@ -15,8 +15,8 @@ import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
 import { validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema } from './sql-files'
-import { RecentFilesStore } from './recent-files-store'
-import { droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
+import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
+import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
 import { recentFilesMenuModel } from '../shared/files/recent'
 import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
@@ -88,10 +88,9 @@ let appearance: AppearanceService
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
 const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
-// File › Recent Files. The OS's own list (Dock, jump list) follows it, except in smoke runs, which must not add to the user's.
-const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), {
-  ...process.env.VARIA_SMOKE_TEST === '1' ? {} : { system: { add: path => app.addRecentDocument(path), clear: () => app.clearRecentDocuments() } }
-})
+// File › Recent Files. macOS's Dock menu follows it, except in smoke runs, which must not add to the user's.
+const systemRecent = process.env.VARIA_SMOKE_TEST === '1' ? undefined : systemRecentDocuments(process.platform, app)
+const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), systemRecent ? { system: systemRecent } : {})
 /** A command's title with its setting filled in (Select Top <n> Rows), from validated settings only. */
 const menuTitle = (id: CommandId, title: string) => commandTitle(id, settings.current(), title)
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
@@ -233,28 +232,29 @@ async function openPaths(paths: readonly string[]): Promise<OpenedFiles> {
   const opened: OpenSqlFile[] = [], errors: string[] = []
   for (const path of paths.slice(0, maxLaunchFiles)) {
     try {
-      if (!isAbsolute(path)) throw new Error('The path is not absolute.')
-      if ((await stat(path)).isDirectory()) continue
-      const file = await files.read(path)
-      opened.push(file)
-      void recent.add(file.path).catch(() => {})
-    } catch (error) { errors.push(`${basename(path)}: ${openError(error)}`.slice(0, 600)) }
+      const file = await openPath(path)
+      if (file) opened.push(file)
+    } catch (error) { errors.push(openFailure(path, error)) }
   }
   return { files: opened, errors }
 }
+/** One file main was handed, read as Open reads it and put first in Recent Files; undefined for a folder. */
+async function openPath(path: string): Promise<OpenSqlFile | undefined> {
+  if (!isAbsolute(path)) throw new Error('The path is not absolute.')
+  if ((await stat(path)).isDirectory()) return undefined
+  const file = await files.read(path)
+  void recent.add(file.path).catch(() => {})
+  return file
+}
+const openFailure = (path: string, error: unknown) => `${basename(path)}: ${openError(error)}`.slice(0, 600)
 
 function sendOpened(opened: OpenedFiles): void {
   if (mainWindow && !mainWindow.isDestroyed() && (opened.files.length || opened.errors.length)) mainWindow.webContents.send('varia:files-opened', opened)
 }
 
-/** Opens the files waiting for the page, once it is ready. A page that resets meanwhile lost them, so they wait again. */
+/** Opens the files waiting for the page, once it is ready. */
 function deliverLaunchFiles(): void {
-  if (!rendererReady || !mainWindow || !launchFiles.size) return
-  const paths = launchFiles.take(), generation = rendererGeneration
-  void openPaths(paths).then(opened => {
-    if (generation !== rendererGeneration) { launchFiles.add(paths); return }
-    sendOpened(opened)
-  })
+  deliverWaiting(launchFiles, { ready: () => rendererReady && !!mainWindow, generation: () => rendererGeneration, open: openPaths, send: sendOpened })
 }
 
 /** Items shown in recently used file lists; the default while settings.json cannot be read. */
@@ -266,19 +266,15 @@ async function recentFiles() {
 function publishRecentFiles(): void {
   void recentFiles().then(list => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:recent-files-changed', list) }, () => {})
 }
-/** A Recent Files entry: opened as an Open would, or, when it no longer opens, the offer to remove it. */
-async function openRecent(id: string): Promise<OpenedFiles> {
-  await recent.load()
-  const path = recent.pathOf(id)
-  if (path === undefined) throw new Error('This file is no longer in the Recent Files list.')
-  const opened = await openPaths([path])
-  if (!opened.errors.length) return opened
-  const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
-    type: 'warning', title: 'Recent Files', message: `${basename(path)} cannot be opened.`, detail: `${path} no longer exists or cannot be read. Remove it from the Recent Files list?`,
-    buttons: ['Remove', 'Keep'], defaultId: 0, cancelId: 1, noLink: true, signal
-  }), { response: 1, checkboxChecked: false }, true)
-  if (response === 0) await recent.remove(id)
-  return { files: [], errors: [] }
+/** A Recent Files entry: opened as an Open would; a file that is gone offers to leave the list, and any other failure says why. */
+function openRecent(id: string): Promise<OpenedFiles> {
+  return openRecentEntry(recent, id, {
+    open: openPath, describe: openFailure,
+    askRemove: async path => (await pageDialog((window, signal) => dialog.showMessageBox(window, {
+      type: 'warning', title: 'Recent Files', message: `${basename(path)} cannot be opened.`, detail: `${path} no longer exists. Remove it from the Recent Files list?`,
+      buttons: ['Remove', 'Keep'], defaultId: 0, cancelId: 1, noLink: true, signal
+    }), { response: 1, checkboxChecked: false }, true)).response === 0
+  })
 }
 
 /** Asks the page to close, as the window's close button and a quit do; the request outlives a reload or crash. */

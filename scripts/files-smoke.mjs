@@ -374,7 +374,7 @@ try {
   await queue('answers', 0)
   const removed = (await nativeRecent()).find(item => item.label.endsWith('launched.sql'))
   await application.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).click(), removed.id)
-  await expect.poll(prompts).toEqual([{ title: 'Recent Files', message: 'launched.sql cannot be opened.', detail: `${launched} no longer exists or cannot be read. Remove it from the Recent Files list?`, buttons: ['Remove', 'Keep'] }])
+  await expect.poll(prompts).toEqual([{ title: 'Recent Files', message: 'launched.sql cannot be opened.', detail: `${launched} no longer exists. Remove it from the Recent Files list?`, buttons: ['Remove', 'Keep'] }])
   await expect.poll(async () => (await nativeRecent()).some(item => item.label.endsWith('launched.sql'))).toBe(false)
   console.log('Files checks: File › Recent Files lists opened and saved files, reopens one from either menu, and offers to remove a missing one.')
 
@@ -426,9 +426,20 @@ try {
   const box = await page.locator('.monaco-editor').boundingBox()
   const at = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) }
   const data = { items: [], files: [dropped], dragOperationsMask: 1 }
-  for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', { type, ...at, data })
+  const dropFile = async () => { for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', { type, ...at, data }) }
+  await dropFile()
   await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'dropped.sql')
   await expect(page.locator('.monaco-editor .view-lines')).toContainText('SELECT 5 AS dropped')
+  // Dropped again on its own query, the file keeps that tab, and Monaco, which never saw the drag, shows no drop caret
+  // (one it started on dragover would stay, as only the drop it never gets ends it).
+  const opened = await tabs().count()
+  await dropFile()
+  // Monaco draws on an animation frame, which a hidden or locked window delays: the caret must never show for 2 s.
+  const carets = []
+  for (let sample = 0; sample < 8; sample++) { await page.waitForTimeout(250); carets.push(await page.locator('.monaco-editor .dnd-target').count()) }
+  expect(carets).toEqual(Array(8).fill(0))
+  await expect(tabs()).toHaveCount(opened)
+  await expect(activeTab().getByRole('tab')).toHaveAttribute('aria-label', 'dropped.sql')
   await cdp.detach()
   console.log('Files checks: a dropped file opens, and a drop page script makes opens nothing.')
 

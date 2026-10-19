@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { chmod, chown, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
-import { fileKinds, isReadOnly, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
+import { fileCheckLimits, fileKinds, isReadOnly, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
 
 let directory: string
 beforeEach(async () => {
@@ -112,7 +112,9 @@ describe('SQL file encodings and save hardening', () => {
     expect(saved).toEqual({ id: opened.id, name: 'big-endian.sql', path: opened.path, encoding: 'utf16be', readOnly: false })
     expect([...(await readFile(path))]).toEqual([0xfe, 0xff, ...Buffer.from("SELECT N'Français';\r\n", 'utf16le').swap16()])
     await writeFile(path, 'a\nb\r\nc\n')
-    expect(await store.read(path)).toMatchObject({ id: opened.id, encoding: 'utf8', eol: 'lf', mixedEol: true })
+    // Opened again, the file keeps what its tab's text was read as; a reload takes what it is now.
+    expect(await store.read(path)).toMatchObject({ id: opened.id, encoding: 'utf16be' })
+    expect(await store.reload(opened.id)).toMatchObject({ id: opened.id, encoding: 'utf8', eol: 'lf', mixedEol: true })
   })
   it('reads a file in the ANSI code page, and writes it only as Unicode it was told to use', async () => {
     const store = new SqlFileStore({ legacyLabel: () => 'windows-1252' })
@@ -443,7 +445,68 @@ describe('changes made outside', () => {
     slow = false
     expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
   })
-  it('looks at no more than eight files at a time, and reports them in registration order', async () => {
+  it('does not compare a file again while its last comparison hangs, and lets at most two hang', async () => {
+    // A share that never answers (a hard NFS mount, an unplugged VPN): each call would hold one of libuv's four threads.
+    const calls = new Map<string, number>()
+    const hung = (path: string) => basename(path).startsWith('hung')
+    const store = new SqlFileStore({ stat: async path => { calls.set(basename(path), (calls.get(basename(path)) ?? 0) + 1); return hung(path) ? new Promise<never>(() => {}) : stat(path) } })
+    const paths = ['hung-1.sql', 'hung-2.sql', 'hung-3.sql', 'hung-4.sql'].map(name => join(directory, name))
+    for (const path of paths) await writeFile(path, 'SELECT 1')
+    for (const path of paths) await store.read(path)
+    const limits = { ...fileCheckLimits, timeoutMs: 20 }
+    expect(await store.check(limits)).toEqual([])
+    expect(await store.check(limits)).toEqual([])
+    expect(await store.check(limits)).toEqual([])
+    expect([...calls.values()].reduce((sum, count) => sum + count, 0)).toBe(fileCheckLimits.concurrency)
+    expect(Math.max(...calls.values())).toBe(1)
+  })
+  it('compares a file again once its late comparison settles', async () => {
+    let answered!: () => void
+    const late = new Promise<void>(resolve => { answered = resolve })
+    let calls = 0
+    const store = new SqlFileStore({ stat: async path => { if (++calls === 1) await late; return stat(path) } })
+    const path = join(directory, 'late.sql')
+    await writeFile(path, 'SELECT 1')
+    const opened = await store.read(path)
+    await writeFile(path, 'SELECT 2')
+    await utimes(path, later(10), later(10))
+    expect(await store.check({ concurrency: 2, timeoutMs: 20 })).toEqual([])
+    expect(await store.check({ concurrency: 2, timeoutMs: 20 })).toEqual([])
+    expect(calls).toBe(1)
+    answered()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
+    expect(calls).toBe(2)
+  })
+  it('hashes a saved value larger than a query may be in full, so touching it is no change', async () => {
+    const store = new SqlFileStore()
+    const path = join(directory, 'large.xml')
+    // 6 MB of UTF-8: more than a query file, less than a value document.
+    const saved = await store.save('<a>' + 'é'.repeat(3_000_000) + '</a>', undefined, path, 'xml')
+    expect((await stat(path)).size).toBeGreaterThan(5_000_000)
+    await utimes(path, later(10), later(10))
+    expect(await store.check()).toEqual([])
+    expect(await store.changedOnDisk(saved.id)).toBe(false)
+    await writeFile(path, '<a>' + 'è'.repeat(3_000_000) + '</a>')
+    await utimes(path, later(20), later(20))
+    expect(await store.check()).toEqual([{ fileId: saved.id, change: 'modified' }])
+  })
+  it('keeps what an open file was read as when it is opened again after another program rewrote it', async () => {
+    const store = new SqlFileStore({ legacyLabel: () => 'windows-1252' })
+    const path = join(directory, 'wide.sql')
+    await writeFile(path, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('SELECT 1', 'utf16le')]))
+    const opened = await store.read(path)
+    expect(opened.encoding).toBe('utf16le')
+    await writeFile(path, Buffer.from([0x53, 0xe9]))
+    await utimes(path, later(10), later(10))
+    const again = await store.read(path)
+    expect(again.id).toBe(opened.id)
+    expect(store.get(opened.id)).toEqual({ id: opened.id, name: 'wide.sql', path: opened.path, encoding: 'utf16le', readOnly: false })
+    // Only a reload takes what the file is now.
+    expect(await store.reload(opened.id)).toMatchObject({ encoding: 'legacy', codePage: 'Windows-1252' })
+    expect(store.get(opened.id)).toMatchObject({ encoding: 'legacy', codePage: 'Windows-1252' })
+  })
+  it('looks at no more than two files at a time, and reports them in registration order', async () => {
     let active = 0, most = 0
     const store = new SqlFileStore({ stat: async path => { active++; most = Math.max(most, active); try { await new Promise(resolve => setTimeout(resolve, 5)); return await stat(path) } finally { active-- } } })
     const paths = Array.from({ length: 20 }, (_, index) => join(directory, `${index}.sql`))
@@ -452,7 +515,7 @@ describe('changes made outside', () => {
     for (const path of paths) opened.push(await store.read(path))
     for (const path of paths) { await writeFile(path, 'SELECT 2'); await utimes(path, later(10), later(10)) }
     expect((await store.check()).map(change => change.fileId)).toEqual(opened.map(file => file.id))
-    expect(most).toBe(8)
+    expect(most).toBe(fileCheckLimits.concurrency)
   })
   it('asks File changed before Save replaces a change, and before Save as Unicode, only while detection is on', async () => {
     const store = new SqlFileStore({ legacyLabel: () => 'windows-1252' })

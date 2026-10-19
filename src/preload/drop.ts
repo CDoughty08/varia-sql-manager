@@ -8,7 +8,7 @@ export interface FileDragEvent {
   preventDefault(): void
   stopImmediatePropagation(): void
 }
-export interface FileDropTarget { addEventListener(type: 'dragover' | 'drop', listener: (event: FileDragEvent) => void, options: { capture: true }): void }
+export interface FileDropTarget { addEventListener(type: 'dragenter' | 'dragover' | 'dragleave' | 'drop', listener: (event: FileDragEvent) => void, options: { capture: true }): void }
 export interface FileDropOptions {
   /** Electron's webUtils.getPathForFile: the dropped file's path, or '' for a file that has none (made by script). */
   pathForFile(file: File): string
@@ -19,17 +19,21 @@ export interface FileDropOptions {
 /**
  * Opens files dropped on the window, from the preload's isolated world. Only a trusted drag that carries files is
  * touched: page script can neither make a trusted event nor reach `pathForFile` or the channel, so it can never name a
- * path. Such a drop stops here, before Monaco or the page see it (which would insert the path or navigate); every other
- * drag, Object Explorer's and the panels' included, goes on as before. Listeners run in the capture phase on the window,
- * registered before any page script, so they come first.
+ * path. Such a drag stops here, before Monaco or the page see any of it: the drop would insert the path or navigate, and
+ * Monaco's drop caret, started on dragenter and dragover, would stay in the query, since it ends only on a drop or
+ * dragleave that reaches it. Every other drag, Object Explorer's and the panels' included, goes on as before. Listeners
+ * run in the capture phase on the window, registered before any page script, so they come first.
  */
 export function installFileDrop(target: FileDropTarget, options: FileDropOptions): void {
   const carriesFiles = (event: FileDragEvent) => event.isTrusted && !!event.dataTransfer && Array.from(event.dataTransfer.types).includes('Files')
-  target.addEventListener('dragover', event => {
-    if (!carriesFiles(event)) return
-    event.preventDefault()
-    event.dataTransfer!.dropEffect = 'copy'
-  }, { capture: true })
+  for (const type of ['dragenter', 'dragover', 'dragleave'] as const) {
+    target.addEventListener(type, event => {
+      if (!carriesFiles(event)) return
+      event.preventDefault()
+      event.dataTransfer!.dropEffect = 'copy'
+      event.stopImmediatePropagation()
+    }, { capture: true })
+  }
   target.addEventListener('drop', event => {
     if (!carriesFiles(event)) return
     event.preventDefault()

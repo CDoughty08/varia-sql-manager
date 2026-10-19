@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema } from '../src/main/launch-files'
+import { describe, expect, it, vi } from 'vitest'
+import type { OpenedFiles } from '../src/shared/contracts'
+import { deliverLaunchFiles, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema } from '../src/main/launch-files'
 import { reloadPromptSchema } from '../src/main/sql-files'
 
 const windows = { cwd: 'C:\\Work', defaultApp: false, platform: 'win32' as const }
@@ -67,5 +68,59 @@ describe('file request schemas', () => {
     for (const value of [{ fileId: 'C:\\a.sql', dirty: false, more: false }, { fileId, dirty: 'no', more: false }, { fileId, dirty: false, more: false, name: 'a.sql' }, { fileId, dirty: false }]) {
       expect(reloadPromptSchema.safeParse(value).success).toBe(false)
     }
+  })
+})
+
+describe('delivering waiting files', () => {
+  /** A main whose page state the test moves, and whose reads finish when the test says. */
+  function host() {
+    const state = { ready: true, generation: 1 }
+    const reads: { paths: readonly string[]; finish: () => void }[] = []
+    const sent: OpenedFiles[] = []
+    const value = {
+      ready: () => state.ready, generation: () => state.generation, send: (opened: OpenedFiles) => { sent.push(opened) },
+      open: vi.fn((paths: readonly string[]) => new Promise<OpenedFiles>(resolve => { reads.push({ paths, finish: () => resolve({ files: [], errors: paths.map(path => `${path}: read`) }) }) }))
+    }
+    return { state, reads, sent, value }
+  }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const [a, b] = ['a.sql', 'b.sql'].map(name => process.platform === 'win32' ? `C:\\${name}` : `/${name}`)
+  it('waits for a ready page, and sends what it read', async () => {
+    const queue = new LaunchQueue(), { state, reads, sent, value } = host()
+    queue.add([a])
+    state.ready = false
+    deliverLaunchFiles(queue, value)
+    expect(value.open).not.toHaveBeenCalled()
+    state.ready = true
+    deliverLaunchFiles(queue, value)
+    expect(queue.size).toBe(0)
+    reads[0].finish(); await settle()
+    expect(sent).toEqual([{ files: [], errors: [`${a}: read`] }])
+  })
+  it('gives files a page lost while they were read to the next page, also when it was ready before the read ended', async () => {
+    const queue = new LaunchQueue(), { state, reads, sent, value } = host()
+    queue.add([a, b])
+    deliverLaunchFiles(queue, value)
+    // The page reloads; the new one says it is ready while the read still runs, and finds nothing waiting.
+    state.generation = 2
+    deliverLaunchFiles(queue, value)
+    expect(value.open).toHaveBeenCalledTimes(1)
+    reads[0].finish(); await settle()
+    expect(sent).toEqual([])
+    expect(value.open).toHaveBeenCalledTimes(2)
+    expect(reads[1].paths).toEqual([a, b])
+    reads[1].finish(); await settle()
+    expect(sent).toEqual([{ files: [], errors: [`${a}: read`, `${b}: read`] }])
+  })
+  it('keeps them waiting when the next page is not ready yet', async () => {
+    const queue = new LaunchQueue(), { state, reads, sent, value } = host()
+    queue.add([a])
+    deliverLaunchFiles(queue, value)
+    state.generation = 2
+    state.ready = false
+    reads[0].finish(); await settle()
+    expect(value.open).toHaveBeenCalledTimes(1)
+    expect(queue.size).toBe(1)
+    expect(sent).toEqual([])
   })
 })

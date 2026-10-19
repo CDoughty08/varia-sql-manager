@@ -653,6 +653,20 @@ describe('files main opened, Recent Files and changes made outside', () => {
     expect(documents.get(gone.id)).toMatchObject({ dirty: true, file: { id: 'f1' } })
     expect(files.getSnapshot()).toEqual({ error: 'gone.sql was deleted or moved outside Varia SQL Manager. Save it to keep it.', kind: 'warning' })
   })
+  it('asks about the rest of the files when one cannot be reloaded, and reports it with the deleted ones', async () => {
+    const { documents, api, files, model } = fixture()
+    const locked = withFile(documents, 'f1', 'locked.sql'), other = withFile(documents, 'f2', 'other.sql'), gone = withFile(documents, 'f3', 'gone.sql')
+    // main has already moved every reported file's stamp: a file not asked about now is never asked about again.
+    api.checkSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ fileId: 'f1', change: 'modified' }, { fileId: 'f2', change: 'modified' }, { fileId: 'f3', change: 'deleted' }] })
+    api.confirmReload.mockResolvedValue({ ok: true, value: 'yes' })
+    api.reloadSqlFile.mockImplementation(async fileId => fileId === 'f1' ? { ok: false, error: 'EBUSY: resource busy or locked' } : { ok: true, value: { ...openedFile(fileId, 'C:/other.sql'), content: 'SELECT 9' } })
+    await files.checkExternalChanges()
+    expect(api.confirmReload.mock.calls.map(([prompt]) => prompt.fileId)).toEqual(['f1', 'f2'])
+    expect(model(locked.id).getValue()).not.toBe('SELECT 9')
+    expect(model(other.id).getValue()).toBe('SELECT 9')
+    expect(documents.get(gone.id)?.dirty).toBe(true)
+    expect(files.getSnapshot()).toEqual({ error: 'locked.sql was not reloaded: EBUSY: resource busy or locked gone.sql was deleted or moved outside Varia SQL Manager. Save it to keep it.', kind: 'error' })
+  })
   it('checks only when a query has a file, once at a time, after a running file task', async () => {
     const { documents, api, files } = fixture()
     await files.checkExternalChanges()

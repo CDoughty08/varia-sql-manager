@@ -1,5 +1,6 @@
 import { isAbsolute, posix, win32 } from 'node:path'
 import { z } from 'zod'
+import type { OpenedFiles } from '../shared/contracts'
 
 /** Files opened at once from the command line, a second instance, macOS or a drop; more are refused or dropped. */
 export const maxLaunchFiles = 32
@@ -62,4 +63,29 @@ export class LaunchQueue {
   /** Everything waiting, in arrival order; the queue is empty afterwards. */
   take(): string[] { return this.paths.splice(0) }
   get size(): number { return this.paths.length }
+}
+
+/** What delivering waiting files needs of main: the page's state, and how files are read and handed to it. */
+export interface LaunchDeliveryHost {
+  /** Whether a page can take files now (it said it is ready, and the window is there). */
+  ready(): boolean
+  /** The page's generation, which a reload or crash moves on. */
+  generation(): number
+  /** Reads the files, reporting each that fails; never rejects. */
+  open(paths: readonly string[]): Promise<OpenedFiles>
+  send(opened: OpenedFiles): void
+}
+
+/**
+ * Opens the files waiting for the page, once it is ready. A page that resets while they are read lost them, so they
+ * wait again, and go to the next page at once when it became ready meanwhile (it found the queue empty then).
+ */
+export function deliverLaunchFiles(queue: LaunchQueue, host: LaunchDeliveryHost): void {
+  if (!host.ready() || !queue.size) return
+  const paths = queue.take(), generation = host.generation()
+  void host.open(paths).then(opened => {
+    if (generation === host.generation()) { host.send(opened); return }
+    queue.add(paths)
+    deliverLaunchFiles(queue, host)
+  })
 }

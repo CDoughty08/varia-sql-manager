@@ -7,7 +7,7 @@ import { installFileDrop, maxDroppedFiles, type FileDragEvent, type FileDropTarg
 function target() {
   const listeners: { type: string; listener: (event: FileDragEvent) => void; capture: boolean }[] = []
   const window: FileDropTarget = { addEventListener: (type, listener, options) => { listeners.push({ type, listener, capture: options.capture }) } }
-  const dispatch = (type: 'dragover' | 'drop', event: FileDragEvent) => { for (const entry of listeners) if (entry.type === type) entry.listener(event) }
+  const dispatch = (type: 'dragenter' | 'dragover' | 'dragleave' | 'drop', event: FileDragEvent) => { for (const entry of listeners) if (entry.type === type) entry.listener(event) }
   return { window, listeners, dispatch }
 }
 const file = (name: string) => ({ name }) as File
@@ -25,14 +25,18 @@ function installed() {
 describe('file drops (preload)', () => {
   it('listens in the capture phase, so it comes before Monaco and the page', () => {
     const { listeners } = installed()
-    expect(listeners.map(entry => [entry.type, entry.capture])).toEqual([['dragover', true], ['drop', true]])
+    expect(listeners.map(entry => [entry.type, entry.capture])).toEqual([['dragenter', true], ['dragover', true], ['dragleave', true], ['drop', true]])
   })
   it('accepts a trusted drag of files as a copy, and opens what is dropped without the page seeing it', () => {
     const { dispatch, send } = installed()
-    const over = drag()
-    dispatch('dragover', over)
-    expect(over.preventDefault).toHaveBeenCalled()
-    expect(over.dataTransfer.dropEffect).toBe('copy')
+    // Monaco never sees the drag: its drop caret would stay, since the drop that would remove it does not reach it.
+    for (const type of ['dragenter', 'dragover', 'dragleave'] as const) {
+      const over = drag()
+      dispatch(type, over)
+      expect(over.preventDefault).toHaveBeenCalled()
+      expect(over.stopImmediatePropagation).toHaveBeenCalled()
+      expect(over.dataTransfer.dropEffect).toBe('copy')
+    }
     const drop = drag({ files: [file('a.sql'), file('b.sql')] })
     dispatch('drop', drop)
     expect(drop.preventDefault).toHaveBeenCalled()
@@ -42,9 +46,11 @@ describe('file drops (preload)', () => {
   it('ignores untrusted events, which page script can make', () => {
     const { dispatch, send } = installed()
     const over = drag({ trusted: false }), drop = drag({ trusted: false })
+    dispatch('dragenter', over)
     dispatch('dragover', over)
     dispatch('drop', drop)
     expect(over.preventDefault).not.toHaveBeenCalled()
+    expect(over.stopImmediatePropagation).not.toHaveBeenCalled()
     expect(drop.preventDefault).not.toHaveBeenCalled()
     expect(drop.stopImmediatePropagation).not.toHaveBeenCalled()
     expect(send).not.toHaveBeenCalled()
@@ -53,9 +59,12 @@ describe('file drops (preload)', () => {
     const { dispatch, send } = installed()
     for (const types of [['application/x-varia-explorer', 'text/plain'], ['text/plain'], []]) {
       const over = drag({ types }), drop = drag({ types })
+      dispatch('dragenter', over)
       dispatch('dragover', over)
+      dispatch('dragleave', over)
       dispatch('drop', drop)
       expect(over.preventDefault).not.toHaveBeenCalled()
+      expect(over.stopImmediatePropagation).not.toHaveBeenCalled()
       expect(drop.preventDefault).not.toHaveBeenCalled()
       expect(drop.stopImmediatePropagation).not.toHaveBeenCalled()
     }
