@@ -57,7 +57,6 @@ const api: VariaApi = {
     return () => { ipcRenderer.removeListener('varia:results-job', listener) }
   },
   testMode: process.argv.includes('--varia-test-mode'),
-  developerTools: process.argv.includes('--varia-developer-tools'),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),

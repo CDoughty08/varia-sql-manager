@@ -38,8 +38,6 @@ export function themeMenuItems(theme: Pick<ThemeState, 'preference' | 'themes'>)
 
 export interface MenuServiceOptions {
   readonly platform: Platform
-  /** A packaged build: its menus have no development commands. */
-  readonly packaged?: boolean
   readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled' | 'execute' | 'onWillExecute'>
   /** Static and state keys, for menu conditions and enablement. */
   readonly context: { getState(): ContextKeys }
@@ -131,9 +129,9 @@ export class MenuService implements Disposable {
 
   /** A menu as it shows now; a context menu's items for `target`, whose commands run with it as their arguments. */
   resolve(menu: MenuId, target?: MenuTarget): readonly ResolvedMenuItem[] {
-    const { platform, packaged, commands, keybindings, theme } = this.options
+    const { platform, commands, keybindings, theme } = this.options
     return resolveMenu(menu, {
-      platform, packaged, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state) },
+      platform, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state) },
       ...(target ? { target: targetKeys(target), args: argsFor(target) } : {})
     })
   }

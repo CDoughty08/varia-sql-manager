@@ -70,8 +70,6 @@ export interface CommandDescriptor {
   readonly allowInModal?: true
   /** The Electron role native menus show for this command; it then has only native keybindings. */
   readonly role?: RoleName
-  /** Unpackaged builds only: packaged builds leave the command out of menus and the palette, and main refuses its role. */
-  readonly development?: true
   /** The title on one platform when no placement title applies, such as macOS's "Reveal in Finder". */
   readonly platformTitles?: Partial<Record<Platform, string>>
 }
@@ -390,7 +388,7 @@ export const commandCatalog = {
   // No key: Ctrl+R and ⌘R toggle the results pane, as in SSMS.
   'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', role: 'reload', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },
   'developer.toggleDevTools': {
-    title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', development: true, keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
+    title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
   },
   // The Query Output menu and the results grid's keys: the grid copies its selected cells (Ctrl+C reaches its copy

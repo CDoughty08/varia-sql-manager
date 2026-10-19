@@ -153,7 +153,7 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Reload Window | `developer.reloadWindow` | — | — | — | Always | View › Reload Window |
-| Toggle Developer Tools (unpackaged builds only) | `developer.toggleDevTools` | Ctrl+Shift+I * | Ctrl+Shift+I * | ⌥⌘I * | Always | View › Toggle Developer Tools |
+| Toggle Developer Tools | `developer.toggleDevTools` | Ctrl+Shift+I * | Ctrl+Shift+I * | ⌥⌘I * | Always | View › Toggle Developer Tools |
 
 ### Other
 

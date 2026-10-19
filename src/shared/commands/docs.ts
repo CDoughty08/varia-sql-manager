@@ -168,7 +168,7 @@ export function renderCommandDocs(): string {
     lines.push('', `### ${category ?? 'Other'}`, '', row(['Command', 'Id', ...platforms.map(platform => platformNames[platform]), 'Available when', 'Menus']), row(['---', '---', ...platforms.map(() => '---'), '---', '---']))
     for (const id of ids) {
       const command = commandDescriptor(id)
-      lines.push(row([command.title + (command.palette === false ? ' (not in the palette)' : '') + (command.development ? ' (unpackaged builds only)' : ''), code(id), ...platforms.map(platform => keys(id, platform)), enablement(id), menus(id)]))
+      lines.push(row([command.title + (command.palette === false ? ' (not in the palette)' : ''), code(id), ...platforms.map(platform => keys(id, platform)), enablement(id), menus(id)]))
     }
   }
   lines.push('', '## Menus', '',
