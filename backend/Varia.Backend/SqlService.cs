@@ -18,7 +18,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public static readonly string[] MethodNames =
     [
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
-        "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close",
+        "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script"
     ];
@@ -67,24 +67,23 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
     }
 
-    /// <summary>The most query sessions the app keeps open at once (each holds its own unpooled connection). It leaves room
-    /// within main's 256 pending requests for every session to run a script and still be cancelled. Idle sessions are never
+    /// <summary>The most query sessions the app keeps open at once (each holds its own unpooled connection). SSMS has no
+    /// such cap; this is only a backstop on connections, far above what anyone keeps open. Scripts running at once are
+    /// bounded by main's 256 pending requests, and cancels use the control lane's reserve. Idle sessions are never
     /// reclaimed to make room: a session's SET options, temporary objects and open transaction are invisible from outside
     /// (an empty temporary table allocates no pages, so tempdb's space views miss it), and closing it would lose them
     /// silently. Only the live checks change it.</summary>
-    internal int SessionLimit { get; set; } = 128;
-    /// <summary>The session probe that follows every script. It is a statement in the user's session, so the next script
-    /// sees @@ROWCOUNT 1 and @@ERROR 0 rather than what its own last statement left, and the session's most recent SQL
-    /// (DBCC INPUTBUFFER, sys.dm_exec_input_buffer, sp_WhoIsActive) is this probe rather than the script. SqlClient keeps
-    /// no public record of a transaction begun in T-SQL, and a DMV read from another session needs VIEW SERVER STATE, so
-    /// this is the cost of knowing about an open transaction before the session ends.</summary>
-    internal const string ProbeSql = "SELECT @@TRANCOUNT, SUSER_SNAME();";
+    internal int SessionLimit { get; set; } = 1000;
+    /// <summary>Follows the SET prologue in the same command, so opening a session costs no extra round trip. The login
+    /// is the session's as it opened, as SSMS shows it from the connection.</summary>
+    internal const string LoginSql = "SELECT SUSER_SNAME();";
     /// <summary>What a query tab's session runs before it closes with commit: every nesting level of its transaction
     /// committed, then what is left. Only the live checks change it, to break the connection while it runs.</summary>
     internal string CommitSql { get; set; } = DefaultCommitSql;
     internal const string DefaultCommitSql = "WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION; SELECT @@TRANCOUNT;";
-    /// <summary>Read before the commit: a session found lost here never received it, and one with nothing open needs none.
-    /// It reads no row (or a plan) when SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY would keep the commit from executing.</summary>
+    /// <summary>Read before the commit and by query.session.state, only when a session is about to end, as SSMS asks: a
+    /// session found lost here never received the commit, and one with nothing open needs none. It reads no row (or a
+    /// plan) when SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY would keep the commit from executing.</summary>
     internal const string TransactionCountSql = "SELECT @@TRANCOUNT;";
     /// <summary>The options that compile a batch without executing it, turned off before a commit. Each SHOWPLAN option must
     /// be alone in its batch, and one that is not ON is only shown, not run, under another.</summary>
@@ -135,7 +134,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "query.execute" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "results.close" => RequestLane.Control,
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
         _ => RequestLane.Metadata
@@ -167,6 +166,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
         "query.session.close" => await CloseSessionAsync(Read<SessionArgs>(parameters, json), Token(context)),
+        "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
@@ -383,8 +383,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ResultSetBuffer? currentSet = null;
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
-        SessionProbe? probe = null;
         int? spid = null;
+        string? login = null;
         var completed = 0;
         var batchNumber = 0;
         var iteration = 0;
@@ -490,9 +490,13 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 try
                 {
                     await using var prologue = connection.CreateCommand();
-                    prologue.CommandText = Prologue;
+                    prologue.CommandText = Prologue + " " + LoginSql;
                     prologue.CommandTimeout = 0;
-                    await prologue.ExecuteNonQueryAsync(token);
+                    await using var reader = await prologue.ExecuteReaderAsync(token);
+                    session.Login = await reader.ReadAsync(token) && reader.FieldCount == 1 && !reader.IsDBNull(0) ? reader.GetString(0) : null;
+                    // The SPID comes with the login acknowledgement: no round trip, and it never changes, since idle
+                    // connection recovery is off for query sessions.
+                    session.Spid = connection.ServerProcessId;
                 }
                 catch
                 {
@@ -696,7 +700,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         finally
         {
-            // The elapsed time is the script's; the probe below is not part of it.
             watch.Stop();
             queries.TryRemove(args.QueryId, out _);
             // A set cut short keeps the rows it stored.
@@ -709,13 +712,13 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             {
                 session.Connection.FireInfoMessageEventOnUserErrors = false;
                 session.Connection.InfoMessage -= onInfo;
+                // Nothing runs in the session after the script: its @@ROWCOUNT, @@ERROR and most recent SQL stay the
+                // script's. Its transaction is read only when it is about to end (query.session.state), as SSMS does.
                 if (session.Connection.State == System.Data.ConnectionState.Open)
                 {
                     database = session.Connection.Database;
-                    // Still holding the session, so nothing else runs between the script and the probe.
-                    probe = await ProbeAsync(session.Connection);
-                    // The session id needs no round trip, so a session the probe could not read is still known to be open.
-                    if (session.Connection.State == System.Data.ConnectionState.Open) spid = session.Connection.ServerProcessId;
+                    spid = session.Spid;
+                    login = session.Login;
                 }
                 if (session.Connection.State is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken)
                 {
@@ -751,7 +754,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, probe?.TransactionCount, spid, probe?.Login);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login);
     }
 
     /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows
@@ -900,22 +903,56 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         try { source.Cancel(); } catch (ObjectDisposedException) { /* Query completed concurrently. */ }
     }
 
-    /// <summary>The open transaction (@@TRANCOUNT) and the login, read on the session after its script. It has its own short
-    /// timeout and no token: the script's token may already be cancelled, and a timeout ends only the probe. It reads no
-    /// row under SET NOEXEC, PARSEONLY or FMTONLY ON, a plan under SET SHOWPLAN_* ON, and nothing on a timeout; the summary
-    /// then has the session's SPID without them, which the workbench takes as a transaction it could not check.</summary>
-    private static async Task<SessionProbe?> ProbeAsync(SqlConnection connection)
+    /// <summary>query.session.state: the open transaction (@@TRANCOUNT) of an idle session about to end, read on demand as
+    /// SSMS reads it when a query window closes or disconnects. It never waits: a session running a script answers
+    /// SESSION_BUSY, an unknown one SESSION_CLOSED, and one found lost is closed and answers SESSION_LOST (SQL Server rolled
+    /// back its transaction). Under SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON the SELECT returns no count, and the
+    /// options stay as they are, since the user may still keep the session: the answer is then unchecked, and a commit
+    /// turns them off first (CommitAsync).</summary>
+    private async Task<SessionState> SessionStateAsync(SessionStateArgs args, CancellationToken token)
     {
+        if (!Guid.TryParse(args.SessionId, out _)) throw new RequestException("INVALID_PARAMS", "A valid session ID is required.");
+        if (!sessions.TryGetValue(args.SessionId, out var session)) throw new RequestException("SESSION_CLOSED", "This query has no open SQL session.");
+        if (!session.TryEnter()) throw new RequestException("SESSION_BUSY", "A query is running in this tab.");
         try
         {
-            await using var command = connection.CreateCommand();
-            command.CommandText = ProbeSql;
-            command.CommandTimeout = 5;
-            await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SingleRow);
-            if (!await reader.ReadAsync()) return null;
-            return new SessionProbe(reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1));
+            var connection = session.Connection;
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                if (!session.HasOpened) throw new RequestException("SESSION_CLOSED", "This query has no open SQL session.");
+                throw Lost(args.SessionId, session, "The SQL session was lost, so SQL Server rolled back its transaction.");
+            }
+            try
+            {
+                var open = await CountAsync(connection, TransactionCountSql, token);
+                return new SessionState(open ?? 0, open is not null);
+            }
+            catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested && connection.State != System.Data.ConnectionState.Open)
+            {
+                throw Lost(args.SessionId, session, "The SQL session was lost, so SQL Server rolled back its transaction.");
+            }
         }
-        catch (Exception error) when (error is SqlException or InvalidOperationException or InvalidCastException) { return null; }
+        finally { session.Exit(); }
+    }
+
+    /// <summary>Forgets a session found lost and closes it; the answer is SESSION_LOST with <paramref name="message"/>.</summary>
+    private RequestException Lost(string sessionId, QuerySession session, string message)
+    {
+        ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(sessionId, session));
+        session.Close();
+        return new RequestException("SESSION_LOST", message);
+    }
+
+    /// <summary>@@TRANCOUNT after the batch, or null when the batch compiled without executing. The token alone carries the
+    /// deadline (see ExecuteAsync).</summary>
+    private static async Task<int?> CountAsync(SqlConnection connection, string sql, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.CommandTimeout = 0;
+        using var stop = token.Register(Attention, command);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        return await reader.ReadAsync(token) && reader.FieldCount == 1 && reader.GetFieldType(0) == typeof(int) ? reader.GetInt32(0) : null;
     }
 
     private async Task<object> CloseSessionAsync(SessionArgs args, CancellationToken token)
@@ -940,14 +977,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         {
             var connection = session.Connection;
             var committing = false;
-            RequestException Lost()
-            {
-                ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(sessionId, session));
-                session.Close();
-                return new RequestException("SESSION_LOST", committing
-                    ? "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again."
-                    : "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.");
-            }
+            RequestException Lost() => this.Lost(sessionId, session, committing
+                ? "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again."
+                : "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.");
             if (connection.State != System.Data.ConnectionState.Open)
             {
                 if (!session.HasOpened) return;
@@ -962,16 +994,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 using var stop = token.Register(Attention, command);
                 await command.ExecuteNonQueryAsync(token);
             }
-            // @@TRANCOUNT after the batch, or null when the batch compiled without executing.
-            async Task<int?> Count(string sql)
-            {
-                await using var command = connection.CreateCommand();
-                command.CommandText = sql;
-                command.CommandTimeout = 0;
-                using var stop = token.Register(Attention, command);
-                await using var reader = await command.ExecuteReaderAsync(token);
-                return await reader.ReadAsync(token) && reader.FieldCount == 1 && reader.GetFieldType(0) == typeof(int) ? reader.GetInt32(0) : null;
-            }
+            Task<int?> Count(string sql) => CountAsync(connection, sql, token);
             try
             {
                 var open = await Count(TransactionCountSql);
@@ -1022,7 +1045,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 return existing;
             }
             if (sessions.Count >= SessionLimit)
-                throw new RequestException("SESSION_LIMIT", "This query was not executed: " + SessionLimit + " query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. "
+                throw new RequestException("SESSION_LIMIT", "This query was not executed: " + SessionLimit.ToString("N0", CultureInfo.InvariantCulture) + " query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. "
                     + "Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again.");
             var session = new QuerySession(args.ConnectionId, CreateConnection(args.ConnectionId, args.Database, stateful: true));
             sessions[args.SessionId] = session;

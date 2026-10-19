@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/shared/contracts'
-import { cancelSettleMs, newSessionMessage, QueryService, type QueryApi } from '../src/renderer/src/services/queries'
+import { cancelSettleMs, newSessionMessage, QueryService, stateReads, type QueryApi } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { EventBus } from '../src/renderer/src/core/events'
@@ -16,7 +16,9 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>) 
   const api = {
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: output() })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
-    confirmSessions: vi.fn<VariaApi['confirmSessions']>(async () => ({ ok: true, value: 'cancel' }))
+    confirmSessions: vi.fn<VariaApi['confirmSessions']>(async () => ({ ok: true, value: 'cancel' })),
+    // No session until a test says otherwise, as the backend answers for a query that never ran.
+    querySessionState: vi.fn<VariaApi['querySessionState']>(async () => ({ ok: false, error: 'This query has no open SQL session.', code: 'SESSION_CLOSED' }))
   }
   const calls: string[] = []
   const results = { begin: vi.fn((tabId: string, _queryId: string) => { calls.push('begin ' + tabId) }), finish: vi.fn() }
@@ -111,7 +113,7 @@ describe('query orchestration', () => {
     const partial = output({ status: 'failed', messages: [{ text: 'Earlier batch output', kind: 'info' }], error: { code: 'SQL_ERROR', message: 'Bad SQL', batchNumber: 2, iteration: 1 } })
     queryApi.execute.mockResolvedValueOnce({ ok: true, value: partial })
     await queries.execute()
-    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: partial, error: undefined, session: { connectionId: 'server-a', transactions: 0 } })
+    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: partial, error: undefined, session: undefined })
     queryApi.execute.mockResolvedValueOnce({ ok: false, error: 'Backend unavailable', code: 'BACKEND_LOST' })
     await queries.execute()
     expect(queries.getSnapshot()[tab.id]).toEqual({ summary: undefined, error: 'Backend unavailable' })
@@ -162,73 +164,89 @@ describe('query orchestration', () => {
     expect(queries.getSnapshot()[tab.id].running).toEqual({ queryId: expect.any(String), connectionId: 'server-a', startedAt: 1000 })
     pending.resolve({ ok: true, value: output() })
     await execution
-    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: output(), error: undefined, session: { connectionId: 'server-a', transactions: 0 } })
+    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: output(), error: undefined, session: undefined })
   })
-  it('tracks the open transaction the probe reports, for the connection it ran on', async () => {
-    const { queries, queryApi, tab, documents, bus, connection } = fixture()
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 2, spid: 53, login: 'sa' }) })
+  it('keeps the SPID and login the summary reports, for the connection it ran on, and reads no transaction while executing', async () => {
+    const { queries, queryApi, tab, documents, bus } = fixture()
+    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 53, login: 'sa' }) })
     await queries.execute()
-    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', transactions: 2, spid: 53, login: 'sa' })
-    expect(queries.transactions(tab.id)).toBe(2)
+    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', spid: 53, login: 'sa' })
     // A run under way keeps it; a failure that leaves the session alone keeps it too.
     const pending = deferred<ApiResult<QueryResult>>()
     queryApi.execute.mockReturnValueOnce(pending.promise)
     const running = queries.execute()
-    expect(queries.transactions(tab.id)).toBe(2)
+    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', spid: 53, login: 'sa' })
     pending.resolve({ ok: false, error: 'A query is already running in this tab.', code: 'SESSION_BUSY' }); await running
-    expect(queries.transactions(tab.id)).toBe(2)
-    // Moving the query elsewhere, or losing its connection, leaves the session's transaction behind (SQL Server rolls it back).
-    documents.update(tab.id, { connectionId: 'server-b' })
-    expect(queries.transactions(tab.id)).toBe(0)
-    documents.update(tab.id, { connectionId: 'server-a' })
-    connection.lost = true
-    expect(queries.transactions(tab.id)).toBe(0)
-    delete connection.lost
-    expect(queries.transactions(tab.id)).toBe(2)
-    // A session that ended, or one the backend found lost, has none.
+    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', spid: 53, login: 'sa' })
+    // A session that ended, or one the backend found lost, has none; nor does a summary without a SPID (the session closed
+    // during the script, or never opened).
     bus.emit({ type: 'session.ended', tabId: tab.id })
     expect(queries.getSnapshot()[tab.id].session).toBeUndefined()
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 1, spid: 53 }) })
+    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 53, login: 'sa' }) })
     await queries.execute()
-    expect(queries.transactions(tab.id)).toBe(1)
     queryApi.execute.mockResolvedValueOnce({ ok: false, error: 'The SQL session was lost.', code: 'SESSION_LOST' })
     await queries.execute()
-    expect(queries.transactions(tab.id)).toBe(0)
-    // A summary without a probe (the session closed during the script) has none either.
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 1 }) })
+    expect(queries.getSnapshot()[tab.id].session).toBeUndefined()
+    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 54, login: 'sa' }) })
     await queries.execute()
     queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed' }) })
     await queries.execute()
-    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', transactions: 0 })
+    expect(queries.getSnapshot()[tab.id].session).toBeUndefined()
+    // As in SSMS, nothing asks the session about its transaction after a script: only ending it does.
+    expect(queryApi.querySessionState).not.toHaveBeenCalled()
+    documents.update(tab.id, { connectionId: 'server-a' })
+    expect(queryApi.querySessionState).not.toHaveBeenCalled()
   })
-  it('keeps a session the probe could not read as one that may hold a transaction, and asks about it', async () => {
-    const { queries, queryApi, tab } = fixture()
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 2, spid: 53, login: 'sa' }) })
+  it('reads an idle session\'s transaction on demand, and treats what it cannot read as one that may be open', async () => {
+    const { queries, queryApi, tab, documents, connection } = fixture()
+    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 53, login: 'sa' }) })
     await queries.execute()
-    // SET SHOWPLAN_XML ON (or NOEXEC, PARSEONLY, FMTONLY, a probe timeout): the session is open, its count unknown.
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 53 }) })
-    await queries.execute()
-    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', transactions: 2, spid: 53, login: 'sa', unchecked: true })
-    expect(queries.transactions(tab.id)).toBe(2)
-    expect(queries.mayHaveTransaction(tab.id)).toBe(true)
-    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'commit' })
-    expect(await queries.confirmSessions('close', [tab.id])).toEqual(new Map([[tab.id, 'commit']]))
-    expect(queryApi.confirmSessions).toHaveBeenLastCalledWith({ action: 'close', tabs: [{ name: 'query.sql', transactions: 2, running: false, unchecked: true }] })
-    // A session with nothing known before it may still have begun one in the script the probe could not follow.
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 0, spid: 53, login: 'sa' }) })
-    await queries.execute()
-    expect(queries.mayHaveTransaction(tab.id)).toBe(false)
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 53 }) })
-    await queries.execute()
-    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', transactions: 0, spid: 53, login: 'sa', unchecked: true })
-    expect(queries.mayHaveTransaction(tab.id)).toBe(true)
-    // A new session (another SPID) keeps nothing of the old one; a probe that reads again clears it.
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 70 }) })
-    await queries.execute()
-    expect(queries.getSnapshot()[tab.id].session).toEqual({ connectionId: 'server-a', transactions: 0, spid: 70, unchecked: true })
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 0, spid: 70, login: 'sa' }) })
-    await queries.execute()
-    expect(queries.mayHaveTransaction(tab.id)).toBe(false)
+    queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 2, checked: true } })
+    expect(await queries.transactionState(tab.id)).toEqual({ transactions: 2 })
+    expect(queryApi.querySessionState).toHaveBeenLastCalledWith(tab.id)
+    // SET SHOWPLAN_*, NOEXEC, PARSEONLY or FMTONLY ON kept the SELECT from returning a count.
+    queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 0, checked: false } })
+    expect(await queries.transactionState(tab.id)).toEqual({ transactions: 0, unchecked: true })
+    // A busy session, no answer in time, or a failed request: it may hold one.
+    for (const failure of [{ ok: false, error: 'busy', code: 'SESSION_BUSY' }, { ok: false, error: 'late', code: 'TIMEOUT' }, { ok: false, error: 'Too many pending backend requests.', code: 'TOO_MANY_REQUESTS' }, { ok: false, error: 'no code' }] as const) {
+      queryApi.querySessionState.mockResolvedValueOnce(failure)
+      expect(await queries.transactionState(tab.id), failure.error).toEqual({ transactions: 0, unchecked: true })
+    }
+    queryApi.querySessionState.mockRejectedValueOnce(new Error('IPC failed'))
+    expect(await queries.mayHaveTransaction(tab.id)).toBe(true)
+    // No session, or one lost (SQL Server rolled it back): nothing open, and the status bar forgets it.
+    for (const code of ['SESSION_LOST', 'SESSION_CLOSED', 'BACKEND_LOST', 'CONNECTION_LOST', 'NOT_CONNECTED'] as const) {
+      queryApi.querySessionState.mockResolvedValueOnce({ ok: false, error: code, code })
+      expect(await queries.transactionState(tab.id), code).toEqual({ transactions: 0 })
+    }
+    expect(queries.getSnapshot()[tab.id].session).toBeUndefined()
+    // A query moved off its connection, a lost connection, or no connection at all is not asked.
+    const calls = queryApi.querySessionState.mock.calls.length
+    connection.lost = true
+    expect(await queries.mayHaveTransaction(tab.id)).toBe(false)
+    delete connection.lost
+    documents.update(tab.id, { connectionId: undefined })
+    expect(await queries.mayHaveTransaction(tab.id)).toBe(false)
+    expect(await queries.mayHaveTransaction('gone')).toBe(false)
+    expect(queryApi.querySessionState).toHaveBeenCalledTimes(calls)
+  })
+  it('reads the sessions a few at a time before one prompt, and sends only those that need asking', async () => {
+    const { queries, queryApi, documents } = fixture()
+    const tabs = Array.from({ length: 20 }, (_, index) => documents.create(`q${index}.sql`, 'SELECT 1', 'master', 'server-a'))
+    let reading = 0, most = 0
+    queryApi.querySessionState.mockImplementation(async id => {
+      most = Math.max(most, ++reading)
+      await new Promise(resolve => { setTimeout(resolve, 1) })
+      reading--
+      const index = tabs.findIndex(tab => tab.id === id)
+      return index === 3 ? { ok: true, value: { transactionCount: 1, checked: true } } : index === 7 ? { ok: true, value: { transactionCount: 0, checked: false } }
+        : index === 9 ? { ok: false, error: 'No session.', code: 'SESSION_CLOSED' } : { ok: true, value: { transactionCount: 0, checked: true } }
+    })
+    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'rollback' })
+    expect(await queries.confirmSessions('closeAll', tabs.map(tab => tab.id))).toEqual(new Map([[tabs[3].id, 'rollback'], [tabs[7].id, 'rollback']]))
+    expect(queryApi.querySessionState).toHaveBeenCalledTimes(20)
+    expect(most).toBe(stateReads)
+    expect(queryApi.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'closeAll', tabs: [{ name: 'q3.sql', transactions: 1, running: false }, { name: 'q7.sql', transactions: 0, running: false, unchecked: true }] })
   })
   it('hands a run that settles after its tab closed to the results, so its sets are released', async () => {
     const waited: number[] = []
@@ -251,17 +269,20 @@ describe('query orchestration', () => {
     const other = documents.create('other.sql', 'SELECT 2', 'master', 'server-a'), idle = documents.create('idle.sql', 'SELECT 3', 'master', 'server-a')
     expect(await queries.confirmSessions('exit', [tab.id, other.id, idle.id])).toEqual(new Map())
     expect(queryApi.confirmSessions).not.toHaveBeenCalled()
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 1 }) })
     await queries.execute(tab.id)
+    queryApi.querySessionState.mockClear()
+    queryApi.querySessionState.mockImplementation(async id => id === tab.id ? { ok: true, value: { transactionCount: 1, checked: true } } : { ok: false, error: 'No session.', code: 'SESSION_CLOSED' })
     const pending = deferred<ApiResult<QueryResult>>()
     queryApi.execute.mockReturnValueOnce(pending.promise)
     const run = queries.execute(other.id)
     // The cancel lands, and the query stops with a transaction it had opened: it is rolled back, never committed.
-    queryApi.cancel.mockImplementationOnce(async () => { pending.resolve({ ok: true, value: output({ status: 'cancelled', transactionCount: 1 }) }); return { ok: true, value: { cancelled: true } } })
+    queryApi.cancel.mockImplementationOnce(async () => { pending.resolve({ ok: true, value: output({ status: 'cancelled' }) }); return { ok: true, value: { cancelled: true } } })
     queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'commit' })
     const plan = await queries.confirmSessions('exit', [tab.id, other.id, idle.id, 'gone'])
     expect(queryApi.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'exit', tabs: [{ name: 'query.sql', transactions: 1, running: false }, { name: 'other.sql', transactions: 0, running: true }] })
     expect(queryApi.cancel).toHaveBeenCalledOnce()
+    // An executing query's session is not read: it is busy, and is cancelled and rolled back whatever it holds.
+    expect(queryApi.querySessionState.mock.calls.map(([id]) => id)).toEqual([tab.id, idle.id])
     expect(queries.isRunning(other.id)).toBe(false)
     expect(plan).toEqual(new Map([[tab.id, 'commit'], [other.id, 'rollback']]))
     await run
@@ -270,10 +291,9 @@ describe('query orchestration', () => {
   })
   it('changes nothing on Cancel, and reports a prompt that failed', async () => {
     const { queries, queryApi, tab } = fixture()
-    queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ transactionCount: 1 }) })
-    await queries.execute()
+    queryApi.querySessionState.mockResolvedValue({ ok: true, value: { transactionCount: 1, checked: true } })
     expect(await queries.confirmSessions('changeConnection', [tab.id])).toBeUndefined()
-    expect(queries.transactions(tab.id)).toBe(1)
+    expect(queryApi.confirmSessions).toHaveBeenLastCalledWith({ action: 'changeConnection', tabs: [{ name: 'query.sql', transactions: 1, running: false }] })
     queryApi.confirmSessions.mockResolvedValueOnce({ ok: false, error: 'Untrusted IPC sender.' })
     await expect(queries.confirmSessions('changeConnection', [tab.id])).rejects.toThrow('Untrusted IPC sender.')
   })

@@ -1229,8 +1229,9 @@ try {
   console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload; a renderer crash Chromium cannot see still gets one crash prompt, reloads and finishes a quit the lost page could not, and Close closes at once.')
 
   // 17. Open transactions and running queries (fixtures/session-prompts.mjs), in a fresh app: F5 connects a disconnected
-  // query first; closing, changing connection and quitting ask Commit, Roll Back or Cancel; an executing query is
-  // cancelled only when asked; and a crash closes the open prompt.
+  // query first; no execution reads its transaction; closing, changing connection and quitting read it then and ask
+  // SSMS's question (Yes commits, No rolls back, Cancel); an executing query is cancelled only when asked; and a crash
+  // closes the open prompt.
   await sessionPrompts(launchOptions)
 
   // 18. A real server, when VARIA_TEST_SQL_SERVER is set, in a fresh app with themed menus: master's New Query runs on

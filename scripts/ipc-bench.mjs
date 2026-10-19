@@ -158,8 +158,8 @@ FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;`
     record('e2e.live.rowsPerSecond', set.rowsRead / (ingest.elapsedMs / 1000), 'rows/s', `${set.rowsRead.toLocaleString('en-US')} rows stored in ${ingest.elapsedMs} ms (backend), ${Math.round(ingest.invokeMs)} ms end to end`)
     if (ingest.firstWindowMs !== undefined) record('e2e.live.firstWindowMs', ingest.firstWindowMs, 'ms', 'first 100-row window after resultSet.opened')
 
-    // A small script in a warm tab, end to end: every execution ends with the session probe (@@TRANCOUNT, @@SPID, login),
-    // so this is the execution floor the prompts cost.
+    // A small script in a warm tab, end to end: the execution floor. Nothing runs in the session after the script (its
+    // transaction is read only when it is about to end), so this is one round trip.
     step = 'live small execute'
     const small = await page.evaluate(async ({ options, runs }) => {
       const connected = await window.varia.connect(options)
@@ -169,7 +169,7 @@ FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;`
         const started = performance.now()
         const result = await window.varia.execute({ connectionId: connected.value.id, sessionId, database: 'master', sql: 'SELECT 1;', queryId: crypto.randomUUID(), maxRows: 0, timeoutSeconds: 30, maxResultSets: 10 })
         const elapsed = performance.now() - started
-        if (!result.ok || result.value.status !== 'completed' || result.value.transactionCount !== 0 || !result.value.spid) throw new Error('Small execute failed: ' + JSON.stringify(result))
+        if (!result.ok || result.value.status !== 'completed' || 'transactionCount' in result.value || !result.value.spid) throw new Error('Small execute failed: ' + JSON.stringify(result))
         for (const descriptor of result.value.resultSets) await window.__variaResults.open(descriptor).close()
         // The first runs open the session and warm both sides up.
         if (run >= 5) { times.push(elapsed); scripts.push(result.value.elapsedMs) }
@@ -178,7 +178,7 @@ FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;`
       await window.varia.disconnect(connected.value.id)
       return { times, scripts }
     }, { options, runs: 200 })
-    record('e2e.live.smallExecuteP50Ms', percentile(small.times, 50), 'ms', `SELECT 1 in a warm tab with its session probe, p50 of ${small.times.length}; p99 ${percentile(small.times, 99).toFixed(1)} ms; backend's script time p50 ${percentile(small.scripts, 50)} ms`)
+    record('e2e.live.smallExecuteP50Ms', percentile(small.times, 50), 'ms', `SELECT 1 in a warm tab, p50 of ${small.times.length}; p99 ${percentile(small.times, 99).toFixed(1)} ms; backend's script time p50 ${percentile(small.scripts, 50)} ms`)
   }
 
   await writeFile(output, JSON.stringify({

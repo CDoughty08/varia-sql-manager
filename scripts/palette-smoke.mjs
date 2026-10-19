@@ -245,6 +245,7 @@ try {
         return { ok: true, value: { nodes, total: nodes.length, elapsedMs: 1 } }
       }
       if (method === 'query.session.close') return { ok: true, value: { closed: true } }
+      if (method === 'query.session.state') return { ok: true, value: { transactionCount: 0, checked: true } }
       // Rows live in the backend's result store, which a stub does not have; the summary's messages carry the target.
       if (method === 'query.execute') return { ok: true, value: {
         resultSets: [], discardedResultSets: 0, messages: [{ text: `Executed on ${globalThis.variaConnections[params.connectionId].server} in ${params.database}`, kind: 'info' }],

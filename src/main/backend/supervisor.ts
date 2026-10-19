@@ -206,10 +206,12 @@ export class BackendSupervisor {
     const unavailable = this.closing || this.snapshot.status === 'failed'
     const connectionId = idOf(params, 'connectionId')
     if (method === 'connections.disconnect' && (unavailable || (connectionId !== undefined && this.lost.has(connectionId)))) return { value: { disconnected: false } }
-    if (method === 'query.session.close') {
+    if (method === 'query.session.close' || method === 'query.session.state') {
       const sessionId = idOf(params, 'sessionId')
       const generation = sessionId === undefined ? undefined : this.sessions.get(sessionId)
       if (unavailable || (generation !== undefined && generation !== (this.connection?.generation ?? this.generation + 1))) {
+        // The session ended with its generation; reading its state would only start a backend to say so.
+        if (method === 'query.session.state') throw new BackendError('SESSION_LOST', sentences.sessionEnded)
         if (sessionId !== undefined) this.sessions.delete(sessionId)
         return { value: { closed: false } }
       }

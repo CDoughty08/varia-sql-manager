@@ -59,7 +59,7 @@ export class TargetService {
       for (const { id, connectionId } of this.documents.getSnapshot().documents) {
         if (connectionId === undefined) continue
         if (this.queries.isRunning(id)) { running++; continue }
-        if (!asked.has(id) && this.queries.mayHaveTransaction(id)) { unasked++; continue }
+        if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         await this.documents.endSession(id, plan.get(id))
         this.update(id, { connectionId: undefined })
       }

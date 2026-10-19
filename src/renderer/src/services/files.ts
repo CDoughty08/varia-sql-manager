@@ -100,7 +100,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     return true
   }
   /**
-   * Asks about unsaved changes, then about an open transaction (Commit, Roll Back, Cancel) or a query still executing
+   * Asks about unsaved changes, then about an open transaction (SSMS's Yes, No, Cancel) or a query still executing
    * (cancel it, or keep it running), and closes the query. Saving first means a later Cancel leaves nothing undone but a
    * saved file. A commit that fails is reported and the query stays open, with its transaction.
    */
@@ -131,7 +131,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       for (const { id } of this.documents.getSnapshot().documents.filter(document => wanted.has(document.id))) {
         if (!this.documents.get(id)) continue
         if (this.queries.isRunning(id)) { running++; continue }
-        if (!asked.has(id) && this.queries.mayHaveTransaction(id)) { unasked++; continue }
+        if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         if (!await this.confirmClose(id) || this.disposed) return
         const file = this.documents.get(id)?.file
         await this.documents.close(id, plan.get(id))

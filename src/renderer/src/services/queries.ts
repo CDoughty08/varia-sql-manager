@@ -8,18 +8,19 @@ import type { ResultsService } from '../results/ResultsService'
 import { DocumentService } from './documents'
 
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number }
-/** The tab's SQL session as probed after its last execution: its open transaction's nesting (@@TRANCOUNT), its SPID and
- *  login. `unchecked` means the session stayed open but the probe read nothing (SET SHOWPLAN_*, NOEXEC, PARSEONLY or
- *  FMTONLY ON, or a timeout), so it may hold a transaction. It belongs to the connection it ran on, so a query moved
- *  elsewhere (or a connection lost) no longer has it. */
-export interface QuerySession { readonly connectionId: string; readonly transactions: number; readonly spid?: number; readonly login?: string; readonly unchecked?: true }
+/** The tab's SQL session as its last execution reported it: its SPID and login, read when it opened (SSMS's status bar
+ *  shows them). It belongs to the connection it ran on, so a query moved elsewhere (or a connection lost) no longer has
+ *  it. Its open transaction is not kept here: it is read from the session only when the session is about to end. */
+export interface QuerySession { readonly connectionId: string; readonly spid?: number; readonly login?: string }
 /** A tab's last run: its summary (the rows stay in the backend; ResultsService shows them) or main's failure. */
 export interface QueryState { readonly running?: RunningQuery; readonly summary?: QueryResult; readonly error?: string; readonly session?: QuerySession }
-export type QueryApi = Pick<VariaApi, 'execute' | 'cancel' | 'confirmSessions'>
+export type QueryApi = Pick<VariaApi, 'execute' | 'cancel' | 'confirmSessions' | 'querySessionState'>
 export type QuerySnapshot = Readonly<Record<string, QueryState>>
 /** How each tab's session ends after the user answered: its open transaction committed or rolled back first. Tabs it does
  *  not name have nothing to end. */
 export type SessionPlan = ReadonlyMap<string, SessionEnd>
+/** An idle session's open transaction as read just before it ends; `unchecked` means it may hold one. */
+export interface TransactionState { readonly transactions: number; readonly unchecked?: true }
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'The operation failed.'
 export const newSessionMessage = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted, so its SET options, temporary tables, and open transaction no longer exist.'
 type QueryConnection = ConnectionInfo & { readonly lost?: true }
@@ -29,18 +30,10 @@ export const queryLimits = { maxRows: 0, maxResultSets: 1000 } as const
 const sessionGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['SESSION_LOST', 'SESSION_CLOSED', 'NOT_CONNECTED', 'CONNECTION_LOST', 'BACKEND_LOST'])
 /** How long ending sessions waits for the queries it cancelled to stop; their sessions close (and roll back) either way. */
 export const cancelSettleMs = 15_000
-
-/**
- * The tab's session after a summary. A probe gives its transaction count and login. A SPID without one is a session that
- * stayed open but could not be checked: it keeps what was known of it and may hold a transaction. Neither means the
- * session was lost or never opened, so nothing is open.
- */
-function probed(summary: QueryResult, connectionId: string, previous: QuerySession | undefined): QuerySession {
-  if (summary.transactionCount !== undefined) return { connectionId, transactions: summary.transactionCount, spid: summary.spid, login: summary.login }
-  if (summary.spid === undefined) return { connectionId, transactions: 0 }
-  const same = previous?.connectionId === connectionId && previous.spid === summary.spid
-  return { connectionId, transactions: same ? previous.transactions : 0, spid: summary.spid, login: same ? previous.login : undefined, unchecked: true }
-}
+/** Session states read at once before a prompt: each is one short request, and Close All may cover hundreds of tabs. */
+export const stateReads = 8
+const nothingOpen: TransactionState = { transactions: 0 }
+const mayBeOpen: TransactionState = { transactions: 0, unchecked: true }
 
 export class QueryService extends SnapshotStore<QuerySnapshot> implements Disposable {
   private disposed = false
@@ -59,20 +52,27 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
     return !this.disposed && !this.documents.getSnapshot().busy && !!connection && !connection.lost && !this.isRunning(id)
   }
-  /** The open transaction's nesting in the tab's session, as its last execution left it; 0 once the query moved to another
-   *  connection or its connection was lost (the server rolled it back). */
-  transactions(id: string): number { return this.liveSession(id)?.transactions ?? 0 }
-  /** Whether the tab's session may hold a transaction: one it reported, or one its last execution could not check. */
-  mayHaveTransaction(id: string): boolean {
-    const session = this.liveSession(id)
-    return !!session && (session.transactions > 0 || !!session.unchecked)
+  /**
+   * Reads the open transaction of an idle query's session from the backend (query.session.state), as SSMS asks its
+   * session when a query window closes or disconnects. A query without a live connection, or whose session is gone (never
+   * opened, closed, lost, or ended with the backend), has nothing open. Anything else that keeps the count from being read
+   * (SET options that keep the SELECT from executing, a session still busy, no answer in time) may hold one.
+   */
+  async transactionState(id: string): Promise<TransactionState> {
+    const connectionId = this.documents.get(id)?.connectionId, connection = connectionId ? this.getConnection(connectionId) : undefined
+    if (this.disposed || !connection || connection.lost) return nothingOpen
+    try {
+      const response = await this.api.querySessionState(id)
+      if (response.ok) return response.value.checked ? { transactions: response.value.transactionCount } : mayBeOpen
+      if (!sessionGone.has(response.code)) return mayBeOpen
+      if (response.code === 'SESSION_LOST' || response.code === 'SESSION_CLOSED') this.sessionEnded(id)
+      return nothingOpen
+    } catch { return mayBeOpen }
   }
-  /** The tab's session while it can still hold its transaction: on the query's connection, and that connection not lost. */
-  private liveSession(id: string): QuerySession | undefined {
-    const session = this.getSnapshot()[id]?.session
-    if (!session || this.documents.get(id)?.connectionId !== session.connectionId) return undefined
-    const connection = this.getConnection(session.connectionId)
-    return connection && !connection.lost ? session : undefined
+  /** Whether the idle query's session may hold a transaction (read now, as transactionState does). */
+  async mayHaveTransaction(id: string): Promise<boolean> {
+    const state = await this.transactionState(id)
+    return state.transactions > 0 || !!state.unchecked
   }
   private update(id: string, state: QueryState): void { this.publish({ ...this.getSnapshot(), [id]: state }) }
   forget(id: string): void {
@@ -119,9 +119,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       notice = newSessionMessage
       this.documents.update(tabId, { sessionNotice: false })
     }
-    // A summary carries the session's probe (none when the session was lost); a failure that left no session ends its
-    // transaction, and any other failure leaves the session as it was.
-    const session: QuerySession | undefined = summary ? probed(summary, connection.id, previous) : sessionGone.has(code) ? undefined : previous
+    // A summary carries the session's SPID and login while it is open (none when it was lost or never opened); a failure
+    // that left no session ends it, and any other failure leaves the session as it was.
+    const session: QuerySession | undefined = summary ? summary.spid === undefined ? undefined : { connectionId: connection.id, spid: summary.spid, login: summary.login }
+      : sessionGone.has(code) ? undefined : previous
     this.results.finish(tabId, queryId, { summary, error, code, notice })
     this.update(tabId, { summary, error, session })
     this.events.emit({ type: 'query.finished', tabId, queryId, summary, error })
@@ -140,18 +141,27 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // A cancel acknowledgement is not completion; keep running until execute settles.
   }
   /**
-   * Before sessions end (`action`), asks about the open transactions and running queries among `tabIds` in main's message
-   * box, then cancels the running ones and waits (up to 15 s) for them to stop. Resolves to how each session ends, or to
-   * undefined when the user chose Cancel or Keep Running; with nothing to ask, to an empty plan at once. An executing
-   * query is never committed: the prompt says that what it left open is rolled back.
+   * Before sessions end (`action`), reads the open transaction of each idle query among `tabIds` from its session (a few
+   * at a time), asks about the open transactions and running queries in main's message box, then cancels the running ones
+   * and waits (up to 15 s) for them to stop. Resolves to how each session ends, or to undefined when the user chose Cancel
+   * or Keep Running; with nothing to ask, to an empty plan. An executing query is never committed: the prompt says that
+   * what it left open is rolled back.
    */
   async confirmSessions(action: SessionAction, tabIds: readonly string[]): Promise<SessionPlan | undefined> {
-    const tabs = tabIds.flatMap(id => {
-      const document = this.documents.get(id), running = this.isRunning(id), transactions = this.transactions(id), unchecked = !!this.liveSession(id)?.unchecked
-      return document && (running || transactions > 0 || unchecked) ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, transactions, ...unchecked ? { unchecked: true as const } : {} }] : []
-    }).slice(0, sessionPromptLimits.tabs)
+    const candidates = tabIds.flatMap(id => {
+      const document = this.documents.get(id)
+      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running: this.isRunning(id), state: nothingOpen }] : []
+    })
+    const idle = candidates.filter(tab => !tab.running)
+    for (let next = 0; next < idle.length; next += stateReads) {
+      await Promise.all(idle.slice(next, next + stateReads).map(async tab => { tab.state = await this.transactionState(tab.id) }))
+      if (this.disposed) return undefined
+    }
+    const tabs = candidates.filter(tab => tab.running || tab.state.transactions > 0 || tab.state.unchecked).slice(0, sessionPromptLimits.tabs)
     if (!tabs.length) return new Map()
-    const response = await this.api.confirmSessions({ action, tabs: tabs.map(({ id: _id, ...tab }) => tab) })
+    const response = await this.api.confirmSessions({
+      action, tabs: tabs.map(tab => ({ name: tab.name, running: tab.running, transactions: tab.running ? 0 : tab.state.transactions, ...!tab.running && tab.state.unchecked ? { unchecked: true as const } : {} }))
+    })
     if (!response.ok) throw new Error(response.error)
     if (response.value === 'cancel' || this.disposed) return undefined
     const running = tabs.filter(tab => tab.running).map(tab => tab.id)

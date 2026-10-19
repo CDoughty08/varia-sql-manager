@@ -102,6 +102,14 @@ using (var offline = new SqlService())
     catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "closing a session ends its transaction only by commit or rollback"); }
     var closed = await offline.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(Guid.NewGuid().ToString(), "commit"), json), json);
     Check(JsonSerializer.Serialize(closed, json) == "{\"closed\":false}", "closing an unknown session with commit has nothing to commit");
+    // SSMS has no cap on query windows; 1,000 sessions is only a backstop on connections.
+    Check(offline.SessionLimit == 1000, "the query session limit is a backstop of 1,000");
+    async Task<string> StateError(string sessionId)
+    {
+        try { await offline.DispatchAsync("query.session.state", JsonSerializer.SerializeToElement(new SessionStateArgs(sessionId), json), json); return "answered"; }
+        catch (RequestException error) { return error.Code; }
+    }
+    Check(await StateError("invalid") == "INVALID_PARAMS" && await StateError(Guid.NewGuid().ToString()) == "SESSION_CLOSED", "an unknown session's state is an error value, at once");
 }
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
