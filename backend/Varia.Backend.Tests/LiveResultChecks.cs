@@ -18,6 +18,10 @@ internal static class LiveResultChecks
     /// that did not stop the script would take all of it, many times the reference, and still fails.</summary>
     internal static long CancelBound(long floorMs, long referenceMs) => Math.Max(floorMs, 2 * referenceMs);
 
+    /// <summary>Whether a cancelled script stopped before reading all of its one result set's rows. Unlike a time bound, this
+    /// does not depend on the machine's load: a cancel that did nothing reads every row, however slowly.</summary>
+    internal static bool StoppedEarly(QueryResult result, long rows) => result.Status == "cancelled" && result.ResultSets is [{ RowsRead: var read }] && read < rows;
+
     /// <summary>Measures once more when the first measurement misses its time bound. On a server other runs share, a
     /// statement now and then waits many seconds on them (with six runs at once, two 8,000,000-character xml cells once took
     /// 10 s instead of 0.3 s, and one 100,000,000-character value 59 s instead of 1 s), while a regression misses both times.</summary>
@@ -451,20 +455,23 @@ internal static class LiveResultChecks
         var row = CellsOf(store, result.ResultSets[0])[0];
         check(result.Status == "completed" && row[0].Text == "7" && row[1].Text!.Length == ColumnPlan.TextCap && (row[1].Flags & PageReader.Truncated) != 0
             && growth < 64L * 1024 * 1024 && ms < 15_000, "a truncated 100,000,000-character value in the last column is read past (" + Measured(growth, ms) + ")");
-        var oneValueMs = ms;
+        var firstValueMs = ms;
         (result, growth, ms) = await Measure("SELECT " + huge + " AS big, 7 AS after FROM (VALUES (1), (2)) AS t(n);", maxRows: 1, boundMs: 15_000);
         check(result.Status == "completed" && result.ResultSets[0] is { RowsRead: 2, RowsStored: 1, Truncated: "rowLimit" } && growth < 64L * 1024 * 1024 && ms < 15_000,
             "a row past maxRows with a 100,000,000-character value is read past (" + Measured(growth, ms) + ")");
         (result, growth, ms) = await Measure("SELECT 1 AS kept; SELECT " + huge + " AS big;", maxResultSets: 1, boundMs: 15_000);
         check(result.Status == "completed" && result.ResultSets.Count == 1 && result.DiscardedResultSets == 1 && growth < 64L * 1024 * 1024 && ms < 15_000,
             "a set past maxResultSets with a 100,000,000-character value is read past (" + Measured(growth, ms) + ")");
+        // The faster of two reads of one such value, so one read that stalled on the shared server does not raise the bound.
+        var oneValueMs = Math.Min(firstValueMs, ms);
         foreach (var maxRows in new[] { 1000, 1 })
         {
-            // Uncancelled, the script reads eight such values, eight times the one above.
+            // Uncancelled, the script reads eight such values, eight times the one above; whatever the load, it stops before the last.
             var bound = CancelBound(5000, oneValueMs);
             (result, growth, ms) = await Measure("SELECT " + huge + " AS big FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) AS t(n);", maxRows: maxRows, cancelAfterMs: 1500, boundMs: bound);
-            check(result.Status == "cancelled" && ms < bound && growth < 64L * 1024 * 1024, "a cancel stops a script " + (maxRows == 1 ? "skipping rows past maxRows" : "reading truncated cells")
-                + " that hold 100,000,000-character values (" + Measured(growth, ms) + " after the cancel, under " + bound + ")");
+            check(StoppedEarly(result, 8) && ms < bound && growth < 64L * 1024 * 1024, "a cancel stops a script " + (maxRows == 1 ? "skipping rows past maxRows" : "reading truncated cells")
+                + " that hold 100,000,000-character values (" + Measured(growth, ms) + " after the cancel, under " + bound + "; " + string.Join(", ", result.ResultSets.Select(set => set.RowsRead))
+                + " of 8 rows read)");
         }
 
         // GetChars on text and ntext reads the whole value at once.
