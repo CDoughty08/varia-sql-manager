@@ -4,14 +4,15 @@ using System.Text;
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.Identity.Client;
+using MsalIdentity = Microsoft.Identity.Client.AppConfig.ManagedIdentityId;
 
 namespace Varia.Backend.Entra;
 
-/// <summary>Tokens from MSAL (MFA, Password, Integrated) and Azure.Identity (Service Principal, Managed Identity,
-/// Default), as SqlClient's own Azure provider gets them, but without WAM: MFA signs in through the system web browser on
-/// every OS (EntraBrowser opens it: the shell on Windows, open on macOS, xdg-open on Linux). Tokens stay in this process's memory
-/// for its lifetime, one MSAL application per sign-in authority, until <see cref="Clear"/>. Nothing is logged: MSAL gets
-/// no logger and Azure.Identity no event listener.</summary>
+/// <summary>Tokens from MSAL (MFA, Password, Integrated, Managed Identity) and Azure.Identity (Service Principal, Default),
+/// as SqlClient's own Azure provider gets them, but without WAM: MFA signs in through the system web browser on every OS
+/// (EntraBrowser opens it: the shell on Windows, open on macOS, xdg-open on Linux). Tokens stay in this process's memory
+/// for its lifetime, one MSAL application per sign-in authority (and another for Integrated), until <see cref="Clear"/>.
+/// Nothing is logged: MSAL gets no logger and Azure.Identity no event listener.</summary>
 internal sealed class MsalTokenSource : IEntraTokenSource
 {
     /// <summary>SqlClient's own public client application (its Azure provider's default), which accepts the loopback
@@ -34,33 +35,42 @@ internal sealed class MsalTokenSource : IEntraTokenSource
     private readonly ConcurrentDictionary<string, IPublicClientApplication> applications = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (TokenCredential Credential, byte[] Secret)> credentials = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (byte[] Hash, DateTimeOffset Until)> passwords = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IManagedIdentityApplication> identities = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Managed identities whose token was fetched since the last clear.</summary>
+    private readonly HashSet<string> refreshed = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock gate = new();
 
-    /// <summary>The MSAL application for the request's authority (its host and tenant), as SqlClient keys them. Its token
-    /// cache is MSAL's in-memory one; persisting it across backend restarts is a later change.</summary>
-    internal IPublicClientApplication Application(EntraRequest request)
+    /// <summary>Integrated Windows authentication itself; the checks replace it (it needs a domain-joined computer and a tenant).</summary>
+    internal Func<IPublicClientApplication, EntraRequest, CancellationToken, Task<EntraToken>> WindowsSignIn { get; set; } = WindowsSignInAsync;
+
+    /// <summary>The MSAL application for the request's authority (its host and tenant), as SqlClient keys them; Integrated
+    /// gets its own, so it only ever reuses an account integrated Windows authentication signed in, never one MFA or Password
+    /// left in the shared cache (the dialog shows Integrated's identity as the Windows user). Its token cache is MSAL's
+    /// in-memory one; persisting it across backend restarts is a later change.</summary>
+    internal IPublicClientApplication Application(EntraRequest request, bool integrated = false)
     {
-        var authority = request.Authority;
-        if (applications.TryGetValue(authority, out var existing)) return existing;
+        var key = (integrated ? "integrated|" : "") + request.Authority;
+        if (applications.TryGetValue(key, out var existing)) return existing;
         lock (gate)
         {
-            if (applications.TryGetValue(authority, out existing)) return existing;
+            if (applications.TryGetValue(key, out existing)) return existing;
             // More authorities than any workbench signs in to: start over rather than grow without bound.
             if (applications.Count >= MaxApplications) applications.Clear();
             var application = PublicClientApplicationBuilder.Create(ClientId)
-                .WithAuthority(authority)
+                .WithAuthority(request.Authority)
                 .WithRedirectUri(RedirectUri)
                 .WithClientName("Varia SQL Manager")
                 .WithClientVersion(Version)
                 .Build();
-            applications[authority] = application;
+            applications[key] = application;
             return application;
         }
     }
 
-    public async Task<EntraToken?> SilentAsync(EntraRequest request, CancellationToken token)
+    public Task<EntraToken?> SilentAsync(EntraRequest request, CancellationToken token) => SilentAsync(Application(request), request, token);
+
+    private static async Task<EntraToken?> SilentAsync(IPublicClientApplication application, EntraRequest request, CancellationToken token)
     {
-        var application = Application(request);
         var accounts = (await application.GetAccountsAsync().ConfigureAwait(false)).ToList();
         // The named account, else the one account signed in to this tenant; several without a name need the account picker.
         var account = request.User is { } user ? accounts.Find(item => string.Equals(item.Username, user, StringComparison.OrdinalIgnoreCase))
@@ -99,9 +109,15 @@ internal sealed class MsalTokenSource : IEntraTokenSource
 
     public async Task<EntraToken> IntegratedAsync(EntraRequest request, CancellationToken token)
     {
-        if (await SilentAsync(request, token).ConfigureAwait(false) is { } cached) return cached;
+        var application = Application(request, integrated: true);
+        if (await SilentAsync(application, request, token).ConfigureAwait(false) is { } cached) return cached;
+        return await WindowsSignIn(application, request, token).ConfigureAwait(false);
+    }
+
+    private static async Task<EntraToken> WindowsSignInAsync(IPublicClientApplication application, EntraRequest request, CancellationToken token)
+    {
 #pragma warning disable CS0618 // MSAL marks integrated Windows authentication obsolete; SSMS 22 still offers Microsoft Entra Integrated.
-        var builder = Application(request).AcquireTokenByIntegratedWindowsAuth([request.Scope]);
+        var builder = application.AcquireTokenByIntegratedWindowsAuth([request.Scope]);
 #pragma warning restore CS0618
         if (request.User is { } user) builder = builder.WithUsername(user);
         return From(await builder.ExecuteAsync(token).ConfigureAwait(false));
@@ -114,9 +130,28 @@ internal sealed class MsalTokenSource : IEntraTokenSource
             () => new ClientSecretCredential(request.Tenant, clientId, secret, new ClientSecretCredentialOptions { AuthorityHost = request.AuthorityHost }), token);
     }
 
-    public Task<EntraToken> ManagedIdentityAsync(EntraRequest request, CancellationToken token) =>
-        CredentialAsync("mi|" + request.AuthorityHost + "|" + request.User, "", request, () => new ManagedIdentityCredential(new ManagedIdentityCredentialOptions(
-            request.User is { } clientId ? ManagedIdentityId.FromUserAssignedClientId(clientId) : ManagedIdentityId.SystemAssigned) { AuthorityHost = request.AuthorityHost }), token);
+    /// <summary>MSAL's managed identity application, used directly: MSAL keeps managed identity tokens in a cache shared by
+    /// the whole process, which a new application (or Azure.Identity credential) reads too, so the first token for each
+    /// identity after a clear (or ever) is fetched anew from the host's endpoint.</summary>
+    public async Task<EntraToken> ManagedIdentityAsync(EntraRequest request, CancellationToken token)
+    {
+        var key = request.User ?? "";
+        IManagedIdentityApplication application;
+        bool force;
+        lock (gate)
+        {
+            if (!identities.TryGetValue(key, out application!))
+            {
+                if (identities.Count >= MaxCredentials) { identities.Clear(); refreshed.Clear(); }
+                application = ManagedIdentityApplicationBuilder.Create(request.User is { } clientId ? MsalIdentity.WithUserAssignedClientId(clientId) : MsalIdentity.SystemAssigned).Build();
+                identities[key] = application;
+            }
+            force = !refreshed.Contains(key);
+        }
+        var result = await application.AcquireTokenForManagedIdentity(Resource(request.Scope)).WithForceRefresh(force).ExecuteAsync(token).ConfigureAwait(false);
+        if (force) lock (gate) refreshed.Add(key);
+        return new EntraToken(result.AccessToken, result.ExpiresOn, null);
+    }
 
     public Task<EntraToken> DefaultAsync(EntraRequest request, CancellationToken token) =>
         CredentialAsync("default|" + request.Authority + "|" + request.User, "", request, () =>
@@ -128,6 +163,9 @@ internal sealed class MsalTokenSource : IEntraTokenSource
             return new DefaultAzureCredential(options);
         }, token);
 
+    /// <summary>Forgets every MSAL application and Azure.Identity credential with their tokens. Tokens held outside this
+    /// process (the Azure CLI's, an Azure host's endpoint, and the managed identity leg of Default's chain, which shares MSAL's
+    /// process-wide cache) are theirs to keep until they expire.</summary>
     public void Clear()
     {
         lock (gate)
@@ -135,6 +173,8 @@ internal sealed class MsalTokenSource : IEntraTokenSource
             applications.Clear();
             credentials.Clear();
             passwords.Clear();
+            identities.Clear();
+            refreshed.Clear();
         }
     }
 
@@ -157,6 +197,9 @@ internal sealed class MsalTokenSource : IEntraTokenSource
         var access = await credential.GetTokenAsync(new TokenRequestContext([request.Scope]), token).ConfigureAwait(false);
         return new EntraToken(access.Token, access.ExpiresOn, null);
     }
+
+    /// <summary>A managed identity asks for a resource, not a scope: the scope without its /.default.</summary>
+    internal static string Resource(string scope) => scope.EndsWith("/.default", StringComparison.Ordinal) ? scope[..^"/.default".Length] : scope;
 
     private static EntraToken From(AuthenticationResult result) => new(result.AccessToken, result.ExpiresOn, result.Account?.Username);
 

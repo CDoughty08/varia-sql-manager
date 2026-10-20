@@ -228,15 +228,24 @@ main on its own behalf: they are in no renderer schema (`requestSchemas`) and no
 `EntraModes.cs` list the same eight types) become SqlClient's `Authentication` keyword, so every pool derived from the
 connection gets tokens through Varia's own `SqlAuthenticationProvider` (registered for SqlClient's seven Entra methods,
 not device code flow or workload identity). Tokens stay in the backend's memory for its lifetime (MSAL's in-memory caches,
-one per sign-in authority, and Azure.Identity's credentials); none is written to disk or crosses IPC. The provider runs
+one per sign-in authority plus one for Entra Integrated, so Integrated never reuses an account MFA or Password signed
+in; MSAL's managed identity cache; and Azure.Identity's credentials); none is written to disk or crosses IPC. The provider runs
 inside SqlClient's synchronous login, where no cancellation reaches it, so it never waits for a person: for MFA it only
 looks for a cached token and otherwise records, by the attempt's `ClientConnectionId`, that a sign-in is needed. Only
 `connections.connect` and `.databases` then sign in through the system web browser (MSAL, SqlClient's public client
 `2fd908ad-0664-4344-b9be-cd3e8b574c38`, redirect `http://localhost`, no WAM), under the request's own token and a
-3-minute limit, one sign-in at a time, and open again with a new connection; after a sign-in without a user name, the
-stored connection string names the account that signed in. Every other open answers `AUTH_ENTRA` ("Your Microsoft Entra
+3-minute limit that includes waiting for another sign-in, one sign-in at a time, and open again with a new connection.
+MFA without a user name opens unpooled (a pool's token is reused without asking the provider), the provider records which
+account its token was for, and the stored connection string names that account, whether the browser ran or not; later
+opens then find that account's token when several are signed in to the tenant. A provider failure that was not recorded
+(SqlClient's error 0, class 11, on an Entra connection) answers `AUTH_ENTRA` with SqlClient's own text. Every other open answers `AUTH_ENTRA` ("Your Microsoft Entra
 sign-in for this server has expired or was revoked…") instead. Authority hosts and resources the server names are
 checked against an allowlist (the public, US Government and China clouds; SQL audiences) before any token is requested.
+The allowlist limits where Varia signs in and which audience a token is for, not which server receives it: as with
+Windows authentication's credentials, a connect or Load databases with MFA (a cached account), Integrated or Default sends
+the token to the server named, with no browser step when one is cached, and a hostile server could replay it against
+Azure SQL until it expires (60 to 90 minutes). SqlClient and SSMS behave the same; binding cached tokens to servers the user
+connected to is an owner decision for later.
 Every connect and Load databases, under any authentication, gives its open up as soon as its token is cancelled, and the
 abandoned connection is closed when SqlClient's login ends, so Stop answers at once.
 
@@ -860,7 +869,8 @@ opened). For connect and Load databases the `details` are error number 0, class 
 an invalid user name or password (AADSTS50126) or client secret (AADSTS7000215) carries that number, which main's forget
 rule for remembered passwords reads. The message is Varia's for a sign-in cancelled in the browser, a browser that could
 not be opened, those two AADSTS errors, multifactor authentication required under Entra Password, no managed identity,
-no identity for Entra Default, a refused sign-in address or resource, and the 3-minute limit; otherwise it is SqlClient's
+no identity for Entra Default, a refused sign-in address or resource, the 3-minute limit, a token cache cleared while the
+browser waited, and a browser sign-in as another account than the user name entered; otherwise it is SqlClient's
 first line followed by MSAL's or Azure.Identity's text. Messages are at most 2,000 characters on one line, with anything
 shaped like a JSON Web Token redacted. Login failed (18456) on an Entra connect adds "If you were recently granted
 access, choose Help › Clear Entra ID Token Cache, then connect again." The same pool opens as Kerberos's answer

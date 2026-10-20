@@ -1,6 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using Azure.Identity;
 using Microsoft.Data.SqlClient;
@@ -54,6 +58,9 @@ internal static class EntraChecks
         return (SqlException)create.Invoke(null, [errors, "", connectionId, null])!;
     }
 
+    /// <summary>The ClientConnectionId of a fake open's result: none.</summary>
+    private static Guid NoId<T>(T _) => Guid.Empty;
+
     private static SqlAuthenticationParameters Parameters(SqlAuthenticationMethod method, Guid connectionId, string? user = null, string? password = null, string authority = Authority, string resource = Resource, int timeout = 15) =>
         new(method, "sql.contoso.database.windows.net", "appdb", resource, authority, user, password, connectionId, timeout);
 
@@ -72,6 +79,7 @@ internal static class EntraChecks
         {
             await ProviderAsync(check, service);
             await SignInAsync(check, service);
+            await AccountsAsync(check, service);
             await ServiceAsync(check);
             await SilentAsync(check, service);
         }
@@ -84,7 +92,8 @@ internal static class EntraChecks
         }
         await AbandonAsync(check);
         await BrowserAsync(check);
-        RealSource(check);
+        await RealSourceAsync(check);
+        await ManagedIdentityAsync(check);
     }
 
     private static ConnectOptions Options(string authentication, string? user = null, string? password = null) =>
@@ -185,6 +194,9 @@ internal static class EntraChecks
         check(EntraFailures.Map(new MsalUiRequiredException("invalid_grant", "AADSTS50076: Due to a configuration change made by your administrator, you must use multi-factor authentication."), password).Message == EntraFailures.Messages.MfaRequired
             && EntraFailures.Map(new MsalUiRequiredException("invalid_grant", "AADSTS50076: multi-factor"), interactive).Explained == false,
             "multifactor required under Entra Password says to use Entra MFA");
+        check(EntraFailures.Map(new MsalServiceException(MsalError.ManagedIdentityUnreachableNetwork, "No managed identity endpoint."), SqlAuthenticationMethod.ActiveDirectoryManagedIdentity).Message == EntraFailures.Messages.NoManagedIdentity
+            && EntraFailures.Map(new MsalServiceException(MsalError.ManagedIdentityUnreachableNetwork, "No managed identity endpoint."), interactive).Explained == false,
+            "MSAL's managed identity client finding no endpoint says Managed Identity needs an Azure host");
         check(EntraFailures.Map(new CredentialUnavailableException("ManagedIdentityCredential authentication unavailable."), SqlAuthenticationMethod.ActiveDirectoryManagedIdentity).Message == EntraFailures.Messages.NoManagedIdentity
             && EntraFailures.Map(new CredentialUnavailableException("ManagedIdentityCredential authentication unavailable."), SqlAuthenticationMethod.ActiveDirectoryMSI).Message == EntraFailures.Messages.NoManagedIdentity
             && EntraFailures.Map(new CredentialUnavailableException("DefaultAzureCredential failed to retrieve a token."), SqlAuthenticationMethod.ActiveDirectoryDefault).Message == EntraFailures.Messages.DefaultNoIdentity,
@@ -207,7 +219,7 @@ internal static class EntraChecks
         check(!Token("x").ToString().Contains("fake-access"), "a token never prints");
     }
 
-    private static EntraRequest Request(string? user = null) => new(new Uri("https://login.microsoftonline.com/"), "72f988bf-86f1-41af-91ab-2d7cd011db47", "https://database.windows.net//.default", user);
+    internal static EntraRequest Request(string? user = null) => new(new Uri("https://login.microsoftonline.com/"), "72f988bf-86f1-41af-91ab-2d7cd011db47", "https://database.windows.net//.default", user);
 
     private static void Attempts(Action<bool, string> check)
     {
@@ -303,7 +315,7 @@ internal static class EntraChecks
         var start = "Data Source=sql.contoso.database.windows.net;Authentication=\"Active Directory Interactive\"";
         using (var request = new CancellationTokenSource())
         {
-            var (connection, connectionString) = await service.OpenForUserAsync(start, "sql.contoso.database.windows.net", Open, request.Token);
+            var (connection, connectionString) = await service.OpenForUserAsync(start, "sql.contoso.database.windows.net", Open, NoId, request.Token);
             check(connection == "connection" && fake.Count("interactive") == 1 && fake.Calls.Last().Request == Request() && opened.Count == 2
                 && new SqlConnectionStringBuilder(connectionString).UserID == "alice@contoso.com" && opened[1] == connectionString,
                 "Connect signs in through the browser once, with the attempt's authority and resource, then opens a new connection, named for the account that signed in");
@@ -332,7 +344,7 @@ internal static class EntraChecks
         opened.Clear();
         using (var stop = new CancellationTokenSource())
         {
-            var connect = service.OpenForUserAsync(start, "srv", Open, stop.Token);
+            var connect = service.OpenForUserAsync(start, "srv", Open, NoId, stop.Token);
             await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var watch = Stopwatch.StartNew();
             stop.Cancel();
@@ -351,8 +363,8 @@ internal static class EntraChecks
         };
         service.Source = fake;
         signedIn = false;
-        var first = service.OpenForUserAsync(start, "srv", Open, CancellationToken.None);
-        var second = service.OpenForUserAsync(start, "srv", Open, CancellationToken.None);
+        var first = service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None);
+        var second = service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None);
         await Task.Delay(100);
         gate.SetResult();
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
@@ -364,8 +376,8 @@ internal static class EntraChecks
         fake.Calls.Clear();
         using (var stopFirst = new CancellationTokenSource())
         {
-            first = service.OpenForUserAsync(start, "srv", Open, stopFirst.Token);
-            second = service.OpenForUserAsync(start, "srv", Open, CancellationToken.None);
+            first = service.OpenForUserAsync(start, "srv", Open, NoId, stopFirst.Token);
+            second = service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None);
             await Task.Delay(100);
             stopFirst.Cancel();
             Exception? stopped = null;
@@ -380,7 +392,7 @@ internal static class EntraChecks
         service.Source = fake;
         signedIn = false;
         RequestException? timedOut = null;
-        try { await service.OpenForUserAsync(start, "srv", Open, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
+        try { await service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
         catch (RequestException error) { timedOut = error; }
         check(timedOut is { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.TimedOut } && timedOut.Details?.Server == "srv", "a sign-in that takes longer than its limit says so");
         service.SignInLimit = TimeSpan.FromMinutes(3);
@@ -388,7 +400,7 @@ internal static class EntraChecks
         fake = new FakeSource { Interactive = (_, _) => throw new MsalClientException(MsalError.AuthenticationCanceledError, "User canceled authentication.") };
         service.Source = fake;
         RequestException? cancelled = null;
-        try { await service.OpenForUserAsync(start, "srv", Open, CancellationToken.None); }
+        try { await service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None); }
         catch (RequestException error) { cancelled = error; }
         check(cancelled is { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.Cancelled }, "a sign-in cancelled in the browser answers AUTH_ENTRA, not CANCELLED");
         RequestException? rejected = null;
@@ -399,7 +411,7 @@ internal static class EntraChecks
                 var id = Guid.NewGuid();
                 service.Attempts.Record(id, new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.BadPassword, EntraFailures.InvalidPassword));
                 throw ProviderFailure(id);
-            }, CancellationToken.None);
+            }, NoId, CancellationToken.None);
         }
         catch (RequestException error) { rejected = error; }
         check(rejected is { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.BadPassword } && rejected.Details == new ErrorDetails(50126, 0, 11, "srv"),
@@ -408,12 +420,96 @@ internal static class EntraChecks
         fake = new FakeSource { Interactive = (_, _) => Task.FromResult(Token("other", "bob@contoso.com")) };
         service.Source = fake;
         RequestException? other2 = null;
-        try { await service.OpenForUserAsync<string>(start + ";User ID=alice@contoso.com", "srv", (_, _) => { var id = Guid.NewGuid(); service.Attempts.Record(id, new InteractionRequired(Request("alice@contoso.com"))); throw ProviderFailure(id); }, CancellationToken.None); }
+        try { await service.OpenForUserAsync<string>(start + ";User ID=alice@contoso.com", "srv", (_, _) => { var id = Guid.NewGuid(); service.Attempts.Record(id, new InteractionRequired(Request("alice@contoso.com"))); throw ProviderFailure(id); }, NoId, CancellationToken.None); }
         catch (RequestException error) { other2 = error; }
         check(other2?.Message == EntraFailures.Messages.OtherAccount && fake.Count("interactive") == 1, "a sign-in as another account than the user name entered says so, after one browser sign-in");
+        // Help › Clear Entra ID Token Cache while the browser waits: the token went into the cache it emptied, which is not
+        // another account.
+        fake = new FakeSource { Interactive = (_, _) => { service.Clear(); return Task.FromResult(Token("cleared", "alice@contoso.com")); } };
+        service.Source = fake;
+        RequestException? overtaken = null;
+        try { await service.OpenForUserAsync<string>(start + ";User ID=alice@contoso.com", "srv", (_, _) => { var id = Guid.NewGuid(); service.Attempts.Record(id, new InteractionRequired(Request("alice@contoso.com"))); throw ProviderFailure(id); }, NoId, CancellationToken.None); }
+        catch (RequestException error) { overtaken = error; }
+        check(overtaken is { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.ClearedDuringSignIn } && fake.Cleared == 1, "a cache clear during the browser sign-in says so, not that another account signed in");
+        // A connect queued behind another sign-in counts its wait in the 3-minute limit, so it ends before main's deadline.
+        var hold = new TaskCompletionSource();
+        fake = new FakeSource { Interactive = async (_, token) => { await hold.Task.WaitAsync(token); return Token("held"); } };
+        service.Source = fake;
+        service.SignInLimit = TimeSpan.FromMinutes(10);
+        using (var stopHolder = new CancellationTokenSource())
+        {
+            var holder = service.SignInAsync(Request(), "srv", stopHolder.Token);
+            for (var waited = 0; fake.Count("interactive") == 0 && waited < 5000; waited += 10) await Task.Delay(10);
+            service.SignInLimit = TimeSpan.FromMilliseconds(200);
+            object queued;
+            try { await service.SignInAsync(Request(), "srv", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); queued = "signed in"; }
+            catch (RequestException error) { queued = error; }
+            catch (TimeoutException) { queued = "still waiting"; }
+            check(queued is RequestException { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.TimedOut } && fake.Count("interactive") == 1,
+                "a sign-in queued behind another one times out within its own limit, waiting included: " + queued);
+            stopHolder.Cancel();
+            try { await holder; } catch (OperationCanceledException) { }
+        }
+        service.SignInLimit = TimeSpan.FromMinutes(3);
+        // SqlClient's provider failure with no recorded attempt (a SqlClient that changed the exception's connection ID): its
+        // own text, as AUTH_ENTRA, on an Entra connection only.
+        Exception? unjoined = null, unjoinedPool = null;
+        try { await service.OpenForUserAsync<string>(start, "srv", (_, _) => throw ProviderFailure(Guid.NewGuid()), NoId, CancellationToken.None); }
+        catch (Exception error) { unjoined = error; }
+        try { await service.OpenPooledAsync(new SqlConnection(start + ";User ID=alice@contoso.com"), CancellationToken.None, (_, _) => throw ProviderFailure(Guid.NewGuid())); }
+        catch (Exception error) { unjoinedPool = error; }
+        Exception? plain = null;
+        try { await service.OpenPooledAsync(new SqlConnection("Data Source=sql.contoso.database.windows.net"), CancellationToken.None, (_, _) => throw ProviderFailure(Guid.NewGuid())); }
+        catch (Exception error) { plain = error; }
+        check(unjoined is RequestException { Code: "AUTH_ENTRA" } unjoinedRequest && unjoinedRequest.Message == "Failed to authenticate the user in Active Directory (Authentication=ActiveDirectoryInteractive)."
+            && unjoinedRequest.Details == new ErrorDetails(0, 0, 11, "srv") && unjoinedPool is RequestException { Code: "AUTH_ENTRA", Details: null } && plain is SqlException,
+            "a provider failure the provider did not record answers AUTH_ENTRA with SqlClient's text on an Entra connection, and is left alone on any other: " + unjoined?.GetType().Name + " " + unjoined?.Message + " / " + unjoinedPool?.GetType().Name + " / " + plain?.GetType().Name);
         // An open failure that is not Entra's is left to the caller (SQL Server's own error, with its details).
-        try { await service.OpenForUserAsync<string>(start, "srv", (_, _) => throw ConnectionFailureChecks.Sql(18456, 1, 14, "srv", "Login failed."), CancellationToken.None); check(false, "unreachable"); }
+        try { await service.OpenForUserAsync<string>(start, "srv", (_, _) => throw ConnectionFailureChecks.Sql(18456, 1, 14, "srv", "Login failed."), NoId, CancellationToken.None); check(false, "unreachable"); }
         catch (SqlException error) { check(error.Number == 18456, "an open failure the provider did not record is left to the caller's mapping"); }
+    }
+
+    /// <summary>MFA without a user name, against a fake that keeps MSAL's account rule (the named account, else the only one
+    /// signed in to the tenant, else none) and opens that call the provider as SqlClient's login does (not for a pool that
+    /// already has a token).</summary>
+    private static async Task AccountsAsync(Action<bool, string> check, EntraService service)
+    {
+        var accounts = new List<string>();
+        var next = "alice@contoso.com";
+        service.Source = new FakeSource
+        {
+            Silent = (request, _) => Task.FromResult(request.User is { } user ? accounts.Contains(user) ? Token("silent", user) : null : accounts.Count == 1 ? Token("silent", accounts[0]) : null),
+            Interactive = (_, _) => { accounts.Add(next); return Task.FromResult(Token("interactive", next)); }
+        };
+        var pooled = new HashSet<string>();
+        var opened = new List<string>();
+        async Task<Guid> Login(string text, CancellationToken token)
+        {
+            opened.Add(text);
+            var builder = new SqlConnectionStringBuilder(text);
+            if (builder.Pooling && pooled.Contains(text)) return Guid.NewGuid();
+            var id = Guid.NewGuid();
+            try { await service.Provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryInteractive, id, builder.UserID)); }
+            catch (EntraProviderException) { throw ProviderFailure(id); }
+            if (builder.Pooling) pooled.Add(text);
+            return id;
+        }
+        const string anonymous = "Data Source=sql.contoso.database.windows.net;Authentication=\"Active Directory Interactive\"";
+        // Load databases signs in (unpooled), then Connect finds that token silently.
+        await service.OpenForUserAsync(anonymous + ";Pooling=false", "srv", Login, id => id, CancellationToken.None);
+        opened.Clear();
+        var (_, kept) = await service.OpenForUserAsync(anonymous, "srv", Login, id => id, CancellationToken.None);
+        var connectOpens = opened.ToList();
+        // A second account signs in to the same tenant (another server's connect), then a query tab opens on the first server.
+        next = "adm-alice@contoso.com";
+        accounts.Add(next);
+        string session;
+        try { await Login(kept, CancellationToken.None); session = "opened"; }
+        catch (SqlException) { session = "sign-in needed"; }
+        check(new SqlConnectionStringBuilder(kept).UserID == "alice@contoso.com" && session == "opened" && connectOpens.Count == 1 && !new SqlConnectionStringBuilder(connectOpens[0]).Pooling,
+            "Connect without a user name that finds a token silently keeps the account it is for (its open unpooled, so the provider is asked), so later opens find it when another account signs in: " + session);
+        check(service.Attempts.Count == 0, "the account recorded for the connect is taken by it");
+        service.Attempts.Clear();
     }
 
     private static async Task ServiceAsync(Action<bool, string> check)
@@ -457,6 +553,29 @@ internal static class EntraChecks
             try { await running.WaitAsync(TimeSpan.FromSeconds(1)); } catch (Exception error) { stopped = error; }
             check(stopped is OperationCanceledException && fake.Count("interactive") == 1, name + " signs in through the browser when MFA has no token, and Stop ends the wait");
         }
+        // Load databases keeps one deadline for its opens (and its read): the browser sign-in between them is not counted, the
+        // first open's time is.
+        service.DiscoveryLimit = TimeSpan.FromSeconds(10);
+        fake.Interactive = (_, _) => Task.FromResult(Token("budget", "alice@contoso.com"));
+        var limits = new List<TimeSpan?>();
+        service.OpenUser = async (_, limit, _) =>
+        {
+            limits.Add(limit);
+            if (limits.Count > 1) throw new InvalidOperationException("budget read");
+            await Task.Delay(400);
+            var id = Guid.NewGuid();
+            service.Entra.Attempts.Record(id, new InteractionRequired(Request("alice@contoso.com")));
+            throw ProviderFailure(id);
+        };
+        try { await service.DiscoverDatabasesAsync(Options("entraMfa", "alice@contoso.com"), CancellationToken.None); } catch (Exception) { }
+        check(limits.Count == 2 && limits[0] == TimeSpan.FromSeconds(10) && limits[1] <= TimeSpan.FromSeconds(10) - TimeSpan.FromMilliseconds(350),
+            "Load databases' opens share one deadline, so a second open after a sign-in gets only what the first left: " + string.Join(", ", limits));
+        // Login failed (18456) under Entra on Connect points to Help › Clear Entra ID Token Cache.
+        service.OpenUser = (_, _, _) => throw ConnectionFailureChecks.Sql(18456, 1, 14, "sql.contoso.database.windows.net", "Login failed for user '<token-identified principal>'.");
+        RequestException? hinted = null;
+        try { await service.ConnectAsync(Options("entraMfa", "alice@contoso.com"), CancellationToken.None); } catch (RequestException error) { hinted = error; }
+        check(hinted is { Code: "SQL_ERROR", Details.Number: 18456 } && hinted.Message.EndsWith(EntraFailures.Messages.ClearCacheHint, StringComparison.Ordinal),
+            "Connect's Login failed (18456) under Entra MFA points to Help › Clear Entra ID Token Cache: " + hinted?.Message);
         // The cache clear: main's request reaches the token source and empties the attempts.
         service.Entra.Attempts.Record(Guid.NewGuid(), new InteractionRequired(Request()));
         var cleared = await service.DispatchAsync("entra.cache.clear", JsonDocument.Parse("{}").RootElement, HostChecks.Json);
@@ -485,10 +604,10 @@ internal static class EntraChecks
                 try { return signedIn ? "connection" : (await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryInteractive, Guid.Empty))).AccessToken; }
                 catch (EntraProviderException) { var id = Guid.NewGuid(); service.Attempts.Record(id, new InteractionRequired(Request())); throw ProviderFailure(id); }
             }
-            await service.OpenForUserAsync("Data Source=x", "x", Open, CancellationToken.None);
+            await service.OpenForUserAsync("Data Source=x", "x", Open, NoId, CancellationToken.None);
             service.Source = new FakeSource { Interactive = (_, _) => throw new MsalServiceException("invalid_request", "AADSTS90002: Tenant not found.") };
             signedIn = false;
-            try { await service.OpenForUserAsync("Data Source=x", "x", Open, CancellationToken.None); } catch (RequestException) { }
+            try { await service.OpenForUserAsync("Data Source=x", "x", Open, NoId, CancellationToken.None); } catch (RequestException) { }
         }
         finally
         {
@@ -595,7 +714,7 @@ internal static class EntraChecks
 
     /// <summary>The real MSAL source offline: building its applications needs no network, and a clear drops them with
     /// their in-memory caches.</summary>
-    private static void RealSource(Action<bool, string> check)
+    private static async Task RealSourceAsync(Action<bool, string> check)
     {
         var source = new MsalTokenSource();
         var first = source.Application(Request());
@@ -606,5 +725,107 @@ internal static class EntraChecks
         check(!ReferenceEquals(first, source.Application(Request())), "a clear drops every application, and with it its tokens");
         var others = Enumerable.Range(0, MsalTokenSource.MaxApplications + 1).Select(index => source.Application(Request() with { Tenant = "tenant" + index })).ToList();
         check(!ReferenceEquals(others[0], source.Application(Request() with { Tenant = "tenant0" })), "at most 16 authorities are kept");
+        // An MFA sign-in as an admin account leaves it in the tenant's application; Integrated, which the dialog shows as the
+        // Windows user, must not connect with it.
+        var seeded = new MsalTokenSource();
+        Seed(seeded.Application(Request()), "admin-alice@contoso.com", "MFA-ADMIN-TOKEN");
+        var mfa = await seeded.SilentAsync(Request(), CancellationToken.None);
+        var windows = 0;
+        seeded.WindowsSignIn = (_, _, _) => { windows++; return Task.FromResult(Token("windows", "alice@contoso.com")); };
+        var integrated = await seeded.IntegratedAsync(Request(), CancellationToken.None);
+        check(mfa is { AccessToken: "MFA-ADMIN-TOKEN", Account: "admin-alice@contoso.com" } && integrated.AccessToken == "fake-access-windows" && windows == 1,
+            "Microsoft Entra Integrated signs in as the Windows user, never with an account MFA or Password left in the tenant's cache: " + integrated.Account);
+    }
+
+    /// <summary>Puts one signed-in account, with an access token for SQL valid for an hour, in an MSAL application's in-memory
+    /// cache, as an MFA sign-in leaves it. MSAL reads it without any network call (login.microsoftonline.com's metadata is
+    /// built in).</summary>
+    private static void Seed(IPublicClientApplication application, string user, string accessToken)
+    {
+        const string tenant = "72f988bf-86f1-41af-91ab-2d7cd011db47", environment = "login.microsoftonline.com", objectId = "00000000-0000-0000-0000-0000000000a1";
+        var home = objectId + "." + tenant;
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        static string Encode(object value) => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(value)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var idToken = Encode(new { alg = "none", typ = "JWT" }) + "." + Encode(new { aud = MsalTokenSource.ClientId, iss = "https://login.microsoftonline.com/" + tenant + "/v2.0", oid = objectId, tid = tenant, preferred_username = user, sub = "subject", ver = "2.0" }) + ".";
+        var cache = new Dictionary<string, object>
+        {
+            ["Account"] = new Dictionary<string, object> { ["account"] = new { home_account_id = home, environment, realm = tenant, local_account_id = objectId, username = user, authority_type = "MSSTS" } },
+            ["IdToken"] = new Dictionary<string, object> { ["id"] = new { home_account_id = home, environment, realm = tenant, credential_type = "IdToken", client_id = MsalTokenSource.ClientId, secret = idToken } },
+            ["RefreshToken"] = new Dictionary<string, object> { ["refresh"] = new { home_account_id = home, environment, credential_type = "RefreshToken", client_id = MsalTokenSource.ClientId, secret = "refresh" } },
+            ["AccessToken"] = new Dictionary<string, object>
+            {
+                ["access"] = new
+                {
+                    home_account_id = home, environment, realm = tenant, credential_type = "AccessToken", client_id = MsalTokenSource.ClientId, secret = accessToken, target = "https://database.windows.net//.default",
+                    cached_at = now.ToString(CultureInfo.InvariantCulture), expires_on = (now + 3600).ToString(CultureInfo.InvariantCulture), extended_expires_on = (now + 3600).ToString(CultureInfo.InvariantCulture), token_type = "Bearer"
+                }
+            },
+            ["AppMetadata"] = new Dictionary<string, object>()
+        };
+        var seeded = false;
+        application.UserTokenCache.SetBeforeAccess(args =>
+        {
+            if (seeded) return;
+            seeded = true;
+            args.TokenCache.DeserializeMsalV3(JsonSerializer.SerializeToUtf8Bytes(cache));
+        });
+    }
+
+    /// <summary>Managed Identity against a stand-in for an Azure App Service identity endpoint (IDENTITY_ENDPOINT and
+    /// IDENTITY_HEADER, which MSAL reads): MSAL caches managed identity tokens for the whole process, so after Help › Clear
+    /// Entra ID Token Cache the next connect must fetch a new one, not get the old one from that cache.</summary>
+    private static async Task ManagedIdentityAsync(Action<bool, string> check)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var hits = 0;
+        using var stop = new CancellationTokenSource();
+        var serving = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                using var client = await listener.AcceptTcpClientAsync(stop.Token);
+                var stream = client.GetStream();
+                var buffer = new byte[16_384];
+                var read = 0;
+                while (read < buffer.Length && !Encoding.ASCII.GetString(buffer, 0, read).Contains("\r\n\r\n", StringComparison.Ordinal))
+                {
+                    var count = await stream.ReadAsync(buffer.AsMemory(read), stop.Token);
+                    if (count == 0) break;
+                    read += count;
+                }
+                var hit = Interlocked.Increment(ref hits);
+                var body = JsonSerializer.Serialize(new Dictionary<string, string>
+                {
+                    ["access_token"] = "managed-" + hit, ["expires_on"] = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+                    ["resource"] = "https://database.windows.net/", ["token_type"] = "Bearer"
+                });
+                await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n" + body), stop.Token);
+            }
+        });
+        var endpoint = Environment.GetEnvironmentVariable("IDENTITY_ENDPOINT");
+        var header = Environment.GetEnvironmentVariable("IDENTITY_HEADER");
+        Environment.SetEnvironmentVariable("IDENTITY_ENDPOINT", "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/msi/token");
+        Environment.SetEnvironmentVariable("IDENTITY_HEADER", "varia-checks");
+        try
+        {
+            var source = new MsalTokenSource();
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var before = await source.ManagedIdentityAsync(Request(), limit.Token);
+            var again = await source.ManagedIdentityAsync(Request(), limit.Token);
+            source.Clear();
+            var after = await source.ManagedIdentityAsync(Request(), limit.Token);
+            check(before.AccessToken == "managed-1" && again.AccessToken == "managed-1" && after.AccessToken == "managed-2" && hits == 2,
+                "Managed Identity reuses its token until Help › Clear Entra ID Token Cache, then fetches a new one, although MSAL's cache is process-wide: "
+                + string.Join(", ", before.AccessToken, again.AccessToken, after.AccessToken));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("IDENTITY_ENDPOINT", endpoint);
+            Environment.SetEnvironmentVariable("IDENTITY_HEADER", header);
+            stop.Cancel();
+            listener.Stop();
+            try { await serving; } catch (Exception error) when (error is OperationCanceledException or SocketException or ObjectDisposedException) { }
+        }
     }
 }

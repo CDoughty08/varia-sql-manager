@@ -30,7 +30,8 @@ internal static partial class EntraFailures
         public const string TimedOut = "Sign-in in the web browser did not finish within 3 minutes. Connect again to sign in.";
         public const string TokenTimedOut = "Microsoft Entra ID did not issue a token within the connect timeout. Try again.";
         public const string OtherAccount = "The account you signed in with in the browser is not the user name entered. Enter that account's user name, or leave User name empty, then connect again.";
-        public const string ClearCacheHint = " If you were recently granted access, choose Help › Clear Entra ID Token Cache, then connect again.";
+        public const string ClearedDuringSignIn = "The Microsoft Entra ID token cache was cleared while the browser sign-in was waiting. Connect again to sign in.";
+        public const string ClearCacheHint =" If you were recently granted access, choose Help › Clear Entra ID Token Cache, then connect again.";
         public const string SignInFailed = "Microsoft Entra sign-in failed.";
 
         public static string RefusedAuthority(string? host) => "The server asked to sign in at " + (host ?? "an unknown address")
@@ -48,6 +49,9 @@ internal static partial class EntraFailures
             if (msal.ErrorCode is MsalError.AuthenticationCanceledError or MsalError.AccessDenied) return new("AUTH_ENTRA", Messages.Cancelled);
             if (msal.ErrorCode is MsalError.LinuxXdgOpen or MsalError.WebviewUnavailable or MsalError.AuthenticationUiFailedError or MsalError.AuthenticationUiFailed)
                 return new("AUTH_ENTRA", Messages.BrowserFailed);
+            // MSAL's managed identity client found no endpoint that answers (not an Azure host).
+            if (msal.ErrorCode == MsalError.ManagedIdentityUnreachableNetwork && method is SqlAuthenticationMethod.ActiveDirectoryManagedIdentity or SqlAuthenticationMethod.ActiveDirectoryMSI)
+                return new("AUTH_ENTRA", Messages.NoManagedIdentity);
             var codes = Aadsts(msal);
             if (codes.Contains(InvalidPassword)) return new("AUTH_ENTRA", Messages.BadPassword, InvalidPassword);
             if (codes.Contains(InvalidClientSecret)) return new("AUTH_ENTRA", Messages.BadSecret, InvalidClientSecret);

@@ -564,6 +564,14 @@ async function rememberPassword() {
   await expect(form(dialog).remember).not.toBeChecked()
   await expect(form(dialog).password).not.toHaveAttribute('placeholder', '••••••••')
   expect(await entries()).toEqual([])
+  // Another failed connect keeps that notice: the next attempt clears only Stop's "Connection cancelled.".
+  const attempts = async () => (await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'password-check').length
+  const before = await attempts()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect.poll(attempts).toBe(before + 1)
+  await expect(dialog.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+  await expect(dialog.getByRole('alert')).toContainText("Login failed for user 'reader'.")
+  await expect(dialog.getByText('The saved password was rejected, so it has been removed. Enter the password.', { exact: true })).toBeVisible()
   await rm(join(control, 'reject-passwords'))
   // (8) Remembered again, then unchecked: connecting forgets it.
   await form(dialog).password.fill(marker)
@@ -589,8 +597,32 @@ async function rememberPassword() {
   await expect(form(dialog).remember).toBeDisabled()
   await expect(form(dialog).remember).not.toBeChecked()
   await noSecrets()
+  // (11) Stop through main's own handlers (varia:request registers the dialog's requestId, varia:connections-cancel sends
+  // CANCEL): the fake ends a Microsoft Entra sign-in wait only on a CANCEL frame, and logs it.
+  const cancels = async () => (await read(join(control, 'cancels.jsonl'))).split('\n').filter(Boolean).map(line => JSON.parse(line).method)
+  const loading = dialog.getByText('Loading databases…', { exact: true })
+  await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('entraMfa')
+  await dialog.getByLabel('User name', { exact: true }).fill('alice@contoso.com')
+  // Load databases (focusing Database Name) waits for the browser; changing the form stops it.
+  await dialog.getByLabel('Database Name', { exact: true }).focus()
+  await expect(loading).toBeVisible()
+  await dialog.getByLabel('User name', { exact: true }).fill('bob@contoso.com')
+  await expect.poll(cancels).toEqual(['connections.databases'])
+  await expect(loading).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByText('Complete the sign-in in your web browser. Waiting up to 3 minutes…', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
+  expect(await cancels()).toEqual(['connections.databases', 'connections.connect'])
+  // Closing the dialog stops Load databases too.
+  await dialog.getByLabel('Database Name', { exact: true }).focus()
+  await expect(loading).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(cancels).toEqual(['connections.databases', 'connections.connect', 'connections.databases'])
   await app.close(); app = undefined
-  // (11) Without the test cipher: Windows (DPAPI) and macOS (Keychain) offer it; Linux needs a keyring.
+  // (12) Without the test cipher: Windows (DPAPI) and macOS (Keychain) offer it; Linux needs a keyring.
   await launch({ ...launchOptions, env: seamless }, 'fake · Ready')
   const backend = await app.evaluate(({ safeStorage }) => process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os')
   dialog = await open()

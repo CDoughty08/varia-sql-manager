@@ -6,7 +6,8 @@ namespace Varia.Backend.Entra;
 /// cancellation reaches it, so it never waits for a person: MFA uses only a cached token, and when there is none it records
 /// that a sign-in is needed (EntraAttempts) and fails at once, leaving the browser sign-in to EntraService, which runs it
 /// under the Connect dialog's request and its Stop. Each other type is bounded by the connect timeout (2 minutes when that
-/// is 0). Every failure is recorded under the attempt's ClientConnectionId and thrown without a retry.</summary>
+/// is 0). Every failure is recorded under the attempt's ClientConnectionId and thrown without a retry, and so is the account
+/// an MFA token without a user name went to.</summary>
 internal sealed class EntraAuthenticationProvider(EntraService service) : SqlAuthenticationProvider
 {
     internal static readonly TimeSpan UnboundedLimit = TimeSpan.FromMinutes(2);
@@ -28,7 +29,13 @@ internal sealed class EntraAuthenticationProvider(EntraService service) : SqlAut
             try
             {
                 var token = await AcquireAsync(service.Source, method, request, parameters.Password ?? "", limit.Token).ConfigureAwait(false);
-                if (token is not null) return new SqlAuthenticationToken(token.AccessToken, token.ExpiresOn);
+                if (token is not null)
+                {
+                    // MFA without a user name took the only account signed in to the tenant: the Connect dialog pins it.
+                    if (method == SqlAuthenticationMethod.ActiveDirectoryInteractive && request.User is null && token.Account is { Length: > 0 and <= 128 } account)
+                        service.Attempts.Record(parameters.ConnectionId, new Served(account));
+                    return new SqlAuthenticationToken(token.AccessToken, token.ExpiresOn);
+                }
                 attempt = new InteractionRequired(request);
             }
             catch (OperationCanceledException) when (limit.IsCancellationRequested) { attempt = new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.TokenTimedOut); }

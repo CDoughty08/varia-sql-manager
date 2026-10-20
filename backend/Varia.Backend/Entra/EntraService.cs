@@ -18,6 +18,8 @@ internal sealed class EntraService
     internal static EntraService Shared => shared.Value;
 
     private readonly SemaphoreSlim signIn = new(1, 1);
+    // Bumped by each clear, so a sign-in that a clear overtook says so.
+    private int generation;
 
     internal EntraService(IEntraTokenSource source)
     {
@@ -42,26 +44,37 @@ internal sealed class EntraService
 
     /// <summary>Opens a connection the user is choosing (connect and Load databases). When MFA has no cached token, signs in
     /// through the browser under the request's token (Stop cancels it), then opens once more with a new connection, which
-    /// now finds the token. A sign-in without a user name names the account it used, so the stored connection string picks
-    /// that account when several are signed in. Other Entra failures answer AUTH_ENTRA with the dialog's details; anything
-    /// else is left to the caller.</summary>
-    /// <returns>The open result and the connection string that opened it.</returns>
-    internal async Task<(T Opened, string ConnectionString)> OpenForUserAsync<T>(string connectionString, string server, Func<string, CancellationToken, Task<T>> open, CancellationToken token)
+    /// now finds the token. MFA without a user name opens unpooled (SqlClient reuses a pool's token without asking the
+    /// provider), so the provider says which account it used, and the connection string returned names that account: later
+    /// opens then find that account's token even when several are signed in. Other Entra failures answer AUTH_ENTRA with the
+    /// dialog's details; anything else is left to the caller.</summary>
+    /// <param name="idOf">The opened connection's ClientConnectionId, under which the provider recorded the account.</param>
+    /// <returns>The open result and the connection string to keep.</returns>
+    internal async Task<(T Opened, string ConnectionString)> OpenForUserAsync<T>(string connectionString, string server, Func<string, CancellationToken, Task<T>> open, Func<T, Guid> idOf, CancellationToken token)
     {
-        try { return (await open(connectionString, token).ConfigureAwait(false), connectionString); }
-        catch (SqlException error) when (!token.IsCancellationRequested && Attempts.Take(error.ClientConnectionId) is { } attempt)
+        async Task<(T, string)> Attempt(string text)
+        {
+            if (!AnonymousMfa(text)) return (await open(text, token).ConfigureAwait(false), text);
+            var opened = await open(new SqlConnectionStringBuilder(text) { Pooling = false }.ConnectionString, token).ConfigureAwait(false);
+            return (opened, Attempts.Take(idOf(opened)) is Served served ? new SqlConnectionStringBuilder(text) { UserID = served.Account }.ConnectionString : text);
+        }
+        try { return await Attempt(connectionString).ConfigureAwait(false); }
+        catch (SqlException error) when (!token.IsCancellationRequested && Failure(error, connectionString) is { } attempt)
         {
             if (attempt is not InteractionRequired required) throw EntraFailures.Describe(attempt, error, server, details: true);
+            var generation = Volatile.Read(ref this.generation);
             var signedIn = await SignInAsync(required.Request, server, token).ConfigureAwait(false);
             var builder = new SqlConnectionStringBuilder(connectionString);
             if (string.IsNullOrWhiteSpace(builder.UserID) && signedIn.Account is { Length: > 0 and <= 128 } account) builder.UserID = account;
             var retry = builder.ConnectionString;
-            try { return (await open(retry, token).ConfigureAwait(false), retry); }
-            catch (SqlException again) when (!token.IsCancellationRequested && Attempts.Take(again.ClientConnectionId) is { } second)
+            try { return await Attempt(retry).ConfigureAwait(false); }
+            catch (SqlException again) when (!token.IsCancellationRequested && Failure(again, retry) is { } second)
             {
-                // The token is cached under the account that signed in, which is not the user name the connection names.
-                throw second is InteractionRequired ? new RequestException("AUTH_ENTRA", EntraFailures.Messages.OtherAccount, new(0, 0, 11, Bounded(server)))
-                    : EntraFailures.Describe(second, again, server, details: true);
+                if (second is not InteractionRequired) throw EntraFailures.Describe(second, again, server, details: true);
+                // The token went into the cache that Help › Clear Entra ID Token Cache emptied while the browser waited; otherwise
+                // it is cached under the account that signed in, which is not the user name the connection names.
+                throw new RequestException("AUTH_ENTRA", generation != Volatile.Read(ref this.generation) ? EntraFailures.Messages.ClearedDuringSignIn : EntraFailures.Messages.OtherAccount,
+                    new(0, 0, 11, Bounded(server)));
             }
         }
     }
@@ -72,20 +85,46 @@ internal sealed class EntraService
     internal async Task OpenPooledAsync(SqlConnection connection, CancellationToken token, Func<SqlConnection, CancellationToken, Task> open)
     {
         try { await open(connection, token).ConfigureAwait(false); }
-        catch (SqlException error) when (!token.IsCancellationRequested && Attempts.Take(error.ClientConnectionId) is { } attempt)
+        catch (SqlException error) when (!token.IsCancellationRequested && Failure(error, connection.ConnectionString) is { } attempt)
         {
             throw EntraFailures.Describe(attempt, error, connection.DataSource, details: false);
         }
     }
 
-    /// <summary>One browser sign-in at a time: a second connect waits, then usually finds the first one's token.</summary>
+    /// <summary>What the provider recorded for a failed open. When it recorded nothing (if SqlClient stopped giving the
+    /// exception the attempt's ClientConnectionId, say) but SqlClient reports its provider's failure (error 0, class 11) on
+    /// an Entra connection, SqlClient's own text is the answer, as AUTH_ENTRA; any other failure is left to the caller.</summary>
+    private EntraAttempt? Failure(SqlException error, string connectionString)
+    {
+        // A Served entry means the token was given and the login failed after it (18456, say): that is SQL Server's answer.
+        if (Attempts.Take(error.ClientConnectionId) is (InteractionRequired or EntraFailure) and var recorded) return recorded;
+        if (!UsesEntra(connectionString) || error.Errors.Count == 0 || error.Errors[0] is not { Number: 0, Class: 11 }) return null;
+        var text = EntraFailures.Sanitize(error.Message);
+        return new EntraFailure("AUTH_ENTRA", text.Length > 0 ? text : EntraFailures.Messages.SignInFailed);
+    }
+
+    private static bool UsesEntra(string connectionString)
+    {
+        try { return Array.IndexOf(EntraModes.Methods, new SqlConnectionStringBuilder(connectionString).Authentication) >= 0; }
+        catch (ArgumentException) { return false; }
+    }
+
+    private static bool AnonymousMfa(string connectionString)
+    {
+        var builder = new SqlConnectionStringBuilder(connectionString);
+        return builder.Authentication == SqlAuthenticationMethod.ActiveDirectoryInteractive && string.IsNullOrWhiteSpace(builder.UserID);
+    }
+
+    /// <summary>One browser sign-in at a time: a second connect waits, then usually finds the first one's token. The limit
+    /// counts that wait too, so a connect queued behind another sign-in still ends within main's deadline.</summary>
     internal async Task<EntraToken> SignInAsync(EntraRequest request, string server, CancellationToken token)
     {
-        await signIn.WaitAsync(token).ConfigureAwait(false);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+        limit.CancelAfter(SignInLimit);
+        try { await signIn.WaitAsync(limit.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { throw TimedOut(server); }
         try
         {
-            using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
-            limit.CancelAfter(SignInLimit);
             try
             {
                 if (await Source.SilentAsync(request, limit.Token).ConfigureAwait(false) is { } cached) return cached;
@@ -93,7 +132,7 @@ internal sealed class EntraService
             }
             // Stop: the request answers CANCELLED, whatever MSAL threw while its listener closed.
             catch (Exception) when (token.IsCancellationRequested) { throw new OperationCanceledException(token); }
-            catch (Exception) when (limit.IsCancellationRequested) { throw new RequestException("AUTH_ENTRA", EntraFailures.Messages.TimedOut, new(0, 0, 11, Bounded(server))); }
+            catch (Exception) when (limit.IsCancellationRequested) { throw TimedOut(server); }
             catch (Exception error) when (error is not (RequestException or OutOfMemoryException))
             {
                 throw EntraFailures.Describe(EntraFailures.Map(error, SqlAuthenticationMethod.ActiveDirectoryInteractive), null, server, details: true);
@@ -102,10 +141,13 @@ internal sealed class EntraService
         finally { signIn.Release(); }
     }
 
+    private static RequestException TimedOut(string server) => new("AUTH_ENTRA", EntraFailures.Messages.TimedOut, new(0, 0, 11, Bounded(server)));
+
     /// <summary>Help › Clear Entra ID Token Cache: every token, credential and pending attempt goes, and so do the pools,
     /// whose idle connections hold tokens of their own.</summary>
     internal void Clear()
     {
+        Interlocked.Increment(ref generation);
         Source.Clear();
         Attempts.Clear();
         SqlConnection.ClearAllPools();

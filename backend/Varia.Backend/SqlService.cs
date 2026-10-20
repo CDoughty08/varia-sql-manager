@@ -119,6 +119,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         // Registers the Entra provider with SqlClient before any connection string can name it.
         entra = EntraService.Shared;
+        Open = (connection, token) => entra.OpenPooledAsync(connection, token, OpenConnection);
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
@@ -219,7 +220,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
         entra.Refuse(options);
         var builder = ConnectBuilder(options);
-        // After an MFA sign-in without a user name, the connection string names the account that signed in.
+        // For MFA without a user name, the connection string kept names the account its token is for.
         var (opened, connectionString) = await OpenForUserAsync(builder.ConnectionString, options, null, token);
         await using var connection = opened;
         var profile = await ServerProfile.ProbeAsync(connection, token);
@@ -243,10 +244,13 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return builder;
     }
 
-    /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, and database and
-    /// column lists (ConnectionFailures.OpenAsync, then the Entra mapping, which never opens a browser). The live checks
-    /// replace it to fail as an expired Kerberos ticket does.</summary>
-    internal Func<SqlConnection, CancellationToken, Task> Open { get; set; } = (connection, token) => EntraService.Shared.OpenPooledAsync(connection, token, ConnectionFailures.OpenAsync);
+    /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, object actions,
+    /// and database and column lists (<see cref="OpenConnection"/>, then the Entra mapping, which never opens a browser). The
+    /// live checks replace it to fail as an expired Kerberos ticket does.</summary>
+    internal Func<SqlConnection, CancellationToken, Task> Open { get; set; }
+    /// <summary>The open inside <see cref="Open"/>; the live checks replace it to fail as a revoked Entra sign-in does, so the
+    /// mapping around it is the production one.</summary>
+    internal Func<SqlConnection, CancellationToken, Task> OpenConnection { get; set; } = ConnectionFailures.OpenAsync;
 
     internal async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
     {
@@ -254,23 +258,45 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var builder = ConnectionSettings.Build(options with { Database = "", Advanced = (options.Advanced ?? new()) with { AttachDbFilename = "" } });
         builder.Pooling = false;
         entra.Refuse(options);
-        // 30 seconds for each open and for the read; an MFA sign-in in the browser between them has its own 3 minutes.
-        var (opened, _) = await OpenForUserAsync(builder.ConnectionString, options, DiscoveryLimit, token);
+        // One budget for the opens and the read; an MFA sign-in in the browser between two opens has its own 3 minutes.
+        var budget = new OpenBudget(DiscoveryLimit);
+        var (opened, _) = await OpenForUserAsync(builder.ConnectionString, options, budget, token);
         await using var connection = opened;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(DiscoveryLimit);
+        deadline.CancelAfter(budget.Remaining);
         return await ReadDatabasesAsync(connection, deadline.Token);
     }
-    private static readonly TimeSpan DiscoveryLimit = TimeSpan.FromSeconds(30);
+    /// <summary>Load databases' deadline (30 seconds), not counting a browser sign-in; the checks shorten it.</summary>
+    internal TimeSpan DiscoveryLimit { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>A deadline shared by a request's opens and what follows them, which a browser sign-in between two opens does
+    /// not use up.</summary>
+    private sealed class OpenBudget(TimeSpan total)
+    {
+        private TimeSpan spent;
+        internal TimeSpan Remaining => spent < total ? total - spent : TimeSpan.Zero;
+
+        internal async Task<T> SpendAsync<T>(Func<TimeSpan, Task<T>> work)
+        {
+            var watch = Stopwatch.StartNew();
+            try { return await work(Remaining); }
+            finally { spent += watch.Elapsed; }
+        }
+    }
 
     /// <summary>Opens a connection the user is choosing (connect and database discovery), so a failure carries its details,
     /// integrated authentication on Linux and macOS (Kerberos through SqlClient's managed SNI) says what to fix, and
     /// Microsoft Entra MFA signs in through the browser when it must (EntraService). A cancelled or timed-out attempt is
     /// left to the host, which answers it CANCELLED or TIMEOUT; Stop answers at once, even while SqlClient still waits.</summary>
-    /// <param name="attemptLimit">Each open's own time limit, if any (the sign-in between two opens is not counted).</param>
-    private async Task<(SqlConnection Connection, string ConnectionString)> OpenForUserAsync(string connectionString, ConnectOptions options, TimeSpan? attemptLimit, CancellationToken token)
+    /// <param name="budget">The opens' deadline, if any (the sign-in between two opens is not counted).</param>
+    private async Task<(SqlConnection Connection, string ConnectionString)> OpenForUserAsync(string connectionString, ConnectOptions options, OpenBudget? budget, CancellationToken token)
     {
-        try { return await entra.OpenForUserAsync(connectionString, options.Server, (text, cancel) => OpenUser(text, attemptLimit, cancel), token); }
+        try
+        {
+            return await entra.OpenForUserAsync(connectionString, options.Server,
+                (text, cancel) => budget is null ? OpenUser(text, null, cancel) : budget.SpendAsync(remaining => OpenUser(text, remaining, cancel)),
+                static connection => connection.ClientConnectionId, token);
+        }
         catch (Exception error) when (!token.IsCancellationRequested && error is not (RequestException or OperationCanceledException)
             && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
         {

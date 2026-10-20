@@ -5,7 +5,8 @@ import type { MessageBoxOptions } from 'electron'
 export const clearEntraPrompt = {
   type: 'question', title: 'Clear Entra ID Token Cache', message: 'Clear the Microsoft Entra ID token cache?',
   detail: 'Use this when you were recently granted access to a server or added to a Microsoft Entra group and still cannot sign in. '
-    + 'The next connection that uses Microsoft Entra ID gets a new token; servers connected with Microsoft Entra MFA must connect again to sign in.',
+    + 'The next connection that uses Microsoft Entra ID gets a new token (tools Microsoft Entra Default signs in through, such as the Azure CLI, keep theirs until they expire); '
+    + 'servers connected with Microsoft Entra MFA must connect again to sign in.',
   buttons: ['Clear', 'Cancel'], defaultId: 0, cancelId: 1, noLink: true
 } as const satisfies MessageBoxOptions
 

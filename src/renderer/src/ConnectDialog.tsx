@@ -265,7 +265,8 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     finally { if (alive.current) setSaving(false) }
   }
   async function connect(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError(''); setNotice('')
+    // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
+    event.preventDefault(); setBusy(true); setError(''); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     connectRequest.current = requestId
     try {
