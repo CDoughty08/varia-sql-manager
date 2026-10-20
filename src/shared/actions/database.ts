@@ -38,6 +38,9 @@ export interface DatabaseOptionDef {
   readonly notOn?: readonly SystemDatabase[]
   /** SSMS closes other connections to change it (its Open Connections prompt). */
   readonly exclusive?: true
+  /** SQL Server refuses the change on a read-only database (3906, or 5073 for COLLATE; measured on SQL Server 2025), so
+   *  one ordered after Database Read-Only cannot share an OK with turning it on. */
+  readonly refusedReadOnly?: true
   readonly sql?: OptionSql
   /** Where SMO's ScriptAlter writes it: a strict total order over every option. */
   readonly smoOrder: number
@@ -73,12 +76,12 @@ export const compatibilityLevelsFor = (major: number): number[] => compatibility
 /** Every row of the Options page, in SSMS's order within each category. */
 export const databaseOptionDefs: readonly DatabaseOptionDef[] = [
   // Header fields above the grid.
-  { key: 'collation', label: 'Collation', category: 'header', control: 'choice', settable: true, notOn: all, sql: { kind: 'collate' }, smoOrder: 3,
+  { key: 'collation', label: 'Collation', category: 'header', control: 'choice', settable: true, notOn: all, sql: { kind: 'collate' }, smoOrder: 3, refusedReadOnly: true,
     description: 'Specify the collation of the database by selecting from the list. For more information, see Set or Change the Database Collation.' },
   { key: 'recoveryModel', label: 'Recovery model', category: 'header', control: 'choice', choices: recovery, settable: true, notOn: ['tempdb'], sql: set('RECOVERY', keywords(recovery)), smoOrder: 29,
     description: 'Specify one of the following models for recovering the database: Full, Bulk-Logged, or Simple. For more information, see Recovery Models.' },
   { key: 'compatibilityLevel', label: 'Compatibility level', category: 'header', control: 'choice', choices: compatibilityLevels.map(level => ({ token: String(level), label: compatibilityLabel(level) })),
-    settable: true, sql: { kind: 'compat' }, smoOrder: 2, description: 'Specify the latest version of SQL Server that the database supports.' },
+    settable: true, sql: { kind: 'compat' }, smoOrder: 2, refusedReadOnly: true, description: 'Specify the latest version of SQL Server that the database supports.' },
   { key: 'containmentType', label: 'Containment type', category: 'header', control: 'choice', choices: containment, settable: true, notOn: ['tempdb'],
     sql: { kind: 'set', keyword: 'CONTAINMENT', eq: true, tokens: keywords(containment), termination: true }, smoOrder: 1,
     description: 'Specify none or partial to designate if this is a contained database. For more information, see Contained Databases.' },
@@ -139,10 +142,10 @@ export const databaseOptionDefs: readonly DatabaseOptionDef[] = [
     description: 'Specify the behavior when null values are concatenated. When True, string + NULL returns NULL.' },
   { key: 'dbChaining', label: 'Cross-database Ownership Chaining Enabled', category: 'Miscellaneous', control: 'bool', choices: bool, settable: false, smoOrder: 32,
     description: 'This read-only value indicates if cross-database ownership chaining has been enabled.' },
-  { key: 'dateCorrelationOptimization', label: 'Date Correlation Optimization Enabled', category: 'Miscellaneous', control: 'bool', choices: bool, settable: true, exclusive: true,
+  { key: 'dateCorrelationOptimization', label: 'Date Correlation Optimization Enabled', category: 'Miscellaneous', control: 'bool', choices: bool, settable: true, exclusive: true, refusedReadOnly: true,
     sql: set('DATE_CORRELATION_OPTIMIZATION'), smoOrder: 22,
     description: 'When True, SQL Server maintains correlation statistics between any two tables in the database that are linked by a FOREIGN KEY constraint and have datetime columns.' },
-  { key: 'delayedDurability', label: 'Delayed Durability', category: 'Miscellaneous', control: 'choice', choices: durability, settable: true, sql: set('DELAYED_DURABILITY', keywords(durability), true), smoOrder: 41,
+  { key: 'delayedDurability', label: 'Delayed Durability', category: 'Miscellaneous', control: 'choice', choices: durability, settable: true, sql: set('DELAYED_DURABILITY', keywords(durability), true), smoOrder: 41, refusedReadOnly: true,
     description: 'Enables this feature. For more information, see Control Transaction Durability.' },
   { key: 'readCommittedSnapshot', label: 'Is Read Committed Snapshot On', category: 'Miscellaneous', control: 'bool', choices: bool, settable: true, exclusive: true,
     notOn: ['master', 'msdb', 'tempdb'], sql: set('READ_COMMITTED_SNAPSHOT'), smoOrder: 26, description: 'Enables this feature.' },
@@ -165,7 +168,7 @@ export const databaseOptionDefs: readonly DatabaseOptionDef[] = [
     sql: set('PAGE_VERIFY', { CHECKSUM: 'CHECKSUM ', TORN_PAGE_DETECTION: 'TORN_PAGE_DETECTION ', NONE: 'NONE ' }), smoOrder: 31,
     description: 'Specify the option used to discover and report incomplete I/O transactions caused by disk I/O errors.' },
   { key: 'targetRecoveryTime', label: 'Target Recovery Time (Seconds)', category: 'Recovery', control: 'integer', range: { min: 0, max: 2_147_483_647 }, settable: true,
-    sql: { kind: 'set', keyword: 'TARGET_RECOVERY_TIME', eq: true, termination: true, seconds: true }, smoOrder: 40,
+    sql: { kind: 'set', keyword: 'TARGET_RECOVERY_TIME', eq: true, termination: true, seconds: true }, smoOrder: 40, refusedReadOnly: true,
     description: 'Specifies the maximum bound on the time, expressed in seconds, to recover the specified database in the event of a crash.' },
   // Service Broker.
   { key: 'brokerEnabled', label: 'Broker Enabled', category: 'Service Broker', control: 'bool', choices: bool, settable: true, notOn: ['master', 'model'],
@@ -190,25 +193,25 @@ export const databaseOptionDefs: readonly DatabaseOptionDef[] = [
 /** Database Scoped Configurations SSMS lists (SQL Server 2016 and later), primary then secondary, in name order:
  *  SMO writes them as its DatabaseScopedConfigurations collection lists them, which sorts by name. */
 export const scopedConfigurationDefs: readonly DatabaseOptionDef[] = [
-  { key: 'legacyCardinalityEstimation', label: 'Legacy Cardinality Estimation', category: 'Database Scoped Configurations', control: 'choice', choices: dscOnOff, settable: true, since: 13,
+  { key: 'legacyCardinalityEstimation', label: 'Legacy Cardinality Estimation', category: 'Database Scoped Configurations', control: 'choice', choices: dscOnOff, settable: true, refusedReadOnly: true, since: 13,
     sql: { kind: 'scoped', name: 'LEGACY_CARDINALITY_ESTIMATION', secondary: false, tokens: smoOnOff }, smoOrder: 50,
     description: 'Sets the query optimizer cardinality estimation model for the primary independent of the database compatibility level.' },
   { key: 'legacyCardinalityEstimationForSecondary', label: 'Legacy Cardinality Estimation for Secondary', category: 'Database Scoped Configurations', control: 'choice',
-    choices: dscSecondary, settable: true, since: 13, sql: { kind: 'scoped', name: 'LEGACY_CARDINALITY_ESTIMATION', secondary: true, tokens: smoOnOff }, smoOrder: 51,
+    choices: dscSecondary, settable: true, refusedReadOnly: true, since: 13, sql: { kind: 'scoped', name: 'LEGACY_CARDINALITY_ESTIMATION', secondary: true, tokens: smoOnOff }, smoOrder: 51,
     description: 'Sets the query optimizer cardinality estimation model for secondaries, if any.' },
-  { key: 'maxDop', label: 'Max DOP', category: 'Database Scoped Configurations', control: 'integer', range: { min: 0, max: 32_767 }, settable: true, since: 13,
+  { key: 'maxDop', label: 'Max DOP', category: 'Database Scoped Configurations', control: 'integer', range: { min: 0, max: 32_767 }, settable: true, refusedReadOnly: true, since: 13,
     sql: { kind: 'scoped', name: 'MAXDOP', secondary: false }, smoOrder: 52, description: 'The default MAXDOP setting for the primary that statements in this database use.' },
   { key: 'maxDopForSecondary', label: 'Max DOP for Secondary', category: 'Database Scoped Configurations', control: 'integer', choices: choices(['PRIMARY', 'PRIMARY']),
-    range: { min: 0, max: 32_767 }, settable: true, since: 13, sql: { kind: 'scoped', name: 'MAXDOP', secondary: true }, smoOrder: 53,
+    range: { min: 0, max: 32_767 }, settable: true, refusedReadOnly: true, since: 13, sql: { kind: 'scoped', name: 'MAXDOP', secondary: true }, smoOrder: 53,
     description: 'The MAXDOP setting for secondary replicas: PRIMARY uses the primary\'s value.' },
-  { key: 'parameterSniffing', label: 'Parameter Sniffing', category: 'Database Scoped Configurations', control: 'choice', choices: dscOnOff, settable: true, since: 13,
+  { key: 'parameterSniffing', label: 'Parameter Sniffing', category: 'Database Scoped Configurations', control: 'choice', choices: dscOnOff, settable: true, refusedReadOnly: true, since: 13,
     sql: { kind: 'scoped', name: 'PARAMETER_SNIFFING', secondary: false, tokens: smoOnOff }, smoOrder: 54, description: 'Enables or disables parameter sniffing on the primary.' },
-  { key: 'parameterSniffingForSecondary', label: 'Parameter Sniffing for Secondary', category: 'Database Scoped Configurations', control: 'choice', choices: dscSecondary, settable: true,
+  { key: 'parameterSniffingForSecondary', label: 'Parameter Sniffing for Secondary', category: 'Database Scoped Configurations', control: 'choice', choices: dscSecondary, settable: true, refusedReadOnly: true,
     since: 13, sql: { kind: 'scoped', name: 'PARAMETER_SNIFFING', secondary: true, tokens: smoOnOff }, smoOrder: 55, description: 'Enables or disables parameter sniffing on secondaries, if any.' },
-  { key: 'queryOptimizerFixes', label: 'Query Optimizer Fixes', category: 'Database Scoped Configurations', control: 'choice', choices: dscOnOff, settable: true, since: 13,
+  { key: 'queryOptimizerFixes', label: 'Query Optimizer Fixes', category: 'Database Scoped Configurations', control: 'choice', choices: dscOnOff, settable: true, refusedReadOnly: true, since: 13,
     sql: { kind: 'scoped', name: 'QUERY_OPTIMIZER_HOTFIXES', secondary: false, tokens: smoOnOff }, smoOrder: 56,
     description: 'Enables or disables query optimization hotfixes on the primary regardless of the compatibility level of the database.' },
-  { key: 'queryOptimizerFixesForSecondary', label: 'Query Optimizer Fixes for Secondary', category: 'Database Scoped Configurations', control: 'choice', choices: dscSecondary, settable: true,
+  { key: 'queryOptimizerFixesForSecondary', label: 'Query Optimizer Fixes for Secondary', category: 'Database Scoped Configurations', control: 'choice', choices: dscSecondary, settable: true, refusedReadOnly: true,
     since: 13, sql: { kind: 'scoped', name: 'QUERY_OPTIMIZER_HOTFIXES', secondary: true, tokens: smoOnOff }, smoOrder: 57,
     description: 'Enables or disables query optimization hotfixes on secondaries, if any.' }
 ]
@@ -249,6 +252,9 @@ const stateNames: Readonly<Record<string, string>> = {
 export function databaseStatusText(state: string, flags: { readonly standby?: boolean; readonly readOnly?: boolean } = {}): string {
   return [stateNames[state] ?? state, flags.standby ? 'Standby' : '', flags.readOnly ? 'Read-Only' : ''].filter(Boolean).join(', ')
 }
+/** Why a change cannot share an OK with turning Database Read-Only on: SQL Server applies it after READ_ONLY and then
+ *  refuses it, which would leave the database read-only with the change failed. */
+export const afterReadOnlyProblem = (label: string) => `${label} cannot change in the same OK as setting Database Read-Only to True: SQL Server refuses it once the database is read-only.`
 /** System databases whose owner SQL Server keeps as sa (Learn: "Changing the database owner" cannot be performed). */
 export const ownerNotOn: readonly SystemDatabase[] = ['master', 'model', 'tempdb']
 /**

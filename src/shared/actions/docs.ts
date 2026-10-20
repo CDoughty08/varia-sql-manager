@@ -144,7 +144,7 @@ function optionSql(def: DatabaseOptionDef): string {
   return sqlForms[sql.kind]
 }
 const optionRow = (def: DatabaseOptionDef): string[] =>
-  [def.label, def.category === 'header' ? 'Header' : def.category, yesNo(def.settable), optionSql(def), def.exclusive ? 'Yes' : '', def.since ? String(def.since) : '', notOnText(def)]
+  [def.label, def.category === 'header' ? 'Header' : def.category, yesNo(def.settable), optionSql(def), def.exclusive ? 'Yes' : '', def.settable && def.refusedReadOnly ? 'Yes' : '', def.since ? String(def.since) : '', notOnText(def)]
 
 /** Database Properties: its pages, the options it changes, the order its statements run in, and the Open Connections rule. */
 function databasePropertiesDocs(): string[] {
@@ -156,18 +156,23 @@ function databasePropertiesDocs(): string[] {
     'filegroups read-only in this version; Owner on the Files page is editable. Options shows Collation, Recovery model,',
     'Compatibility level and Containment type above SSMS\'s property grid. OK and Script send only the values that changed,',
     `as SSMS does; Script with nothing changed says "${noScriptNotice}" A snapshot, a database that is not online or`,
-    'not accessible, and Azure SQL Managed Instance open read-only with a note. Compatibility level is greyed for a login',
-    'outside sysadmin (SSMS ignores the change silently), and Containment type when the server\'s contained database',
-    `authentication is off. The owner of ${ownerNotOn.join(', ')} cannot change.`,
+    'not accessible, a database the login may not ALTER, and Azure SQL Managed Instance open read-only with a note.',
+    'Compatibility level is greyed for a login outside sysadmin (SSMS ignores the change silently), and Containment type',
+    `when the server's contained database authentication is off. The owner of ${ownerNotOn.join(', ')} cannot change.`,
+    'On a read-only database only Database Read-Only and Restrict Access change, and the owner is greyed. Turning Database',
+    'Read-Only on cannot share an OK with a change SQL Server applies after it and refuses on a read-only database (the',
+    '"Read-only" column below, and the owner): SSMS would leave the database read-only with that change failed, so Varia',
+    'says why and runs nothing.',
     '',
     `Compatibility levels offered: ${compatibilityLevels.map(compatibilityLabel).join(', ')}, up to the server's own.`,
     '',
     '### Database options',
     '',
-    '"Exclusive": SSMS closes other connections to change it. "Not on": system databases SQL Server refuses it on (Learn\'s',
-    'master, model, msdb and tempdb pages). "Since": the version band (13 = SQL Server 2016, 17 = 2025).',
+    '"Exclusive": SSMS closes other connections to change it. "Read-only": SQL Server refuses the change on a read-only',
+    'database (3906, or 5073 for COLLATE; measured on SQL Server 2025). "Not on": system databases SQL Server refuses it on',
+    '(Learn\'s master, model, msdb and tempdb pages). "Since": the version band (13 = SQL Server 2016, 17 = 2025).',
     '',
-    table(['Option', 'Category', 'Settable', 'SQL', 'Exclusive', 'Since', 'Not on'], [...databaseOptionDefs, ...scopedConfigurationDefs].map(optionRow)),
+    table(['Option', 'Category', 'Settable', 'SQL', 'Exclusive', 'Read-only', 'Since', 'Not on'], [...databaseOptionDefs, ...scopedConfigurationDefs].map(optionRow)),
     '',
     '### Statement order',
     '',
@@ -187,9 +192,13 @@ function databasePropertiesDocs(): string[] {
     '',
     `When OK changes an exclusive option and the database has sessions (or they cannot be counted), Varia asks "${openConnectionsPrompt.message}"`,
     `(${openConnectionsPrompt.buttons.join(' or ')}; ${openConnectionsPrompt.buttons[openConnectionsPrompt.defaultId]} is the default, because Yes rolls back the other sessions' transactions, and Escape answers No).`,
-    'No runs nothing. Yes writes the SET options WITH ROLLBACK IMMEDIATE. Without the prompt, WITH NO_WAIT makes SQL Server',
-    'refuse (`IN_USE`) rather than wait for the other sessions\' transactions; SQL Server gives up after about 20 seconds. Script',
-    'never asks: it always writes WITH NO_WAIT, as SSMS does.',
+    'No runs nothing. Yes writes the SET options WITH ROLLBACK IMMEDIATE. SSMS counts the connections when OK is pressed, so',
+    'the backend counts them again before anything runs: when sessions have joined since the dialog opened with none, it',
+    'answers `IN_USE` at once and the dialog asks. Without the prompt, WITH NO_WAIT makes SQL Server refuse (`IN_USE`)',
+    'rather than wait for the other sessions\' transactions; SQL Server gives up after about 20 seconds. That failure advises',
+    'choosing Yes only after an exclusive change made without closing connections; otherwise (Broker Enabled or Containment',
+    'type with other sessions, which SSMS does not close connections for) it advises closing them first. Script never',
+    'asks: it always writes WITH NO_WAIT, as SSMS does.',
     ''
   ]
 }

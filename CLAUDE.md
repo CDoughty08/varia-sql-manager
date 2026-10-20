@@ -120,15 +120,15 @@ pages, limits, error codes, display formats, benchmarks).
   backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
   only in `ActionService`: on its own unpooled connection (the application name plus " - Object Actions", never retried),
   never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
-  and `Designer/DesignerSql`, all checked by the offline lints (`ActionSql.LintExecutable` and its siblings), where names go
-  in as parameters through server-side `QUOTENAME`; ALTER DATABASE statements take names only through `QUOTENAME`, numbers
-  only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and collations only as
-  `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows for hostile names,
-  and that Database Properties' script equals SMO's capture of SSMS's sequence); Script never runs anything; after a
-  preflight in the same connection; waiting for locks
-  as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's, or the status bar's for a rename), whose
-  reply waits for SQL Server and lists the steps completed; and never logging names, SQL or values. Describe and script reads
-  use `LOCK_TIMEOUT 10000`. The test-only dry run is an internal C# method, never a request field.
+  and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
+  form for the others), where names, the database a batch runs in included, go in as parameters through server-side
+  `QUOTENAME`, numbers only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and
+  collations only as `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows
+  for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence); after a preflight in
+  the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
+  or the status bar's for a rename), whose reply waits for SQL Server and lists the steps completed; and never logging
+  names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`. The test-only dry
+  run is an internal C# method, never a request field.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

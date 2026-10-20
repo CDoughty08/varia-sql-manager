@@ -1,9 +1,9 @@
 // Database Properties without the DOM: the draft its pages edit, which rows are greyed and why, and the request OK and
 // Script send, which carries only what differs from the describe, as SSMS sends only changed values. Node tests run it.
 import {
-  compatibilityLabel, databaseOptionDefs, optionDef, ownerNotOn, scopedConfigurationDefs, tokenProblem, type DatabaseOptionDef, type OptionCategory, type SystemDatabase
+  afterReadOnlyProblem, compatibilityLabel, databaseOptionDefs, optionDef, ownerNotOn, scopedConfigurationDefs, tokenProblem, type DatabaseOptionDef, type OptionCategory, type SystemDatabase
 } from '../../../shared/actions/database.ts'
-import type { DatabaseChanges, DatabasePropertiesModel, PropertiesRequest } from '../../../shared/actions/schema.ts'
+import type { ActionError, DatabaseChanges, DatabasePropertiesModel, PropertiesRequest } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { ident } from '../../../shared/explorer/schema.ts'
 
@@ -54,11 +54,13 @@ export function optionState(def: DatabaseOptionDef, model: DatabasePropertiesMod
   return { disabled: false }
 }
 
-/** The owner field: greyed for a read-only dialog and for the system databases whose owner SQL Server keeps. */
+/** The owner field: greyed for a read-only dialog, for the system databases whose owner SQL Server keeps, and on a
+ *  read-only database, where SQL Server refuses ALTER AUTHORIZATION (3906). */
 export function ownerState(model: DatabasePropertiesModel, target: ObjectRef): { readonly disabled: boolean; readonly note?: string } {
   if (model.readOnlyReason) return { disabled: true, note: model.readOnlyReason }
   const system = systemDatabase(target)
-  return system && ownerNotOn.includes(system) ? { disabled: true, note: greyNotes.owner(system) } : { disabled: false }
+  if (system && ownerNotOn.includes(system)) return { disabled: true, note: greyNotes.owner(system) }
+  return model.options.readOnly === 'true' ? { disabled: true, note: greyNotes.readOnlyDatabase } : { disabled: false }
 }
 
 /** A list's choices: an option's own, the server's collations, and the compatibility levels the server offers. */
@@ -93,15 +95,23 @@ export function setOption(draft: DatabaseDraft, key: string, text: string): Data
 }
 
 const range = (def: DatabaseOptionDef) => def.range ? `a whole number from ${def.range.min.toLocaleString('en-US')} to ${def.range.max.toLocaleString('en-US')}` : 'one of its values'
-/** Problems OK and Script show instead of sending, by option key ('owner' for the owner). */
+const readOnlyOrder = optionDef('readOnly')!.smoOrder
+/** Problems OK and Script show instead of sending, by option key ('owner' for the owner). Turning Database Read-Only on
+ *  cannot share an OK with a change SQL Server would refuse after it (SSMS would leave the database read-only with
+ *  that change failed); DatabaseAlter.Plan refuses the same. */
 export function draftErrors(model: DatabasePropertiesModel, draft: DatabaseDraft, target: ObjectRef): Map<string, string> {
   const errors = new Map<string, string>()
+  const turningReadOnly = draft.options.readOnly === 'true' && model.options.readOnly !== 'true'
   for (const def of [...databaseOptionDefs, ...scopedConfigurationDefs]) {
     const value = draftValue(draft, def)
     if (value === undefined || value === modelValue(model, def) || optionState(def, model, draft, target).disabled) continue
     if (tokenProblem(def, value.trim() === value ? value : '')) errors.set(def.key, `${def.label} must be ${def.choices && def.range ? def.choices.map(choice => choice.token).join(' or ') + ' or ' : ''}${range(def)}.`)
+    else if (turningReadOnly && def.refusedReadOnly && def.smoOrder > readOnlyOrder) errors.set(def.key, afterReadOnlyProblem(def.label))
   }
-  if (draft.owner !== (model.general.owner ?? '') && !ownerState(model, target).disabled && !ident.safeParse(draft.owner).success) errors.set('owner', 'Owner must be a login name of 1 to 128 characters.')
+  if (draft.owner !== (model.general.owner ?? '') && !ownerState(model, target).disabled) {
+    if (!ident.safeParse(draft.owner).success) errors.set('owner', 'Owner must be a login name of 1 to 128 characters.')
+    else if (turningReadOnly) errors.set('owner', afterReadOnlyProblem('Owner'))
+  }
   return errors
 }
 
@@ -121,6 +131,14 @@ export function databaseRequest(target: ObjectRef, model: DatabasePropertiesMode
   if (Object.keys(scoped).length) changes.scoped = scoped
   if (draft.owner !== (model.general.owner ?? '') && !ownerState(model, target).disabled) changes.owner = draft.owner
   return Object.keys(changes).length ? { action: 'properties', target, closeConnections: false, changes } : undefined
+}
+
+/** The model after OK failed: when other connections were in the way (IN_USE), the session count the dialog opened with
+ *  is stale, so it becomes unknown and the next OK asks Open Connections, as SSMS counts them when OK is pressed. */
+export function afterDatabaseFailure(model: DatabasePropertiesModel, failure: ActionError): DatabasePropertiesModel {
+  if (failure.code !== 'IN_USE' || model.sessions === undefined) return model
+  const { sessions: _stale, ...rest } = model
+  return rest
 }
 
 /** SSMS's Open Connections prompt: OK changes an option it closes other connections for, and the database has sessions (or they cannot be counted). */

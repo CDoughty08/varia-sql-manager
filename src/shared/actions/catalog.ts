@@ -220,7 +220,7 @@ const byState = (row: ActionRow, state: 'enabled' | 'disabled') => objectActions
 /** What C# needs of an option: its key, the tokens it accepts, how it is written, and where SQL Server refuses it. */
 const optionJson = (def: DatabaseOptionDef) => ({
   key: def.key, label: def.label, control: def.control, settable: def.settable, tokens: def.choices?.map(choice => choice.token), range: def.range, since: def.since, notOn: def.notOn,
-  exclusive: def.exclusive, sql: def.sql, smoOrder: def.smoOrder
+  exclusive: def.exclusive, refusedReadOnly: def.refusedReadOnly, sql: def.sql, smoOrder: def.smoOrder
 })
 
 /**

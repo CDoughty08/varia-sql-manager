@@ -551,6 +551,10 @@ internal sealed class ActionService : IDisposable
             if (!row.Bool("can_alter")) return (null, Error("PERMISSION_DENIED", "You do not have permission to change " + display + " (ALTER on it)."));
             if (!row.Bool("owner_exists")) return (null, Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Changes.Owner!) + " does not exist."));
         }
+        // SSMS counts the database's connections when OK is pressed. The dialog asks Open Connections from the count it opened
+        // with; sessions that joined since would make WITH NO_WAIT wait about 20 s and fail, so the change is refused before
+        // anything runs, and the dialog asks.
+        if (execute && args.CloseConnections != true && Exclusive(args.Changes) && row.Long("sessions") > 0) return (null, Error("IN_USE", ActionErrors.OpenConnectionsAdvice));
         var facts = new DatabaseAlter.Facts(band, Math.Min(row.Int("major") * 10, catalog.CompatibilityLevels.Max()), row.Bool("auto_create"));
         // Script always writes WITH NO_WAIT: SSMS never closes connections while scripting.
         var (plan, refusal) = DatabaseAlter.Plan(catalog, target.Name!, args.Changes, execute && args.CloseConnections == true, facts);
@@ -559,14 +563,19 @@ internal sealed class ActionService : IDisposable
         return (plan, null);
     }
 
+    /// <summary>Whether the changes include an option SSMS closes other connections for.</summary>
+    private bool Exclusive(DatabaseChangesDto changes) => (changes.Options ?? []).Keys.Any(key => catalog.DatabaseOptions.TryGetValue(key, out var option) && option.Exclusive == true);
+
     /// <summary>The properties preflight, in master: the database's state and kind, the login's access and ALTER permission,
-    /// Auto Create Statistics now, the server's edition and version, and whether a new owner's login exists.</summary>
+    /// Auto Create Statistics now, the server's edition and version, whether a new owner's login exists, and the sessions in
+    /// the database (with VIEW SERVER STATE; this connection is in master).</summary>
     public const string DatabasePropertiesPreflight = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
         + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, d.is_auto_create_stats_on AS auto_create, "
         + "CONVERT(int, SERVERPROPERTY('EngineEdition')) AS engine_edition, CONVERT(int, SERVERPROPERTY('ProductMajorVersion')) AS major, "
-        + "CONVERT(bit, CASE WHEN @owner IS NULL OR EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = @owner) THEN 1 ELSE 0 END) AS owner_exists "
+        + "CONVERT(bit, CASE WHEN @owner IS NULL OR EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = @owner) THEN 1 ELSE 0 END) AS owner_exists, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions "
         + "FROM sys.databases AS d WHERE d.name = @name;";
 
     private async Task<ActionScriptResult> ScriptPropertiesJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
@@ -581,12 +590,16 @@ internal sealed class ActionService : IDisposable
     private async Task<ActionExecuteResult> ExecutePropertiesJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
         var messages = CollectMessages(connection);
+        // The backend's own idle pooled connections in the database must not hold it (SET options WITH NO_WAIT, COLLATE), nor
+        // count as other connections in the preflight.
+        host.ClearPoolsFor(args.ConnectionId, target.Name!);
         var (plan, error) = await PlanPropertiesAsync(connection, args, target, band, execute: true, token);
         if (plan is null) return new([], [], 0, error);
-        // The backend's own idle pooled connections in the database must not hold it (SET options WITH NO_WAIT, COLLATE).
-        host.ClearPoolsFor(args.ConnectionId, target.Name!);
+        // Choosing Yes helps only where the dialog asks: an exclusive change made without closing connections. Other
+        // changes that need the database to themselves (Broker Enabled, Containment type, COLLATE) are never asked about.
+        var advice = args.CloseConnections != true && Exclusive(args.Changes!) ? ActionErrors.OpenConnectionsAdvice : ActionErrors.OtherConnectionsAdvice;
         var (steps, failure, _) = await RunStepsAsync(connection, [.. plan.Select(statement => (statement.Title, (Func<Task>)(() => RunAlterAsync(connection, statement, dryRun: false, token))))],
-            ActionErrors.OpenConnectionsAdvice, token);
+            advice, token);
         return new(steps, messages.Collected(), 0, failure);
     }
 

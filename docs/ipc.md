@@ -280,6 +280,11 @@ only changed values, at least one and at most 512 statements, each key a settabl
 integer as plain decimal text in range, a collation name of letters, digits and underscores), and `closeConnections` (the
 Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. Script always
 writes `WITH NO_WAIT` and answers `database: 'master'`; execute runs one step per statement, titled by the option's label.
+Before any statement, execute counts the database's sessions again, as SSMS does when OK is pressed: an option SSMS closes
+connections for, without `closeConnections`, while other sessions are in the database answers `IN_USE` with no steps, and
+the dialog asks Open Connections. Turning Database Read-Only on with a change SQL Server refuses after it on a read-only
+database (the owner, scoped configurations, Target Recovery Time, Delayed Durability) answers `NOT_SUPPORTED` before
+anything runs, for Script too.
 A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.

@@ -8,7 +8,9 @@ import { dialogMessages, ObjectDialogService } from '../src/renderer/src/dialogs
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
-import { connectionInfo, connectionOptions } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, explorerAnswer, readyBackend, workbenchFixture } from './fixtures/workbench'
+import type { Platform } from '../src/shared/commands/keybindings'
+import type { KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import { databaseModel } from './fixtures/database-properties'
 import { setOption, type DatabaseDraft } from '../src/renderer/src/dialogs/database-properties'
 
@@ -251,6 +253,37 @@ describe('ObjectDialogService: Database Properties', () => {
     execute.resolve(done)
     await ok
   })
+  it('asks Open Connections at once when connections joined after the dialog counted none (IN_USE before anything ran), as SSMS counts them at OK', async () => {
+    const { dialogs, api, execute } = await opened(databaseModel({ sessions: 0 }))
+    dialogs.updateDraft(setOption(draftOf(dialogs), 'restrictAccess', 'SINGLE_USER'))
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'IN_USE', message: 'Other connections use the database.', retryable: true } } })
+    api.confirmOpenConnections.mockResolvedValueOnce({ ok: true, value: true })
+    const ok = dialogs.ok()
+    await vi.waitFor(() => expect(api.executeObjectAction).toHaveBeenCalledTimes(2))
+    expect(api.confirmOpenConnections).toHaveBeenCalledTimes(1)
+    expect(api.executeObjectAction.mock.calls.map(call => call[0].action === 'properties' && call[0].closeConnections)).toEqual([false, true])
+    execute.resolve(done)
+    await ok
+    expect(dialogs.current).toBeUndefined()
+  })
+  it('keeps IN_USE when a step had run, and asks on the next OK; a change SSMS never asks about keeps its advice', async () => {
+    const { dialogs, api } = await opened(databaseModel({ sessions: 0 }))
+    dialogs.updateDraft(setOption(setOption(draftOf(dialogs), 'autoClose', 'true'), 'readOnly', 'true'))
+    const inUse = { code: 'IN_USE', message: 'Other connections use the database.', retryable: true } as const
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done' }, { status: 'failed' }], messages: [], elapsedMs: 1, error: inUse } })
+    await dialogs.ok()
+    expect(api.confirmOpenConnections).not.toHaveBeenCalled()
+    expect(dialogs.current).toMatchObject({ phase: 'failed', error: inUse })
+    await dialogs.ok()
+    expect(api.confirmOpenConnections).toHaveBeenCalledTimes(1)
+    expect(api.executeObjectAction).toHaveBeenCalledTimes(1)
+    const broker = await opened(databaseModel({ sessions: 0 }))
+    broker.dialogs.updateDraft(setOption(draftOf(broker.dialogs), 'brokerEnabled', 'true'))
+    broker.api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'failed' }], messages: [], elapsedMs: 1, error: inUse } })
+    await broker.dialogs.ok()
+    expect(broker.api.confirmOpenConnections).not.toHaveBeenCalled()
+    expect(broker.dialogs.current).toMatchObject({ phase: 'failed', error: inUse })
+  })
   it('runs nothing when the server goes while Open Connections is asked', async () => {
     const { dialogs, api, connections } = await opened()
     const answer = deferred<ApiResult<boolean>>()
@@ -263,5 +296,45 @@ describe('ObjectDialogService: Database Properties', () => {
     await ok
     expect(dialogs.current?.phase).toBe('disconnected')
     expect(api.executeObjectAction).not.toHaveBeenCalled()
+  })
+})
+
+describe('Object Explorer: Properties key', () => {
+  const press = (platform: Platform): KeyDownEvent => ({
+    key: 'i', code: 'KeyI', ctrlKey: platform !== 'darwin', metaKey: platform === 'darwin', altKey: false, shiftKey: false, repeat: false, isComposing: false, keyCode: 73, defaultPrevented: false,
+    preventDefault: () => {}, stopPropagation: () => {}
+  })
+  async function explorerWith(platform: Platform) {
+    const fixture = workbenchFixture({ platform })
+    cleanups.push(fixture.dispose)
+    fixture.api.explorerChildren.mockImplementation(async params => ({ ok: true, value: explorerAnswer(params) }))
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+    const find = async (label: string) => {
+      let id: number | undefined
+      await vi.waitFor(() => { id = fixture.explorer.getSnapshot().rows.nodes.find(node => node?.label === label)?.id; expect(id, label).toBeDefined() })
+      return id!
+    }
+    fixture.explorer.expand(await find('Databases'))
+    fixture.explorer.select(await find('AppData'))
+    fixture.focused.panel = 'explorer'
+    return fixture
+  }
+  it('opens Database Properties with Cmd+I on macOS while Object Explorer has focus, once', async () => {
+    const { keybindings, dialogs, api, commands } = await explorerWith('darwin')
+    keybindings.handleKeyDown(press('darwin'))
+    await vi.waitFor(() => expect(dialogs.current?.dialog).toBe('databaseProperties'))
+    expect(api.describeObject.mock.calls[0][0]).toMatchObject({ dialog: 'databaseProperties', target: { kind: 'database', name: 'AppData' } })
+    // A second press while the dialog is open does nothing.
+    expect(commands.isEnabled('explorer.properties')).toBe(false)
+    keybindings.handleKeyDown(press('darwin'))
+    expect(api.describeObject).toHaveBeenCalledTimes(1)
+  })
+  it.each(['win32', 'linux'] as const)('has no Properties key on %s, where Alt+Enter stays reserved', async platform => {
+    const { keybindings, dialogs, api } = await explorerWith(platform)
+    keybindings.handleKeyDown(press(platform))
+    keybindings.handleKeyDown({ ...press(platform), key: 'i', ctrlKey: false, metaKey: true })
+    expect(dialogs.current).toBeUndefined()
+    expect(api.describeObject).not.toHaveBeenCalled()
   })
 })

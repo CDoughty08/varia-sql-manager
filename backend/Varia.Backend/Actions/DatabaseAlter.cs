@@ -134,8 +134,20 @@ internal static partial class DatabaseAlter
             if (system is not null && catalog.OwnerNotOn.Contains(system)) return (null, "SQL Server does not allow changing the owner of " + system + ".");
             plan.Add((int.MaxValue, new(AlterTemplate.Owner, database, "owner", Name: owner, Title: "Owner")));
         }
+        // SSMS would run READ_ONLY and then fail what SQL Server refuses on a read-only database (3906), leaving the database
+        // read-only with those changes failed; nothing runs instead, as the dialog's own check says.
+        if (options.GetValueOrDefault("readOnly") == "true")
+        {
+            var readOnly = catalog.DatabaseOptions["readOnly"].SmoOrder;
+            var refused = plan.Where(item => item.Order > readOnly && (item.Statement.Template == AlterTemplate.Owner || Option(catalog, item.Statement.Key)?.RefusedReadOnly == true))
+                .OrderBy(item => item.Order).Select(item => item.Statement.Title).FirstOrDefault();
+            if (refused is not null) return (null, AfterReadOnlyProblem(refused));
+        }
         return ([.. plan.OrderBy(item => item.Order).Select(item => item.Statement)], null);
     }
+
+    /// <summary>src/shared/actions/database.ts' afterReadOnlyProblem, word for word.</summary>
+    public static string AfterReadOnlyProblem(string label) => label + " cannot change in the same OK as setting Database Read-Only to True: SQL Server refuses it once the database is read-only.";
 
     /// <summary>The fragments AUTO_CREATE_STATISTICS can take (SMO's ScriptAutoCreateStatistics).</summary>
     public static readonly string[] AutoCreateFragments = ["ON", "OFF", "ON(INCREMENTAL = ON)", "ON(INCREMENTAL = OFF)"];
@@ -205,7 +217,6 @@ internal static partial class DatabaseAlter
         return text.ToString();
     }
 
-    private const string Guard = "IF @stmt IS NULL THROW 50000, N'A name could not be quoted.', 1;\n";
     private static string Sql(string literal) => "N'" + literal.Replace("'", "''", StringComparison.Ordinal) + "'";
 
     /// <summary>The batch that runs a statement: SQL Server builds it from constant literals and the parameters (@db where it
@@ -231,42 +242,16 @@ internal static partial class DatabaseAlter
             'C' => "@c",
             'O' => "QUOTENAME(@p2)",
             _ => throw new InvalidOperationException("Unknown part")
-        }))).Append(";\n").Append(Guard);
+        }))).Append(";\n").Append(ActionSql.Guard);
         text.Append(dryRun ? "SELECT @stmt AS stmt;" : "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt;");
         return text.ToString();
     }
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
-    private static readonly HashSet<string> Messages = ["N'A name could not be quoted.'", "N'A number is out of range.'", "N'The collation is not one of the server''s.'", "N'.sys.sp_executesql'"];
-    /// <summary>Keyword text only: letters, digits, underscores, spaces and the punctuation SMO's forms use. No quote, bracket,
-    /// comment or line break can be written with it, and it comes only from the embedded catalogue.</summary>
-    [GeneratedRegex(@"^N'[A-Za-z0-9_ ():=;]*'$")]
-    private static partial Regex KeywordLiteral();
-    [GeneratedRegex(@"N?'(?:[^']|'')*'")]
-    private static partial Regex LiteralPattern();
-    [GeneratedRegex(@"@\w+")]
-    private static partial Regex Variable();
-    [GeneratedRegex(@"QUOTENAME\(@p[12]\)|CONVERT\(nvarchar\(20\), @n1\)|^IF @n1 IS NULL OR @n1 < \d+ OR @n1 > \d+ THROW|WHERE c\.name = @p2\);$", RegexOptions.Multiline)]
-    private static partial Regex AllowedUse();
-
-    /// <summary>Problems with one batch (empty when it passes): a format hole, a parameter outside its three forms (QUOTENAME,
-    /// CONVERT of a guarded number, the collation lookup), an undeclared variable, and a literal that is neither one of the
-    /// fixed messages nor keyword text.</summary>
-    public static List<string> LintExecutable(string text)
-    {
-        var problems = new List<string>();
-        if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
-        var bare = AllowedUse().Replace(text, "");
-        foreach (Match used in Variable().Matches(bare))
-            if (used.Value is "@p1" or "@p2" or "@n1") problems.Add("uses " + used.Value + " outside QUOTENAME, CONVERT or the collation lookup");
-            else if (used.Value is not ("@db" or "@stmt" or "@module" or "@c")) problems.Add("uses the undeclared " + used.Value);
-        if (text.Contains("@n1", StringComparison.Ordinal) && !text.StartsWith("IF @n1 IS NULL OR @n1 < ", StringComparison.Ordinal)) problems.Add("uses @n1 without its range guard");
-        if (!text.Contains(Guard, StringComparison.Ordinal)) problems.Add("has no quoting guard");
-        foreach (Match literal in LiteralPattern().Matches(text))
-            if (!Messages.Contains(literal.Value) && !KeywordLiteral().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);
-        return problems;
-    }
+    /// <summary>The fixed messages and module suffix its batches may hold besides keyword text (ActionSql.LintExecutable).</summary>
+    public static readonly IReadOnlySet<string> Messages = new HashSet<string>(StringComparer.Ordinal)
+        { "N'A name could not be quoted.'", "N'A number is out of range.'", "N'The collation is not one of the server''s.'", "N'.sys.sp_executesql'" };
 
     /// <summary>Every statement the catalogue can plan: each settable option with each of its tokens (a number at its bounds),
     /// both terminations, the auto-create fragments, scoped configurations and the owner.</summary>
@@ -316,6 +301,7 @@ internal static partial class DatabaseAlter
     {
         foreach (var statement in Corpus(catalog))
             foreach (var dry in new[] { false, true })
-                yield return (statement.Template + " " + statement.Key + " " + statement.Token + (statement.Rollback ? " rollback" : "") + (dry ? " (dry run)" : ""), LintExecutable(Executable(catalog, statement, dry)));
+                yield return (statement.Template + " " + statement.Key + " " + statement.Token + (statement.Rollback ? " rollback" : "") + (dry ? " (dry run)" : ""),
+                    ActionSql.LintExecutable(Executable(catalog, statement, dry), Messages));
     }
 }

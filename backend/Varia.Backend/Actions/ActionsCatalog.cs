@@ -13,7 +13,7 @@ internal sealed record OptionSqlJson(string Kind, string? Keyword = null, bool? 
 internal sealed record RangeJson(long Min, long Max);
 /// <summary>A database option or scoped configuration as the catalogue resolves it for C#.</summary>
 internal sealed record OptionJson(string Key, string Label, string Control, bool Settable, int SmoOrder, List<string>? Tokens = null, RangeJson? Range = null, int? Since = null, List<string>? NotOn = null,
-    bool? Exclusive = null, OptionSqlJson? Sql = null);
+    bool? Exclusive = null, OptionSqlJson? Sql = null, bool? RefusedReadOnly = null);
 
 /// <summary>Object actions as src/shared/actions/catalog.ts declares them, embedded as actions-catalog.json (a vitest file
 /// snapshot keeps the copy in sync): which kinds and subtypes offer Select Top, Rename, Delete and Properties, the dialogs

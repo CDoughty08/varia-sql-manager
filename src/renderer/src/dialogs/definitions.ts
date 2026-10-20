@@ -4,9 +4,9 @@
 // for later dialogs (Login Properties, Backup and Restore): a dialog id and pages in src/shared/actions/catalog.ts, a
 // describe in the backend, a definition here, and its pages there. No React here, so the service and its tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
-import type { ActionDescribeResult, ActionRequest, DatabasePropertiesModel, DeleteTarget } from '../../../shared/actions/schema.ts'
+import type { ActionDescribeResult, ActionError, ActionRequest, DatabasePropertiesModel, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
-import { databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
+import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
 
 /** A request without its ids. */
 export type BuiltRequest = Omit<ActionRequest, 'connectionId' | 'requestId'>
@@ -29,6 +29,8 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly confirm?: (model: Model, request: BuiltRequest) => DialogConfirmation | undefined
   /** The request once the user answered Yes. */
   readonly withConfirmation?: (request: BuiltRequest, confirmation: DialogConfirmation) => BuiltRequest
+  /** The model after OK failed, when the failure shows part of it is stale (the same model otherwise). */
+  readonly afterFailure?: (model: Model, failure: ActionError) => Model
   readonly afterSuccess: (effects: DialogEffects) => void
 }
 
@@ -55,6 +57,7 @@ export const databasePropertiesDefinition: ObjectDialogDefinition<DatabaseProper
   request: databaseRequest,
   confirm: (model, request) => isProperties(request) ? databaseConfirm(model, request) : undefined,
   withConfirmation: request => isProperties(request) ? { ...request, closeConnections: true } : request,
+  afterFailure: afterDatabaseFailure,
   // The Databases listing shows Read-Only and Single User in its sublabels.
   afterSuccess: effects => effects.refreshListing()
 }

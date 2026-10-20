@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
-  autogrowthText, compatibilityLabel, compatibilityLevelsFor, databaseOptionDefs, databaseStatusText, fileTypeLabel, optionDef, scopedConfigurationDefs, tokenProblem
+  afterReadOnlyProblem, autogrowthText, compatibilityLabel, compatibilityLevelsFor, databaseOptionDefs, databaseStatusText, fileTypeLabel, optionDef, scopedConfigurationDefs, tokenProblem
 } from '../src/shared/actions/database'
 import { actionRequestSchema } from '../src/shared/actions/schema'
 import {
-  databaseConfirm, databaseRequest, draftErrors, greyNotes, initialDatabaseDraft, optionChoices, optionGroups, optionShown, optionState, ownerState, setOption, type DatabaseRequest
+  afterDatabaseFailure, databaseConfirm, databaseRequest, draftErrors, greyNotes, initialDatabaseDraft, optionChoices, optionGroups, optionShown, optionState, ownerState, setOption, type DatabaseRequest
 } from '../src/renderer/src/dialogs/database-properties'
 import { databaseModel } from './fixtures/database-properties'
 
@@ -119,6 +119,26 @@ describe('Database Properties draft', () => {
     expect(optionState(optionDef('autoUpdateStatistics')!, model, initialDatabaseDraft(model), tempdb).disabled).toBe(false)
     expect(ownerState(model, tempdb)).toEqual({ disabled: true, note: 'SQL Server does not allow changing the owner of tempdb.' })
     expect(ownerState(model, { kind: 'database', name: 'msdb' }).disabled).toBe(false)
+    // SQL Server refuses ALTER AUTHORIZATION on a read-only database (3906).
+    expect(ownerState(readOnly, target)).toEqual({ disabled: true, note: greyNotes.readOnlyDatabase })
+    expect(request(readOnly, draft => ({ ...draft, owner: 'AppUser' }))).toBeUndefined()
+  })
+  it('refuses to turn Read-Only on in the same OK as a change SQL Server would refuse after it, which SSMS would leave half applied', () => {
+    const model = databaseModel()
+    const readOnly = (draft: ReturnType<typeof initialDatabaseDraft>) => setOption(draft, 'readOnly', 'true')
+    expect(request(model, draft => setOption(readOnly(draft), 'maxDop', '4'))).toEqual({ problem: afterReadOnlyProblem('Max DOP') })
+    expect(request(model, draft => ({ ...readOnly(draft), owner: 'AppUser' }))).toEqual({ problem: afterReadOnlyProblem('Owner') })
+    expect(draftErrors(model, setOption(setOption(readOnly(initialDatabaseDraft(model)), 'targetRecoveryTime', '30'), 'delayedDurability', 'FORCED'), target))
+      .toEqual(new Map([['delayedDurability', afterReadOnlyProblem('Delayed Durability')], ['targetRecoveryTime', afterReadOnlyProblem('Target Recovery Time (Seconds)')]]))
+    // What runs before READ_ONLY, and what SQL Server allows on a read-only database, still goes with it.
+    const together = request(model, draft => ['compatibilityLevel:150', 'collation:Latin1_General_BIN2', 'dateCorrelationOptimization:true', 'recoveryModel:SIMPLE', 'restrictAccess:SINGLE_USER',
+      'pageVerify:NONE', 'allowSnapshotIsolation:true'].reduce((next, pair) => setOption(next, pair.split(':')[0], pair.split(':')[1]), readOnly(draft))) as DatabaseRequest
+    expect(Object.keys(together.changes.options!).sort()).toEqual(['allowSnapshotIsolation', 'collation', 'compatibilityLevel', 'dateCorrelationOptimization', 'pageVerify', 'readOnly', 'recoveryModel', 'restrictAccess'])
+    // Turning it off, or a database that already is read-only, is not this rule.
+    expect(request(model, draft => setOption(setOption(draft, 'readOnly', 'false'), 'maxDop', '4'))).toMatchObject({ changes: { scoped: { maxDop: '4' } } })
+    expect(all.filter(def => def.settable && def.refusedReadOnly).map(def => def.key).sort()).toEqual(['collation', 'compatibilityLevel', 'dateCorrelationOptimization', 'delayedDurability',
+      'legacyCardinalityEstimation', 'legacyCardinalityEstimationForSecondary', 'maxDop', 'maxDopForSecondary', 'parameterSniffing', 'parameterSniffingForSecondary', 'queryOptimizerFixes',
+      'queryOptimizerFixesForSecondary', 'targetRecoveryTime'])
   })
   it('shows rows only where the server and the database have them', () => {
     const model = databaseModel()
@@ -137,5 +157,11 @@ describe('Database Properties draft', () => {
     expect(databaseConfirm(unknown, built(unknown, 'readOnly', 'true'))).toBe('openConnections')
     expect(databaseConfirm(idle, built(idle, 'readCommittedSnapshot', 'true'))).toBeUndefined()
     expect(databaseConfirm(busy, built(busy, 'recoveryModel', 'SIMPLE'))).toBeUndefined()
+    // After IN_USE the count the dialog opened with is stale, so the next OK asks, as SSMS counts at OK.
+    const inUse = { code: 'IN_USE', message: 'Other connections use the database.', retryable: true } as const
+    const stale = afterDatabaseFailure(idle, inUse)
+    expect(stale.sessions).toBeUndefined()
+    expect(databaseConfirm(stale, built(stale, 'readOnly', 'true'))).toBe('openConnections')
+    expect(afterDatabaseFailure(idle, { ...inUse, code: 'SQL_ERROR' })).toBe(idle)
   })
 })

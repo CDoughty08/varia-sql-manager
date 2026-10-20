@@ -5,6 +5,7 @@ import { scriptDestinations, type ScriptDestination } from '../../../shared/scri
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { trapFocus } from '../trap-focus'
+import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import FilegroupsPage from './pages/database/FilegroupsPage'
 import FilesPage from './pages/database/FilesPage'
@@ -105,9 +106,11 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!executing) close() }
-    else if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement) && !(event.target instanceof HTMLSelectElement) && !(event.target as Element).closest?.('[role="grid"], [role="listbox"], table')) {
+    else if (event.key === 'Enter') {
+      const enter = dialogEnter(event.target as Element)
+      if (enter === 'native') return
       event.preventDefault()
-      void dialogs.ok()
+      if (enter === 'ok') void dialogs.ok()
     }
   }
   const title = open.title

@@ -11,8 +11,12 @@ internal static class ActionErrors
     public const int MaxMessage = 2048;
     /// <summary>Delete Object's advice for a database other connections use.</summary>
     public const string CloseConnectionsAdvice = "Close its connections, or check Close existing connections.";
-    /// <summary>Database Properties' advice when WITH NO_WAIT finds other connections (5061, 5070) or COLLATE cannot lock the database (5030).</summary>
+    /// <summary>Database Properties' advice when other connections are in the way of an option it asks Open Connections for:
+    /// WITH NO_WAIT finds them (5061, 5070), or the preflight counts them.</summary>
     public const string OpenConnectionsAdvice = "Other connections use the database. Choose Yes when asked to close them, or close them first.";
+    /// <summary>Its advice for any other change other connections are in the way of (Broker Enabled, Containment type, COLLATE's
+    /// 5030, a single-user database's 924), which Open Connections never asks about.</summary>
+    public const string OtherConnectionsAdvice = "Other connections use the database. Close them first.";
     /// <summary>SQL Server error numbers by the code they map to (Lost also covers severity 20 and above), one mapping per line.</summary>
     public static readonly IReadOnlyDictionary<string, int[]> Numbers = new Dictionary<string, int[]>(StringComparer.Ordinal)
     {

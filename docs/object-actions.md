@@ -63,73 +63,78 @@ number of users, memory-optimized memory and collation). Files and Filegroups li
 filegroups read-only in this version; Owner on the Files page is editable. Options shows Collation, Recovery model,
 Compatibility level and Containment type above SSMS's property grid. OK and Script send only the values that changed,
 as SSMS does; Script with nothing changed says "There is no action to be scripted." A snapshot, a database that is not online or
-not accessible, and Azure SQL Managed Instance open read-only with a note. Compatibility level is greyed for a login
-outside sysadmin (SSMS ignores the change silently), and Containment type when the server's contained database
-authentication is off. The owner of master, model, tempdb cannot change.
+not accessible, a database the login may not ALTER, and Azure SQL Managed Instance open read-only with a note.
+Compatibility level is greyed for a login outside sysadmin (SSMS ignores the change silently), and Containment type
+when the server's contained database authentication is off. The owner of master, model, tempdb cannot change.
+On a read-only database only Database Read-Only and Restrict Access change, and the owner is greyed. Turning Database
+Read-Only on cannot share an OK with a change SQL Server applies after it and refuses on a read-only database (the
+"Read-only" column below, and the owner): SSMS would leave the database read-only with that change failed, so Varia
+says why and runs nothing.
 
 Compatibility levels offered: SQL Server 2008 (100), SQL Server 2012 (110), SQL Server 2014 (120), SQL Server 2016 (130), SQL Server 2017 (140), SQL Server 2019 (150), SQL Server 2022 (160), SQL Server 2025 (170), up to the server's own.
 
 ### Database options
 
-"Exclusive": SSMS closes other connections to change it. "Not on": system databases SQL Server refuses it on (Learn's
-master, model, msdb and tempdb pages). "Since": the version band (13 = SQL Server 2016, 17 = 2025).
+"Exclusive": SSMS closes other connections to change it. "Read-only": SQL Server refuses the change on a read-only
+database (3906, or 5073 for COLLATE; measured on SQL Server 2025). "Not on": system databases SQL Server refuses it on
+(Learn's master, model, msdb and tempdb pages). "Since": the version band (13 = SQL Server 2016, 17 = 2025).
 
-| Option | Category | Settable | SQL | Exclusive | Since | Not on |
-| --- | --- | --- | --- | --- | --- | --- |
-| Collation | Header | Yes | `COLLATE` |  |  | master, model, msdb, tempdb |
-| Recovery model | Header | Yes | `RECOVERY` `FULL`, `BULK_LOGGED`, `SIMPLE` |  |  | tempdb |
-| Compatibility level | Header | Yes | `COMPATIBILITY_LEVEL` |  |  |  |
-| Containment type | Header | Yes | `CONTAINMENT` `NONE`, `PARTIAL` |  |  | tempdb |
-| Auto Close | Automatic | Yes | `AUTO_CLOSE` `ON`, `OFF` |  |  | master, tempdb |
-| Auto Create Incremental Statistics | Automatic | Yes | `AUTO_CREATE_STATISTICS` |  |  |  |
-| Auto Create Statistics | Automatic | Yes | `AUTO_CREATE_STATISTICS` |  |  |  |
-| Auto Shrink | Automatic | Yes | `AUTO_SHRINK` `ON`, `OFF` |  |  | master, tempdb |
-| Auto Update Statistics | Automatic | Yes | `AUTO_UPDATE_STATISTICS` `ON`, `OFF` |  |  |  |
-| Auto Update Statistics Asynchronously | Automatic | Yes | `AUTO_UPDATE_STATISTICS_ASYNC` `ON`, `OFF` |  |  |  |
-| Default Fulltext Language LCID | Containment | No |  |  |  |  |
-| Default Language | Containment | No |  |  |  |  |
-| Nested Triggers Enabled | Containment | No |  |  |  |  |
-| Transform Noise Words | Containment | No |  |  |  |  |
-| Two Digit Year Cutoff | Containment | No |  |  |  |  |
-| Close Cursor on Commit Enabled | Cursor | Yes | `CURSOR_CLOSE_ON_COMMIT` `ON`, `OFF` |  |  |  |
-| Default Cursor | Cursor | Yes | `CURSOR_DEFAULT` `GLOBAL`, `LOCAL` |  |  |  |
-| FILESTREAM Directory Name | FILESTREAM | No |  |  |  |  |
-| FILESTREAM Non-Transacted Access | FILESTREAM | Yes | `FILESTREAM( NON_TRANSACTED_ACCESS = … )` | Yes |  |  |
-| Is Ledger Database | Ledger | No |  |  | 16 |  |
-| Allow Snapshot Isolation | Miscellaneous | Yes | `ALLOW_SNAPSHOT_ISOLATION` |  |  | master, msdb |
-| ANSI NULL Default | Miscellaneous | Yes | `ANSI_NULL_DEFAULT` `ON`, `OFF` |  |  |  |
-| ANSI NULLS Enabled | Miscellaneous | Yes | `ANSI_NULLS` `ON`, `OFF` |  |  |  |
-| ANSI Padding Enabled | Miscellaneous | Yes | `ANSI_PADDING` `ON`, `OFF` |  |  |  |
-| ANSI Warnings Enabled | Miscellaneous | Yes | `ANSI_WARNINGS` `ON`, `OFF` |  |  |  |
-| Arithmetic Abort Enabled | Miscellaneous | Yes | `ARITHABORT` `ON`, `OFF` |  |  |  |
-| Concatenate Null Yields Null | Miscellaneous | Yes | `CONCAT_NULL_YIELDS_NULL` `ON`, `OFF` |  |  |  |
-| Cross-database Ownership Chaining Enabled | Miscellaneous | No |  |  |  |  |
-| Date Correlation Optimization Enabled | Miscellaneous | Yes | `DATE_CORRELATION_OPTIMIZATION` `ON`, `OFF` | Yes |  |  |
-| Delayed Durability | Miscellaneous | Yes | `DELAYED_DURABILITY` `DISABLED`, `ALLOWED`, `FORCED` |  |  |  |
-| Is Read Committed Snapshot On | Miscellaneous | Yes | `READ_COMMITTED_SNAPSHOT` `ON`, `OFF` | Yes |  | master, msdb, tempdb |
-| Numeric Round-Abort | Miscellaneous | Yes | `NUMERIC_ROUNDABORT` `ON`, `OFF` |  |  |  |
-| Parameterization | Miscellaneous | Yes | `PARAMETERIZATION` `SIMPLE`, `FORCED` |  |  |  |
-| Quoted Identifiers Enabled | Miscellaneous | Yes | `QUOTED_IDENTIFIER` `ON`, `OFF` |  |  |  |
-| Recursive Triggers Enabled | Miscellaneous | Yes | `RECURSIVE_TRIGGERS` `ON`, `OFF` |  |  |  |
-| Trustworthy | Miscellaneous | No |  |  |  |  |
-| VarDecimal Storage Format Enabled | Miscellaneous | No |  |  |  |  |
-| Page Verify | Recovery | Yes | `PAGE_VERIFY` `CHECKSUM`, `TORN_PAGE_DETECTION`, `NONE` |  |  |  |
-| Target Recovery Time (Seconds) | Recovery | Yes | `TARGET_RECOVERY_TIME` `n SECONDS` |  |  |  |
-| Broker Enabled | Service Broker | Yes | `ENABLE_BROKER`, `DISABLE_BROKER` |  |  | master, model |
-| Honor Broker Priority | Service Broker | No |  |  |  |  |
-| Service Broker Identifier | Service Broker | No |  |  |  |  |
-| Database Read-Only | State | Yes | `READ_ONLY`, `READ_WRITE` | Yes |  | master, tempdb |
-| Database State | State | No |  |  |  |  |
-| Encryption Enabled | State | No |  |  |  |  |
-| Restrict Access | State | Yes | `MULTI_USER`, `RESTRICTED_USER`, `SINGLE_USER` | Yes |  | master, tempdb |
-| Legacy Cardinality Estimation | Database Scoped Configurations | Yes | `SET LEGACY_CARDINALITY_ESTIMATION` |  | 13 |  |
-| Legacy Cardinality Estimation for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET LEGACY_CARDINALITY_ESTIMATION` |  | 13 |  |
-| Max DOP | Database Scoped Configurations | Yes | `SET MAXDOP` |  | 13 |  |
-| Max DOP for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET MAXDOP` |  | 13 |  |
-| Parameter Sniffing | Database Scoped Configurations | Yes | `SET PARAMETER_SNIFFING` |  | 13 |  |
-| Parameter Sniffing for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET PARAMETER_SNIFFING` |  | 13 |  |
-| Query Optimizer Fixes | Database Scoped Configurations | Yes | `SET QUERY_OPTIMIZER_HOTFIXES` |  | 13 |  |
-| Query Optimizer Fixes for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET QUERY_OPTIMIZER_HOTFIXES` |  | 13 |  |
+| Option | Category | Settable | SQL | Exclusive | Read-only | Since | Not on |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Collation | Header | Yes | `COLLATE` |  | Yes |  | master, model, msdb, tempdb |
+| Recovery model | Header | Yes | `RECOVERY` `FULL`, `BULK_LOGGED`, `SIMPLE` |  |  |  | tempdb |
+| Compatibility level | Header | Yes | `COMPATIBILITY_LEVEL` |  | Yes |  |  |
+| Containment type | Header | Yes | `CONTAINMENT` `NONE`, `PARTIAL` |  |  |  | tempdb |
+| Auto Close | Automatic | Yes | `AUTO_CLOSE` `ON`, `OFF` |  |  |  | master, tempdb |
+| Auto Create Incremental Statistics | Automatic | Yes | `AUTO_CREATE_STATISTICS` |  |  |  |  |
+| Auto Create Statistics | Automatic | Yes | `AUTO_CREATE_STATISTICS` |  |  |  |  |
+| Auto Shrink | Automatic | Yes | `AUTO_SHRINK` `ON`, `OFF` |  |  |  | master, tempdb |
+| Auto Update Statistics | Automatic | Yes | `AUTO_UPDATE_STATISTICS` `ON`, `OFF` |  |  |  |  |
+| Auto Update Statistics Asynchronously | Automatic | Yes | `AUTO_UPDATE_STATISTICS_ASYNC` `ON`, `OFF` |  |  |  |  |
+| Default Fulltext Language LCID | Containment | No |  |  |  |  |  |
+| Default Language | Containment | No |  |  |  |  |  |
+| Nested Triggers Enabled | Containment | No |  |  |  |  |  |
+| Transform Noise Words | Containment | No |  |  |  |  |  |
+| Two Digit Year Cutoff | Containment | No |  |  |  |  |  |
+| Close Cursor on Commit Enabled | Cursor | Yes | `CURSOR_CLOSE_ON_COMMIT` `ON`, `OFF` |  |  |  |  |
+| Default Cursor | Cursor | Yes | `CURSOR_DEFAULT` `GLOBAL`, `LOCAL` |  |  |  |  |
+| FILESTREAM Directory Name | FILESTREAM | No |  |  |  |  |  |
+| FILESTREAM Non-Transacted Access | FILESTREAM | Yes | `FILESTREAM( NON_TRANSACTED_ACCESS = … )` | Yes |  |  |  |
+| Is Ledger Database | Ledger | No |  |  |  | 16 |  |
+| Allow Snapshot Isolation | Miscellaneous | Yes | `ALLOW_SNAPSHOT_ISOLATION` |  |  |  | master, msdb |
+| ANSI NULL Default | Miscellaneous | Yes | `ANSI_NULL_DEFAULT` `ON`, `OFF` |  |  |  |  |
+| ANSI NULLS Enabled | Miscellaneous | Yes | `ANSI_NULLS` `ON`, `OFF` |  |  |  |  |
+| ANSI Padding Enabled | Miscellaneous | Yes | `ANSI_PADDING` `ON`, `OFF` |  |  |  |  |
+| ANSI Warnings Enabled | Miscellaneous | Yes | `ANSI_WARNINGS` `ON`, `OFF` |  |  |  |  |
+| Arithmetic Abort Enabled | Miscellaneous | Yes | `ARITHABORT` `ON`, `OFF` |  |  |  |  |
+| Concatenate Null Yields Null | Miscellaneous | Yes | `CONCAT_NULL_YIELDS_NULL` `ON`, `OFF` |  |  |  |  |
+| Cross-database Ownership Chaining Enabled | Miscellaneous | No |  |  |  |  |  |
+| Date Correlation Optimization Enabled | Miscellaneous | Yes | `DATE_CORRELATION_OPTIMIZATION` `ON`, `OFF` | Yes | Yes |  |  |
+| Delayed Durability | Miscellaneous | Yes | `DELAYED_DURABILITY` `DISABLED`, `ALLOWED`, `FORCED` |  | Yes |  |  |
+| Is Read Committed Snapshot On | Miscellaneous | Yes | `READ_COMMITTED_SNAPSHOT` `ON`, `OFF` | Yes |  |  | master, msdb, tempdb |
+| Numeric Round-Abort | Miscellaneous | Yes | `NUMERIC_ROUNDABORT` `ON`, `OFF` |  |  |  |  |
+| Parameterization | Miscellaneous | Yes | `PARAMETERIZATION` `SIMPLE`, `FORCED` |  |  |  |  |
+| Quoted Identifiers Enabled | Miscellaneous | Yes | `QUOTED_IDENTIFIER` `ON`, `OFF` |  |  |  |  |
+| Recursive Triggers Enabled | Miscellaneous | Yes | `RECURSIVE_TRIGGERS` `ON`, `OFF` |  |  |  |  |
+| Trustworthy | Miscellaneous | No |  |  |  |  |  |
+| VarDecimal Storage Format Enabled | Miscellaneous | No |  |  |  |  |  |
+| Page Verify | Recovery | Yes | `PAGE_VERIFY` `CHECKSUM`, `TORN_PAGE_DETECTION`, `NONE` |  |  |  |  |
+| Target Recovery Time (Seconds) | Recovery | Yes | `TARGET_RECOVERY_TIME` `n SECONDS` |  | Yes |  |  |
+| Broker Enabled | Service Broker | Yes | `ENABLE_BROKER`, `DISABLE_BROKER` |  |  |  | master, model |
+| Honor Broker Priority | Service Broker | No |  |  |  |  |  |
+| Service Broker Identifier | Service Broker | No |  |  |  |  |  |
+| Database Read-Only | State | Yes | `READ_ONLY`, `READ_WRITE` | Yes |  |  | master, tempdb |
+| Database State | State | No |  |  |  |  |  |
+| Encryption Enabled | State | No |  |  |  |  |  |
+| Restrict Access | State | Yes | `MULTI_USER`, `RESTRICTED_USER`, `SINGLE_USER` | Yes |  |  | master, tempdb |
+| Legacy Cardinality Estimation | Database Scoped Configurations | Yes | `SET LEGACY_CARDINALITY_ESTIMATION` |  | Yes | 13 |  |
+| Legacy Cardinality Estimation for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET LEGACY_CARDINALITY_ESTIMATION` |  | Yes | 13 |  |
+| Max DOP | Database Scoped Configurations | Yes | `SET MAXDOP` |  | Yes | 13 |  |
+| Max DOP for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET MAXDOP` |  | Yes | 13 |  |
+| Parameter Sniffing | Database Scoped Configurations | Yes | `SET PARAMETER_SNIFFING` |  | Yes | 13 |  |
+| Parameter Sniffing for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET PARAMETER_SNIFFING` |  | Yes | 13 |  |
+| Query Optimizer Fixes | Database Scoped Configurations | Yes | `SET QUERY_OPTIMIZER_HOTFIXES` |  | Yes | 13 |  |
+| Query Optimizer Fixes for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET QUERY_OPTIMIZER_HOTFIXES` |  | Yes | 13 |  |
 
 ### Statement order
 
@@ -149,9 +154,13 @@ from this catalogue, and a collation only as `sys.fn_helpcollations()` names it.
 
 When OK changes an exclusive option and the database has sessions (or they cannot be counted), Varia asks "To change the database properties, SQL Server must close all other connections to the database. Are you sure you want to change the properties and close all other connections?"
 (Yes or No; No is the default, because Yes rolls back the other sessions' transactions, and Escape answers No).
-No runs nothing. Yes writes the SET options WITH ROLLBACK IMMEDIATE. Without the prompt, WITH NO_WAIT makes SQL Server
-refuse (`IN_USE`) rather than wait for the other sessions' transactions; SQL Server gives up after about 20 seconds. Script
-never asks: it always writes WITH NO_WAIT, as SSMS does.
+No runs nothing. Yes writes the SET options WITH ROLLBACK IMMEDIATE. SSMS counts the connections when OK is pressed, so
+the backend counts them again before anything runs: when sessions have joined since the dialog opened with none, it
+answers `IN_USE` at once and the dialog asks. Without the prompt, WITH NO_WAIT makes SQL Server refuse (`IN_USE`)
+rather than wait for the other sessions' transactions; SQL Server gives up after about 20 seconds. That failure advises
+choosing Yes only after an exclusive change made without closing connections; otherwise (Broker Enabled or Containment
+type with other sessions, which SSMS does not close connections for) it advises closing them first. Script never
+asks: it always writes WITH NO_WAIT, as SSMS does.
 
 ## SQL
 

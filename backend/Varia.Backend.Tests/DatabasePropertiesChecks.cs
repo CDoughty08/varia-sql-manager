@@ -162,9 +162,22 @@ internal static class DatabasePropertiesChecks
         var first = DatabaseAlter.Plan(Catalog, "AppData", Options(("autoCreateIncrementalStatistics", "true"), ("autoCreateStatistics", "false")), false, Facts2022).Plan!;
         check(off.Count == 0 && first.Single().Token == "OFF" && first.Single().Title == "Auto Create Statistics",
             "INCREMENTAL is written only when Auto Create Statistics ends up on, as SMO's ScriptAutoCreateStatistics does");
-        var plan = DatabaseAlter.Plan(Catalog, "AppData", new(Owner: "sa", Options: new() { ["readOnly"] = "true", ["autoClose"] = "true" }), false, Facts2022).Plan!;
+        var plan = DatabaseAlter.Plan(Catalog, "AppData", new(Owner: "sa", Options: new() { ["readOnly"] = "false", ["autoClose"] = "true" }), false, Facts2022).Plan!;
         check(plan.Select(statement => statement.Title).SequenceEqual(["Auto Close", "Database Read-Only", "Owner"]) && plan.All(statement => !statement.Rollback),
             "each statement is a step titled by its option's label, in SMO's order, and the owner last");
+        // SSMS would run READ_ONLY, then fail what SQL Server refuses on a read-only database (3906), leaving it read-only.
+        check(Refusal(new(Scoped: new() { ["maxDop"] = "4" }, Options: new() { ["readOnly"] = "true" })) == DatabaseAlter.AfterReadOnlyProblem("Max DOP")
+            && Refusal(new(Owner: "sa", Options: new() { ["readOnly"] = "true" })) == DatabaseAlter.AfterReadOnlyProblem("Owner")
+            && Refusal(Options(("readOnly", "true"), ("delayedDurability", "FORCED"), ("targetRecoveryTime", "30"))) == DatabaseAlter.AfterReadOnlyProblem("Target Recovery Time (Seconds)")
+            && Refusal(Options(("readOnly", "true"), ("compatibilityLevel", "150"), ("collation", "Latin1_General_BIN2"), ("dateCorrelationOptimization", "true"), ("recoveryModel", "SIMPLE"),
+                ("restrictAccess", "SINGLE_USER"), ("pageVerify", "NONE"), ("allowSnapshotIsolation", "true"))) == ""
+            && Refusal(new(Owner: "sa", Options: new() { ["readOnly"] = "false" }, Scoped: new() { ["maxDop"] = "4" })) == "",
+            "turning Read-Only on refuses a change SQL Server applies after it and refuses on a read-only database (the owner, scoped configurations, Target Recovery Time, "
+            + "Delayed Durability), and allows what runs before it or works on a read-only database");
+        var refusedReadOnly = Catalog.DatabaseOptions.Values.Concat(Catalog.ScopedConfigurations.Values).Where(option => option.RefusedReadOnly == true).Select(option => option.Key).Order(StringComparer.Ordinal).ToList();
+        check(refusedReadOnly.SequenceEqual(["collation", "compatibilityLevel", "dateCorrelationOptimization", "delayedDurability", "legacyCardinalityEstimation", "legacyCardinalityEstimationForSecondary",
+            "maxDop", "maxDopForSecondary", "parameterSniffing", "parameterSniffingForSecondary", "queryOptimizerFixes", "queryOptimizerFixesForSecondary", "targetRecoveryTime"]),
+            "the catalogue marks the changes SQL Server refuses on a read-only database: " + string.Join(", ", refusedReadOnly));
     }
 
     private static void Lint(Action<bool, string> check)
@@ -183,10 +196,12 @@ internal static class DatabasePropertiesChecks
             ("no quoting guard", good.Replace("IF @stmt IS NULL THROW 50000, N'A name could not be quoted.', 1;\n", "", StringComparison.Ordinal)),
             ("a number without its guard", DatabaseAlter.Executable(Catalog, new(AlterTemplate.Compat, "db", "compatibilityLevel", Number: 150))[(DatabaseAlter.Executable(Catalog, new(AlterTemplate.Compat, "db", "compatibilityLevel", Number: 150)).IndexOf('\n') + 1)..]),
             ("a format hole", good.Replace("N' TO '", "N' TO {0}'", StringComparison.Ordinal)),
-            ("an undeclared variable", good.Replace("QUOTENAME(@p2)", "QUOTENAME(@other)", StringComparison.Ordinal))
+            ("an undeclared variable", good.Replace("QUOTENAME(@p2)", "QUOTENAME(@other)", StringComparison.Ordinal)),
+            ("a bare database parameter", good.Replace("QUOTENAME(@db) + N'.sys.sp_executesql'", "@db + N'.sys.sp_executesql'", StringComparison.Ordinal))
         };
-        var missed = mutations.Where(mutation => DatabaseAlter.LintExecutable(mutation.Text).Count == 0).Select(mutation => mutation.Name).ToList();
-        check(missed.Count == 0 && DatabaseAlter.LintExecutable(good).Count == 0, "the lint catches bare and spliced names, a comment in a literal, a missing guard, an unguarded number, format holes and undeclared variables: " + string.Join(", ", missed));
+        var missed = mutations.Where(mutation => mutation.Text == good || ActionSql.LintExecutable(mutation.Text, DatabaseAlter.Messages).Count == 0).Select(mutation => mutation.Name).ToList();
+        check(missed.Count == 0 && ActionSql.LintExecutable(good, DatabaseAlter.Messages).Count == 0,
+            "the lint catches bare and spliced names, the database outside QUOTENAME, a comment in a literal, a missing guard, an unguarded number, format holes and undeclared variables: " + string.Join(", ", missed));
         check(corpus.All(statement => DatabaseAlter.Executable(Catalog, statement) == DatabaseAlter.Executable(Catalog, statement with { Database = ActionChecks.Long(InjectionMatrix.Fragments[0]), Name = "other" })),
             "a batch's text never depends on the database, the collation or the login: they are parameters");
     }

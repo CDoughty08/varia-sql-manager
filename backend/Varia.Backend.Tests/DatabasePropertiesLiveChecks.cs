@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Common;
@@ -114,10 +115,12 @@ internal static class DatabasePropertiesLiveChecks
         var skipped = new List<string>();
         var failed = new List<string>();
         var changedCount = 0;
+        // Only levels the server offers: SQL Server 2017's highest is 140, so a fixed 150 would be refused there.
+        string OtherLevel(string current) => model.CompatibilityLevels.Where(level => level.ToString(CultureInfo.InvariantCulture) != current).Max().ToString(CultureInfo.InvariantCulture);
         string? Other(OptionJson option, string current) => option.Key switch
         {
             "collation" => current == "Latin1_General_BIN2" ? "Latin1_General_CI_AS" : "Latin1_General_BIN2",
-            "compatibilityLevel" => current == "150" ? "140" : "150",
+            "compatibilityLevel" => OtherLevel(current),
             "targetRecoveryTime" => current == "30" ? "60" : "30",
             "maxDop" => current == "4" ? "0" : "4",
             "maxDopForSecondary" => current == "PRIMARY" ? "2" : "PRIMARY",
@@ -158,24 +161,29 @@ internal static class DatabasePropertiesLiveChecks
         await using (var connection = ((IActionHost)service).Connection(info.Id))
         {
             await ((IActionHost)service).OpenAsync(connection, CancellationToken.None);
+            var level = OtherLevel(model.Options["compatibilityLevel"]);
+            var smoLevel = Enum.Parse<CompatibilityLevel>("Version" + level);
             var sets = new (string Name, DatabaseChangesDto Changes, Action<Database> Apply, bool? Snapshot, string? Owner)[]
             {
-                ("SET options", new(Options: new() { ["recoveryModel"] = "FULL", ["autoClose"] = "true", ["ansiNulls"] = "true", ["compatibilityLevel"] = "150", ["pageVerify"] = "TORN_PAGE_DETECTION",
-                    ["defaultCursor"] = "LOCAL", ["brokerEnabled"] = "true", ["targetRecoveryTime"] = "30", ["delayedDurability"] = "FORCED", ["parameterization"] = "FORCED",
+                ("SET options", new(Options: new() { ["recoveryModel"] = "FULL", ["autoClose"] = "true", ["ansiNulls"] = "true", ["compatibilityLevel"] = level, ["pageVerify"] = "TORN_PAGE_DETECTION",
+                    ["defaultCursor"] = "LOCAL", ["brokerEnabled"] = "true", ["parameterization"] = "FORCED",
                     ["autoCreateStatistics"] = "false", ["readOnly"] = "true", ["restrictAccess"] = "RESTRICTED_USER", ["collation"] = "Latin1_General_BIN2", ["dateCorrelationOptimization"] = "true" }),
                     database =>
                     {
                         database.DatabaseOptions.RecoveryModel = RecoveryModel.Full; database.DatabaseOptions.AutoClose = true; database.DatabaseOptions.AnsiNullsEnabled = true;
-                        database.CompatibilityLevel = CompatibilityLevel.Version150; database.DatabaseOptions.PageVerify = PageVerify.TornPageDetection;
-                        database.DatabaseOptions.LocalCursorsDefault = true; database.BrokerEnabled = true; database.TargetRecoveryTime = 30; database.DelayedDurability = DelayedDurability.Forced;
+                        database.CompatibilityLevel = smoLevel; database.DatabaseOptions.PageVerify = PageVerify.TornPageDetection;
+                        database.DatabaseOptions.LocalCursorsDefault = true; database.BrokerEnabled = true;
                         database.DatabaseOptions.IsParameterizationForced = true; database.DatabaseOptions.AutoCreateStatistics = false; database.DatabaseOptions.ReadOnly = true;
                         database.DatabaseOptions.UserAccess = DatabaseUserAccess.Restricted; database.Collation = "Latin1_General_BIN2"; database.DatabaseOptions.DateCorrelationOptimization = true;
                     }, null, null),
-                ("statistics and scoped configurations", new(Options: new() { ["autoCreateIncrementalStatistics"] = "true", ["ansiPadding"] = "true", ["arithmeticAbort"] = "true" },
+                // Target Recovery Time and Delayed Durability cannot follow Read-Only's True in one OK, so they are here.
+                ("statistics and scoped configurations", new(Options: new() { ["autoCreateIncrementalStatistics"] = "true", ["ansiPadding"] = "true", ["arithmeticAbort"] = "true",
+                    ["targetRecoveryTime"] = "30", ["delayedDurability"] = "FORCED" },
                     Scoped: new() { ["maxDop"] = "4", ["legacyCardinalityEstimation"] = "ON", ["maxDopForSecondary"] = "2", ["parameterSniffingForSecondary"] = "OFF" }),
                     database =>
                     {
                         database.DatabaseOptions.AutoCreateStatisticsIncremental = true; database.DatabaseOptions.AnsiPaddingEnabled = true; database.DatabaseOptions.ArithmeticAbortEnabled = true;
+                        database.TargetRecoveryTime = 30; database.DelayedDurability = DelayedDurability.Forced;
                         database.MaxDop = 4; database.LegacyCardinalityEstimation = DatabaseScopedConfigurationOnOff.On; database.MaxDopForSecondary = 2;
                         database.ParameterSniffingForSecondary = DatabaseScopedConfigurationOnOff.Off;
                     }, null, null),
@@ -205,30 +213,46 @@ internal static class DatabasePropertiesLiveChecks
             check(differences.Count == 0, "Script writes exactly what SMO 181 captures for SSMS's sequence (Alter with FailOnOpenTransactions, SetSnapshotIsolation, SetOwner):" + NL + string.Join(NL, differences));
         }
 
-        // Open Connections: another session in the database makes a Read-Only change with NO_WAIT fail (SQL Server gives up after
-        // about 20 s, measured on SQL Server 2025, instead of waiting for the transaction), changing
-        // nothing; with ROLLBACK IMMEDIATE (Yes) it succeeds and the other session's connection is closed.
+        // Open Connections, with another session in the database. Broker Enabled, which SSMS does not close connections for,
+        // fails WITH NO_WAIT (SQL Server gives up after about 20 s, measured on SQL Server 2025, instead of waiting for the
+        // transaction) and advises closing them, since no prompt offers Yes. Read-Only without closing them (the dialog's
+        // count was 0) is refused by the preflight's count before any statement runs, as SSMS counts them at OK; with
+        // ROLLBACK IMMEDIATE (Yes) it succeeds and the other session's connection is closed.
         var other = Guid.NewGuid().ToString();
+        var broker = model.Options["brokerEnabled"];
         try
         {
             var inside = await sql("BEGIN TRANSACTION; SELECT 1;", db, other);
             var watch = Stopwatch.StartNew();
+            var brokerChange = await client.Execute(db, new DatabaseChangesDto(Options: new() { ["brokerEnabled"] = broker == "true" ? "false" : "true" }));
+            var brokerMs = watch.ElapsedMilliseconds;
+            var brokerAfter = (await Model()).Options["brokerEnabled"];
+            check(inside.Status == "completed" && brokerChange is { Error.Code: "IN_USE" } && brokerChange.Error.Message.EndsWith(ActionErrors.OtherConnectionsAdvice, StringComparison.Ordinal)
+                && brokerChange.Steps.Count == 1 && brokerAfter == broker,
+                "with another session in the database, Broker Enabled WITH NO_WAIT is IN_USE in " + brokerMs + " ms, changes nothing, and advises closing the connections rather than a Yes no prompt offers ("
+                + brokerChange.Error?.Message + ")");
             var noWait = await client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "true" }));
-            var refusedMs = watch.ElapsedMilliseconds;
             var stillWritable = (await Model()).Options["readOnly"];
             var rollback = await client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "true" }), close: true);
             var readOnly = (await Model()).Options["readOnly"];
             var sessions = (await sql("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE database_id = DB_ID(N'" + db + "');", "master", null)).Scalar;
-            check(inside.Status == "completed" && noWait is { Error.Code: "IN_USE" } && noWait.Error.Message.EndsWith(ActionErrors.OpenConnectionsAdvice, StringComparison.Ordinal) && refusedMs < 40_000
+            check(noWait is { Error.Code: "IN_USE", Steps.Count: 0 } && noWait.Error.Message == ActionErrors.OpenConnectionsAdvice
                 && stillWritable == "false" && Done(rollback) && readOnly == "true" && sessions == "0",
-                "with another session in the database, Read-Only WITH NO_WAIT is IN_USE in " + refusedMs + " ms and changes nothing; WITH ROLLBACK IMMEDIATE it succeeds and closes that session ("
+                "with another session in the database, Read-Only without closing connections is IN_USE before any statement runs and changes nothing; WITH ROLLBACK IMMEDIATE it succeeds and closes that session ("
                 + noWait.Error?.Message + "; " + rollback.Error?.Message + ")");
         }
         finally
         {
             await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(other), json), json);
             await client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "false" }), close: true);
+            if ((await Model()).Options["brokerEnabled"] != broker) await client.Execute(db, new DatabaseChangesDto(Options: new() { ["brokerEnabled"] = broker }));
         }
+
+        // Read-Only cannot share an OK with a change SQL Server refuses once the database is read-only: nothing runs.
+        var partial = await client.Execute(db, new DatabaseChangesDto(Owner: "sa", Options: new() { ["readOnly"] = "true" }, Scoped: new() { ["maxDop"] = "4" }), close: true);
+        var untouched = await Model();
+        check(partial is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && partial.Error.Message == DatabaseAlter.AfterReadOnlyProblem("Max DOP") && untouched.Options["readOnly"] == "false"
+            && untouched.Scoped["maxDop"] == model.Scoped["maxDop"], "Read-Only with a scoped configuration and the owner is refused before anything runs, leaving the database writable (" + partial.Error?.Message + ")");
 
         // Stop: ALTER AUTHORIZATION waits behind another session's open transaction that changed the owner, until Stop
         // cancels it in SQL Server.

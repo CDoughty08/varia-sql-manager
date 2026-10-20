@@ -32,7 +32,8 @@ internal static partial class ActionSql
     /// <summary>Runs a catalog statement in the object's database, which reaches T-SQL only through QUOTENAME.</summary>
     public const string ModuleCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
         + "EXEC @module @stmt, @decl, @schema = @schema, @name = @name, @new = @new, @take = @take;";
-    private const string Guard = "IF @stmt IS NULL THROW 50000, N'A name could not be quoted.', 1;\n";
+    /// <summary>Every DDL batch stops before running a statement a NULL from QUOTENAME (a name over 128 units) emptied.</summary>
+    internal const string Guard = "IF @stmt IS NULL THROW 50000, N'A name could not be quoted.', 1;\n";
 
     public static string Quote(string name) => ScriptFormatter.Quote(name);
     private static string Literal(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
@@ -201,6 +202,14 @@ internal static partial class ActionSql
     private static partial Regex Placeholder();
     [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )")]
     private static partial Regex QuotedPlaceholder();
+    /// <summary>Builder batches' keyword text: letters, digits, underscores, spaces and the punctuation SMO's forms use. No quote,
+    /// bracket, comment or line break can be written with it, and it comes only from an embedded catalogue.</summary>
+    [GeneratedRegex(@"^N'[A-Za-z0-9_ ():=;]*'$")]
+    private static partial Regex KeywordLiteral();
+    /// <summary>The three parameter forms of a builder batch: a name through QUOTENAME (@db where it runs, @p1 and @p2), a
+    /// number through CONVERT after its range guard, and a collation only as sys.fn_helpcollations() names it.</summary>
+    [GeneratedRegex(@"QUOTENAME\(@(?:db|p1|p2)\)|CONVERT\(nvarchar\(20\), @n1\)|^IF @n1 IS NULL OR @n1 < \d+ OR @n1 > \d+ THROW|WHERE c\.name = @p2\);$", RegexOptions.Multiline)]
+    private static partial Regex BuilderUse();
     /// <summary>The one metadata function the catalog statements use, for the owner of a database a Windows group's member made.</summary>
     private const string OwnerFallback = "SUSER_SNAME(d.owner_sid)";
 
@@ -212,10 +221,31 @@ internal static partial class ActionSql
         if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
         var bare = QuotedPlaceholder().Replace(text, "");
         if (Placeholder().IsMatch(bare)) problems.Add("uses a name parameter outside QUOTENAME or a procedure argument");
+        // The database a batch runs in reaches T-SQL only as QUOTENAME(@db) + N'.sys.…'.
+        if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
         var parameters = Enumerable.Range(1, ParameterCount(template)).Select(index => "@p" + index.ToString(CultureInfo.InvariantCulture)).Append("@db").ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Placeholder().Matches(text)) if (!parameters.Contains(used.Value)) problems.Add("uses " + used.Value + ", which the template does not bind");
         problems.AddRange(Undeclared(text, parameters));
         foreach (Match literal in LiteralPattern().Matches(text)) if (!Literals.Contains(literal.Value)) problems.Add("has the literal " + literal.Value);
+        return problems;
+    }
+
+    /// <summary>Problems with one builder batch, which has SQL Server build its statement from constant keyword literals and
+    /// parameters (Database Properties' ALTER DATABASE in Actions/DatabaseAlter): a format hole, a parameter outside its three
+    /// forms (QUOTENAME of @db, @p1 or @p2; CONVERT of @n1 after its range guard; the collation lookup), an undeclared
+    /// variable, no quoting guard, and a literal that is neither one of <paramref name="messages"/> nor keyword text.</summary>
+    public static List<string> LintExecutable(string text, IReadOnlySet<string> messages)
+    {
+        var problems = new List<string>();
+        if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
+        var bare = BuilderUse().Replace(text, "");
+        foreach (Match used in Variable().Matches(bare))
+            if (used.Value is "@db" or "@p1" or "@p2" or "@n1") problems.Add("uses " + used.Value + " outside QUOTENAME, CONVERT or the collation lookup");
+            else if (used.Value is not ("@stmt" or "@module" or "@c")) problems.Add("uses the undeclared " + used.Value);
+        if (text.Contains("@n1", StringComparison.Ordinal) && !text.StartsWith("IF @n1 IS NULL OR @n1 < ", StringComparison.Ordinal)) problems.Add("uses @n1 without its range guard");
+        if (!text.Contains(Guard, StringComparison.Ordinal)) problems.Add("has no quoting guard");
+        foreach (Match literal in LiteralPattern().Matches(text))
+            if (!messages.Contains(literal.Value) && !KeywordLiteral().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);
         return problems;
     }
 

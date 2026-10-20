@@ -161,6 +161,7 @@ try {
   await expect(dialog().getByRole('navigation', { name: 'Select a page' }).getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page')
   await expect(dialog().locator('.object-dialog-box dd')).toHaveText(['server-a', 'sa'])
   await expect(dialog().locator('.object-dialog-progress')).toHaveText('Ready')
+  const compactFrame = await dialog().boundingBox()
   await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['dbo.Lines', 'Table', 'dbo', '', ''])
   await expect(dialog().locator('.object-dialog-warnings li')).toHaveText(['Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.'])
   // Script › Script Action to Clipboard puts the action's script there; the dialog stays open, as in SSMS.
@@ -204,6 +205,10 @@ try {
   await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
   await expect(properties()).toBeVisible()
   await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
+  // Database Properties uses the large frame, as SSMS's property dialogs are larger than Delete Object.
+  const largeFrame = await properties().boundingBox()
+  expect(largeFrame.width).toBeGreaterThan(compactFrame.width)
+  expect(largeFrame.height).toBeGreaterThan(compactFrame.height)
   const pages = properties().getByRole('navigation', { name: 'Select a page' })
   await expect(pages.getByRole('button')).toHaveText(['General', 'Files', 'Filegroups', 'Options'])
   await expect(pages.getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page')
@@ -254,8 +259,17 @@ try {
   // Restrict Access closes other connections: No runs nothing; Yes writes WITH ROLLBACK IMMEDIATE, then the dialog closes
   // and Databases reloads.
   await pages.getByRole('button', { name: 'Options' }).click()
-  await properties().getByLabel('Restrict Access', { exact: true }).selectOption('SINGLE_USER')
   const executes = (await stubCalls('actions.execute')).length
+  // Enter in the property grid commits the cell, as in SSMS: it never presses OK.
+  const recoveryTime = properties().getByLabel('Target Recovery Time (Seconds)', { exact: true })
+  await recoveryTime.fill('120')
+  await recoveryTime.press('Enter')
+  await expect(recoveryTime).toHaveAttribute('data-changed', 'true')
+  await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
+  expect((await stubCalls('actions.execute')).length).toBe(executes)
+  await recoveryTime.fill('60')
+  await expect(recoveryTime).not.toHaveAttribute('data-changed', 'true')
+  await properties().getByLabel('Restrict Access', { exact: true }).selectOption('SINGLE_USER')
   await application.evaluate(() => { globalThis.variaStub.answers.push(1) })
   await properties().getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.variaStub.prompts.length)).toBe(1)

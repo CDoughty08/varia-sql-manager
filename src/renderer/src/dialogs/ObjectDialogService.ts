@@ -160,7 +160,11 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
-    this.update(open, { phase: 'failed', error: failure, ...(value ? { steps: value.steps } : {}) })
+    const model = definition.afterFailure?.(open.model, failure) ?? open.model
+    this.update(open, { phase: 'failed', error: failure, model, ...(value ? { steps: value.steps } : {}) })
+    // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
+    // did not ask, it is asked at once rather than on the next OK.
+    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built)) await this.ok()
   }
 
   /** Stop: cancels the running action in SQL Server; the dialog reports Stopped, with what completed, when its answer comes. */

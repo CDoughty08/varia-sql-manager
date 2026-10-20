@@ -62,8 +62,10 @@ internal static class ActionChecks
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("EXEC @rename @objname = @undeclared;", ActionTemplate.RenameObject).Count > 0
+            && ActionSql.LintExecutable(ActionSql.Executable(ActionTemplate.DropTable).Replace("QUOTENAME(@db) + N'.sys.sp_executesql'", "@db + N'.sys.sp_executesql'", StringComparison.Ordinal), ActionTemplate.DropTable).Count > 0
+            && ActionSql.LintExecutable(ActionSql.Executable(ActionTemplate.RenameObject).Replace("QUOTENAME(@db) + N'.sys.sp_rename'", "@db + N'.sys.sp_rename'", StringComparison.Ordinal), ActionTemplate.RenameObject).Count > 0
             && ActionSql.LintCatalog("SELECT OBJECT_ID(@name);", 16, database: true).Count > 0 && ActionSql.LintCatalog("SELECT USER_NAME(o.principal_id) FROM sys.objects AS o WHERE o.name = @name;", 16, database: true).Count > 0
-            && ActionSql.LintCatalog("SELECT t.ledger_type FROM sys.tables AS t WHERE t.name = @name;", 15, database: true).Count > 0, "the lint refuses spliced names, bare name parameters, undeclared variables, metadata functions and band gates");
+            && ActionSql.LintCatalog("SELECT t.ledger_type FROM sys.tables AS t WHERE t.name = @name;", 15, database: true).Count > 0, "the lint refuses spliced names, bare name parameters, the database outside QUOTENAME, undeclared variables, metadata functions and band gates");
         // Every executable batch is constant text: no name ever reaches it.
         check(Enum.GetValues<ActionTemplate>().All(template => ActionSql.Executable(template) == ActionSql.Executable(template) && !InjectionMatrix.Fragments.Any(fragment => ActionSql.Executable(template).Contains(fragment[1..4], StringComparison.Ordinal))),
             "executable batches are constant text per template");
@@ -129,7 +131,9 @@ internal static class ActionChecks
         {
             [1222] = "BLOCKED", [3702] = "IN_USE", [5030] = "IN_USE", [5061] = "IN_USE", [5070] = "IN_USE", [3726] = "DEPENDENTS", [3729] = "DEPENDENTS",
             [2714] = "NAME_IN_USE", [1801] = "NAME_IN_USE", [15335] = "NAME_IN_USE", [15225] = "NOT_FOUND", [229] = "PERMISSION_DENIED", [262] = "PERMISSION_DENIED",
-            [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR"
+            [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR",
+            // Database Properties (PR-B), and the file and filegroup numbers PR-B2's DDL will meet.
+            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),
