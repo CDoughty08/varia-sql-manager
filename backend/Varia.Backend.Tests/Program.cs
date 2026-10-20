@@ -103,6 +103,7 @@ await ExplorerChecks.RunAsync(Check);
 await ScriptingChecks.RunAsync(Check);
 await ActionChecks.RunAsync(Check);
 DatabasePropertiesChecks.Run(Check);
+DesignerChecks.Run(Check);
 using (var offline = new SqlService())
 {
     try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }
@@ -332,6 +333,7 @@ try
     await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
+    await DesignerLiveChecks.RunAsync(Check, service, info, json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }
 finally { await Call<object>("connections.disconnect", new ConnectionArgs(info.Id)); }

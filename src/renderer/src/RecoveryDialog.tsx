@@ -21,13 +21,13 @@ export default function RecoveryDialog() {
   const all = chosen.length === entries.length
   const close = () => {
     recovery.closeDialog()
-    requestAnimationFrame(() => documents.boundEditor?.focus())
+    requestAnimationFrame(() => documents.focusActive())
   }
   // Nothing left to offer (all discarded): the dialog has done its work.
   useEffect(() => {
     if (entries.length) return
     recovery.closeDialog()
-    requestAnimationFrame(() => documents.boundEditor?.focus())
+    requestAnimationFrame(() => documents.focusActive())
   }, [entries.length, recovery, documents])
   const toggle = (id: string, checked: boolean) => {
     setConfirming(false)

@@ -702,3 +702,68 @@ describe('window focus checks', () => {
     expect(listeners.size).toBe(0)
   })
 })
+
+describe('custom documents (the table designer\'s tab)', () => {
+  /** A provider like TableDesignerService: saves through `save`, refuses to close while `refusal` is set, and a revision. */
+  function designer() {
+    const base = fixture()
+    const state = { revision: 0, refusal: undefined as string | undefined, pending: undefined as ReturnType<typeof deferred<boolean>> | undefined }
+    const provider = {
+      kind: 'tableDesigner' as const, revision: () => state.revision, canClose: () => state.refusal, focus: vi.fn(), closed: vi.fn(),
+      save: vi.fn(async (id: string) => { if (state.pending) return state.pending.promise; base.documents.setDirty(id, false); return true })
+    }
+    const registration = base.documents.registerProvider(provider)
+    cleanups.push(() => registration.dispose())
+    const tab = base.documents.openCustom('tableDesigner', 'srv.AppData - dbo.Table_1', 'server-a', 'AppData')
+    const edit = () => { state.revision++; base.documents.setDirty(tab.id, true) }
+    return { ...base, provider, state, tab, edit }
+  }
+  it('saves a designer through its provider without holding the document task, so other file work goes on', async () => {
+    const { documents, files, commands, provider, state, tab, edit } = designer()
+    edit()
+    state.pending = deferred<boolean>()
+    const saving = commands.run('file.save')
+    await Promise.resolve()
+    expect(provider.save).toHaveBeenCalledWith(tab.id, false)
+    expect(documents.getSnapshot().busy).toBe(false)
+    expect(files.canRun()).toBe(true)
+    state.pending.resolve(true)
+    await saving
+    expect(provider.save).toHaveBeenCalledTimes(1)
+  })
+  it('asks to save a dirty designer when it closes, and checks its revision, not a model\'s', async () => {
+    const { documents, api, files, tab, edit, provider } = designer()
+    edit()
+    api.confirmClose.mockImplementationOnce(async () => { edit(); return { ok: true, value: 'discard' } })
+    await files.close(tab.id)
+    expect(api.confirmClose).toHaveBeenCalledWith('srv.AppData - dbo.Table_1')
+    expect(documents.get(tab.id)).toBeDefined()
+    expect(files.getSnapshot().error).toBe('The table changed while confirming close. Review the latest changes before closing it.')
+    api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'discard' })
+    await files.close(tab.id)
+    expect(documents.get(tab.id)).toBeUndefined()
+    expect(provider.closed).toHaveBeenCalledWith(tab.id)
+    // A designer has no SQL session to end.
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+  })
+  it('refuses to close a designer that is saving, with its reason', async () => {
+    const { documents, files, tab, state, api } = designer()
+    state.refusal = 'Wait for the table to be saved, or stop it first.'
+    await files.close(tab.id)
+    expect(documents.get(tab.id)).toBeDefined()
+    expect(api.confirmClose).not.toHaveBeenCalled()
+    expect(files.getSnapshot().error).toBe(state.refusal)
+  })
+  it('includes dirty designers in Save All and in the window close prompts', async () => {
+    const { documents, files, commands, provider, tab, edit, api } = designer()
+    edit()
+    await commands.run('file.saveAll')
+    expect(provider.save).toHaveBeenCalledWith(tab.id, false)
+    expect(documents.get(tab.id)?.dirty).toBe(false)
+    edit()
+    api.confirmClose.mockResolvedValue({ ok: true, value: 'discard' })
+    await files.closeWindow(async () => {})
+    expect(api.confirmClose).toHaveBeenCalledWith('srv.AppData - dbo.Table_1')
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
+  })
+})

@@ -12,7 +12,8 @@ function setup(queries: number) {
   const file = new FakeElement(doc, 'button', { attributes: { 'data-menu': 'file' } }), field = new FakeElement(doc, 'input')
   body.append(new FakeElement(doc, 'nav', { className: 'title-bar-menus' }).append(file), field)
   const editor = { focusCalls: 0, focus() { this.focusCalls++ } }
-  const documents = { getSnapshot: () => ({ documents: Array.from({ length: queries }, (_, index) => ({ id: String(index) })) }), boundEditor: editor }
+  // DocumentService.focusActive: the query editor here (a table designer's grid is documents.test.ts').
+  const documents = { getSnapshot: () => ({ documents: Array.from({ length: queries }, (_, index) => ({ id: String(index) })) }), focusActive: () => editor.focus() }
   return { doc, file, field, editor, focus: domFocusAdapter(documents as unknown as Parameters<typeof domFocusAdapter>[0]) }
 }
 

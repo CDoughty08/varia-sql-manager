@@ -57,7 +57,10 @@ describe('menu model', () => {
     expect(submenu('edit', 'darwin').map(entry => entry.kind === 'submenu' && [entry.nativeId, entry.title, entry.mnemonic])).toEqual([
       ['edit.findReplace', 'Find and Replace', 'f'], ['edit.advanced', 'Advanced', 'v'], ['edit.bookmarks', 'Bookmarks', 'k'], ['edit.intellisense', 'IntelliSense', 'i']
     ])
-    const [scriptAs] = submenu('explorer.context', 'darwin')
+    // New (Tables only) comes first, then Script as.
+    const [newMenu, scriptAs] = submenu('explorer.context', 'darwin')
+    expect(newMenu).toMatchObject({ id: 'explorer.new', nativeId: 'explorer.new', title: 'New', mnemonic: 'n' })
+    expect(newMenu.kind === 'submenu' && newMenu.when && [evaluateWhen(newMenu.when, { explorerFolder: 'tables' }), evaluateWhen(newMenu.when, { explorerFolder: 'views' })]).toEqual([true, false])
     expect(scriptAs).toMatchObject({ id: 'explorer.scriptAs', nativeId: 'explorer.scriptAs', title: 'Script as', dynamicTitle: 'scriptAs' })
     expect(scriptAs.kind === 'submenu' && scriptAs.when && [evaluateWhen(scriptAs.when, { explorerScriptTitle: 'table', explorerNode: 'table' }), evaluateWhen(scriptAs.when, { explorerScriptTitle: '', explorerNode: 'database' }),
       evaluateWhen(scriptAs.when, { explorerScriptTitle: 'table', explorerNode: 'background' })]).toEqual([true, false, false])
@@ -321,10 +324,12 @@ describe('menu state', () => {
     const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
-      'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', ...scriptCommandIds,
+      'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.newTable', ...scriptCommandIds,
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
-      'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers']
+      'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
+      // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
+      'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

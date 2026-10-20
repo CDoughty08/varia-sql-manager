@@ -121,7 +121,7 @@ pages, limits, error codes, display formats, benchmarks).
   only in `ActionService`: on its own unpooled connection (the application name plus " - Object Actions", never retried),
   never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
   and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
-  form for the others), where names, the database a batch runs in included, go in as parameters through server-side
+  forms for the others), where names, the database a batch runs in included, go in as parameters through server-side
   `QUOTENAME`, numbers only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and
   collations only as `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows
   for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence); after a preflight in
@@ -129,6 +129,15 @@ pages, limits, error codes, display formats, benchmarks).
   or the status bar's for a rename), whose reply waits for SQL Server and lists the steps completed; and never logging
   names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`. The test-only dry
   run is an internal C# method, never a request field.
+- Table Designer types, properties, commands and limits live only in `src/shared/designer/catalog.ts`; after changing it,
+  regenerate `docs/table-designer.md` and the backend's embedded `Designer/designer-catalog.json` with
+  `npx vitest run tests/table-designer-catalog.test.ts -u`. Designer DDL runs only through `actions.execute`'s `createTable`,
+  in one transaction: the backend re-validates the design (`TableDesignValidator`), sends it as one JSON parameter, and
+  constant builder batches (`DesignerSql.Builder`, linted by `ActionSql.LintExecutable`'s designer form) have SQL Server
+  shred it with OPENJSON and compose each statement from `QUOTENAME`d names, `CONVERT`ed typed numbers and type keywords
+  from a constant table generated from the catalogue; a live dry run proves the server builds exactly
+  `DesignerSql.Statements` for hostile names. The design lives in the renderer (`TableDesignerService`, a
+  `CustomDocumentProvider` tab with no Monaco model), never reaches AutoRecover, and saves outside the document task.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

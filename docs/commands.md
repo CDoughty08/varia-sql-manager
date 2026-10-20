@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (134)
+## Commands (142)
 
 ### File
 
@@ -18,7 +18,7 @@ keys it uses are listed below.
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
 | Save | `file.save` | Ctrl+S (`!outputGridFocus`) | Ctrl+S (`!outputGridFocus`) | ⌘S (`!outputGridFocus`) | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
-| Save As… | `file.saveAs` | — | — | ⇧⌘S | `hasActiveDocument && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
+| Save As… | `file.saveAs` | — | — | ⇧⌘S | `activeDocumentIsText && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
 | Save All | `file.saveAll` | Ctrl+Shift+S | Ctrl+Shift+S | ⌥⌘S | `anyDocumentDirty && !documentBusy` | File › Save All |
 | Open Recent File… | `file.openRecent` | — | — | — | `hasRecentFiles && !documentBusy` | File › Recent Files › each recent file |
 | Clear Recent Files | `file.clearRecent` | — | — | — | `hasRecentFiles` | File › Recent Files › Clear Recent Files |
@@ -40,20 +40,20 @@ keys it uses are listed below.
 | Paste (not in the palette) | `edit.paste` | Ctrl+V * | Ctrl+V * | ⌘V * | Always | Edit › Paste; Editor context menu › Paste; Text field context menu › Paste |
 | Delete (not in the palette) | `edit.delete` | Delete * | Delete * | ⌦ * | Always | Edit › Delete; Text field context menu › Delete |
 | Select All (not in the palette) | `edit.selectAll` | Ctrl+A * | Ctrl+A * | ⌘A * | Always | Edit › Select All; Text field context menu › Select All |
-| Toggle Insert/Overtype Mode | `editor.toggleOvertype` | Insert (`editorTextFocus`) | Insert (`editorTextFocus`) | — | `hasActiveDocument`; checked when `editorOvertype` | — |
-| Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `hasActiveDocument` | Edit › Find and Replace › Quick Find |
-| Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `hasActiveDocument` | Edit › Find and Replace › Quick Replace |
-| Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `hasActiveDocument` | Edit › Advanced › Toggle Line Comment |
-| Comment Selection | `edit.commentLines` | Ctrl+K Ctrl+C * | Ctrl+K Ctrl+C * | ⌘K ⌘C * | `hasActiveDocument` | Edit › Advanced › Comment Selection |
-| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `hasActiveDocument` | Edit › Advanced › Uncomment Selection |
-| Find Next | `edit.findNext` | F3 * | F3 * | ⌘G *, F3 * | `hasActiveDocument` | Edit › Find and Replace › Find Next |
-| Find Previous | `edit.findPrevious` | Shift+F3 * | Shift+F3 * | ⇧⌘G *, ⇧F3 * | `hasActiveDocument` | Edit › Find and Replace › Find Previous |
-| Go To Line… | `edit.goToLine` | Ctrl+G (`editorFocus`) | Ctrl+G (`editorFocus`) | ⌃G (`editorFocus`) | `hasActiveDocument` | Edit › Go To Line… |
-| Make Uppercase | `edit.makeUppercase` | Ctrl+Shift+U (`editorTextFocus`) | Ctrl+Shift+U (`editorTextFocus`) | ⇧⌘U (`editorTextFocus`) | `hasActiveDocument` | Edit › Advanced › Make Uppercase |
-| Make Lowercase | `edit.makeLowercase` | Ctrl+Shift+L (`editorTextFocus`) | Ctrl+Shift+L (`editorTextFocus`) | ⇧⌘L (`editorTextFocus`) | `hasActiveDocument` | Edit › Advanced › Make Lowercase |
-| Increase Line Indent | `edit.increaseIndent` | — | — | — | `hasActiveDocument` | Edit › Advanced › Increase Line Indent |
-| Decrease Line Indent | `edit.decreaseIndent` | — | — | — | `hasActiveDocument` | Edit › Advanced › Decrease Line Indent |
-| Toggle Bookmark | `edit.toggleBookmark` | Ctrl+K Ctrl+K * | Ctrl+K Ctrl+K * | ⌘K ⌘K * | `hasActiveDocument` | Edit › Bookmarks › Toggle Bookmark |
+| Toggle Insert/Overtype Mode | `editor.toggleOvertype` | Insert (`editorTextFocus`) | Insert (`editorTextFocus`) | — | `activeDocumentIsText`; checked when `editorOvertype` | — |
+| Find | `edit.find` | Ctrl+F * | Ctrl+F * | ⌘F * | `activeDocumentIsText` | Edit › Find and Replace › Quick Find |
+| Replace | `edit.replace` | Ctrl+H * | Ctrl+H * | ⌥⌘F * | `activeDocumentIsText` | Edit › Find and Replace › Quick Replace |
+| Toggle Line Comment | `edit.toggleLineComment` | Ctrl+/ * | Ctrl+/ * | ⌘/ * | `activeDocumentIsText` | Edit › Advanced › Toggle Line Comment |
+| Comment Selection | `edit.commentLines` | Ctrl+K Ctrl+C * | Ctrl+K Ctrl+C * | ⌘K ⌘C * | `activeDocumentIsText` | Edit › Advanced › Comment Selection |
+| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `activeDocumentIsText` | Edit › Advanced › Uncomment Selection |
+| Find Next | `edit.findNext` | F3 * | F3 * | ⌘G *, F3 * | `activeDocumentIsText` | Edit › Find and Replace › Find Next |
+| Find Previous | `edit.findPrevious` | Shift+F3 * | Shift+F3 * | ⇧⌘G *, ⇧F3 * | `activeDocumentIsText` | Edit › Find and Replace › Find Previous |
+| Go To Line… | `edit.goToLine` | Ctrl+G (`editorFocus`) | Ctrl+G (`editorFocus`) | ⌃G (`editorFocus`) | `activeDocumentIsText` | Edit › Go To Line… |
+| Make Uppercase | `edit.makeUppercase` | Ctrl+Shift+U (`editorTextFocus`) | Ctrl+Shift+U (`editorTextFocus`) | ⇧⌘U (`editorTextFocus`) | `activeDocumentIsText` | Edit › Advanced › Make Uppercase |
+| Make Lowercase | `edit.makeLowercase` | Ctrl+Shift+L (`editorTextFocus`) | Ctrl+Shift+L (`editorTextFocus`) | ⇧⌘L (`editorTextFocus`) | `activeDocumentIsText` | Edit › Advanced › Make Lowercase |
+| Increase Line Indent | `edit.increaseIndent` | — | — | — | `activeDocumentIsText` | Edit › Advanced › Increase Line Indent |
+| Decrease Line Indent | `edit.decreaseIndent` | — | — | — | `activeDocumentIsText` | Edit › Advanced › Decrease Line Indent |
+| Toggle Bookmark | `edit.toggleBookmark` | Ctrl+K Ctrl+K * | Ctrl+K Ctrl+K * | ⌘K ⌘K * | `activeDocumentIsText` | Edit › Bookmarks › Toggle Bookmark |
 | Previous Bookmark | `edit.previousBookmark` | Ctrl+K Ctrl+P * | Ctrl+K Ctrl+P * | ⌘K ⌘P * | `hasBookmarks` | Edit › Bookmarks › Previous Bookmark |
 | Next Bookmark | `edit.nextBookmark` | Ctrl+K Ctrl+N * | Ctrl+K Ctrl+N * | ⌘K ⌘N * | `hasBookmarks` | Edit › Bookmarks › Next Bookmark |
 | Clear Bookmarks | `edit.clearBookmarks` | Ctrl+K Ctrl+L * | Ctrl+K Ctrl+L * | ⌘K ⌘L * | `hasBookmarks` | Edit › Bookmarks › Clear Bookmarks |
@@ -70,7 +70,7 @@ keys it uses are listed below.
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
-| Switch Between Query and Results | `window.switchPane` | F6, Shift+F6 | F6, Shift+F6 | F6, ⇧F6 | `hasActiveDocument` | — |
+| Switch Between Query and Results | `window.switchPane` | F6, Shift+F6 | F6, Shift+F6 | F6, ⇧F6 | `activeDocumentIsText` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
@@ -128,6 +128,7 @@ keys it uses are listed below.
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
 | Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
+| New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
 | Script as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady && explorerScriptCreate == 'enabled'` | Object Explorer context menu › Script … as › CREATE To › Clipboard |
@@ -162,6 +163,18 @@ keys it uses are listed below.
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
+
+### Table Designer
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Set Primary Key | `tableDesigner.setPrimaryKey` | — | — | — | `activeDocumentIsDesigner && designerEditable && designerRowSelected && !designerPrimaryKeyRemovable` | Table designer context menu › Set Primary Key |
+| Remove Primary Key | `tableDesigner.removePrimaryKey` | — | — | — | `activeDocumentIsDesigner && designerEditable && designerPrimaryKeyRemovable` | Table designer context menu › Remove Primary Key |
+| Insert Column | `tableDesigner.insertColumn` | — | — | — | `activeDocumentIsDesigner && designerEditable && designerRowSelected` | Table designer context menu › Insert Column |
+| Delete Column | `tableDesigner.deleteColumn` | — | — | — | `activeDocumentIsDesigner && designerEditable && designerRowSelected` | Table designer context menu › Delete Column |
+| Generate Change Script… | `tableDesigner.generateChangeScript` | — | — | — | `activeDocumentIsDesigner && designerEditable && backendReady` | Table designer context menu › Generate Change Script… |
+| Properties | `tableDesigner.properties` | F4 (`designerFocus`) | F4 (`designerFocus`) | F4 (`designerFocus`) | `activeDocumentIsDesigner` | Table designer context menu › Properties |
+| Stop | `tableDesigner.stop` | — | — | — | `designerSaving` | — |
 
 ### Preferences
 
@@ -382,17 +395,24 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remo**v**e Filter | `explorer.removeFilter` | `explorerFolderFiltered` |
-| `5_copy` | Copy **N**ame | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
+| `5_copy` | Copy N**a**me | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
 | `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background'` |
 | `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
 | `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 | `9_properties` | **P**roperties | `explorer.properties` | `explorerActionProperties != '' && explorerNode != 'background'` |
+
+#### Object Explorer context menu › New
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_table` | **T**able… | `explorer.newTable` | Always |
 
 #### Object Explorer context menu › Script … as
 
@@ -489,6 +509,19 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_destination` | **F**ile… | `explorer.scriptExecuteToFile` | Always |
 | `1_destination` | C**l**ipboard | `explorer.scriptExecuteToClipboard` | Always |
 
+#### Table designer context menu (`tableDesigner.context`)
+
+Right-click the table designer grid (a row selector selects its row first), or press Shift+F10 or the context-menu key in the grid. Items act on the selected columns.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_key` | Set Primar**y** Key | `tableDesigner.setPrimaryKey` | `!designerPrimaryKeyRemovable` |
+| `1_key` | Remo**v**e Primary Key | `tableDesigner.removePrimaryKey` | `designerPrimaryKeyRemovable` |
+| `2_column` | **I**nsert Column | `tableDesigner.insertColumn` | Always |
+| `2_column` | Delete Colum**n** | `tableDesigner.deleteColumn` | Always |
+| `8_script` | Generate Change **S**cript… | `tableDesigner.generateChangeScript` | Always |
+| `9_properties` | P**r**operties | `tableDesigner.properties` | Always |
+
 #### Query tab context menu (`documentTab.context`)
 
 Right-click a query tab, or press Shift+F10 or the context-menu key on a focused tab. Items act on that tab's query.
@@ -539,7 +572,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (64)
+## Context keys (72)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -557,10 +590,17 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
+| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer. |
+| `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
+| `designerEditable` | boolean | state | The active table designer has loaded, is not saving or saved, and its server is connected. |
+| `designerSaving` | boolean | state | A table designer is saving its table (Stop cancels it). |
+| `designerRowSelected` | boolean | state | The active table designer has a column selected. |
+| `designerPrimaryKeyRemovable` | boolean | state | Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key. |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
@@ -609,6 +649,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
+| `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
 | `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |

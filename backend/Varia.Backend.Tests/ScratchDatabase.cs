@@ -42,6 +42,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string ActionsRenamed => Name + "_actr";
     /// <summary>Where the Database Properties checks change options, scoped configurations and the owner (created on demand).</summary>
     public string Properties => Name + "_dbp";
+    /// <summary>Where the table designer checks create tables (created on demand).</summary>
+    public string Designer => Name + "_tbd";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
     /// <summary>Held in memory only, never printed.</summary>
@@ -180,6 +182,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked Database Properties database.</summary>
     public Task<string> CreatePropertiesAsync() => CreateMarkedAsync(Properties);
+
+    /// <summary>Creates the empty, marked table designer database.</summary>
+    public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
 
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()

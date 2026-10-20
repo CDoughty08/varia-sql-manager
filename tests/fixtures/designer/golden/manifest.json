@@ -1,0 +1,9 @@
+{
+  "files": {
+    "composite-key.sql": "varia",
+    "hostile.sql": "varia",
+    "identity-key.sql": "varia",
+    "lob.sql": "varia",
+    "minimal.sql": "varia"
+  }
+}

@@ -10,8 +10,8 @@ export const applicationMenus = [
   { id: 'query', label: 'Query', mnemonic: 'q' }, { id: 'tools', label: 'Tools', mnemonic: 't' }, { id: 'window', label: 'Window', mnemonic: 'w' }
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
-/** Context menus, one per kind of target: the editor, an Object Explorer node, a query tab, Query Output, a panel tab, a text field. */
-export const contextMenuIds = ['editor.context', 'explorer.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context'] as const
+/** Context menus, one per kind of target: the editor, an Object Explorer node, a table designer, a query tab, Query Output, a panel tab, a text field. */
+export const contextMenuIds = ['editor.context', 'explorer.context', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
 export const submenuIds = [
   'file.recent',
@@ -21,6 +21,7 @@ export const submenuIds = [
   'edit.intellisense',
   'theme',
   'query.connection',
+  'explorer.new',
   ...scriptSubmenuIds
 ] as const
 export type SubmenuId = typeof submenuIds[number]
@@ -48,7 +49,9 @@ export const menuIds: readonly MenuId[] = [
   'window',
   'editor.context',
   'explorer.context',
+  'explorer.new',
   ...scriptSubmenuIds,
+  'tableDesigner.context',
   'documentTab.context',
   'output.context',
   'dockTab.context',
@@ -93,6 +96,8 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
     title: 'Connection', nativeId: 'query.connection',
     placements: [{ menu: 'query', group: '0_connection', order: 1, mnemonic: 'o' }, { menu: 'editor.context', group: '1_connection', order: 1, mnemonic: 'o' }]
   },
+  // SSMS's New on the Tables folder (learn.microsoft.com: Create tables); its Table… is src/shared/designer/catalog.ts'.
+  'explorer.new': { title: 'New', nativeId: 'explorer.new', placements: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: "explorerFolder == 'tables'" }] },
   // Script as › <verb> To, from src/shared/scripting/catalog.ts.
   ...scriptSubmenuEntries()
 }

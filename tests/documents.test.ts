@@ -230,3 +230,42 @@ describe('query documents', () => {
     expect(editor.options.at(-1)).toEqual({ matchBrackets: 'always' })
   })
 })
+
+describe('custom documents', () => {
+  function withProvider() {
+    const fixture = documentFixture()
+    const provider = { kind: 'tableDesigner' as const, save: async () => true, canClose: () => undefined, revision: () => 7, focus: (id: string) => { focused.push(id) }, closed: (id: string) => { closed.push(id) } }
+    const focused: string[] = [], closed: string[] = []
+    fixture.documents.registerProvider(provider)
+    return { ...fixture, provider, focused, closed }
+  }
+  it('opens a designer with no model: the editor shows nothing while it is active, and the query again after', async () => {
+    const { documents, model, focused, closed, api } = withProvider()
+    const query = documents.create('query.sql', 'SELECT 1', 'master')
+    const instance = new TestEditor()
+    documents.bindEditor(instance.asEditor())
+    const tab = documents.openCustom('tableDesigner', 'srv.db - dbo.Table_1', 'server-a', 'db')
+    expect(documents.active).toMatchObject({ id: tab.id, kind: 'tableDesigner', dirty: false, connectionId: 'server-a', database: 'db' })
+    expect(documents.isCustom(tab.id) && !documents.isCustom(query.id)).toBe(true)
+    expect(instance.model).toBeNull()
+    expect(documents.getModel(tab.id)).toBeUndefined()
+    expect(documents.revision(tab.id)).toBe(7)
+    expect(documents.revision(query.id)).toBe(model(query.id).getVersionId())
+    documents.focusActive()
+    expect(focused).toEqual([tab.id])
+    documents.setDirty(tab.id, true)
+    expect(documents.get(tab.id)?.dirty).toBe(true)
+    documents.activate(query.id)
+    expect(instance.model).toBe(model(query.id))
+    await documents.close(tab.id)
+    expect(closed).toEqual([tab.id])
+    expect(documents.get(tab.id)).toBeUndefined()
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+  })
+  it('needs a provider for the kind, and one provider per kind', () => {
+    const { documents, provider } = withProvider()
+    expect(() => documents.registerProvider(provider)).toThrow('already registered')
+    const bare = documentFixture()
+    expect(() => bare.documents.openCustom('tableDesigner', 'x', undefined, 'db')).toThrow('No tableDesigner provider')
+  })
+})

@@ -46,6 +46,8 @@ import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingServ
 import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
+import { designerContribution } from '../../src/renderer/src/contributions/designer'
+import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
@@ -239,7 +241,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     describeObject: vi.fn<VariaApi['describeObject']>(async params => ({
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),
-    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.target.database ?? 'master', warnings: [] } })),
+    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
@@ -281,6 +283,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
+  const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
     platform,
@@ -298,6 +301,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     bookmarks,
     recentFiles,
     recovery,
+    designer: designers.context,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -349,7 +353,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     settings,
     scripting,
     actions,
-    dialogs
+    dialogs,
+    designers
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -367,6 +372,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     backendContribution(workbench),
     scriptingContribution(workbench),
     actionsContribution(workbench),
+    designerContribution(workbench),
     settingsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
@@ -395,6 +401,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting.dispose()
     actions.dispose()
     dialogs.dispose()
+    designers.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     settings.dispose()
@@ -420,6 +427,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
+    designers,
     focusEditor,
     queries,
     files,
