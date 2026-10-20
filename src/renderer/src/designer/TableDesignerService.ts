@@ -66,7 +66,7 @@ export interface DesignerSnapshot { readonly designers: Readonly<Record<string, 
 
 export interface TableDesignerServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot'>
   readonly files: { saveCopy(name: string, content: string): Promise<unknown> }
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: { refreshAndSelect(folderNodeId: number, ref: ExplorerNodeRef): void }
@@ -354,17 +354,19 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
         : !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? unknownOutcomeMessage
           : value?.error?.message ?? error(result) ?? 'The table could not be saved.'
     this.patch(id, { phase: 'ready', error: message })
+    this.show(id)
     return false
   }
   /** The first problem refuses Save or Generate Change Script: it shows, and its cell becomes current. */
   private refuse(id: string): boolean {
     const state = this.get(id)
     if (!state) return false
-    if (!TableDesignerService.columnRows(state).length) { this.patch(id, { error: designerStrings.noColumns }); return false }
+    if (!TableDesignerService.columnRows(state).length) { this.patch(id, { error: designerStrings.noColumns }); this.show(id); return false }
     const first = TableDesignerService.design(state).problems[0]
     if (!first) return true
     const column: DesignerColumn = first.property === 'dataType' || first.property === 'identity' ? 'type' : first.property === 'allowNulls' ? 'nulls' : 'name'
     this.patch(id, { error: first.message, ...first.row !== undefined ? { current: { row: first.row, column } } : {}, ...first.property === 'tableName' || first.property === 'schema' ? { propertiesVisible: true } : {} })
+    this.show(id)
     this.options.focus?.(id)
     return false
   }
@@ -409,7 +411,8 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
       this.prompts.get(id)?.(undefined)
       this.prompts.set(id, resolve)
       this.patch(id, { prompt: { kind: 'chooseName', value } })
-      })
+      this.show(id)
+    })
   }
   /** Stop: cancels the designer's save in SQL Server (the active one, else every one saving). */
   stop(id?: string): void {
@@ -478,6 +481,9 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     this.publish({ designers: { ...this.getSnapshot().designers, [state.id]: state } })
     this.publishContext()
   }
+  /** Only the active designer renders: Save All and the close prompts save designers in the background, and one that
+   *  needs the user (Choose Name, a problem, a failure) comes forward rather than waiting unseen while they hold the task. */
+  private show(id: string): void { if (this.options.documents.getSnapshot().activeId !== id) this.options.documents.activate(id) }
   private caption(id: string): void {
     const state = this.get(id)
     if (state) this.options.documents.update(id, { name: designerCaption(state.server, state.database, state.schema, state.name) })

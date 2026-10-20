@@ -186,6 +186,17 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
 
+    /// <summary>For a bare scratch name: the low-privilege login (named like the database, so the sweep finds it), when the
+    /// server accepts SQL logins; false when it accepts Windows logins only.</summary>
+    public async Task<bool> CreateLoginAsync()
+    {
+        if ((await Exec("SELECT CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly'));")).Scalar != "0") return false;
+        Login = Name;
+        await Exec("CREATE LOGIN " + Bracket(Login) + " WITH PASSWORD = " + Quote(Password) + ", CHECK_POLICY = OFF, DEFAULT_DATABASE = [master];");
+        loginCreated = true;
+        return true;
+    }
+
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()
     {

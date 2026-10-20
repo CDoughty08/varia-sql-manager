@@ -175,6 +175,29 @@ describe('table designer', () => {
     expect(state()).toMatchObject({ error: 'The column name a is used twice.', current: { row: 1, column: 'name' } })
     expect(requests()).toEqual([])
   })
+  it('brings a background designer forward when Save All needs its Choose Name or refuses its design', async () => {
+    const { designers, documents, files, id, state, requests } = designer()
+    await settled()
+    designers.setCell(id, 0, 'name', 'Id')
+    const other = designers.open(tables('c1'))
+    await settled()
+    designers.setCell(other, 0, 'name', 'a')
+    designers.setCell(other, 1, 'name', 'a')
+    const query = documents.newQuery('SELECT 1', 'Query.sql', undefined, 'master')
+    expect(documents.active?.id).toBe(query.id)
+    // Only the active designer renders, so a prompt in a hidden one would wait unseen while Save All holds the task.
+    const saving = files.saveAll()
+    await settled()
+    expect(documents.active?.id).toBe(id)
+    expect(state().prompt).toEqual({ kind: 'chooseName', value: 'Table_1' })
+    designers.answerName(id, 'Orders')
+    await saving
+    expect(requests()).toHaveLength(1)
+    // The second design names a column twice: Save All stops there, showing it with the first problem.
+    expect(documents.active?.id).toBe(other)
+    expect(designers.get(other)).toMatchObject({ error: 'The column name a is used twice.' })
+    expect(documents.getSnapshot().busy).toBe(false)
+  })
   it('sends one request for concurrent saves, and Stop cancels it in SQL Server', async () => {
     const { designers, id, state, api, requests } = designer()
     await settled()

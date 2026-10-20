@@ -12,7 +12,7 @@ namespace Varia.Backend.Tests;
 /// VariaScratch_…_tbd database: each fixture design saved as one table matching it, the displayed script creating the same
 /// table, hostile names creating exactly their objects, taken names and a missing schema refused before any DDL, a key
 /// SQL Server refuses after CREATE TABLE leaving nothing behind, json at SQL Server 2025, and Stop behind another session's
-/// lock.</summary>
+/// lock, and permissions refused before any DDL.</summary>
 internal static class DesignerLiveChecks
 {
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
@@ -34,7 +34,7 @@ internal static class DesignerLiveChecks
     private static DesignColumnDto Column(string name, string type, int? length = null, bool nulls = true, DesignIdentityDto? identity = null, bool? max = null) =>
         new(name, new DesignTypeDto(type, length, max), nulls, identity);
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions live, JsonSerializerOptions json)
     {
         var client = new Client(service, info.Id, json);
         async Task<SqlRun> Sql(string text, string database = "master", string? session = null)
@@ -96,6 +96,7 @@ internal static class DesignerLiveChecks
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         var db = await scratch.CreateDesignerAsync();
         await ScratchAsync(check, client, service, info, json, Sql, db, major);
+        await PermissionsAsync(check, service, live, json, Sql, scratch, db);
     }
 
     /// <summary>A table as SQL Server describes it: each column's name, type, length, precision, scale, nullability and
@@ -242,5 +243,54 @@ internal static class DesignerLiveChecks
             await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, holder);
             await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json);
         }
+    }
+    /// <summary>Save refuses before any DDL when the login may not create a table in the database (CREATE TABLE) or in the
+    /// schema (ALTER on it). The designer's own facts and preflight statements are run as a database user with no login,
+    /// which any server allows; the whole path as a SQL login, where the server accepts them (CI).</summary>
+    private static async Task PermissionsAsync(Action<bool, string> check, SqlService service, ConnectOptions live, JsonSerializerOptions json,
+        Func<string, string, string?, Task<SqlRun>> sql, ScratchDatabase scratch, string db)
+    {
+        Task<SqlRun> Sql(string text) => sql(text, db, null);
+        const string probe = "VariaDesignerProbe";
+        var statements = "EXECUTE AS USER = N'" + probe + "';\n"
+            + "EXEC sys.sp_executesql " + Literal(DesignerSql.MasterFacts) + ", N'@db nvarchar(128)', @db = " + Literal(db) + ";\n"
+            + "EXEC sys.sp_executesql " + Literal(DesignerSql.Preflight) + ", N'@schema nvarchar(128), @name nvarchar(128), @new nvarchar(128)', @schema = N'dbo', @name = N'Denied', @new = N'PK_Denied';\n"
+            + "REVERT;";
+        var user = await Sql("CREATE USER " + probe + " WITHOUT LOGIN;");
+        var denied = await Sql(statements);
+        await Sql("GRANT CREATE TABLE TO " + probe + ";");
+        var tableOnly = await Sql(statements);
+        await Sql("GRANT ALTER ON SCHEMA::dbo TO " + probe + ";");
+        var allowed = await Sql(statements);
+        // MasterFacts' can_create is its fifth column, the preflight's can_alter its second.
+        static string Answers(SqlRun run) => run.Status != "completed" || run.Sets.Count != 2 ? "failed: " + run.Error : run.Sets[0][0][4] + "/" + run.Sets[1][0][1];
+        check(user.Status == "completed" && Answers(denied) == "0/0" && Answers(tableOnly) == "1/0" && Answers(allowed) == "1/1",
+            "the designer's facts and preflight answer CREATE TABLE and the schema's ALTER as SQL Server grants them (" + Answers(denied) + ", " + Answers(tableOnly) + ", " + Answers(allowed) + ")");
+
+        if (!await scratch.CreateLoginAsync())
+        {
+            Console.WriteLine("Low-privilege table designer checks skipped: the server accepts Windows logins only.");
+            return;
+        }
+        var login = scratch.Login!;
+        await Sql("CREATE USER " + Bracket(login) + " FOR LOGIN " + Bracket(login) + ";");
+        var limited = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live with
+        {
+            Authentication = "sql", Username = login, Password = scratch.Password
+        }, json), json);
+        try
+        {
+            var reader = new Client(service, limited.Id, json);
+            var design = new TableDesignDto("dbo", "Denied", [Column("a", "int", nulls: false)], [0]);
+            var described = await reader.Describe(db);
+            var noCreate = await reader.Save(db, design);
+            await Sql("GRANT CREATE TABLE TO " + Bracket(login) + ";");
+            var noAlter = await reader.Save(db, design);
+            var left = (await Sql("SELECT CASE WHEN OBJECT_ID(N'dbo.Denied') IS NULL THEN 0 ELSE 1 END;")).Scalar;
+            check(described is { Error: null, TableDesigner.CanCreate: false } && noCreate is { Error.Code: "PERMISSION_DENIED", Steps.Count: 0 }
+                && noAlter is { Error.Code: "PERMISSION_DENIED", Steps.Count: 0 } && noAlter.Error.Message.Contains("(ALTER on it)", StringComparison.Ordinal) && left == "0",
+                "a login without CREATE TABLE, then without ALTER on the schema, is PERMISSION_DENIED before any DDL (" + noCreate.Error?.Message + "; " + noAlter.Error?.Message + ")");
+        }
+        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(limited.Id), json), json); }
     }
 }
