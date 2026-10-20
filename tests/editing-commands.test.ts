@@ -11,7 +11,9 @@ class EditingEditor extends TestEditor {
   selections: TextSelection[] = [{ selectionStartLineNumber: 1, selectionStartColumn: 1, positionLineNumber: 1, positionColumn: 1 }]
   readonly inserted: string[] = []
   controller: unknown = { insert: (body: string, options: unknown) => { this.inserted.push(body); this.calls.push(`insert ${JSON.stringify(options)}`) } }
-  findController: unknown = { setSearchString: (value: string) => { this.calls.push(`search ${value}`) } }
+  /** Monaco's find state's search text, which setSearchString changes. */
+  searchString = ''
+  findController: unknown = { getState: () => ({ searchString: this.searchString }), setSearchString: (value: string) => { this.searchString = value; this.calls.push(`search ${value}`) } }
   focus(): void { this.calls.push('focus') }
   trigger(_source: string, action: string): void { this.calls.push(action) }
   getPosition() { return this.position }
@@ -53,14 +55,15 @@ describe('editing commands', () => {
   it('register the catalogue bridge chords with Monaco', () => {
     const { monaco } = setup()
     expect(monaco.editor.registerCommand.mock.calls.map(call => call[0])).toEqual(['varia.edit.toggleBookmark', 'varia.edit.previousBookmark', 'varia.edit.nextBookmark', 'varia.edit.clearBookmarks',
-      'varia.edit.insertSnippet', 'varia.edit.surroundWith', 'varia.edit.find', 'varia.edit.replace'])
+      'varia.edit.insertSnippet', 'varia.edit.surroundWith', 'varia.edit.find', 'varia.edit.replace', 'varia.edit.findNext', 'varia.edit.findPrevious'])
     expect(monaco.editor.addKeybindingRules.mock.calls.flatMap(call => call[0]).every(rule => rule.when === 'editorTextFocus')).toBe(true)
   })
-  it('take Ctrl+F and Ctrl+H from Monaco in editor text, so the keys seed Quick Find as the menus do', async () => {
+  it('take Ctrl+F, Ctrl+H, F3 and Shift+F3 from Monaco in editor text, so the keys seed as the menus do', async () => {
     const { monaco, commands, target } = setup({ platform: 'win32' })
-    // Ctrl is CtrlCmd (2048); F and H are KeyCode 36 and 38.
+    // Ctrl is CtrlCmd (2048) and Shift 1024; F, H and F3 are KeyCode 36, 38 and 61.
     expect(monaco.editor.addKeybindingRules.mock.calls[1][0]).toEqual([
-      { keybinding: 2048 | 36, command: 'varia.edit.find', when: 'editorTextFocus' }, { keybinding: 2048 | 38, command: 'varia.edit.replace', when: 'editorTextFocus' }
+      { keybinding: 2048 | 36, command: 'varia.edit.find', when: 'editorTextFocus' }, { keybinding: 2048 | 38, command: 'varia.edit.replace', when: 'editorTextFocus' },
+      { keybinding: 61, command: 'varia.edit.findNext', when: 'editorTextFocus' }, { keybinding: 1024 | 61, command: 'varia.edit.findPrevious', when: 'editorTextFocus' }
     ])
     const handler = monaco.editor.registerCommand.mock.calls.find(call => call[0] === 'varia.edit.find')![1]
     target.select(2, 6)
@@ -69,9 +72,20 @@ describe('editing commands', () => {
     await vi.waitFor(() => expect(target.calls).toEqual(['focus', 'actions.find', 'search t']))
     expect(run).toHaveBeenCalledWith('edit.find', undefined, 'keybinding')
   })
-  it('take ⌘F and ⌥⌘F on macOS', () => {
+  it('take ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, F3 and ⇧F3 on macOS', () => {
     const { monaco } = setup({ platform: 'darwin' })
-    expect(monaco.editor.addKeybindingRules.mock.calls[1][0].map(rule => [rule.command, rule.keybinding])).toEqual([['varia.edit.find', 2048 | 36], ['varia.edit.replace', 2048 | 512 | 36]])
+    // G is KeyCode 37; Alt is 512.
+    expect(monaco.editor.addKeybindingRules.mock.calls[1][0].map(rule => [rule.command, rule.keybinding])).toEqual([['varia.edit.find', 2048 | 36], ['varia.edit.replace', 2048 | 512 | 36],
+      ['varia.edit.findNext', 2048 | 37], ['varia.edit.findNext', 61], ['varia.edit.findPrevious', 2048 | 1024 | 37], ['varia.edit.findPrevious', 1024 | 61]])
+  })
+  it('run F3 in editor text as Find Next, seeded from the caret while there is no search text', async () => {
+    const { monaco, commands, target } = setup({ platform: 'win32' })
+    const handler = monaco.editor.registerCommand.mock.calls.find(call => call[0] === 'varia.edit.findNext')![1]
+    target.select(2, 1)
+    const run = vi.spyOn(commands, 'execute')
+    handler()
+    await vi.waitFor(() => expect(target.calls).toEqual(['focus', 'editor.action.nextMatchFindAction', 'search from']))
+    expect(run).toHaveBeenCalledWith('edit.findNext', undefined, 'keybinding')
   })
   it.each([['edit.find', 'actions.find'], ['edit.replace', 'editor.action.startFindReplaceAction']] as const)(
     '%s seeds the word the caret is at the start of or inside, nothing after a word, and leaves a selection to Monaco', async (id, action) => {
@@ -108,6 +122,26 @@ describe('editing commands', () => {
     await commands.execute('edit.findPrevious', undefined, 'keybinding')
     expect(target.calls).toEqual(['focus', 'editor.action.nextMatchFindAction', 'focus', 'editor.action.previousMatchFindAction'])
   })
+  it.each([['edit.findNext', 'editor.action.nextMatchFindAction'], ['edit.findPrevious', 'editor.action.previousMatchFindAction']] as const)(
+    '%s with no search text searches for the word the caret is at the start of or inside, as Ctrl+F would seed it', async (id, action) => {
+      const { commands, target } = setup()
+      const run = async () => { target.calls.length = 0; await commands.execute(id, undefined, 'menu'); return target.calls }
+      // After "select" and at the end of a line: no word, so Monaco's action runs with the empty search, as it would.
+      target.select(1, 7)
+      expect(await run()).toEqual(['focus', action])
+      target.select(1, 9)
+      expect(await run()).toEqual(['focus', action])
+      // A selection is Monaco's to seed.
+      target.select(1, 1, 1, 7)
+      expect(await run()).toEqual(['focus', action])
+      target.select(1, 3)
+      // The word follows the action, which creates the find widget: a new widget ignores a search text set before it.
+      expect(await run()).toEqual(['focus', action, 'search select'])
+      // With search text, Monaco's Find Next and Previous are unchanged: the caret's word does not replace it.
+      target.select(2, 1)
+      expect(await run()).toEqual(['focus', action])
+      expect(target.searchString).toBe('select')
+    })
   it('open Go To Line with the caret line and the line count, only with a document', async () => {
     const { commands, target, editorDialogs, tab, documents } = setup()
     target.position = { lineNumber: 2, column: 4 }

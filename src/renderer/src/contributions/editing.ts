@@ -2,7 +2,7 @@ import type { editor } from 'monaco-editor'
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { defaultRules, type Platform, type ResolvedRule } from '../../../shared/commands/keybindings'
-import { focusedEditor, triggerEditorAction } from '../editor/actions'
+import { focusedEditor } from '../editor/actions'
 import { caretFindSeed } from '../editor/find-seed'
 import { registerEditorBridge, type BridgeMonaco } from '../editor/keybinding-bridge'
 import { snippetById, snippets, type Snippet } from '../editor/snippets'
@@ -17,16 +17,26 @@ function snippetController(target: editor.IStandaloneCodeEditor): SnippetInserte
   return controller
 }
 
-/** The part of Monaco's FindController that sets the search text, as its own seeding does (escaped under regular expressions). */
-interface SearchStringSetter { setSearchString(searchString: string): void }
-
-/** Quick Find and Quick Replace, with the Monaco actions they open the find widget with. */
-const quickFindActions = [['edit.find', 'actions.find'], ['edit.replace', 'editor.action.startFindReplaceAction']] as const
 /**
- * Their keys (Ctrl+F, Ctrl+H; ⌘F, ⌥⌘F), which Monaco dispatches, run them in editor text instead of Monaco's actions,
- * so the keys seed as the menus and the palette do. In the find widget Monaco's own actions still have them.
+ * The part of Monaco's FindController the find commands use: the current search text, and setting it as Monaco's own
+ * seeding does (escaped under regular expressions).
  */
-const quickFindRules = (platform: Platform): ResolvedRule[] => defaultRules(platform).filter(rule => quickFindActions.some(([id]) => id === rule.command))
+interface SearchStringController { getState(): { readonly searchString: string }; setSearchString(searchString: string): void }
+
+/**
+ * The find commands that start from the word at the caret, with their Monaco actions: Quick Find and Quick Replace
+ * always, Find Next and Previous only while there is no search text yet, as if Ctrl+F had seeded it first.
+ */
+const seededFindActions = [
+  ['edit.find', 'actions.find', 'always'], ['edit.replace', 'editor.action.startFindReplaceAction', 'always'],
+  ['edit.findNext', 'editor.action.nextMatchFindAction', 'whenEmpty'], ['edit.findPrevious', 'editor.action.previousMatchFindAction', 'whenEmpty']
+] as const
+/**
+ * Their keys (Ctrl+F, Ctrl+H, F3, Shift+F3; ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, F3, ⇧F3), which Monaco dispatches, run them in editor text
+ * instead of Monaco's actions, so the keys seed as the menus and the palette do. In the find widget Monaco's own actions
+ * still have them.
+ */
+const seededFindRules = (platform: Platform): ResolvedRule[] => defaultRules(platform).filter(rule => seededFindActions.some(([id]) => id === rule.command))
 
 /**
  * SSMS's editing commands in the query editor: Quick Find and Replace, Find Next and Previous, Go To Line, Edit ›
@@ -43,11 +53,14 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
   // With nothing selected, the find box takes the word the caret is at the start of or inside (caretFindSeed), or keeps
   // its text; Monaco seeds from a single-line selection itself (seedSearchStringFromSelection: 'selection'). The word is
   // set after the action starts: Monaco creates the find widget then, synchronously, and a new widget does not read a
-  // search text set before it; it focuses and selects the find box a microtask later, so typing replaces the word.
-  const quickFind = (action: string) => withEditor((target, model) => {
-    const selection = target.getSelection(), seed = selection ? caretFindSeed(model, selection) : undefined
+  // search text set before it. Monaco focuses and selects the find box a microtask later, so typing replaces the word;
+  // Find Next and Previous search for it then, after the find model starts (they await the find clipboard first).
+  const seededFind = (action: string, when: 'always' | 'whenEmpty') => withEditor((target, model) => {
+    const controller = target.getContribution('editor.contrib.findController') as unknown as Partial<SearchStringController> | null
+    const selection = target.getSelection()
+    const empty = typeof controller?.getState === 'function' && controller.getState().searchString === ''
+    const seed = selection && (when === 'always' || empty) ? caretFindSeed(model, selection) : undefined
     target.trigger('menu', action, null)
-    const controller = target.getContribution('editor.contrib.findController') as unknown as Partial<SearchStringSetter> | null
     if (seed !== undefined && typeof controller?.setSearchString === 'function') controller.setSearchString(seed)
   })
   const selections = (target: editor.IStandaloneCodeEditor): TextSelection[] => target.getSelections() ?? []
@@ -86,10 +99,8 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
   })
   const registrations = [
     registerEditorBridge(monaco, commands, workbench.platform),
-    registerEditorBridge(monaco, commands, workbench.platform, quickFindRules(workbench.platform)),
-    ...quickFindActions.map(([id, action]) => commands.register(id, { run: quickFind(action) })),
-    commands.register('edit.findNext', { run: () => triggerEditorAction(documents, 'editor.action.nextMatchFindAction') }),
-    commands.register('edit.findPrevious', { run: () => triggerEditorAction(documents, 'editor.action.previousMatchFindAction') }),
+    registerEditorBridge(monaco, commands, workbench.platform, seededFindRules(workbench.platform)),
+    ...seededFindActions.map(([id, action, when]) => commands.register(id, { run: seededFind(action, when) })),
     commands.register('edit.goToLine', { run: goToLine }),
     commands.register('edit.makeUppercase', { run: changeCase('upper') }),
     commands.register('edit.makeLowercase', { run: changeCase('lower') }),

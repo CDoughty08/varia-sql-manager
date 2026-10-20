@@ -223,9 +223,22 @@ try {
 
   // 10. Quick Find and Quick Replace seed as SSMS's: the word the caret is inside or at the start of, selected so typing
   // replaces it; with the caret just after a word (where Monaco would take that word), the find box keeps its text. With
-  // two lines selected Quick Find searches in the selection; F3 and Shift+F3 move between matches.
-  await setText('select * from Orders')
+  // two lines selected Quick Find searches in the selection; F3 and Shift+F3 move between matches. F3 with no search text
+  // yet (the app has just relaunched) seeds by the same rule and finds the word, leaving focus in the editor.
   const findInput = page.locator('.find-widget .find-part textarea'), replaceInput = page.locator('.find-widget .replace-part textarea')
+  const count = page.locator('.find-widget .matchesCount')
+  await setText('Orders, Orders')
+  await page.keyboard.press('F3')
+  await expect(page.locator('.find-widget.visible')).toBeVisible()
+  await expect(findInput).toHaveValue('')
+  await page.keyboard.press('Home')
+  await page.keyboard.press('F3')
+  await expect(findInput).toHaveValue('Orders')
+  await expect(count).toHaveText(/of 2$/)
+  await expect(textbox()).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.find-widget.visible')).toHaveCount(0)
+  await setText('select * from Orders')
   /**
    * Ctrl+F or Ctrl+H with the caret where `moves` take it from Home: the find box's text, focused and selected after
    * Ctrl+F, then Escape to the editor. Monaco's Quick Replace focuses the find or the replace box depending on whether it
@@ -257,7 +270,6 @@ try {
   await page.keyboard.press('Control+F')
   await expect(page.locator('.find-widget [role="checkbox"][aria-label^="Find in Selection"]')).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.type('a')
-  const count = page.locator('.find-widget .matchesCount')
   await expect(count).toHaveText(/of 4$/)
   const first = await count.textContent()
   await page.keyboard.press('F3')
@@ -266,7 +278,7 @@ try {
   await expect(count).toHaveText(first)
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
-  console.log('Editor checks: Ctrl+F and Ctrl+H seed the word the caret is in or at the start of, and keep the previous search after a word; Ctrl+F on a multi-line selection finds in it (4 of the 5 a\'s), and F3 and Shift+F3 move between matches.')
+  console.log('Editor checks: Ctrl+F and Ctrl+H seed the word the caret is in or at the start of, and keep the previous search after a word; F3 with no search text seeds by the same rule; Ctrl+F on a multi-line selection finds in it (4 of the 5 a\'s), and F3 and Shift+F3 move between matches.')
 
   // 11. Ctrl+K with nothing after it for 6 s: Monaco has left chord mode, and the next key types.
   await setText('')
