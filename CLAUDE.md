@@ -70,10 +70,11 @@ pages, limits, error codes, display formats, benchmarks).
   connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
   logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
   (async API only, in `src/main/secret-cipher.ts`) in `saved-passwords.json` (atomic, 0600, quarantined if unreadable),
-  keyed by its history entry's id and bound by hash to its server, login and TLS settings. Only main reads that file or
-  decrypts; the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases`
-  only for a matching binding. Remember password is disabled where safeStorage is unavailable or Linux's backend is
-  `basic_text`/`unknown`.
+  keyed by its history entry's id and bound to its server, login and TLS settings by a hash beside it and a check inside
+  the ciphertext. Only main reads that file or decrypts; the renderer learns only which entries have one, and main injects
+  it into `connections.connect`/`.databases` only for a matching binding. Remember password is disabled where
+  safeStorage is unavailable, Linux's backend is `basic_text`/`unknown`, or its keyring cannot be reached (Electron's
+  fallback key, tag `v10`).
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
@@ -89,7 +90,7 @@ pages, limits, error codes, display formats, benchmarks).
   New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
   never re-sent.
 - Preferences are written atomically (`src/main/json-file.ts`) (`settings.json`, `appearance.json`, `connections.json`,
-  `workspace-layouts.json`); unreadable files are quarantined, never overwritten.
+  `workspace-layouts.json`, `saved-passwords.json` (0600)); unreadable files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
   (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles

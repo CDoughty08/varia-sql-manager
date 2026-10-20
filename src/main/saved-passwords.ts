@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import { canRememberPassword, credentialBinding, type ConnectionLibrary, type SecretStorageState } from '../shared/connections'
 import type { ConnectionOptions } from '../shared/contracts'
@@ -25,6 +25,22 @@ export const savedPasswordMessages = {
 
 /** The file holds a hash of the binding, so neither the server nor the login is stored in clear beside the ciphertext. */
 const bindingHash = (options: Omit<ConnectionOptions, 'password'>) => createHash('sha256').update(credentialBinding(options)).digest('hex')
+/**
+ * What is encrypted: a check over the binding and the password, then the password. The outer hash is plain JSON that a
+ * process able to write the file (but not to use the OS key) could rewrite, or it could swap ciphertexts between entries;
+ * the check, inside the ciphertext, still refuses a password for any other credentials. It covers the password too because
+ * the Keychain's and the Linux keyring's encryption (AES-CBC) has no integrity check of its own, so spliced blocks must not
+ * be able to keep it valid.
+ */
+const sealCheck = (options: Omit<ConnectionOptions, 'password'>, password: string) => createHash('sha256').update(JSON.stringify([credentialBinding(options), password])).digest('hex')
+const checkLength = 64
+const seal = (options: Omit<ConnectionOptions, 'password'>, password: string) => sealCheck(options, password) + password
+function unseal(text: string, options: Omit<ConnectionOptions, 'password'>): string {
+  const check = Buffer.from(text.slice(0, checkLength)), password = text.slice(checkLength)
+  const expected = Buffer.from(sealCheck(options, password))
+  if (!password || check.length !== expected.length || !timingSafeEqual(check, expected)) throw new Error(savedPasswordMessages.unreadable)
+  return password
+}
 type LibrarySource = ConnectionLibrary | (() => Promise<ConnectionLibrary>)
 
 /**
@@ -68,16 +84,19 @@ export class SavedPasswordStore {
     const { ids, warning } = await this.change(entries => ({ entries, value: undefined }))
     return { ids, ...(warning ? { warning } : {}) }
   }
-  /** Remembers `options.password` for the entry `profileId`, replacing what it had. */
+  /**
+   * Remembers `options.password` for the entry `profileId`, replacing what it had, and in every other entry with the
+   * same credentials: the dialog uses any of them for those credentials, so none may keep an older password to replay.
+   */
   async set(profileId: string, options: ConnectionOptions): Promise<void> {
     const password = options.password
     if (!canRememberPassword(options.authentication) || !password) throw new Error(savedPasswordMessages.notSaved)
     let cipher: Buffer
-    try { cipher = await this.cipher.encrypt(password) } catch { throw new Error(savedPasswordMessages.notSaved) }
+    try { cipher = await this.cipher.encrypt(seal(options, password)) } catch { throw new Error(savedPasswordMessages.notSaved) }
     if (cipher.length > maxCipherBytes) throw new Error(savedPasswordMessages.notSaved)
     const entry: Entry = { profileId: z.uuid().parse(profileId), binding: bindingHash(options), cipher: cipher.toString('base64'), savedAt: new Date().toISOString() }
     await this.change(entries => {
-      const others = entries.filter(item => item.profileId !== profileId)
+      const others = entries.filter(item => item.profileId !== profileId).map(item => item.binding === entry.binding ? { ...item, cipher: entry.cipher, savedAt: entry.savedAt } : item)
       if (others.length >= maxEntries) throw new Error(savedPasswordMessages.notSaved)
       return { entries: [...others, entry], value: undefined }
     })
@@ -94,16 +113,18 @@ export class SavedPasswordStore {
     if (!entry || entry.binding !== bindingHash(options)) return undefined
     let decrypted: { text: string; reEncrypt: boolean }
     try { decrypted = await this.cipher.decrypt(Buffer.from(entry.cipher, 'base64')) } catch { throw new Error(savedPasswordMessages.unreadable) }
+    const password = unseal(decrypted.text, options)
     if (decrypted.reEncrypt) {
       // The key was rotated: store the password under the new one. Failing that, the old ciphertext still decrypts.
       try {
         const cipher = await this.cipher.encrypt(decrypted.text)
         if (cipher.length <= maxCipherBytes) {
-          await this.change(entries => ({ entries: entries.map(item => item.profileId === profileId && item.cipher === entry.cipher ? { ...item, cipher: cipher.toString('base64') } : item), value: undefined }))
+          // Every entry that shares this ciphertext (the same credentials) moves to the new one.
+          await this.change(entries => ({ entries: entries.map(item => item.cipher === entry.cipher ? { ...item, cipher: cipher.toString('base64') } : item), value: undefined }))
         }
       } catch { /* Kept as it was. */ }
     }
-    return decrypted.text
+    return password
   }
   async forget(...profileIds: string[]): Promise<void> {
     if (!profileIds.length || !await this.available()) return

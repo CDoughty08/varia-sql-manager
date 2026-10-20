@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { prepare, secretRejected, settle, type ConnectionRequestDeps, type Settled } from '../src/main/connection-requests'
 import { BackendError } from '../src/main/backend/errors'
 import { ConnectionStore } from '../src/main/connection-store'
+import { connectionLibrary } from '../src/main/connection-library'
 import { SavedPasswordStore } from '../src/main/saved-passwords'
 import { testCipher, type SecretCipher } from '../src/main/secret-cipher'
 import { validateRequest } from '../src/main/validation'
@@ -34,7 +35,7 @@ async function setup(cipher: SecretCipher = testCipher()) {
   const remembered = async (value: ConnectionOptions = options) => {
     await request('connections.connect', value, { remember: true }, () => ({ ok: true, value: info() }))
     const { library } = await connections.load()
-    return library.profiles.find(profile => profile.options.database === value.database && profile.options.server === value.server)!.id
+    return library.profiles.find(profile => profile.options.database === value.database && profile.options.server === value.server && profile.options.username === value.username)!.id
   }
   return { directory, connections, savedPasswords, deps, request, remembered }
 }
@@ -137,6 +138,52 @@ describe('remembered password requests', () => {
     expect(secretRejected(options, new BackendError('AUTH_KERBEROS', 'Login failed.', { number: 18456 }))).toBe(false)
     expect(secretRejected(options, Object.assign(new Error('Login failed.'), { code: 'SQL_ERROR', details: { number: 18456 } }))).toBe(false)
   })
+  it('lets Load databases use a remembered password without entering history or forgetting it', async () => {
+    const { request, remembered, savedPasswords, directory } = await setup()
+    const id = await remembered()
+    const before = await readFile(join(directory, 'connections.json'), 'utf8')
+    const { prepared, settled } = await request('connections.databases', empty, { profileId: id }, () => ({ ok: true, value: [{ name: 'master' }] }))
+    expect(prepared.injected).toBe(true)
+    expect(settled).toEqual({ ok: true, value: [{ name: 'master' }] })
+    expect(await readFile(join(directory, 'connections.json'), 'utf8')).toBe(before)
+    expect(await savedPasswords.get(id, empty)).toBe(marker)
+  })
+  it('refuses a remembered password outside the Password bounds before anything is sent', async () => {
+    const { deps } = await setup()
+    for (const stored of ['x'.repeat(1025), '']) {
+      const savedPasswords = { ...deps.savedPasswords, get: async () => stored }
+      await expect(prepare('connections.connect', validateRequest('connections.connect', empty), { profileId: randomUUID() }, { savedPasswords }), String(stored.length)).rejects.toThrow('The saved password could not be read. Enter the password.')
+    }
+    const savedPasswords = { ...deps.savedPasswords, get: async () => 'x'.repeat(1024) }
+    expect((await prepare('connections.connect', validateRequest('connections.connect', empty), { profileId: randomUUID() }, { savedPasswords })).injected).toBe(true)
+  })
+  it('treats the server and login as the unit: unchecking or a new password leaves no other entry with an old one', async () => {
+    const { request, remembered, savedPasswords } = await setup()
+    const master = await remembered({ ...options, password: 'old-pass' })
+    const sales = await remembered({ ...options, database: 'Sales', password: 'old-pass' })
+    // The login's password changed: the user picks the master entry, types the new one for Sales, and keeps the box checked.
+    await request('connections.connect', { ...options, database: 'Sales', password: 'new-pass' }, { profileId: master, remember: true }, () => ({ ok: true, value: info() }))
+    for (const id of [master, sales]) expect(await savedPasswords.get(id, empty)).toBe('new-pass')
+    // Choosing the master entry later sends the new password, not one SQL Server would reject into a lockout.
+    let sent: ConnectionOptions | undefined
+    await request('connections.connect', empty, { profileId: master, remember: true }, value => { sent = value; return { ok: true, value: info() } })
+    expect(sent?.password).toBe('new-pass')
+    // Unchecked through the master entry: Sales, which the dialog would offer for the same credentials, loses it too.
+    const other = await remembered({ ...options, username: 'other-login' })
+    await request('connections.connect', empty, { profileId: master, remember: false }, () => ({ ok: true, value: info() }))
+    expect((await savedPasswords.load()).ids).toEqual([other])
+  })
+  it('warns only about a password it was asked and able to remember, and drops the password of an entry history pruned', async () => {
+    const { request, remembered, savedPasswords } = await setup()
+    const { settled } = await request('connections.connect', { ...options, authentication: 'windows' }, { remember: true }, () => ({ ok: true, value: info() }))
+    expect(settled.ok && (settled.value as ConnectionInfo).historyWarning).toBeUndefined()
+    const first = await remembered({ ...options, database: 'db0' })
+    // 30 newer connections push the first out of Recent Connections.
+    for (let index = 1; index <= 30; index++) await remembered({ ...options, database: 'db' + index })
+    const ids = (await savedPasswords.load()).ids
+    expect(ids).toHaveLength(30)
+    expect(ids).not.toContain(first)
+  })
   it('keeps a password it cannot decrypt, failing the request as a value', async () => {
     let deny = false
     const real = testCipher()
@@ -145,5 +192,28 @@ describe('remembered password requests', () => {
     deny = true
     await expect(request('connections.connect', empty, { profileId: id }, () => ({ ok: true, value: info() }))).rejects.toThrow('The saved password could not be read. Enter the password.')
     expect((await savedPasswords.load()).ids).toEqual([id])
+  })
+})
+
+describe('connection library with remembered passwords', () => {
+  it('drops the password of an entry Save changes moves to another server or login, and of a removed entry', async () => {
+    const { remembered, connections, savedPasswords } = await setup()
+    const library = connectionLibrary({ connections, savedPasswords })
+    const id = await remembered()
+    const kept = await remembered({ ...options, database: 'Sales' })
+    const loaded = await library.load()
+    expect(loaded.savedPasswords.sort()).toEqual([id, kept].sort())
+    expect(loaded.passwordStorage).toEqual({ available: true })
+    // Save changes that keep the credentials keep it.
+    const renamed = await library.save({ id, options: { ...options, displayName: 'Renamed' } })
+    expect(renamed.savedPasswords.sort()).toEqual([id, kept].sort())
+    const moved = await library.save({ id, options: { ...options, server: 'elsewhere' } })
+    expect(moved.savedPasswords).toEqual([kept])
+    expect(moved.library.profiles.some(profile => profile.id === id)).toBe(true)
+    expect(await savedPasswords.get(id, { ...empty, server: 'elsewhere' })).toBeUndefined()
+    const removed = await library.remove(kept)
+    expect(removed).toEqual({ library: (await connections.load()).library, savedPasswords: [] })
+    await expect(library.remove('not-an-id')).rejects.toThrow()
+    await expect(library.save({ options: { ...options, password: 'x'.repeat(1025) } })).rejects.toThrow()
   })
 })

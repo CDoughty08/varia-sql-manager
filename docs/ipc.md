@@ -950,9 +950,10 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,
-  bound by a SHA-256 hash to its server, login and TLS settings; main decrypts it (async API only) and puts it into a
-  `connections.connect` or `.databases` request whose options have that binding and an empty password, after
-  `validateRequest`, and the frame is zeroed as before. The renderer only learns which history entries have one.
+  bound to its server, login and TLS settings by a SHA-256 hash beside it and a check over them and the password inside
+  it (so a ciphertext moved between entries, or a rewritten hash, is refused); main decrypts it (async API only) and
+  puts it into a `connections.connect` or `.databases` request whose options have that binding and an empty password,
+  after `validateRequest`, and the frame is zeroed as before. The renderer only learns which history entries have one.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an
   absolute `VARIA_TEST_NODE`), `VARIA_BACKEND_TEST_HOOKS`, `VARIA_RESULT_BUDGET_BYTES`, `VARIA_BACKEND_LIVENESS_MS`,
   `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, and `window.__variaRecovery.flush()`, AutoRecover's save at once),

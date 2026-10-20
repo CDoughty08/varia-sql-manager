@@ -71,11 +71,15 @@ export async function settle(prepared: PreparedRequest, outcome: Settled, deps: 
   try { id = (await deps.connections.rememberEntry(prepared.validated as ConnectionOptions)).id }
   catch { info.historyWarning = 'Connected successfully, but recent connections could not be saved.'; return outcome }
   if (context?.remember && canRememberPassword(params.authentication) && params.password) {
-    // A password used through another entry with the same credentials stays with that entry too.
+    // set() gives every other entry with these credentials (the one used among them) this password, so none keeps an
+    // older one to replay.
     try { await deps.savedPasswords.set(id, params) } catch { info.historyWarning = 'Connected successfully, but the password could not be saved.' }
   } else if (!context?.remember) {
-    try { await deps.savedPasswords.forget(id, ...context?.profileId ? [context.profileId] : []) }
-    catch { info.historyWarning = 'Connected successfully, but the saved password could not be removed.' }
+    // Any entry with these credentials would offer its password again, so unchecking forgets them all.
+    try {
+      await deps.savedPasswords.forget(id, ...context?.profileId ? [context.profileId] : [])
+      await deps.savedPasswords.forgetCredentials(params)
+    } catch { info.historyWarning = 'Connected successfully, but the saved password could not be removed.' }
   }
   await deps.savedPasswords.reconcile(() => libraryOf(deps)).catch(() => {})
   return outcome

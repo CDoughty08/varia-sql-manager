@@ -3,11 +3,11 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/
 import { readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { SavedPasswordStore, savedPasswordMessages } from '../src/main/saved-passwords'
 import { safeStorageCipher, testCipher, type SafeStorageApi, type SecretCipher } from '../src/main/secret-cipher'
 import { ConnectionStore } from '../src/main/connection-store'
-import type { ConnectionLibrary, ConnectionProfile } from '../src/shared/connections'
+import { credentialBinding, type ConnectionLibrary, type ConnectionProfile } from '../src/shared/connections'
 import type { ConnectionOptions } from '../src/shared/contracts'
 
 const marker = 'correct-horse-marker'
@@ -60,6 +60,41 @@ describe('saved passwords', () => {
       expect(await saved.get(id, { ...base, ...changed })).toBe(marker)
     }
     expect(await saved.get(randomUUID(), base)).toBeUndefined()
+  })
+  it('binds the password inside its ciphertext, so moving a ciphertext or rewriting a binding hash gets nothing', async () => {
+    const { store: saved, path } = await store()
+    const prod = randomUUID(), evil = randomUUID()
+    const prodOptions: ConnectionOptions = { ...options, server: 'prod-sql', username: 'sa', password: 'prod-secret' }
+    const evilOptions: ConnectionOptions = { ...options, server: 'evil-sql', username: 'x', trustServerCertificate: true, encrypt: 'optional', password: 'evil-known' }
+    await saved.set(prod, prodOptions)
+    await saved.set(evil, evilOptions)
+    const file = JSON.parse(await readFile(path, 'utf8'))
+    const original = JSON.stringify(file)
+    const [first, second] = file.entries
+    ;[first.cipher, second.cipher] = [second.cipher, first.cipher]
+    await writeFile(path, JSON.stringify(file))
+    // A process that can write the file but not use the OS key swapped the two ciphertexts.
+    for (const [id, value] of [[evil, evilOptions], [prod, prodOptions]] as const) {
+      await expect(new SavedPasswordStore(path, testCipher()).get(id, { ...value, password: '' })).rejects.toThrow(savedPasswordMessages.unreadable)
+    }
+    // Or it rewrote the prod entry's binding hash for its own server, as Save changes would have.
+    const rebound = JSON.parse(original)
+    const target = rebound.entries.find((entry: { profileId: string }) => entry.profileId === prod)
+    target.binding = createHash('sha256').update(credentialBinding(evilOptions)).digest('hex')
+    await writeFile(path, JSON.stringify(rebound))
+    await expect(new SavedPasswordStore(path, testCipher()).get(prod, { ...evilOptions, password: '' })).rejects.toThrow(savedPasswordMessages.unreadable)
+    await writeFile(path, original)
+    expect(await new SavedPasswordStore(path, testCipher()).get(prod, { ...prodOptions, password: '' })).toBe('prod-secret')
+  })
+  it('keeps one password per server and login: saving one replaces it in every entry with those credentials', async () => {
+    const { store: saved } = await store()
+    const [a, b, other] = [randomUUID(), randomUUID(), randomUUID()]
+    await saved.set(a, { ...options, password: 'old-pass' })
+    await saved.set(other, { ...options, username: 'other-login', password: 'other-pass' })
+    await saved.set(b, { ...options, database: 'Sales', password: 'new-pass' })
+    expect(await saved.get(a, { ...options, password: '' })).toBe('new-pass')
+    expect(await saved.get(b, { ...options, password: '' })).toBe('new-pass')
+    expect(await saved.get(other, { ...options, username: 'other-login', password: '' })).toBe('other-pass')
   })
   it('reconciles with the library: removed, pruned, re-bound and Windows authentication entries lose their password', async () => {
     const { store: saved, directory } = await store()
@@ -178,8 +213,23 @@ describe('safeStorage cipher', () => {
   const api = (backend: ReturnType<SafeStorageApi['getSelectedStorageBackend']>, available = true) => ({
     getSelectedStorageBackend: vi.fn(() => backend),
     isAsyncEncryptionAvailable: vi.fn(async () => available),
-    encryptStringAsync: vi.fn(async (text: string) => Buffer.from('enc:' + text)),
-    decryptStringAsync: vi.fn(async (data: Buffer) => ({ result: data.toString().slice(4), shouldReEncrypt: false }))
+    // v11: the tag of a key held by the Secret Service or KWallet.
+    encryptStringAsync: vi.fn(async (text: string) => Buffer.from('v11' + text)),
+    decryptStringAsync: vi.fn(async (data: Buffer) => ({ result: data.toString().slice(3), shouldReEncrypt: false }))
+  })
+  it('refuses a Linux keyring backend whose keyring cannot be reached, where Electron falls back to its hard-coded key', async () => {
+    for (const fallback of ['v10', 'plain', '']) {
+      const storage = api('gnome_libsecret')
+      storage.encryptStringAsync.mockImplementation(async (text: string) => Buffer.from(fallback + text))
+      expect(await safeStorageCipher(storage, 'linux').state(), fallback).toEqual({ available: false, reason: 'no-keyring' })
+    }
+    const throwing = api('kwallet6')
+    throwing.encryptStringAsync.mockRejectedValue(new Error('dbus'))
+    expect(await safeStorageCipher(throwing, 'linux').state()).toEqual({ available: false, reason: 'unavailable' })
+    // The secret portal's key (v12) is held by the desktop too.
+    const portal = api('gnome_libsecret')
+    portal.encryptStringAsync.mockImplementation(async (text: string) => Buffer.from('v12' + text))
+    expect(await safeStorageCipher(portal, 'linux').state()).toEqual({ available: true })
   })
   it('refuses Linux without a keyring before starting the encryptor', async () => {
     for (const [backend, reason] of [['basic_text', 'no-keyring'], ['unknown', 'unknown-backend']] as const) {

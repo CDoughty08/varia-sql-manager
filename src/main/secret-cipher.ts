@@ -17,6 +17,8 @@ export type SafeStorageApi = Pick<Electron.SafeStorage, 'isAsyncEncryptionAvaila
 
 const unavailable = 'The operating system could not protect the secret.'
 const unreadable = 'The operating system could not read the protected secret.'
+const probe = 'varia-keyring-probe'
+const keyringTags = new Set(['v11', 'v12'])
 
 /** Call state() only once the app is ready: before that, Linux reports no backend. */
 export function safeStorageCipher(storage: SafeStorageApi, platform: NodeJS.Platform): SecretCipher {
@@ -30,8 +32,15 @@ export function safeStorageCipher(storage: SafeStorageApi, platform: NodeJS.Plat
       if (backend === 'basic_text') return { available: false, reason: 'no-keyring' }
       if (backend === 'unknown') return { available: false, reason: 'unknown-backend' }
     }
-    try { return await storage.isAsyncEncryptionAvailable() ? { available: true } : { available: false, reason: 'unavailable' } }
-    catch { return { available: false, reason: 'unavailable' } }
+    try {
+      if (!await storage.isAsyncEncryptionAvailable()) return { available: false, reason: 'unavailable' }
+      if (platform !== 'linux') return { available: true }
+      // A desktop mapped to the Secret Service or KWallet with neither reachable passes both checks above, and the
+      // encryptor silently falls back to Chromium's hard-coded key (tag v10), which protects nothing. Only a key the
+      // keyring holds (v11; v12 through the secret portal) counts.
+      const tag = (await storage.encryptStringAsync(probe)).subarray(0, 3).toString('latin1')
+      return keyringTags.has(tag) ? { available: true } : { available: false, reason: 'no-keyring' }
+    } catch { return { available: false, reason: 'unavailable' } }
   }
   const state = (): Promise<SecretStorageState> => {
     known ??= check()

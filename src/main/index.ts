@@ -26,6 +26,7 @@ import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
 import { safeStorageCipher, testCipher } from './secret-cipher'
 import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
+import { connectionLibrary } from './connection-library'
 import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { lossDetails } from '../shared/files/recovery'
@@ -40,7 +41,6 @@ import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { contentSecurityPolicy } from '../shared/csp'
 import { userInfo } from 'node:os'
-import { connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
@@ -615,13 +615,7 @@ app.whenReady().then(async () => {
   // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
   const secretCipher = testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
-  const currentLibrary = async () => (await connectionStore.load()).library
-  // The renderer learns only which entries have a remembered password. A file that cannot be read hides them; it is not
-  // a reason to fail the library.
-  const libraryView = async (library: ConnectionLibrary): Promise<ConnectionLibraryView & { passwordWarning?: string }> => {
-    const saved = await savedPasswords.reconcile(currentLibrary).catch(() => ({ ids: [] as string[], warning: 'Saved passwords could not be read.' }))
-    return { library, savedPasswords: saved.ids, ...(saved.warning ? { passwordWarning: saved.warning } : {}) }
-  }
+  const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
   await appearance.initialize()
@@ -668,21 +662,9 @@ app.whenReady().then(async () => {
   ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined } })
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
-  handle('varia:connections-load', async () => {
-    const { library, warning } = await connectionStore.load()
-    return { ...await libraryView(library), passwordStorage: await savedPasswords.state(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username, ...(warning ? { warning } : {}) }
-  })
-  handle('varia:connections-save', async value => {
-    const { library, savedPasswords: ids } = await libraryView(await connectionStore.save(connectionProfileInputSchema.parse(value)))
-    return { library, savedPasswords: ids }
-  })
-  // The password goes first, so a failure leaves the entry listed with it rather than an orphaned password.
-  handle('varia:connections-remove', async value => {
-    const id = z.uuid().parse(value)
-    await savedPasswords.forget(id)
-    const { library, savedPasswords: ids } = await libraryView(await connectionStore.remove(id))
-    return { library, savedPasswords: ids }
-  })
+  handle('varia:connections-load', async () => ({ ...await library.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
+  handle('varia:connections-save', value => library.save(value))
+  handle('varia:connections-remove', value => library.remove(value))
   handle('varia:settings-get', () => settings.load({ showsWarning: true }))
   handle('varia:settings-update', value => settings.update(value))
   handle('varia:layouts-load', () => layouts.load())
