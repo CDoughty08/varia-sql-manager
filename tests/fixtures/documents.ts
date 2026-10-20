@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
-import type { editor, IRange, ISelection } from 'monaco-editor'
+import type { editor, IPosition, IRange, ISelection } from 'monaco-editor'
+import { DEFAULT_WORD_REGEXP, getWordAtText } from 'monaco-editor/editor/common/core/wordHelper.js'
 import type { ApiResult, SqlFile, VariaApi } from '../../src/shared/contracts'
 import { DocumentService, type DocumentOptions } from '../../src/renderer/src/services/documents'
 import { EventBus } from '../../src/renderer/src/core/events'
@@ -39,6 +40,15 @@ export class TestModel {
   /** The indentation DocumentService set, as Monaco's resolved options. */
   getOptions() { return { tabSize: 4, indentSize: 4, insertSpaces: false, ...this.options } }
   getLineMaxColumn(line: number): number { return this.getValue().split('\n')[line - 1].length + 1 }
+  /**
+   * Monaco's getWordAtPosition for SQL, which has no word pattern of its own, so the default one: the position is clamped
+   * to the line, and the word must touch the position asked for, so a word that ends there counts.
+   */
+  getWordAtPosition({ lineNumber, column }: IPosition): { word: string; startColumn: number; endColumn: number } | null {
+    const line = this.getLineContent(lineNumber)
+    const word = getWordAtText(Math.min(Math.max(column, 1), line.length + 1), DEFAULT_WORD_REGEXP, line, 0)
+    return word && word.startColumn <= column && column <= word.endColumn ? word : null
+  }
   /** Monaco's applyEdits: a new version, but no undo stop. */
   applyEdits(edits: { range: IRange; text: string }[]): void {
     let value = this.getValue()

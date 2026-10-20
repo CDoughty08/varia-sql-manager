@@ -36,3 +36,7 @@ declare module 'monaco-editor/editor/common/model/pieceTreeTextBuffer/pieceTreeT
     finish(normalizeEOL?: boolean): { create(defaultEOL: number): { textBuffer: PieceTreeTextBuffer } }
   }
 }
+declare module 'monaco-editor/editor/common/core/wordHelper.js' {
+  export const DEFAULT_WORD_REGEXP: RegExp
+  export function getWordAtText(column: number, wordDefinition: RegExp, text: string, textOffset: number): { word: string; startColumn: number; endColumn: number } | null
+}
