@@ -143,14 +143,30 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 /// run it: the object's, or master for databases and server objects. Commands counts the SQL commands the job sent.</summary>
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
-/// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row).</summary>
+/// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
-/// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options; Validate refuses the rest.</summary>
-internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null);
+/// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
+/// CloseConnections and Changes; Validate refuses the rest.</summary>
+internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
+    DatabaseChangesDto? Changes = null);
+/// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
+internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
 internal sealed record ActionError(string Code, string Message, bool Retryable);
 internal sealed record ActionWarningDto(string Text, bool Blocking);
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null);
-internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null);
+/// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
+internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
+    string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null);
+internal sealed record GrowthDto(bool Enabled, string? Unit = null, long? By = null, long? MaxMb = null);
+/// <summary>Type: rows, log or filestream. Path is the folder and FileName the file of physical_name.</summary>
+internal sealed record DatabaseFileDto(string Name, string Type, string? Filegroup, double SizeMb, GrowthDto Growth, string Path, string FileName, bool IsPrimary);
+/// <summary>Type: rows, filestream or memoryOptimized.</summary>
+internal sealed record DatabaseFilegroupDto(string Name, string Type, int Files, bool ReadOnly, bool IsDefault, bool? AutogrowAllFiles = null);
+internal sealed record DatabaseServerFactsDto(int Level, bool Sysadmin, int FilestreamLevel, string PathSeparator, int Edition, bool ContainedAuthentication);
+internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Dictionary<string, string> Options, Dictionary<string, string> Scoped, List<int> CompatibilityLevels,
+    List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
+    DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
+internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null);
 internal sealed record ActionScriptResult(string? Text, string Database, List<string> Warnings, ActionError? Error = null);
 /// <summary>Status: done, failed, skipped or cancelled; Message: the step's title, or SQL Server's text for a failed one.</summary>
 internal sealed record ActionStepDto(string Status, string? Message = null);

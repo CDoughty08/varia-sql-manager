@@ -40,6 +40,7 @@ import { userInfo } from 'node:os'
 import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
+import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -791,6 +792,12 @@ app.whenReady().then(async () => {
     if (!prompt) return 'proceed'
     const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal }), { response: prompt.cancelId, checkboxChecked: false }, true)
     return prompt.buttons[response]?.answer ?? 'cancel'
+  })
+  // Database Properties' Open Connections prompt; a page that reloads or crashes while it is open gets No.
+  handle('varia:confirm-open-connections', async value => {
+    confirmOpenConnectionsSchema.parse(value)
+    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, openConnectionsBox(signal)), { response: 1, checkboxChecked: false }, true)
+    return openConnectionsAnswer(response)
   })
   // The page has handled every unsaved query. On macOS a window close leaves the app running, as macOS apps do.
   ipcMain.handle('varia:close-window', async event => {

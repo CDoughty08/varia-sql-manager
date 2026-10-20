@@ -2,10 +2,61 @@
   "actions": [
     {"action":"selectTop","class":"query","title":"Select Top 1000 Rows"},
     {"action":"rename","class":"inline","title":"Rename"},
-    {"action":"delete","class":"dialog","title":"Delete"}
+    {"action":"delete","class":"dialog","title":"Delete"},
+    {"action":"properties","class":"dialog","systemObjects":true,"title":"Properties"}
+  ],
+  "compatibilityLevels": [100,110,120,130,140,150,160,170],
+  "databaseOptions": [
+    {"control":"choice","key":"collation","label":"Collation","notOn":["master","model","msdb","tempdb"],"settable":true,"smoOrder":3,"sql":{"kind":"collate"}},
+    {"control":"choice","key":"recoveryModel","label":"Recovery model","notOn":["tempdb"],"settable":true,"smoOrder":29,"sql":{"eq":false,"keyword":"RECOVERY","kind":"set","termination":true,"tokens":{"BULK_LOGGED":"BULK_LOGGED","FULL":"FULL","SIMPLE":"SIMPLE"}},"tokens":["FULL","BULK_LOGGED","SIMPLE"]},
+    {"control":"choice","key":"compatibilityLevel","label":"Compatibility level","settable":true,"smoOrder":2,"sql":{"kind":"compat"},"tokens":["100","110","120","130","140","150","160","170"]},
+    {"control":"choice","key":"containmentType","label":"Containment type","notOn":["tempdb"],"settable":true,"smoOrder":1,"sql":{"eq":true,"keyword":"CONTAINMENT","kind":"set","termination":true,"tokens":{"NONE":"NONE","PARTIAL":"PARTIAL"}},"tokens":["NONE","PARTIAL"]},
+    {"control":"bool","key":"autoClose","label":"Auto Close","notOn":["master","tempdb"],"settable":true,"smoOrder":9,"sql":{"eq":false,"keyword":"AUTO_CLOSE","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"autoCreateIncrementalStatistics","label":"Auto Create Incremental Statistics","settable":true,"smoOrder":12,"sql":{"kind":"autoCreateStats"},"tokens":["true","false"]},
+    {"control":"bool","key":"autoCreateStatistics","label":"Auto Create Statistics","settable":true,"smoOrder":11,"sql":{"kind":"autoCreateStats"},"tokens":["true","false"]},
+    {"control":"bool","key":"autoShrink","label":"Auto Shrink","notOn":["master","tempdb"],"settable":true,"smoOrder":10,"sql":{"eq":false,"keyword":"AUTO_SHRINK","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"autoUpdateStatistics","label":"Auto Update Statistics","settable":true,"smoOrder":13,"sql":{"eq":false,"keyword":"AUTO_UPDATE_STATISTICS","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"autoUpdateStatisticsAsync","label":"Auto Update Statistics Asynchronously","settable":true,"smoOrder":21,"sql":{"eq":false,"keyword":"AUTO_UPDATE_STATISTICS_ASYNC","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"text","key":"defaultFulltextLanguageLcid","label":"Default Fulltext Language LCID","settable":false,"smoOrder":33},
+    {"control":"text","key":"defaultLanguage","label":"Default Language","settable":false,"smoOrder":34},
+    {"control":"bool","key":"nestedTriggersEnabled","label":"Nested Triggers Enabled","settable":false,"smoOrder":35,"tokens":["true","false"]},
+    {"control":"bool","key":"transformNoiseWords","label":"Transform Noise Words","settable":false,"smoOrder":36,"tokens":["true","false"]},
+    {"control":"text","key":"twoDigitYearCutoff","label":"Two Digit Year Cutoff","settable":false,"smoOrder":37},
+    {"control":"bool","key":"closeCursorOnCommit","label":"Close Cursor on Commit Enabled","settable":true,"smoOrder":14,"sql":{"eq":false,"keyword":"CURSOR_CLOSE_ON_COMMIT","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"choice","key":"defaultCursor","label":"Default Cursor","settable":true,"smoOrder":15,"sql":{"eq":false,"keyword":"CURSOR_DEFAULT ","kind":"set","termination":true,"tokens":{"GLOBAL":"GLOBAL","LOCAL":"LOCAL"}},"tokens":["GLOBAL","LOCAL"]},
+    {"control":"text","key":"filestreamDirectoryName","label":"FILESTREAM Directory Name","settable":false,"smoOrder":39},
+    {"control":"choice","exclusive":true,"key":"filestreamNonTransactedAccess","label":"FILESTREAM Non-Transacted Access","settable":true,"smoOrder":38,"sql":{"kind":"filestream"},"tokens":["OFF","READ_ONLY","FULL"]},
+    {"control":"bool","key":"isLedgerDatabase","label":"Is Ledger Database","settable":false,"since":16,"smoOrder":72,"tokens":["true","false"]},
+    {"control":"bool","key":"allowSnapshotIsolation","label":"Allow Snapshot Isolation","notOn":["master","msdb"],"settable":true,"smoOrder":60,"sql":{"kind":"snapshotIsolation"},"tokens":["true","false"]},
+    {"control":"bool","key":"ansiNullDefault","label":"ANSI NULL Default","settable":true,"smoOrder":4,"sql":{"eq":false,"keyword":"ANSI_NULL_DEFAULT","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"ansiNulls","label":"ANSI NULLS Enabled","settable":true,"smoOrder":5,"sql":{"eq":false,"keyword":"ANSI_NULLS","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"ansiPadding","label":"ANSI Padding Enabled","settable":true,"smoOrder":6,"sql":{"eq":false,"keyword":"ANSI_PADDING","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"ansiWarnings","label":"ANSI Warnings Enabled","settable":true,"smoOrder":7,"sql":{"eq":false,"keyword":"ANSI_WARNINGS","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"arithmeticAbort","label":"Arithmetic Abort Enabled","settable":true,"smoOrder":8,"sql":{"eq":false,"keyword":"ARITHABORT","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"concatNullYieldsNull","label":"Concatenate Null Yields Null","settable":true,"smoOrder":16,"sql":{"eq":false,"keyword":"CONCAT_NULL_YIELDS_NULL","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"dbChaining","label":"Cross-database Ownership Chaining Enabled","settable":false,"smoOrder":32,"tokens":["true","false"]},
+    {"control":"bool","exclusive":true,"key":"dateCorrelationOptimization","label":"Date Correlation Optimization Enabled","settable":true,"smoOrder":22,"sql":{"eq":false,"keyword":"DATE_CORRELATION_OPTIMIZATION","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"choice","key":"delayedDurability","label":"Delayed Durability","settable":true,"smoOrder":41,"sql":{"eq":true,"keyword":"DELAYED_DURABILITY","kind":"set","termination":true,"tokens":{"ALLOWED":"ALLOWED","DISABLED":"DISABLED","FORCED":"FORCED"}},"tokens":["DISABLED","ALLOWED","FORCED"]},
+    {"control":"bool","exclusive":true,"key":"readCommittedSnapshot","label":"Is Read Committed Snapshot On","notOn":["master","msdb","tempdb"],"settable":true,"smoOrder":26,"sql":{"eq":false,"keyword":"READ_COMMITTED_SNAPSHOT","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"numericRoundAbort","label":"Numeric Round-Abort","settable":true,"smoOrder":17,"sql":{"eq":false,"keyword":"NUMERIC_ROUNDABORT","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"choice","key":"parameterization","label":"Parameterization","settable":true,"smoOrder":25,"sql":{"eq":false,"keyword":"PARAMETERIZATION","kind":"set","termination":true,"tokens":{"FORCED":"FORCED","SIMPLE":"SIMPLE"}},"tokens":["SIMPLE","FORCED"]},
+    {"control":"bool","key":"quotedIdentifiers","label":"Quoted Identifiers Enabled","settable":true,"smoOrder":18,"sql":{"eq":false,"keyword":"QUOTED_IDENTIFIER","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"recursiveTriggers","label":"Recursive Triggers Enabled","settable":true,"smoOrder":19,"sql":{"eq":false,"keyword":"RECURSIVE_TRIGGERS","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
+    {"control":"bool","key":"trustworthy","label":"Trustworthy","settable":false,"smoOrder":23,"tokens":["true","false"]},
+    {"control":"bool","key":"varDecimalStorageFormat","label":"VarDecimal Storage Format Enabled","settable":false,"smoOrder":73,"tokens":["true","false"]},
+    {"control":"choice","key":"pageVerify","label":"Page Verify","settable":true,"smoOrder":31,"sql":{"eq":false,"keyword":"PAGE_VERIFY","kind":"set","termination":true,"tokens":{"CHECKSUM":"CHECKSUM ","NONE":"NONE ","TORN_PAGE_DETECTION":"TORN_PAGE_DETECTION "}},"tokens":["CHECKSUM","TORN_PAGE_DETECTION","NONE"]},
+    {"control":"integer","key":"targetRecoveryTime","label":"Target Recovery Time (Seconds)","range":{"max":2147483647,"min":0},"settable":true,"smoOrder":40,"sql":{"eq":true,"keyword":"TARGET_RECOVERY_TIME","kind":"set","seconds":true,"termination":true}},
+    {"control":"bool","key":"brokerEnabled","label":"Broker Enabled","notOn":["master","model"],"settable":true,"smoOrder":20,"sql":{"eq":false,"keyword":"","kind":"set","termination":true,"tokens":{"false":"DISABLE_BROKER","true":"ENABLE_BROKER"}},"tokens":["true","false"]},
+    {"control":"bool","key":"honorBrokerPriority","label":"Honor Broker Priority","settable":false,"smoOrder":27,"tokens":["true","false"]},
+    {"control":"text","key":"serviceBrokerIdentifier","label":"Service Broker Identifier","settable":false,"smoOrder":74},
+    {"control":"bool","exclusive":true,"key":"readOnly","label":"Database Read-Only","notOn":["master","tempdb"],"settable":true,"smoOrder":28,"sql":{"eq":false,"keyword":"","kind":"set","termination":true,"tokens":{"false":"READ_WRITE","true":"READ_ONLY"}},"tokens":["true","false"]},
+    {"control":"text","key":"databaseState","label":"Database State","settable":false,"smoOrder":70},
+    {"control":"bool","key":"encryptionEnabled","label":"Encryption Enabled","settable":false,"smoOrder":71,"tokens":["true","false"]},
+    {"control":"choice","exclusive":true,"key":"restrictAccess","label":"Restrict Access","notOn":["master","tempdb"],"settable":true,"smoOrder":30,"sql":{"eq":false,"keyword":"","kind":"set","termination":true,"tokens":{"MULTI_USER":"MULTI_USER","RESTRICTED_USER":"RESTRICTED_USER","SINGLE_USER":"SINGLE_USER"}},"tokens":["MULTI_USER","RESTRICTED_USER","SINGLE_USER"]}
   ],
   "dialogs": [
-    {"dialog":"deleteObject","pages":["general"]}
+    {"action":"delete","dialog":"deleteObject","pages":["general"]},
+    {"action":"properties","dialog":"databaseProperties","pages":["general","files","filegroups","options"]}
   ],
   "errors": [
     {"code":"NOT_FOUND","retryable":false},
@@ -23,11 +74,12 @@
     {"code":"AUTH_KERBEROS","retryable":true},
     {"code":"AUTH_UNSUPPORTED","retryable":true}
   ],
-  "limits": {"cancelIds":16,"dependents":100,"describeMs":40000,"executePerConnection":1,"executeTotal":2,"gateWaitMs":30000,"infoMessageChars":512,"infoMessages":32,"messageChars":2048,"newName":128,"readLockTimeoutMs":10000,"readPerConnection":2,"readTotal":4,"registered":128,"scriptChars":65536,"scriptMs":25000,"statusDelayMs":300,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64},
+  "limits": {"cancelIds":16,"collations":8192,"dependents":100,"describeMs":40000,"executePerConnection":1,"executeTotal":2,"filegroups":256,"files":1024,"gateWaitMs":30000,"infoMessageChars":512,"infoMessages":32,"logins":1024,"messageChars":2048,"newName":128,"readLockTimeoutMs":10000,"readPerConnection":2,"readTotal":4,"registered":128,"scriptChars":1000000,"scriptMs":25000,"statements":512,"statusDelayMs":300,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64},
+  "ownerNotOn": ["master","model","tempdb"],
   "rows": [
-    {"disabled":[],"enabled":["rename","delete"],"kind":"database","subtype":""},
-    {"disabled":["rename","delete"],"enabled":[],"kind":"database","subtype":"system"},
-    {"disabled":["rename"],"enabled":["delete"],"kind":"database","subtype":"snapshot"},
+    {"disabled":[],"enabled":["rename","delete","properties"],"kind":"database","subtype":""},
+    {"disabled":["rename","delete"],"enabled":["properties"],"kind":"database","subtype":"system"},
+    {"disabled":["rename"],"enabled":["delete","properties"],"kind":"database","subtype":"snapshot"},
     {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"table","subtype":""},
     {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"systemVersioned"},
     {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"history"},
@@ -58,5 +110,15 @@
     {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"clrScalar"},
     {"disabled":["delete"],"enabled":["rename"],"kind":"function","subtype":"aggregate"}
   ],
-  "version": 1
+  "scopedConfigurations": [
+    {"control":"choice","key":"legacyCardinalityEstimation","label":"Legacy Cardinality Estimation","settable":true,"since":13,"smoOrder":50,"sql":{"kind":"scoped","name":"LEGACY_CARDINALITY_ESTIMATION","secondary":false,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["ON","OFF"]},
+    {"control":"choice","key":"legacyCardinalityEstimationForSecondary","label":"Legacy Cardinality Estimation for Secondary","settable":true,"since":13,"smoOrder":51,"sql":{"kind":"scoped","name":"LEGACY_CARDINALITY_ESTIMATION","secondary":true,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["PRIMARY","ON","OFF"]},
+    {"control":"integer","key":"maxDop","label":"Max DOP","range":{"max":32767,"min":0},"settable":true,"since":13,"smoOrder":52,"sql":{"kind":"scoped","name":"MAXDOP","secondary":false}},
+    {"control":"integer","key":"maxDopForSecondary","label":"Max DOP for Secondary","range":{"max":32767,"min":0},"settable":true,"since":13,"smoOrder":53,"sql":{"kind":"scoped","name":"MAXDOP","secondary":true},"tokens":["PRIMARY"]},
+    {"control":"choice","key":"parameterSniffing","label":"Parameter Sniffing","settable":true,"since":13,"smoOrder":54,"sql":{"kind":"scoped","name":"PARAMETER_SNIFFING","secondary":false,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["ON","OFF"]},
+    {"control":"choice","key":"parameterSniffingForSecondary","label":"Parameter Sniffing for Secondary","settable":true,"since":13,"smoOrder":55,"sql":{"kind":"scoped","name":"PARAMETER_SNIFFING","secondary":true,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["PRIMARY","ON","OFF"]},
+    {"control":"choice","key":"queryOptimizerFixes","label":"Query Optimizer Fixes","settable":true,"since":13,"smoOrder":56,"sql":{"kind":"scoped","name":"QUERY_OPTIMIZER_HOTFIXES","secondary":false,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["ON","OFF"]},
+    {"control":"choice","key":"queryOptimizerFixesForSecondary","label":"Query Optimizer Fixes for Secondary","settable":true,"since":13,"smoOrder":57,"sql":{"kind":"scoped","name":"QUERY_OPTIMIZER_HOTFIXES","secondary":true,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["PRIMARY","ON","OFF"]}
+  ],
+  "version": 2
 }

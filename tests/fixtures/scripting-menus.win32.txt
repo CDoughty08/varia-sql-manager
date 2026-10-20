@@ -509,6 +509,8 @@ explorer.context, for a database
   D&elete
   ---
   Re&fresh
+  ---
+  &Properties
 explorer.context, for a database snapshot
   New &Query
   ---
@@ -536,6 +538,8 @@ explorer.context, for a database snapshot
   D&elete
   ---
   Re&fresh
+  ---
+  &Properties
 explorer.context, for an index
   &Script Index as >
     &CREATE To >

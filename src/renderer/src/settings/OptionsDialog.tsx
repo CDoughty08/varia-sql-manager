@@ -4,7 +4,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { trapFocus } from '../trap-focus'
 import {
-  ancestorIds, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
+  ancestorIds, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
 import { highlightParts, searchPages } from './search'
@@ -189,7 +189,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
         {/* A form page's own note (Fonts and Colors: where colors come from) stays above its rows. */}
         {form.page.layout !== 'propertyGrid' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
         {form.page.layout === 'propertyGrid'
-          ? <PropertyGrid label={form.page.title} groups={form.groups} focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
+          ? <PropertyGrid label={form.page.title} groups={form.groups.map(group => ({ ...group, rows: group.rows.map(settingGridRow) }))} idPrefix="setting-" focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
           : <div className="options-form">{groups(form.groups)}</div>}
       </div>
     </div>

@@ -2,7 +2,7 @@
 
 <!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->
 
-Object Explorer's actions on objects: Select Top 1000 Rows, Rename and Delete. Which kinds and subtypes offer each is
+Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete and Properties. Which kinds and subtypes offer each is
 data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`
 and re-derives the subtype in the action's own connection before any DDL runs.
 
@@ -13,36 +13,41 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `1_query` 2 | w | — | — | `explorerActionSelectTop` |
 | `rename` | Rename | `explorer.rename` | inline | `7_edit` 1 | m | F2 | F2 | `explorerActionRename` |
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `7_edit` 2 | e | Delete | ⌘⌫, Delete | `explorerActionDelete` |
+| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` |
 
 Keys work while Object Explorer has focus and no text field does. Delete's access key is E: Disconnect has SSMS's D in
 Varia's one Object Explorer menu.
 Select Top 1000 Rows follows Tools › Options › SQL Server Object Explorer › Commands (Select Top <n> Rows).
+Properties is the last item, after Refresh, and is offered on SQL Server's own databases too, as in SSMS. SSMS 22's
+access key and shortcut for it are unverified: Varia uses P, and ⌘I (Finder's Get Info) on macOS only, because Alt+Enter
+is reserved on Windows and Linux.
 
 ## Object kinds
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete |
-| --- | --- | --- | --- | --- |
-| `database` | none | – | ✓ | ✓ |
-| `database` | `system` | – | ○ | ○ |
-| `database` | `snapshot` | – | ○ | ✓ |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ |
-| `table` | `droppedLedger` | – | ○ | ○ |
-| `view` | none | ✓ | ✓ | ✓ |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ |
-| `view` | `droppedLedger` | – | ○ | ○ |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ |
-| `function` | `aggregate` | – | ✓ | ○ |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties |
+| --- | --- | --- | --- | --- | --- |
+| `database` | none | – | ✓ | ✓ | ✓ |
+| `database` | `system` | – | ○ | ○ | ✓ |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – |
+| `view` | none | ✓ | ✓ | ✓ | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – |
+| `function` | `aggregate` | – | ✓ | ○ | – |
 
 ## Dialogs
 
-| Dialog | Title | Pages |
-| --- | --- | --- |
-| `deleteObject` | Delete Object | General |
+| Dialog | Title | Action | Pages |
+| --- | --- | --- | --- |
+| `deleteObject` | Delete Object | `delete` | General |
+| `databaseProperties` | Database Properties - <name> | `properties` | General, Files, Filegroups, Options |
 
 The Script button scripts to a new query window; its arrow lists Script Action to New Query Window, Script Action to File, Script Action to Clipboard. Script never runs anything.
 OK runs the action; Cancel reads Stop while it runs, and Stop cancels the statement in SQL Server.
@@ -50,6 +55,103 @@ OK runs the action; Cancel reads Stop while it runs, and Stop cancels the statem
 Delete Object for a database also offers "Delete backup and restore history information for databases" (checked,
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
 confirmation.
+
+## Database Properties
+
+Database Properties opens on General (read-only facts: backups, name, status, owner, date created, size, space available,
+number of users, memory-optimized memory and collation). Files and Filegroups list the database's files and
+filegroups read-only in this version; Owner on the Files page is editable. Options shows Collation, Recovery model,
+Compatibility level and Containment type above SSMS's property grid. OK and Script send only the values that changed,
+as SSMS does; Script with nothing changed says "There is no action to be scripted." A snapshot, a database that is not online or
+not accessible, and Azure SQL Managed Instance open read-only with a note. Compatibility level is greyed for a login
+outside sysadmin (SSMS ignores the change silently), and Containment type when the server's contained database
+authentication is off. The owner of master, model, tempdb cannot change.
+
+Compatibility levels offered: SQL Server 2008 (100), SQL Server 2012 (110), SQL Server 2014 (120), SQL Server 2016 (130), SQL Server 2017 (140), SQL Server 2019 (150), SQL Server 2022 (160), SQL Server 2025 (170), up to the server's own.
+
+### Database options
+
+"Exclusive": SSMS closes other connections to change it. "Not on": system databases SQL Server refuses it on (Learn's
+master, model, msdb and tempdb pages). "Since": the version band (13 = SQL Server 2016, 17 = 2025).
+
+| Option | Category | Settable | SQL | Exclusive | Since | Not on |
+| --- | --- | --- | --- | --- | --- | --- |
+| Collation | Header | Yes | `COLLATE` |  |  | master, model, msdb, tempdb |
+| Recovery model | Header | Yes | `RECOVERY` `FULL`, `BULK_LOGGED`, `SIMPLE` |  |  | tempdb |
+| Compatibility level | Header | Yes | `COMPATIBILITY_LEVEL` |  |  |  |
+| Containment type | Header | Yes | `CONTAINMENT` `NONE`, `PARTIAL` |  |  | tempdb |
+| Auto Close | Automatic | Yes | `AUTO_CLOSE` `ON`, `OFF` |  |  | master, tempdb |
+| Auto Create Incremental Statistics | Automatic | Yes | `AUTO_CREATE_STATISTICS` |  |  |  |
+| Auto Create Statistics | Automatic | Yes | `AUTO_CREATE_STATISTICS` |  |  |  |
+| Auto Shrink | Automatic | Yes | `AUTO_SHRINK` `ON`, `OFF` |  |  | master, tempdb |
+| Auto Update Statistics | Automatic | Yes | `AUTO_UPDATE_STATISTICS` `ON`, `OFF` |  |  |  |
+| Auto Update Statistics Asynchronously | Automatic | Yes | `AUTO_UPDATE_STATISTICS_ASYNC` `ON`, `OFF` |  |  |  |
+| Default Fulltext Language LCID | Containment | No |  |  |  |  |
+| Default Language | Containment | No |  |  |  |  |
+| Nested Triggers Enabled | Containment | No |  |  |  |  |
+| Transform Noise Words | Containment | No |  |  |  |  |
+| Two Digit Year Cutoff | Containment | No |  |  |  |  |
+| Close Cursor on Commit Enabled | Cursor | Yes | `CURSOR_CLOSE_ON_COMMIT` `ON`, `OFF` |  |  |  |
+| Default Cursor | Cursor | Yes | `CURSOR_DEFAULT` `GLOBAL`, `LOCAL` |  |  |  |
+| FILESTREAM Directory Name | FILESTREAM | No |  |  |  |  |
+| FILESTREAM Non-Transacted Access | FILESTREAM | Yes | `FILESTREAM( NON_TRANSACTED_ACCESS = … )` | Yes |  |  |
+| Is Ledger Database | Ledger | No |  |  | 16 |  |
+| Allow Snapshot Isolation | Miscellaneous | Yes | `ALLOW_SNAPSHOT_ISOLATION` |  |  | master, msdb |
+| ANSI NULL Default | Miscellaneous | Yes | `ANSI_NULL_DEFAULT` `ON`, `OFF` |  |  |  |
+| ANSI NULLS Enabled | Miscellaneous | Yes | `ANSI_NULLS` `ON`, `OFF` |  |  |  |
+| ANSI Padding Enabled | Miscellaneous | Yes | `ANSI_PADDING` `ON`, `OFF` |  |  |  |
+| ANSI Warnings Enabled | Miscellaneous | Yes | `ANSI_WARNINGS` `ON`, `OFF` |  |  |  |
+| Arithmetic Abort Enabled | Miscellaneous | Yes | `ARITHABORT` `ON`, `OFF` |  |  |  |
+| Concatenate Null Yields Null | Miscellaneous | Yes | `CONCAT_NULL_YIELDS_NULL` `ON`, `OFF` |  |  |  |
+| Cross-database Ownership Chaining Enabled | Miscellaneous | No |  |  |  |  |
+| Date Correlation Optimization Enabled | Miscellaneous | Yes | `DATE_CORRELATION_OPTIMIZATION` `ON`, `OFF` | Yes |  |  |
+| Delayed Durability | Miscellaneous | Yes | `DELAYED_DURABILITY` `DISABLED`, `ALLOWED`, `FORCED` |  |  |  |
+| Is Read Committed Snapshot On | Miscellaneous | Yes | `READ_COMMITTED_SNAPSHOT` `ON`, `OFF` | Yes |  | master, msdb, tempdb |
+| Numeric Round-Abort | Miscellaneous | Yes | `NUMERIC_ROUNDABORT` `ON`, `OFF` |  |  |  |
+| Parameterization | Miscellaneous | Yes | `PARAMETERIZATION` `SIMPLE`, `FORCED` |  |  |  |
+| Quoted Identifiers Enabled | Miscellaneous | Yes | `QUOTED_IDENTIFIER` `ON`, `OFF` |  |  |  |
+| Recursive Triggers Enabled | Miscellaneous | Yes | `RECURSIVE_TRIGGERS` `ON`, `OFF` |  |  |  |
+| Trustworthy | Miscellaneous | No |  |  |  |  |
+| VarDecimal Storage Format Enabled | Miscellaneous | No |  |  |  |  |
+| Page Verify | Recovery | Yes | `PAGE_VERIFY` `CHECKSUM`, `TORN_PAGE_DETECTION`, `NONE` |  |  |  |
+| Target Recovery Time (Seconds) | Recovery | Yes | `TARGET_RECOVERY_TIME` `n SECONDS` |  |  |  |
+| Broker Enabled | Service Broker | Yes | `ENABLE_BROKER`, `DISABLE_BROKER` |  |  | master, model |
+| Honor Broker Priority | Service Broker | No |  |  |  |  |
+| Service Broker Identifier | Service Broker | No |  |  |  |  |
+| Database Read-Only | State | Yes | `READ_ONLY`, `READ_WRITE` | Yes |  | master, tempdb |
+| Database State | State | No |  |  |  |  |
+| Encryption Enabled | State | No |  |  |  |  |
+| Restrict Access | State | Yes | `MULTI_USER`, `RESTRICTED_USER`, `SINGLE_USER` | Yes |  | master, tempdb |
+| Legacy Cardinality Estimation | Database Scoped Configurations | Yes | `SET LEGACY_CARDINALITY_ESTIMATION` |  | 13 |  |
+| Legacy Cardinality Estimation for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET LEGACY_CARDINALITY_ESTIMATION` |  | 13 |  |
+| Max DOP | Database Scoped Configurations | Yes | `SET MAXDOP` |  | 13 |  |
+| Max DOP for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET MAXDOP` |  | 13 |  |
+| Parameter Sniffing | Database Scoped Configurations | Yes | `SET PARAMETER_SNIFFING` |  | 13 |  |
+| Parameter Sniffing for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET PARAMETER_SNIFFING` |  | 13 |  |
+| Query Optimizer Fixes | Database Scoped Configurations | Yes | `SET QUERY_OPTIMIZER_HOTFIXES` |  | 13 |  |
+| Query Optimizer Fixes for Secondary | Database Scoped Configurations | Yes | `FOR SECONDARY SET QUERY_OPTIMIZER_HOTFIXES` |  | 13 |  |
+
+### Statement order
+
+Script and OK write SSMS's statements in SSMS's order (SMO's Database.ScriptAlter, then SSMS's own steps):
+
+1. One ALTER DATABASE per changed option in SMO's order: containment, compatibility level, collation, then the SET
+   options (WITH NO_WAIT, or WITH ROLLBACK IMMEDIATE when other connections are closed), then the scoped
+   configurations in the database (`USE [db]`, then `ALTER DATABASE SCOPED CONFIGURATION …`).
+2. `ALTER DATABASE … SET ALLOW_SNAPSHOT_ISOLATION`, as SSMS's SetSnapshotIsolation.
+3. The owner: `ALTER AUTHORIZATION ON DATABASE::[db] TO [login]` in the database.
+
+Each statement is one step; the first failure stops the rest, which are skipped. Statements are built by SQL Server
+from constant text: names through `QUOTENAME`, numbers through `CONVERT` of range-checked parameters, keywords only
+from this catalogue, and a collation only as `sys.fn_helpcollations()` names it.
+
+### Open Connections
+
+When OK changes an exclusive option and the database has sessions (or they cannot be counted), Varia asks "To change the database properties, SQL Server must close all other connections to the database. Are you sure you want to change the properties and close all other connections?"
+(Yes or No; No is the default, because Yes rolls back the other sessions' transactions, and Escape answers No).
+No runs nothing. Yes writes the SET options WITH ROLLBACK IMMEDIATE. Without the prompt, WITH NO_WAIT makes SQL Server
+refuse (`IN_USE`) rather than wait for the other sessions' transactions; SQL Server gives up after about 20 seconds. Script
+never asks: it always writes WITH NO_WAIT, as SSMS does.
 
 ## SQL
 
@@ -108,7 +210,12 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `messageChars` | 2,048 | Characters in an error message |
 | `infoMessages` | 32 | Informational messages an action returns |
 | `infoMessageChars` | 512 | Characters in an informational message |
-| `scriptChars` | 65,536 | Characters in a script |
+| `scriptChars` | 1,000,000 | Characters in a script: main's limit for a query, so a script sent to a new query window can run there |
 | `newName` | 128 | UTF-16 code units in a new name (used verbatim, never trimmed) |
+| `files` | 1,024 | Files Database Properties lists; more make the Files page say so |
+| `filegroups` | 256 | Filegroups Database Properties lists; more make the Filegroups page say so |
+| `logins` | 1,024 | Logins the Owner field suggests |
+| `collations` | 8,192 | Collations the Collation list offers |
+| `statements` | 512 | Statements one Database Properties request may plan |
 | `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
 | `statusDelayMs` | 300 | How long a rename runs before the status bar shows it with Stop, in ms |

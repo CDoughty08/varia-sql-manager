@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { unknownOutcomeMessage } from '../src/shared/actions/catalog'
+import { noScriptNotice } from '../src/shared/actions/database'
 import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult, DeleteTarget } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
@@ -8,6 +9,8 @@ import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
+import { databaseModel } from './fixtures/database-properties'
+import { setOption, type DatabaseDraft } from '../src/renderer/src/dialogs/database-properties'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -27,7 +30,8 @@ function setup() {
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `DROP ${params.target.name}`, database: 'AppData', warnings: [] } as ActionScriptResult })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(() => execute.promise),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async ids => ({ ok: true, value: { cancelled: ids.length } })),
-    writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined }))
+    writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
+    confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false }))
   }
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
@@ -167,5 +171,97 @@ describe('ObjectDialogService', () => {
     dialogs.open('deleteObject', node(ordersRef))
     dialogs.dispose()
     expect(api.cancelObjectActions.mock.calls.at(-1)).toEqual([['id-2']])
+  })
+})
+
+describe('ObjectDialogService: Database Properties', () => {
+  const properties = (model = databaseModel()): ApiResult<ActionDescribeResult> => ({ ok: true, value: { databaseProperties: model, elapsedMs: 1 } })
+  const draftOf = (dialogs: ObjectDialogService) => dialogs.current!.draft as DatabaseDraft
+  async function opened(model = databaseModel()) {
+    const fixture = setup()
+    fixture.api.describeObject.mockResolvedValueOnce(properties(model))
+    fixture.dialogs.open('databaseProperties', node(databaseRef, 12))
+    await fixture.settle()
+    return fixture
+  }
+  it('opens "Database Properties - AppData" on General with the describe\'s model and a draft of its values', async () => {
+    const { dialogs, api } = await opened()
+    expect(api.describeObject.mock.calls[0][0]).toMatchObject({ dialog: 'databaseProperties', target: databaseRef })
+    expect(dialogs.current).toMatchObject({ title: 'Database Properties - AppData', page: 'general', phase: 'ready', model: { general: { name: 'AppData' } } })
+    expect(draftOf(dialogs)).toMatchObject({ owner: 'sa', options: { recoveryModel: 'FULL' }, scoped: { maxDop: '0' } })
+    dialogs.setPage('options')
+    expect(dialogs.current?.page).toBe('options')
+    dialogs.setPage('permissions' as never)
+    expect(dialogs.current?.page).toBe('options')
+    const deleting = setup()
+    deleting.dialogs.open('deleteObject', node(ordersRef))
+    expect(deleting.dialogs.current?.title).toBe('Delete Object')
+  })
+  it('says there is nothing to script when nothing changed, and scripts only the changes', async () => {
+    const { dialogs, api, documents } = await opened()
+    await dialogs.script('newQuery')
+    expect(api.scriptObjectAction).not.toHaveBeenCalled()
+    expect(dialogs.current).toMatchObject({ phase: 'ready', notice: noScriptNotice })
+    dialogs.updateDraft(setOption(setOption(draftOf(dialogs), 'recoveryModel', 'SIMPLE'), 'autoClose', 'true'))
+    await dialogs.script('newQuery')
+    expect(api.scriptObjectAction.mock.calls[0][0]).toEqual({ action: 'properties', target: databaseRef, closeConnections: false, changes: { options: { recoveryModel: 'SIMPLE', autoClose: 'true' } },
+      connectionId: 'server-a', requestId: 'id-2' })
+    expect(documents.newQuery).toHaveBeenCalledTimes(1)
+  })
+  it('closes without a request when nothing changed', async () => {
+    const { dialogs, api } = await opened()
+    await dialogs.ok()
+    expect(dialogs.current).toBeUndefined()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(api.confirmOpenConnections).not.toHaveBeenCalled()
+  })
+  it('asks Open Connections before an exclusive change: No and a failed prompt send nothing, Yes closes the connections', async () => {
+    const { dialogs, api, execute, explorer } = await opened()
+    dialogs.updateDraft(setOption(draftOf(dialogs), 'restrictAccess', 'SINGLE_USER'))
+    await dialogs.ok()
+    expect(api.confirmOpenConnections).toHaveBeenCalledTimes(1)
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(dialogs.current?.phase).toBe('ready')
+    api.confirmOpenConnections.mockRejectedValueOnce(new Error('The window closed.'))
+    await dialogs.ok()
+    api.confirmOpenConnections.mockResolvedValueOnce({ ok: false, error: 'Untrusted IPC sender.' })
+    await dialogs.ok()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(dialogs.current?.phase).toBe('ready')
+    api.confirmOpenConnections.mockResolvedValueOnce({ ok: true, value: true })
+    const ok = dialogs.ok()
+    await vi.waitFor(() => expect(api.executeObjectAction).toHaveBeenCalledTimes(1))
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'properties', closeConnections: true, changes: { options: { restrictAccess: 'SINGLE_USER' } } })
+    execute.resolve(done)
+    await ok
+    expect(dialogs.current).toBeUndefined()
+    expect(explorer.refresh.mock.calls).toEqual([[3]])
+  })
+  it('runs a change SSMS does not close connections for without asking, and never asks before Script', async () => {
+    const { dialogs, api, execute } = await opened()
+    dialogs.updateDraft(setOption(draftOf(dialogs), 'readOnly', 'true'))
+    await dialogs.script('clipboard')
+    expect(api.confirmOpenConnections).not.toHaveBeenCalled()
+    expect(api.scriptObjectAction.mock.calls[0][0]).toMatchObject({ closeConnections: false })
+    dialogs.updateDraft(setOption(draftOf(dialogs), 'readOnly', 'false'))
+    dialogs.updateDraft(setOption(draftOf(dialogs), 'pageVerify', 'NONE'))
+    const ok = dialogs.ok()
+    expect(api.confirmOpenConnections).not.toHaveBeenCalled()
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ closeConnections: false, changes: { options: { pageVerify: 'NONE' } } })
+    execute.resolve(done)
+    await ok
+  })
+  it('runs nothing when the server goes while Open Connections is asked', async () => {
+    const { dialogs, api, connections } = await opened()
+    const answer = deferred<ApiResult<boolean>>()
+    api.confirmOpenConnections.mockReturnValueOnce(answer.promise)
+    dialogs.updateDraft(setOption(draftOf(dialogs), 'readOnly', 'true'))
+    const ok = dialogs.ok()
+    expect(dialogs.current?.phase).toBe('confirming')
+    connections.remove('server-a')
+    answer.resolve({ ok: true, value: true })
+    await ok
+    expect(dialogs.current?.phase).toBe('disconnected')
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
   })
 })

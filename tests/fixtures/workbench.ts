@@ -210,6 +210,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
+    confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
     // Nothing to ask unless a test says otherwise; answers Cancel when asked.

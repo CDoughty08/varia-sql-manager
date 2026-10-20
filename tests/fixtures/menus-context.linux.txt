@@ -135,6 +135,8 @@ explorer.context, for a database
   D&elete  Delete  -+++
   ---
   Re&fresh  F5  -+++
+  ---
+  &Properties  -+++
 explorer.context, for a Tables folder
   F&ilter Settings…  -+++
   ---

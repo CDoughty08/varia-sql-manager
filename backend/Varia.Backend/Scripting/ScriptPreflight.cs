@@ -342,6 +342,8 @@ internal static partial class ScriptPreflight
         /// <summary>An identifier exactly as stored ('' when absent).</summary>
         public string Name(string name) => values.TryGetValue(name, out var value) && value is string text ? text : "";
         public bool Has(string name) => values.ContainsKey(name);
+        /// <summary>The value as read, or null.</summary>
+        public object? Raw(string name) => values.TryGetValue(name, out var value) ? value : null;
     }
 
     /// <summary>The subtype Object Explorer would show for this row now (PR4's derivations), or '' for none.</summary>

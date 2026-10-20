@@ -115,13 +115,17 @@ pages, limits, error codes, display formats, benchmarks).
   `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
   unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
   DDL, and never logs scripts, names or options.
-- Object actions (Select Top 1000 Rows, Rename, Delete), their dialogs and pages live only in
-  `src/shared/actions/catalog.ts`; after changing it, regenerate `docs/object-actions.md` and the backend's embedded
-  `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs only in
-  `ActionService`: on its own unpooled connection (the application name plus " - Object Actions", never retried), never
-  the explorer or scripting pool; with statements only from `ActionSql`'s constant templates, where names go in as
-  parameters through server-side `QUOTENAME` (the offline lint checks every template and band, and live checks prove the
-  server builds what Script Action shows for hostile names); after a preflight in the same connection; waiting for locks
+- Object actions (Select Top 1000 Rows, Rename, Delete, Properties), their dialogs, pages and database options live only
+  in `src/shared/actions/catalog.ts` and `database.ts`; after changing them, regenerate `docs/object-actions.md` and the
+  backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
+  only in `ActionService`: on its own unpooled connection (the application name plus " - Object Actions", never retried),
+  never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
+  and `Designer/DesignerSql`, all checked by the offline lints (`ActionSql.LintExecutable` and its siblings), where names go
+  in as parameters through server-side `QUOTENAME`; ALTER DATABASE statements take names only through `QUOTENAME`, numbers
+  only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and collations only as
+  `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows for hostile names,
+  and that Database Properties' script equals SMO's capture of SSMS's sequence); Script never runs anything; after a
+  preflight in the same connection; waiting for locks
   as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's, or the status bar's for a rename), whose
   reply waits for SQL Server and lists the steps completed; and never logging names, SQL or values. Describe and script reads
   use `LOCK_TIMEOUT 10000`. The test-only dry run is an internal C# method, never a request field.

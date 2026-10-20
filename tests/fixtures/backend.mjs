@@ -526,8 +526,23 @@ async function workbench(id, method, params, credit) {
     case 'databases.list': return respond(id, workbenchDatabases)
     case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     // Object actions: Delete Object's row for the target, its DROP script, and one done step.
-    case 'actions.describe': return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
-    case 'actions.script': return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
+    case 'actions.describe':
+      switch (params.dialog) {
+        // Database Properties: a small user database with its options as tokens.
+        case 'databaseProperties': return respond(id, { databaseProperties: {
+          general: { name: params.target.name, status: 'ONLINE', standby: false, owner: 'sa', created: '2026-01-01T00:00:00.000', sizeMb: 16, users: 4, collation: 'Latin1_General_CI_AS' },
+          options: { collation: 'Latin1_General_CI_AS', recoveryModel: 'FULL', compatibilityLevel: '160', containmentType: 'NONE', autoClose: 'false', readOnly: 'false', restrictAccess: 'MULTI_USER' },
+          scoped: { maxDop: '0', maxDopForSecondary: 'PRIMARY' }, compatibilityLevels: [100, 110, 120, 130, 140, 150, 160], collations: ['Latin1_General_CI_AS'], logins: ['sa'],
+          files: [], filesTruncated: false, filegroups: [], filegroupsTruncated: false,
+          server: { level: 16, sysadmin: true, filestreamLevel: 0, pathSeparator: '\\', edition: 3, containedAuthentication: false }, sessions: 0
+        }, elapsedMs: 1 })
+        default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
+      }
+    case 'actions.script':
+      switch (params.action) {
+        case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
+        default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
+      }
     case 'actions.execute': return respond(id, { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))

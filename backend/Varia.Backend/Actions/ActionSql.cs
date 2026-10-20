@@ -182,7 +182,10 @@ internal static partial class ActionSql
     [
         "N'.'", "N'.sys.sp_executesql'", "N'.sys.sp_rename'", "N'OBJECT'", "N'SCHEMA'", "N'DATABASE'", "N'ALTER'", "N'CONTROL'", "N'VIEW SERVER STATE'", "N'ALTER ANY DATABASE'",
         "N'A name could not be quoted.'", "N'DROP TABLE '", "N'DROP VIEW '", "N'DROP PROCEDURE '", "N'DROP FUNCTION '", "N'DROP DATABASE '", "N'ALTER DATABASE '",
-        "N' MODIFY NAME = '", "N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE'"
+        "N' MODIFY NAME = '", "N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE'",
+        // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
+        "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
+        "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
@@ -255,5 +258,15 @@ internal static partial class ActionSql
         }
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
+        // Database Properties: the describe in master and inside the database for every band, its call, the preflight,
+        // and every ALTER the catalogue can plan, run and dry run.
+        for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
+        {
+            yield return ("properties master band " + band, LintCatalog(DatabaseProperties.Master(band), band, database: false));
+            yield return ("properties inside band " + band, LintCatalog(DatabaseProperties.Inside(band), band, database: true));
+        }
+        yield return ("properties call", LintCatalog(DatabaseProperties.InsideCall, ExplorerCatalog.MaxBand, database: false));
+        yield return ("properties preflight", LintCatalog(ActionService.DatabasePropertiesPreflight, ExplorerCatalog.MaxBand, database: false));
+        foreach (var item in DatabaseAlter.Lint(ActionsCatalog.Current)) yield return item;
     }
 }

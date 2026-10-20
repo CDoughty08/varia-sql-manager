@@ -269,6 +269,21 @@ cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: 
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
 not reachable from the wire.
 
+**Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
+'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers
+`{ databaseProperties: { general, options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
+(≤ 1,024), filesTruncated, filegroups (≤ 256), filegroupsTruncated, server: { level, sysadmin, filestreamLevel,
+pathSeparator, edition, containedAuthentication }, sessions?, readOnlyReason? }, elapsedMs }`, where `options` and
+`scoped` map the catalogue's option keys (docs/object-actions.md) to tokens. `actions.script` and `actions.execute` take
+`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? } }`:
+only changed values, at least one and at most 512 statements, each key a settable option with one of its tokens (an
+integer as plain decimal text in range, a collation name of letters, digits and underscores), and `closeConnections` (the
+Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. Script always
+writes `WITH NO_WAIT` and answers `database: 'master'`; execute runs one step per statement, titled by the option's label.
+A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
+main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
+`true` only for Yes.
+
 ## Streams and credits
 
 `results.read { resultId: u32 ≥ 1, firstRow: 0 … 2⁵³ − 1, maxRows: 1 … 65,536 }` sends a DATA frame for every sealed page

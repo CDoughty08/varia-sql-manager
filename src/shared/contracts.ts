@@ -428,6 +428,8 @@ export interface VariaApi {
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
+  /** Database Properties' Open Connections prompt in main's message box: true only for Yes (No is the default). */
+  confirmOpenConnections(): Promise<ApiResult<boolean>>
   /** Asks, in main's message box, what to do with the open transactions and running queries of sessions that are about
    *  to end (src/shared/sessions.ts composes the prompt). */
   confirmSessions(request: SessionPromptRequest): Promise<ApiResult<SessionAnswer>>

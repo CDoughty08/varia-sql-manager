@@ -96,6 +96,7 @@ const api: VariaApi = {
   takeRecovery: id => ipcRenderer.invoke('varia:recovery-take', { id }),
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
+  confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),
   confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),
   closeWindowCancelled: () => { ipcRenderer.send('varia:close-cancelled') },

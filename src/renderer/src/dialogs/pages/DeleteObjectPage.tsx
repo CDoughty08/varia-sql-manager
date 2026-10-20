@@ -1,5 +1,7 @@
 import { displayText } from '../../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../../core/WorkbenchContext'
+import type { DeleteTarget } from '../../../../shared/actions/schema.ts'
+import type { DeleteDraft } from '../definitions'
 import type { PageProps } from '../ObjectDialog'
 
 const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
@@ -11,7 +13,7 @@ const count = (value: number, one: string, many: string) => `${value.toLocaleStr
 export default function DeleteObjectPage({ open, editable }: PageProps) {
   const { dialogs, documents } = useWorkbench()
   const { documents: tabs } = useServiceSnapshot(documents)
-  const model = open.model, draft = open.draft
+  const model = open.model as DeleteTarget | undefined, draft = open.draft as DeleteDraft | undefined
   const database = open.target.kind === 'database'
   const windows = database ? tabs.filter(tab => tab.connectionId === open.connectionId && tab.database === open.target.name).length : 0
   const failed = open.steps?.find(step => step.status === 'failed')

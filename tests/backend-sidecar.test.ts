@@ -174,9 +174,19 @@ describe('real .NET sidecar over protocol v2', () => {
     for (const [method, params] of [
       ['actions.execute', { action: 'rename', ...ids, target, newName: 'Orders' }], ['actions.execute', { action: 'rename', ...ids, target, newName: 'a\u0000b' }],
       ['actions.execute', { action: 'delete', ...ids, target, closeConnections: true, deleteHistory: false }], ['actions.script', { action: 'delete', ...ids, target: { kind: 'login', name: 'sa' }, closeConnections: false, deleteHistory: false }],
-      ['actions.describe', { ...ids, dialog: 'databaseProperties', target }], ['actions.describe', { ...ids, dialog: 'deleteObject', target, extra: 1 }]
+      ['actions.describe', { ...ids, dialog: 'loginProperties', target: { kind: 'database', name: 'AppData' } }], ['actions.describe', { ...ids, dialog: 'databaseProperties', target }],
+      ['actions.describe', { ...ids, dialog: 'deleteObject', target, extra: 1 }],
+      // Database Properties: an unknown option, U+0000 in the owner, a table target, and changes on a rename.
+      ['actions.execute', { action: 'properties', ...ids, target: { kind: 'database', name: 'AppData' }, closeConnections: false, changes: { options: { autoCloseX: 'true' } } }],
+      ['actions.script', { action: 'properties', ...ids, target: { kind: 'database', name: 'AppData' }, closeConnections: false, changes: { owner: 'a\u0000b' } }],
+      ['actions.execute', { action: 'properties', ...ids, target, closeConnections: false, changes: { options: { autoClose: 'true' } } }],
+      ['actions.execute', { action: 'rename', ...ids, target, newName: 'Orders2', changes: { options: { autoClose: 'true' } } }]
     ] as const) await expect(call(connection, method, params as never), JSON.stringify(params)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(call(connection, 'actions.describe', { ...ids, dialog: 'deleteObject', target })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    // Database Properties passes validation (master included) and then needs a connection.
+    await expect(call(connection, 'actions.describe', { ...ids, requestId: crypto.randomUUID(), dialog: 'databaseProperties', target: { kind: 'database', name: 'master' } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    await expect(call(connection, 'actions.script', { action: 'properties', ...ids, requestId: crypto.randomUUID(), target: { kind: 'database', name: 'master' }, closeConnections: false,
+      changes: { options: { recoveryModel: 'FULL' }, scoped: { maxDopForSecondary: 'PRIMARY' }, owner: "q]'; --" } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     await expect(call(connection, 'actions.execute', { action: 'delete', ...ids, requestId: crypto.randomUUID(), target, closeConnections: false, deleteHistory: false })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('actions.execute', { action: 'rename', ...ids, target, newName: 'x' })).toEqual({ deadlineMs: 0, backstopMs: 0 })
   })

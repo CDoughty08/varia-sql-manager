@@ -5,6 +5,7 @@ import {
   defaultSettings, pageById, settingDefs, settingPages, visibleSettings, type SettingDef, type SettingKey, type SettingPage, type SettingsValues
 } from '../../../shared/settings/catalog'
 import { valueSchema, type SettingsPatch } from '../../../shared/settings/schema'
+import type { GridRow } from './PropertyGrid'
 
 /** The dialog's edits across every page: typed values, or the text of an integer field that is not a whole number yet. */
 export type OptionsDraft = Readonly<Record<SettingKey, boolean | number | string>>
@@ -67,6 +68,11 @@ export function settingRow(def: SettingDef, draft: OptionsDraft): SettingRow {
     ...def.type === 'boolean' ? { choices: booleanChoices } : def.type === 'enum' ? { choices: def.values } : {}
   }
 }
+/** A setting's row in a property grid: booleans and enums are lists, integers number fields. */
+export const settingGridRow = (row: SettingRow): GridRow => ({
+  key: row.key, label: row.def.label, description: row.def.description, control: row.def.type === 'integer' ? 'integer' : 'choice', value: row.value,
+  ...row.choices ? { choices: row.choices } : {}, ...row.def.type === 'integer' ? { min: row.def.min, max: row.def.max } : {}, changed: row.changed, disabled: row.disabled
+})
 /** The page's rows on `platform`, grouped in catalogue order; hidden settings and other platforms' are left out. */
 export function pageForm(pageId: string, draft: OptionsDraft, platform: Platform, defs: readonly SettingDef[] = settingDefs): PageForm {
   const page = pageById(pageId) ?? pageById('environment.general')!, groups: { label?: string; rows: SettingRow[] }[] = []
