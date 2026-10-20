@@ -97,6 +97,7 @@ PageChecks.Run(Check);
 HostChecks.Run(Check);
 await ConnectionFailureChecks.RunAsync(Check);
 await ConnectionFailureChecks.IdentityAsync(Check);
+await EntraChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
@@ -139,6 +140,8 @@ Check(retried == 300 && await LiveResultChecks.OnceMore("a measurement in time",
     "a timed live check that misses its bound measures once more, and only once");
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
+// Microsoft Entra ID needs a tenant: these run only with their own variables, before and without the SQL Server ones.
+await EntraLiveChecks.RunAsync(Check, json);
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
 if (string.IsNullOrWhiteSpace(server))
 {
@@ -330,6 +333,7 @@ try
     await ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json);
     await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
+    await EntraChecks.LiveAsync(Check, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }
 finally { await Call<object>("connections.disconnect", new ConnectionArgs(info.Id)); }

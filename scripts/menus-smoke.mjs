@@ -196,7 +196,7 @@ try {
   await page.keyboard.press('ArrowRight')
   await expect(menubarItem('Edit')).toBeFocused()
   await page.keyboard.press('End')
-  await expect(menubarItem('Window')).toBeFocused()
+  await expect(menubarItem('Help')).toBeFocused()
   await page.keyboard.press('Home')
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowDown')
@@ -264,6 +264,10 @@ try {
   await page.keyboard.press('Alt+w')
   await expect(menu('Window')).toBeVisible()
   await expect(menu('View')).toHaveCount(0)
+  // Help, last, as in SSMS: Alt+H opens it.
+  await page.keyboard.press('Alt+h')
+  await expect(menu('Help').getByRole('menuitem', { name: 'Clear Entra ID Token Cache', exact: true })).toBeVisible()
+  await expect(menu('Window')).toHaveCount(0)
   await page.keyboard.press('Alt')
   await expect(openMenus()).toHaveCount(0)
   await expect(textbox()).toBeFocused()
@@ -1252,7 +1256,7 @@ try {
     await connect.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
     if (liveUser) {
       await connect.getByLabel('Authentication', { exact: true }).selectOption('sql')
-      await connect.getByLabel('User Name', { exact: true }).fill(liveUser)
+      await connect.getByLabel('Login', { exact: true }).fill(liveUser)
       await connect.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     } else await connect.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await connect.getByLabel('Trust server certificate', { exact: true }).check()

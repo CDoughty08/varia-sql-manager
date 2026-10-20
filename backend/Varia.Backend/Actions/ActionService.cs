@@ -221,7 +221,7 @@ internal sealed class ActionService : IDisposable
                 {
                     await using var connection = host.Connection(connectionId);
                     try { await host.OpenAsync(connection, token); }
-                    catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED") { return failed(ActionErrors.Create(catalog, error.Code, error.Message)); }
+                    catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return failed(ActionErrors.Create(catalog, error.Code, error.Message)); }
                     // Nothing ran yet, so the outcome is known: the action did not start.
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.Create(catalog, "CONNECTION_LOST", "Could not connect to the server: " + error.Message)); }
                     try

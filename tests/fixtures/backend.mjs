@@ -10,6 +10,8 @@
 //                       redacted
 //   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
 //                       accepts only the password correct-horse-marker
+// Server 'entra-wait' connects (and lists databases) as a Microsoft Entra MFA sign-in waiting for the browser does: only a
+// CANCEL frame (the Connect dialog's Stop) ends it, answered CANCELLED.
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -469,6 +471,13 @@ const fixtures = {
   XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
 }
 
+/** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it. */
+async function entraWait(id) {
+  while (!cancelled.has(id)) await sleep(25)
+  cancelled.delete(id)
+  fail(id, 'CANCELLED', 'The operation was cancelled.')
+}
+
 async function workbench(id, method, params, credit) {
   if (controlDirectory) {
     const redacted = params?.password === undefined ? params : { ...params, password: '<redacted>' }
@@ -483,15 +492,18 @@ async function workbench(id, method, params, credit) {
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
+      if (params.server === 'entra-wait') return entraWait(id)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0 }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }
     case 'connections.databases':
+      if (params.server === 'entra-wait') return entraWait(id)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       return respond(id, workbenchDatabases)
     case 'connections.discover': return respond(id, { servers: [] })
+    case 'entra.cache.clear': return respond(id, { cleared: true })
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })
     case 'connections.disconnect':
       for (const [sessionId, session] of sessions) if (session.connectionId === params.connectionId) sessions.delete(sessionId)

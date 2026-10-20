@@ -125,3 +125,5 @@
   {"id":"layout.save@window","label":"Save Window Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load@window","label":"Load Window Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
   {"id":"layout.reset@window","label":"Reset Window Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
+{"id":"menu.help","label":"Help"}
+  {"id":"help.clearEntraTokenCache","label":"Clear Entra ID Token Cache","registerAccelerator":false,"type":"normal","click":[["command","help.clearEntraTokenCache"]]}

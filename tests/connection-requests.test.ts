@@ -131,12 +131,31 @@ describe('remembered password requests', () => {
     // Every entry with those credentials goes, so the next attempt cannot repeat the rejected password.
     expect((await savedPasswords.load()).ids).toEqual([])
   })
-  it('limits the rejection rule to SQL Server Authentication', () => {
+  it('limits the rejection rule to a refused password: 18456 for SQL Server Authentication, AADSTS50126 and 7000215 for Entra', () => {
     expect(secretRejected(options, loginFailed())).toBe(true)
     // Under other authentication 18456 means a missing grant or a stale token, not a wrong password.
     expect(secretRejected({ ...options, authentication: 'windows' }, loginFailed())).toBe(false)
+    for (const authentication of ['entraPassword', 'entraServicePrincipal', 'entraMfa'] as const) expect(secretRejected({ ...options, authentication }, loginFailed()), authentication).toBe(false)
+    const entra = (number: number) => new BackendError('AUTH_ENTRA', 'Microsoft Entra ID rejected it.', { number, state: 0, class: 11 })
+    expect(secretRejected({ ...options, authentication: 'entraPassword' }, entra(50126))).toBe(true)
+    expect(secretRejected({ ...options, authentication: 'entraServicePrincipal' }, entra(7000215))).toBe(true)
+    // A sign-in that was cancelled, timed out or needs MFA says nothing about the password; neither do other types.
+    expect(secretRejected({ ...options, authentication: 'entraPassword' }, entra(0))).toBe(false)
+    expect(secretRejected({ ...options, authentication: 'entraMfa' }, entra(50126))).toBe(false)
+    expect(secretRejected({ ...options, authentication: 'entraPassword' }, new BackendError('SQL_ERROR', 'x', { number: 50126 }))).toBe(false)
     expect(secretRejected(options, new BackendError('AUTH_KERBEROS', 'Login failed.', { number: 18456 }))).toBe(false)
     expect(secretRejected(options, Object.assign(new Error('Login failed.'), { code: 'SQL_ERROR', details: { number: 18456 } }))).toBe(false)
+  })
+  it('forgets a remembered Entra client secret that Microsoft Entra ID rejected', async () => {
+    const { request, remembered, savedPasswords } = await setup()
+    const principal: ConnectionOptions = { ...options, authentication: 'entraServicePrincipal', username: '11111111-2222-3333-4444-555555555555' }
+    const id = await remembered(principal)
+    expect((await savedPasswords.load()).ids).toEqual([id])
+    const kept = await request('connections.connect', { ...principal, password: '' }, { profileId: id }, () => ({ ok: false, error: loginFailed() }))
+    expect(kept.prepared.injected && !kept.settled.ok && !kept.settled.passwordForgotten).toBe(true)
+    const { settled } = await request('connections.connect', { ...principal, password: '' }, { profileId: id }, () => ({ ok: false, error: new BackendError('AUTH_ENTRA', 'The client secret is not valid (AADSTS7000215).', { number: 7000215, state: 0, class: 11 }) }))
+    expect(settled).toMatchObject({ ok: false, passwordForgotten: true })
+    expect((await savedPasswords.load()).ids).toEqual([])
   })
   it('lets Load databases use a remembered password without entering history or forgetting it', async () => {
     const { request, remembered, savedPasswords, directory } = await setup()

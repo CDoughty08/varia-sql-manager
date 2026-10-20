@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest } from '../src/main/validation'
+import { connectionCancelSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest } from '../src/main/validation'
+import { connectContext } from '../src/main/connection-requests'
 import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
 import { deadlineFor, mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
@@ -185,5 +186,31 @@ describe('IPC validation', () => {
     }
     expect(methodPolicies['results.copy']).toMatchObject({ kind: 'stream', lane: 'results', deadlineMs: 120_000 })
     expect(methodPolicies['results.export']).toMatchObject({ kind: 'unary', lane: 'results', deadlineMs: 0 })
+    // Help › Clear Entra ID Token Cache is main's, after its own confirmation: the renderer cannot clear the cache silently.
+    expect(mainOnlyMethods).toContain('entra.cache.clear')
+    expect(methodPolicies['entra.cache.clear']).toMatchObject({ kind: 'unary', lane: 'control', deadlineMs: 10_000 })
+  })
+  it('gives a Microsoft Entra MFA connect and Load databases 3 more minutes for the browser sign-in', () => {
+    const options = { server: 'contoso.database.windows.net', database: '', authentication: 'entraMfa' as const, trustServerCertificate: false }
+    expect(deadlineFor('connections.connect', options).deadlineMs).toBe(225_000)
+    expect(deadlineFor('connections.connect', { ...options, authentication: 'entraDefault' }).deadlineMs).toBe(45_000)
+    expect(deadlineFor('connections.connect', { ...options, advanced: { connectTimeout: 0 } }).deadlineMs).toBe(0)
+    expect(deadlineFor('connections.connect', { ...options, advanced: { connectTimeout: 30 } }).deadlineMs).toBe(240_000)
+    expect(deadlineFor('connections.databases', options).deadlineMs).toBe(225_000)
+    expect(deadlineFor('connections.databases', { ...options, authentication: 'sql' }).deadlineMs).toBe(45_000)
+    expect(methodPolicies['connections.databases']).toMatchObject({ lane: 'metadata', sensitive: true })
+  })
+  it('takes the Connect dialog\'s context, with the request id Stop uses, only for connect and Load databases', () => {
+    const requestId = crypto.randomUUID()
+    for (const method of ['connections.connect', 'connections.databases']) expect(connectContext(method, { requestId, remember: false })).toEqual({ requestId, remember: false })
+    for (const method of ['connections.preview', 'explorer.children', 'query.execute']) expect(() => connectContext(method, { requestId }), method).toThrow('Invalid request.')
+    expect(() => connectContext('connections.connect', { requestId: 'not-a-uuid' })).toThrow('Invalid request.')
+    expect(() => connectContext('connections.connect', requestId)).toThrow('Invalid request.')
+  })
+  it('cancels connects by 1 to 16 request ids', () => {
+    const ids = (count: number) => Array.from({ length: count }, () => crypto.randomUUID())
+    expect(connectionCancelSchema.safeParse({ requestIds: ids(1) }).success).toBe(true)
+    expect(connectionCancelSchema.safeParse({ requestIds: ids(16) }).success).toBe(true)
+    for (const value of [{ requestIds: [] }, { requestIds: ids(17) }, { requestIds: ['stop'] }, { requestIds: ids(1), all: true }, ids(1)]) expect(connectionCancelSchema.safeParse(value).success, JSON.stringify(value).slice(0, 40)).toBe(false)
   })
 })

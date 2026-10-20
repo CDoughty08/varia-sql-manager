@@ -61,9 +61,11 @@ Renderer (sandboxed)                          Main                              
 
 - **Unary methods** stay on `ipcRenderer.invoke('varia:request')`: `trusted()`, strict zod (`requestSchemas`), and
   `ApiResult` results, now with an error `code`. `connections.connect` and `.databases` take an optional fourth
-  argument, a strict `ConnectContext` (`{ profileId?, remember? }`: the history entry whose remembered password main may
-  fill in, and whether to remember the password once connected); any other method with one fails with `Invalid request.`.
-  A failure after main filled in a remembered password that SQL Server rejected carries `passwordForgotten: true`.
+  argument, a strict `ConnectContext` (`{ profileId?, remember?, requestId? }`: the history entry whose remembered
+  password main may fill in, whether to remember the password once connected, and the uuid the dialog's Stop cancels the
+  request by); any other method with one fails with `Invalid request.`. A failure after main filled in a remembered
+  password that was rejected (SQL Server's 18456 under SQL Server Authentication, AADSTS50126 or 7000215 under Microsoft
+  Entra Password or Service Principal) carries `passwordForgotten: true`.
 - **One MessagePort per renderer load** carries query events, the memory push, and the `results.read` / `results.close`
   streams between main and the results worker. The preload never decodes MessagePack and exposes no port.
 - **Rows stay in the backend.** `query.execute` returns a summary with a descriptor per result set; the results worker
@@ -194,8 +196,8 @@ for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metada
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
 | `system.health` | invoke | unary | control | 10 s |
-| `connections.connect` | invoke | unary | metadata | (connect timeout, default 15) + 30 s; 0 means none. Password zeroed. A failed open carries error `details`. |
-| `connections.databases` | invoke | unary | metadata | 45 s. Password zeroed. A failed open carries error `details`. |
+| `connections.connect` | invoke; cancelled with `cancelConnectionRequests` (Stop) | unary | metadata | (connect timeout, default 15) + 30 s, plus 180 s for Microsoft Entra MFA's browser sign-in; 0 means none. Password zeroed. A failed open carries error `details`. |
+| `connections.databases` | invoke; cancelled with `cancelConnectionRequests` | unary | metadata | 45 s, plus 180 s for Microsoft Entra MFA. Password zeroed. A failed open carries error `details`. |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Password zeroed. |
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or a failed backend |
@@ -215,10 +217,33 @@ for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metada
 | `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`) |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
+| `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
-`mainOnlyMethods` (`results.copy`, `results.export`, `debug.results.synthesize`) are sent only by main on its own
-behalf: they are in no renderer schema (`requestSchemas`) and no port schema (`portRequestSchema`).
+`mainOnlyMethods` (`results.copy`, `results.export`, `entra.cache.clear`, `debug.results.synthesize`) are sent only by
+main on its own behalf: they are in no renderer schema (`requestSchemas`) and no port schema (`portRequestSchema`).
+
+**Microsoft Entra ID.** The six Entra types (`authentication`: `entraMfa`, `entraPassword`, `entraIntegrated`,
+`entraServicePrincipal`, `entraManagedIdentity`, `entraDefault`; `src/shared/auth.ts` and the backend's
+`EntraModes.cs` list the same eight types) become SqlClient's `Authentication` keyword, so every pool derived from the
+connection gets tokens through Varia's own `SqlAuthenticationProvider` (registered for SqlClient's seven Entra methods,
+not device code flow or workload identity). Tokens stay in the backend's memory for its lifetime (MSAL's in-memory caches,
+one per sign-in authority, and Azure.Identity's credentials); none is written to disk or crosses IPC. The provider runs
+inside SqlClient's synchronous login, where no cancellation reaches it, so it never waits for a person: for MFA it only
+looks for a cached token and otherwise records, by the attempt's `ClientConnectionId`, that a sign-in is needed. Only
+`connections.connect` and `.databases` then sign in through the system web browser (MSAL, SqlClient's public client
+`2fd908ad-0664-4344-b9be-cd3e8b574c38`, redirect `http://localhost`, no WAM), under the request's own token and a
+3-minute limit, one sign-in at a time, and open again with a new connection; after a sign-in without a user name, the
+stored connection string names the account that signed in. Every other open answers `AUTH_ENTRA` ("Your Microsoft Entra
+sign-in for this server has expired or was revoked…") instead. Authority hosts and resources the server names are
+checked against an allowlist (the public, US Government and China clouds; SQL audiences) before any token is requested.
+Every connect and Load databases, under any authentication, gives its open up as soon as its token is cancelled, and the
+abandoned connection is closed when SqlClient's login ends, so Stop answers at once.
+
+**Connect cancellation** works as the others do (`RendererRequests`, `varia:connections-cancel`, 1–16 ids, 64 tombstones
+for 60 s; 8 running): a connect or Load databases is registered by the `requestId` of its context, only when it has one,
+and the Connect dialog's Stop (its Cancel button, or Escape, while connecting), a changed form, and a closed dialog cancel
+it with a CANCEL frame (reason 1), answered `CANCELLED`.
 
 **A backend method is added in five places:** `RpcMethods` (`src/shared/contracts.ts`); `requestSchemas`
 (`src/main/validation.ts`) for invoke or `portRequestSchema` for the port; a `methodPolicies` entry (a new unary method
@@ -226,7 +251,7 @@ is usually one `metadata` line); a preload or `ResultClient` method; and a `SqlS
 `MethodNames` entry and record in `Contracts.cs`. A backend whose HELLO lacks a method main may call is refused, and
 lists that could exceed 16 MiB must be paged (`RESPONSE_TOO_LARGE`).
 
-**Integrated identity.** Under Windows Authentication the Connect dialog's User Name shows who will sign in, as SSMS
+**Integrated identity.** Under Windows Authentication the Connect dialog's User name shows who will sign in, as SSMS
 does: `DOMAIN\user` on Windows (main answers it with the connection library), and off Windows the principal of the
 default credential cache's ticket, from `connections.identity`. The renderer asks when the dialog opens, as SSMS reads
 the identity then, so saved Windows Authentication connections show it too, and again each time Windows Authentication is
@@ -266,8 +291,8 @@ the same connection; describe and script use `LOCK_TIMEOUT 10000`. A lost backen
 renderer reports as an unknown outcome ("Refresh Object Explorer to check"), since main never sends a request twice.
 Failures the user can act on are `result.error` values, not envelope codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
-`NAME_IN_USE`, `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS` and
-`AUTH_UNSUPPORTED` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
+`NAME_IN_USE`, `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
+`AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
 not reachable from the wire.
@@ -830,9 +855,21 @@ node, and as Script As' `result.error`, "Could not script dbo.Orders: " and the 
 a pool after a failed open and rethrows that failure for 5 to 60 seconds without trying, so a Connect or Retry after
 `kinit` would show the stale failure.
 
+Microsoft Entra failures answer `AUTH_ENTRA` (Entra Integrated off Windows answers `AUTH_UNSUPPORTED` before anything is
+opened). For connect and Load databases the `details` are error number 0, class 11, state 0 and the server, except that
+an invalid user name or password (AADSTS50126) or client secret (AADSTS7000215) carries that number, which main's forget
+rule for remembered passwords reads. The message is Varia's for a sign-in cancelled in the browser, a browser that could
+not be opened, those two AADSTS errors, multifactor authentication required under Entra Password, no managed identity,
+no identity for Entra Default, a refused sign-in address or resource, and the 3-minute limit; otherwise it is SqlClient's
+first line followed by MSAL's or Azure.Identity's text. Messages are at most 2,000 characters on one line, with anything
+shaped like a JSON Web Token redacted. Login failed (18456) on an Entra connect adds "If you were recently granted
+access, choose Help › Clear Entra ID Token Cache, then connect again." The same pool opens as Kerberos's answer
+`AUTH_ENTRA`, without `details`: a query tab's session, `databases.list`, `tables.columns`, and retryable
+`AUTH_ENTRA` values for `explorer.children`, `scripting.script` and the object actions.
+
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

@@ -21,7 +21,8 @@
     {"code":"SQL_ERROR","retryable":true},
     {"code":"CANCELLED","retryable":true},
     {"code":"AUTH_KERBEROS","retryable":true},
-    {"code":"AUTH_UNSUPPORTED","retryable":true}
+    {"code":"AUTH_UNSUPPORTED","retryable":true},
+    {"code":"AUTH_ENTRA","retryable":true}
   ],
   "limits": {"cancelIds":16,"dependents":100,"describeMs":40000,"executePerConnection":1,"executeTotal":2,"gateWaitMs":30000,"infoMessageChars":512,"infoMessages":32,"messageChars":2048,"newName":128,"readLockTimeoutMs":10000,"readPerConnection":2,"readTotal":4,"registered":128,"scriptChars":65536,"scriptMs":25000,"statusDelayMs":300,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64},
   "rows": [

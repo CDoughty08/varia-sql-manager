@@ -38,7 +38,7 @@ export const requestSchemas = {
   'actions.execute': actionRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
-// Shown as the dialog's User Name: one line of at most 256 characters without control or formatting characters (C#: KerberosProbe.Bounded).
+// Shown as the dialog's User name: one line of at most 256 characters without control or formatting characters (C#: KerberosProbe.Bounded).
 const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
 export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
@@ -59,6 +59,9 @@ export function validateRequest(method: string, params: unknown): unknown {
   if (!parsed.success) throw new Error(parsed.error.issues.some(issue => issue.message === tooLargeScript) ? tooLargeScript : 'Invalid request. Check the connection or query settings.')
   return parsed.data
 }
+
+/** varia:connections-cancel: the Connect dialog's Stop, by the ids its connect and Load databases carried. */
+export const connectionCancelSchema = z.object({ requestIds: z.array(z.uuid()).min(1).max(16) }).strict()
 
 const u31 = z.number().int().min(1).max(2 ** 31 - 1)
 const u32 = z.number().int().min(1).max(0xffffffff)

@@ -42,6 +42,10 @@ pages, limits, error codes, display formats, benchmarks).
   cancelled script to leave rows unread (`LiveResultChecks.StoppedEarly`), which no load can fake, and those value timings
   are measured once more when they miss their bound (`LiveResultChecks.OnceMore`). A new live check that walks shared
   server state or times work against a fixed bound needs the same care.
+- Microsoft Entra ID needs a tenant, so its live checks run only on request: `VARIA_TEST_ENTRA_SERVER`,
+  `VARIA_TEST_ENTRA_SP_CLIENT_ID` and `VARIA_TEST_ENTRA_SP_SECRET` (a service principal with a user in the Azure SQL
+  database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never
+  print the secret. Without them the offline checks cover Entra through a fake token source.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`. Every
@@ -74,7 +78,10 @@ pages, limits, error codes, display formats, benchmarks).
   the ciphertext. Only main reads that file or decrypts; the renderer learns only which entries have one, and main injects
   it into `connections.connect`/`.databases` only for a matching binding. Remember password is disabled where
   safeStorage is unavailable, Linux's backend is `basic_text`/`unknown`, or its keyring cannot be reached (Electron's
-  fallback key, tag `v10`).
+  fallback key, tag `v10`). Microsoft Entra tokens stay in the backend's memory for its lifetime (MSAL and Azure.Identity
+  through Varia's own `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, and
+  never sent to main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
+  (Stop); sign-in hosts and token resources the server names are allowlisted.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.

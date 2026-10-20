@@ -9,7 +9,7 @@ const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TES
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'connections-profile-'))
-// A credential cache that does not exist: off Windows, Windows Authentication's User Name is then the OS user name.
+// A credential cache that does not exist: off Windows, Windows Authentication's User name is then the OS user name.
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, KRB5CCNAME: 'FILE:' + join(profile, 'no-kerberos-ticket') }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
@@ -50,10 +50,12 @@ try {
   // authentication there. The options read as SSMS's on every platform.
   const defaultAuthentication = process.platform === 'win32' ? 'windows' : 'sql'
   const authentication = dialog.getByLabel('Authentication', { exact: true })
-  const userName = dialog.getByLabel('User Name', { exact: true })
+  const userName = dialog.getByLabel('User name', { exact: true })
   await expect(authentication).toHaveValue(defaultAuthentication)
-  await expect(authentication.locator('option')).toHaveText(['Windows Authentication', 'SQL Server Authentication'])
-  // User Name shows, greyed, the identity Windows Authentication uses, as SSMS does: DOMAIN\user on Windows; elsewhere the
+  // SSMS 22's eight types, in its order.
+  await expect(authentication.locator('option')).toHaveText(['Windows Authentication', 'SQL Server Authentication', 'Microsoft Entra MFA', 'Microsoft Entra Password',
+    'Microsoft Entra Integrated', 'Microsoft Entra Service Principal', 'Microsoft Entra Managed Identity', 'Microsoft Entra Default'])
+  // User name shows, greyed, the identity Windows Authentication uses, as SSMS does: DOMAIN\user on Windows; elsewhere the
   // Kerberos principal, or the OS user name without a ticket (this suite's KRB5CCNAME names no cache).
   const windowsIdentity = process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username
   await authentication.selectOption('windows')
@@ -64,7 +66,8 @@ try {
   await expect(authentication).toHaveValue(defaultAuthentication)
   await dialog.getByLabel('Server Name', { exact: true }).fill('sql-dev')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-  await dialog.getByLabel('User Name', { exact: true }).fill('reader')
+  // SQL Server Authentication's field is Login, as in SSMS 22.
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
   await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
@@ -172,7 +175,7 @@ try {
     // A real failed login: SQL Server's number, severity, state and server under the error, never the password.
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-    await dialog.getByLabel('User Name', { exact: true }).fill('varia_no_such_login_' + crypto.randomUUID().slice(0, 8))
+    await dialog.getByLabel('Login', { exact: true }).fill('varia_no_such_login_' + crypto.randomUUID().slice(0, 8))
     await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog.getByRole('alert')).toBeVisible({ timeout: 30000 })
@@ -195,7 +198,7 @@ try {
     expect(await liveDatabaseDetails.textContent()).not.toMatch(/never-store-this-marker|Password=/i)
     if (liveUser) {
       await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-      await dialog.getByLabel('User Name', { exact: true }).fill(liveUser)
+      await dialog.getByLabel('Login', { exact: true }).fill(liveUser)
       await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
@@ -213,9 +216,26 @@ try {
   await app.evaluate(({ ipcMain }, statics) => {
     globalThis.connectionCalls = []
     globalThis.dbPending = []
+    // A Microsoft Entra MFA connect to 'entra-wait' waits for the browser until the dialog's Stop names its request id.
+    globalThis.entraPending = new Map()
+    globalThis.entraStops = []
+    ipcMain.removeHandler('varia:connections-cancel')
+    ipcMain.handle('varia:connections-cancel', (_event, value) => {
+      globalThis.entraStops.push(...value.requestIds)
+      let cancelled = 0
+      for (const id of value.requestIds) {
+        const resolve = globalThis.entraPending.get(id)
+        if (!resolve) continue
+        globalThis.entraPending.delete(id)
+        cancelled++
+        resolve({ ok: false, code: 'CANCELLED', error: 'The operation was cancelled.' })
+      }
+      return { ok: true, value: { cancelled } }
+    })
     ipcMain.removeHandler('varia:request')
-    ipcMain.handle('varia:request', async (_event, method, params) => {
-      globalThis.connectionCalls.push({ method, params: { ...params, password: params.password ? '<redacted>' : undefined } })
+    ipcMain.handle('varia:request', async (_event, method, params, context) => {
+      globalThis.connectionCalls.push({ method, params: { ...params, password: params.password ? '<redacted>' : undefined }, context })
+      if ((method === 'connections.connect' || method === 'connections.databases') && params.server === 'entra-wait') return new Promise(resolve => { globalThis.entraPending.set(context?.requestId, resolve) })
       if (method === 'connections.discover') return { ok: true, value: { servers: [{ server: params.scope + '-server', version: '17.0', source: params.scope }], warning: 'Discovery can be incomplete.' } }
       if (method === 'connections.databases') {
         if (params.server === 'slow-server') return new Promise(resolve => { globalThis.dbPending.push(resolve) })
@@ -256,28 +276,31 @@ try {
     expect(await identityCalls()).toBe(1)
   }
   await dialog.getByText('Development', { exact: true }).click()
-  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
+  await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   if (process.platform === 'win32') {
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue(windowsIdentity)
     expect(await identityCalls()).toBe(0)
   } else {
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('alice@CONTOSO.COM')
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue('alice@CONTOSO.COM')
     // After a kdestroy, choosing Windows Authentication again never shows the old principal, not even while the new lookup
-    // waits (a stuck cache holds it until the deadline): User Name and the rows show the OS user name.
+    // waits (a stuck cache holds it until the deadline): User name and the rows show the OS user name.
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
     await app.evaluate(() => { globalThis.identityPending = true; globalThis.identityResolve = undefined })
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await expect.poll(() => app.evaluate(() => typeof globalThis.identityResolve)).toBe('function')
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue(windowsIdentity)
     expect(await integratedRows()).toEqual(['master · ' + windowsIdentity])
     expect(await identityCalls()).toBe(3)
     await app.evaluate(() => { globalThis.identityPending = false; globalThis.identityResolve({ ok: true, value: {} }) })
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue(windowsIdentity)
     expect(await integratedRows()).toEqual(['master · ' + windowsIdentity])
   }
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
+  await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
+  await entraChecks(dialog, windowsIdentity)
+  await dialog.getByText('Development', { exact: true }).click()
+  await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await dialog.getByLabel('Server source', { exact: true }).selectOption('network')
   await expect(dialog.getByRole('button', { name: /network-server/ })).toBeVisible()
@@ -354,16 +377,99 @@ try {
   await page.keyboard.insertText('SELECT 1;')
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect.poll(() => app.evaluate(() => globalThis.connectionCalls.find(call => call.method === 'query.execute')?.params.timeoutSeconds)).toBe(7)
+  await clearEntraCache()
   expect(failures).toEqual([])
   await app.close(); app = undefined
   await rememberPassword()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication).')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
   await rm(passwordProfile, { recursive: true, force: true })
+}
+
+/**
+ * Microsoft Entra ID in the Connect dialog (the stubbed requests): each type's fields as SSMS 22 shows them, and Stop, by
+ * button and by Escape, while a sign-in waits for the web browser. The dialog starts on a SQL Server Authentication entry.
+ */
+async function entraChecks(dialog, windowsIdentity) {
+  const authentication = dialog.getByLabel('Authentication', { exact: true })
+  const password = dialog.getByLabel('Password', { exact: true })
+  const connect = dialog.getByRole('button', { name: 'Connect', exact: true })
+  const user = dialog.getByLabel('User name', { exact: true })
+  await authentication.selectOption('entraMfa')
+  await expect(password).toBeDisabled()
+  await user.fill('')
+  await expect(user).toHaveAttribute('placeholder', 'user@contoso.com (optional)')
+  await expect(connect).toBeEnabled()
+  await expect(dialog.getByText('Sign in with your web browser when you connect.', { exact: true })).toBeVisible()
+  await authentication.selectOption('entraServicePrincipal')
+  await expect(user).toHaveAttribute('placeholder', 'Application (client) ID')
+  await expect(connect).toBeDisabled()
+  await user.fill('11111111-2222-3333-4444-555555555555')
+  await expect(connect).toBeEnabled()
+  await expect(password).toBeEnabled()
+  await authentication.selectOption('entraManagedIdentity')
+  await expect(dialog.getByLabel('User assigned identity', { exact: true })).toBeEnabled()
+  await expect(password).toBeDisabled()
+  await authentication.selectOption('entraIntegrated')
+  await expect(user).toBeDisabled()
+  await expect(user).toHaveValue(windowsIdentity)
+  await expect(dialog.getByText(/^Microsoft Entra Integrated needs Windows\./)).toHaveCount(process.platform === 'win32' ? 0 : 1)
+  // Stop, while a sign-in waits for the web browser: the connect's own request id is cancelled, and the form is editable.
+  await authentication.selectOption('entraMfa')
+  await user.fill('alice@contoso.com')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
+  const stopButton = dialog.getByRole('button', { name: 'Stop', exact: true })
+  const connectIds = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'entra-wait').map(call => call.context?.requestId))
+  await connect.click()
+  await expect(stopButton).toBeEnabled()
+  await expect(stopButton).toBeFocused()
+  await expect(dialog.getByText('Complete the sign-in in your web browser. Waiting up to 3 minutes…', { exact: true })).toBeVisible()
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toBeDisabled()
+  await dialog.screenshot({ path: resolve('artifacts', 'connect-dialog-entra.png') })
+  await stopButton.click()
+  await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toBeEnabled()
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled()
+  let ids = await connectIds()
+  expect(ids).toHaveLength(1)
+  expect(await app.evaluate(() => globalThis.entraStops)).toEqual(ids)
+  // Escape is Stop while connecting, and leaves the dialog open.
+  await connect.click()
+  await expect(stopButton).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
+  await expect(dialog).toBeVisible()
+  ids = await connectIds()
+  expect(ids).toHaveLength(2)
+  expect(await app.evaluate(() => globalThis.entraStops)).toEqual(ids)
+  await expect(connect).toBeFocused()
+}
+
+/** Help › Clear Entra ID Token Cache (the custom menubar on Windows and Linux, the palette on macOS): main asks, the real
+ *  backend forgets its tokens, and the workbench says so. */
+async function clearEntraCache() {
+  await app.evaluate(({ dialog }) => {
+    globalThis.entraPrompts = []
+    globalThis.previousShowMessageBox ??= dialog.showMessageBox
+    dialog.showMessageBox = async (_window, options) => { globalThis.entraPrompts.push(options.title); return { response: 0, checkboxChecked: false } }
+  })
+  if (process.platform === 'darwin') {
+    await page.locator('.monaco-editor [role="textbox"]').focus()
+    await page.keyboard.press('F1')
+    await page.keyboard.type('Clear Entra ID Token Cache')
+    await page.keyboard.press('Enter')
+  } else {
+    await page.getByRole('menubar', { name: 'Application menu' }).getByRole('menuitem', { name: 'Help', exact: true }).click({ force: true })
+    await page.getByRole('menu', { name: 'Help', exact: true }).getByRole('menuitem', { name: 'Clear Entra ID Token Cache', exact: true }).click({ force: true })
+  }
+  await expect(page.getByText('Entra ID token cache cleared.', { exact: true })).toBeVisible()
+  expect(await app.evaluate(() => globalThis.entraPrompts)).toEqual(['Clear Entra ID Token Cache'])
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.previousShowMessageBox })
 }
 
 /**
@@ -393,7 +499,7 @@ async function rememberPassword() {
   async function fill(dialog, password) {
     await dialog.getByLabel('Server Name', { exact: true }).fill('password-check')
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-    await dialog.getByLabel('User Name', { exact: true }).fill('reader')
+    await dialog.getByLabel('Login', { exact: true }).fill('reader')
     await form(dialog).password.fill(password)
   }
   const choose = dialog => dialog.locator('.connection-choice', { hasText: 'password-check' }).first().click()

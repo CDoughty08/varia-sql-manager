@@ -332,7 +332,10 @@ export const scriptErrorRetryable = {
   EMPTY: false, BLOCKED: true, TIMEOUT: true, CONNECTION_LOST: true, UNREPRESENTABLE: false, SMO_ERROR: true, SQL_ERROR: true,
   // Off Windows, a pool connection that could not sign in with Kerberos: an expired ticket (run kinit, then retry) or a
   // missing GSSAPI library, as Object Explorer reports it on a node.
-  AUTH_KERBEROS: true, AUTH_UNSUPPORTED: true
+  AUTH_KERBEROS: true, AUTH_UNSUPPORTED: true,
+  // A pool connection that could not get a Microsoft Entra token: a sign-in that expired (connect again) or a failure that
+  // may pass.
+  AUTH_ENTRA: true
 } as const satisfies Record<string, boolean>
 export type ScriptErrorCode = keyof typeof scriptErrorRetryable
 export const scriptErrorCodes = Object.keys(scriptErrorRetryable) as ScriptErrorCode[]

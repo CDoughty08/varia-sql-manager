@@ -8,6 +8,8 @@ import { BackendError, sentences } from '../src/main/backend/errors'
 import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/ipc/wire/frames'
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../src/shared/ipc/wire/msgpack'
 import { backendMethods, deadlineFor } from '../src/shared/ipc/methods'
+import { cancelReasons } from '../src/shared/ipc/wire/protocol'
+import { connectionRequestLimits, RendererRequests } from '../src/main/backend/renderer-requests'
 import { fakeSpawn, manualClock, settle } from './fixtures/fake-process'
 
 const connections: BackendConnection[] = []
@@ -271,5 +273,32 @@ describe('BackendConnection secrets', () => {
     expect(contains(writes[1].copy)).toBe(true)
     await expect.poll(() => writes[1].chunk.every(byte => byte === 0)).toBe(true)
     expect(contains(writes[1].chunk)).toBe(false)
+  })
+})
+
+describe('Connect dialog Stop', () => {
+  it('stops a connect and a Load databases waiting for a Microsoft Entra sign-in with one user CANCEL frame each, answered CANCELLED', async () => {
+    const connection = fake('workbench')
+    await connection.ready
+    const reasons: number[] = []
+    const requests = new RendererRequests({ cancel: (_generation, id, reason) => { reasons.push(reason); connection.cancel(id, reason) } }, connectionRequestLimits, 'connection')
+    const options = { server: 'entra-wait', database: '', authentication: 'entraMfa' as const, trustServerCertificate: false }
+    for (const method of ['connections.connect', 'connections.databases'] as const) {
+      const requestId = crypto.randomUUID()
+      const load = requests.begin(requestId)
+      const request = connection.send(method, options, { ...deadlineFor(method, options), sensitive: true })
+      load.sent(request.id, 1)
+      const answer = failure(request.done)
+      // The sign-in waits for the browser: nothing answers until Stop.
+      await new Promise(resolve => setTimeout(resolve, 200))
+      expect(requests.cancel([requestId])).toBe(1)
+      expect(await answer).toMatchObject({ code: 'CANCELLED' })
+      load.end()
+    }
+    expect(reasons).toEqual([cancelReasons.user, cancelReasons.user])
+    // A Stop that arrives before main registered the request (still validating) refuses it when it comes.
+    const early = crypto.randomUUID()
+    expect(requests.cancel([early])).toBe(0)
+    expect(() => requests.begin(early)).toThrow(expect.objectContaining({ code: 'CANCELLED' }))
   })
 })
