@@ -69,3 +69,35 @@ export function connectionKey(options: ConnectionOptions): string {
   return JSON.stringify([clean.server.toLowerCase(), clean.database.toLowerCase(), clean.authentication, clean.username ?? '',
     clean.encrypt ?? 'mandatory', clean.trustServerCertificate, clean.hostNameInCertificate ?? '', { ...advancedDefaults, ...clean.advanced }])
 }
+
+/** Where the operating system can protect a remembered password; `reason` says why it cannot. */
+export interface SecretStorageState { available: boolean; reason?: 'no-keyring' | 'unknown-backend' | 'unavailable' }
+/** The authentication types whose password the Connect dialog can remember: those with an editable Password box, as SSMS. */
+export function canRememberPassword(authentication: ConnectionOptions['authentication']): boolean { return authentication === 'sql' }
+/**
+ * Everything that decides where a password goes and how the server is verified. A remembered password is sent only to
+ * a request with the same binding, so changing the database, name or color keeps it, and anything else needs it typed.
+ */
+export function credentialBinding(options: Omit<ConnectionOptions, 'password'>): string {
+  return JSON.stringify([options.server.trim().toLowerCase(), options.authentication, options.username ?? '', options.encrypt ?? 'mandatory',
+    options.encrypt !== 'strict' && options.trustServerCertificate, options.hostNameInCertificate ?? '', options.advanced?.serverCertificate ?? '',
+    options.advanced?.failoverPartner ?? '', options.advanced?.networkProtocol ?? 'default'])
+}
+const recency = (profile: ConnectionProfile) => [profile.lastConnected ? 0 : profile.favorite ? 1 : 2, profile.lastConnected ?? ''] as const
+/**
+ * The saved entry whose remembered password the form would use: the selected entry when it has one for the same
+ * credentials, otherwise the most recently connected such entry, then a favorite, then a registered one.
+ */
+export function rememberedProfile(profiles: readonly ConnectionProfile[], savedIds: ReadonlySet<string>, options: ConnectionOptions, selectedId?: string): ConnectionProfile | undefined {
+  if (!canRememberPassword(options.authentication)) return undefined
+  const binding = credentialBinding(options)
+  const candidates = profiles.filter(profile => savedIds.has(profile.id) && credentialBinding(profile.options) === binding)
+  const selected = candidates.find(profile => profile.id === selectedId)
+  if (selected) return selected
+  return candidates.sort((a, b) => { const [ra, la] = recency(a), [rb, lb] = recency(b); return ra - rb || lb.localeCompare(la) })[0]
+}
+/** The fourth argument of `varia:request`, for `connections.connect` and `.databases` only. */
+export const connectContextSchema = z.object({ profileId: z.uuid().optional(), remember: z.boolean().optional() }).strict()
+export type ConnectContext = z.infer<typeof connectContextSchema>
+/** The library with the ids of the entries that have a remembered password; never the password or its ciphertext. */
+export interface ConnectionLibraryView { library: ConnectionLibrary; savedPasswords: string[] }

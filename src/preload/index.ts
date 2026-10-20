@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ApiResult, BackendState, OpenedFiles, RecentFile, ResultsJobProgress, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
+import type { ConnectContext } from '../shared/connections'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
@@ -9,6 +10,8 @@ import type { SettingsState } from '../shared/settings/schema'
 import { installFileDrop } from './drop'
 
 const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params)
+// The connect methods only: main refuses a context with any other method.
+const connectRequest = <M extends 'connections.connect' | 'connections.databases'>(method: M, params: RpcMethods[M]['params'], context?: ConnectContext): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params, context)
 
 const api: VariaApi = {
   platform: process.platform,
@@ -23,8 +26,8 @@ const api: VariaApi = {
     return () => { ipcRenderer.removeListener('varia:context-menu-command', listener) }
   },
   health: () => request('system.health', {}),
-  connect: options => request('connections.connect', options),
-  discoverDatabases: options => request('connections.databases', options),
+  connect: (options, context) => connectRequest('connections.connect', options, context),
+  discoverDatabases: (options, context) => connectRequest('connections.databases', options, context),
   discoverServers: scope => request('connections.discover', { scope }),
   previewConnection: options => request('connections.preview', options),
   loadConnectionLibrary: () => ipcRenderer.invoke('varia:connections-load'),

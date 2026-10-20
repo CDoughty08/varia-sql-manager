@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
@@ -19,13 +19,15 @@ await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, 
 let app
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 180000)
-async function launch() {
-  app = await electron.launch(launchOptions)
+const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 300000)
+// Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
+const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
+async function launch(options = launchOptions, ready = /\.NET 10\..*Ready/) {
+  app = await electron.launch(options)
   page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText(ready)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 async function open() {
@@ -353,10 +355,152 @@ try {
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect.poll(() => app.evaluate(() => globalThis.connectionCalls.find(call => call.method === 'query.execute')?.params.timeoutSeconds)).toBe(7)
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, and keyboard focus.')
+  await app.close(); app = undefined
+  await rememberPassword()
+  expect(failures).toEqual([])
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
+  await rm(passwordProfile, { recursive: true, force: true })
+}
+
+/**
+ * Remember password against the fake backend: only main's injection of the remembered password can satisfy server
+ * password-check when Password is empty. Windows uses DPAPI; elsewhere the test cipher stands in for a keyring CI lacks.
+ */
+async function rememberPassword() {
+  const marker = 'correct-horse-marker', encoded = Buffer.from(marker).toString('base64')
+  const userData = join(passwordProfile, 'user-data'), control = join(passwordProfile, 'control')
+  await mkdir(control, { recursive: true })
+  const passwordsFile = join(userData, 'saved-passwords.json'), connectionsFile = join(userData, 'connections.json'), callsFile = join(control, 'calls.jsonl')
+  const seamless = { ...env, VARIA_TEST_USER_DATA: userData, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
+  delete seamless.VARIA_TEST_SAFE_STORAGE
+  const options = { ...launchOptions, env: { ...seamless, ...process.platform === 'win32' ? {} : { VARIA_TEST_SAFE_STORAGE: 'test' } } }
+  const read = path => readFile(path, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })
+  const entries = async () => JSON.parse(await read(passwordsFile) || '{"entries":[]}').entries
+  const calls = async () => (await read(callsFile)).split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const historyId = async server => JSON.parse(await read(connectionsFile)).profiles.find(item => item.options.server === server && item.lastConnected)?.id
+  async function noSecrets() {
+    for (const [name, text] of [['saved-passwords.json', await read(passwordsFile)], ['connections.json', await read(connectionsFile)], ['calls.jsonl', await read(callsFile)]]) {
+      expect(text.includes(marker) || text.includes(encoded), name).toBe(false)
+    }
+    // No password member (the server's name, password-check, says password too).
+    expect(await read(connectionsFile)).not.toContain('"password"')
+  }
+  const form = dialog => ({ password: dialog.getByLabel('Password', { exact: true }), remember: dialog.getByLabel('Remember password', { exact: true }) })
+  async function fill(dialog, password) {
+    await dialog.getByLabel('Server Name', { exact: true }).fill('password-check')
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+    await dialog.getByLabel('User Name', { exact: true }).fill('reader')
+    await form(dialog).password.fill(password)
+  }
+  const choose = dialog => dialog.locator('.connection-choice', { hasText: 'password-check' }).first().click()
+  async function connected(dialog) {
+    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+  }
+  /** Reopened and chosen from history: the remembered password shows only as a placeholder, with the box checked. */
+  async function remembered() {
+    const dialog = await open()
+    await choose(dialog)
+    const { password, remember } = form(dialog)
+    await expect(password).toHaveValue('')
+    await expect(password).toHaveAttribute('placeholder', '••••••••')
+    await expect(remember).toBeChecked()
+    return dialog
+  }
+
+  await launch(options, 'fake · Ready')
+  // (1) Typed and remembered, then (2) only ciphertext under the history entry's id.
+  let dialog = await open()
+  await fill(dialog, marker)
+  await expect(form(dialog).remember).toBeEnabled()
+  await form(dialog).remember.check()
+  await connected(dialog)
+  const id = await historyId('password-check')
+  await expect.poll(async () => (await entries()).map(entry => entry.profileId)).toEqual([id])
+  if (process.platform !== 'win32') expect((await stat(passwordsFile)).mode & 0o777).toBe(0o600)
+  await noSecrets()
+  // (3) The renderer never holds it, not even in the library it loads.
+  dialog = await remembered()
+  await dialog.screenshot({ path: resolve('artifacts', 'connect-remember-password.png') })
+  expect(await page.evaluate(async () => JSON.stringify(await window.varia.loadConnectionLibrary()))).not.toContain(marker)
+  expect(await page.evaluate(() => document.body.innerHTML)).not.toContain(marker)
+  // (4) An empty Password connects with main's injected one.
+  await connected(dialog)
+  expect((await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'password-check').map(call => call.params.password)).toEqual(['<redacted>', '<redacted>'])
+  // (5) A forged request naming the entry gets no password for another server or a weaker certificate check.
+  const forged = await page.evaluate(async profileId => {
+    const base = { server: 'evil-server', database: '', authentication: 'sql', username: 'reader', trustServerCertificate: false, encrypt: 'mandatory' }
+    const evil = await window.varia.connect(base, { profileId, remember: true })
+    const trusting = await window.varia.connect({ ...base, server: 'password-check', trustServerCertificate: true }, { profileId, remember: true })
+    return [evil.ok, trusting.ok, trusting.passwordForgotten ?? null]
+  }, id)
+  expect(forged).toEqual([true, false, null])
+  const forgedCalls = (await calls()).filter(call => call.method === 'connections.connect' && (call.params.server === 'evil-server' || call.params.trustServerCertificate))
+  expect(forgedCalls).toHaveLength(2)
+  for (const call of forgedCalls) expect(call.params).not.toHaveProperty('password')
+  expect((await entries()).map(entry => entry.profileId)).toEqual([id])
+  await noSecrets()
+  // (6) Kept across a restart.
+  await app.close(); app = undefined
+  await launch(options, 'fake · Ready')
+  dialog = await remembered()
+  await connected(dialog)
+  // (7) Rejected after a password change: forgotten, and the dialog says so.
+  await writeFile(join(control, 'reject-passwords'), '')
+  dialog = await remembered()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText("Login failed for user 'reader'.")
+  await expect(dialog.getByText('The saved password was rejected, so it has been removed. Enter the password.', { exact: true })).toBeVisible()
+  await expect(form(dialog).remember).not.toBeChecked()
+  await expect(form(dialog).password).not.toHaveAttribute('placeholder', '••••••••')
+  expect(await entries()).toEqual([])
+  await rm(join(control, 'reject-passwords'))
+  // (8) Remembered again, then unchecked: connecting forgets it.
+  await form(dialog).password.fill(marker)
+  await form(dialog).remember.check()
+  await connected(dialog)
+  await expect.poll(async () => (await entries()).length).toBe(1)
+  dialog = await remembered()
+  await form(dialog).remember.uncheck()
+  await connected(dialog)
+  expect(await entries()).toEqual([])
+  // (9) Remembered again, then the entry's ×: gone from both files.
+  dialog = await open()
+  await choose(dialog)
+  await form(dialog).password.fill(marker)
+  await form(dialog).remember.check()
+  await connected(dialog)
+  await expect.poll(async () => (await entries()).length).toBe(1)
+  dialog = await remembered()
+  await dialog.getByRole('button', { name: 'Remove saved password-check', exact: true }).first().click()
+  await expect.poll(async () => ({ saved: await entries(), entry: await historyId('password-check') })).toEqual({ saved: [], entry: undefined })
+  // (10) Windows Authentication has no password to remember.
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await expect(form(dialog).remember).toBeDisabled()
+  await expect(form(dialog).remember).not.toBeChecked()
+  await noSecrets()
+  await app.close(); app = undefined
+  // (11) Without the test cipher: Windows (DPAPI) and macOS (Keychain) offer it; Linux needs a keyring.
+  await launch({ ...launchOptions, env: seamless }, 'fake · Ready')
+  const backend = await app.evaluate(({ safeStorage }) => process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os')
+  dialog = await open()
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  const note = dialog.getByText('Remember password needs a system keyring (GNOME Keyring or KWallet), and none was found. Passwords are used for this connection only.', { exact: true })
+  if (backend === 'basic_text') {
+    await expect(form(dialog).remember).toBeDisabled()
+    await expect(note).toBeVisible()
+  } else if (backend === 'unknown') {
+    await expect(form(dialog).remember).toBeDisabled()
+    await expect(dialog.getByText(/Remember password is unavailable/)).toBeVisible()
+  } else if (backend === 'os') {
+    await expect(form(dialog).remember).toBeEnabled()
+    await expect(note).toHaveCount(0)
+  }
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await app.close(); app = undefined
 }
 

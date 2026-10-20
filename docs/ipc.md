@@ -60,7 +60,10 @@ Renderer (sandboxed)                          Main                              
 ```
 
 - **Unary methods** stay on `ipcRenderer.invoke('varia:request')`: `trusted()`, strict zod (`requestSchemas`), and
-  `ApiResult` results, now with an error `code`.
+  `ApiResult` results, now with an error `code`. `connections.connect` and `.databases` take an optional fourth
+  argument, a strict `ConnectContext` (`{ profileId?, remember? }`: the history entry whose remembered password main may
+  fill in, and whether to remember the password once connected); any other method with one fails with `Invalid request.`.
+  A failure after main filled in a remembered password that SQL Server rejected carries `passwordForgotten: true`.
 - **One MessagePort per renderer load** carries query events, the memory push, and the `results.read` / `results.close`
   streams between main and the results worker. The preload never decodes MessagePack and exposes no port.
 - **Rows stay in the backend.** `query.execute` returns a summary with a descriptor per result set; the results worker
@@ -765,9 +768,10 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   it waits the app has no window and releases the single-instance lock, so relaunching starts a new instance at once.
   Closing the last window starts no new backend unless the app keeps running (macOS).
 - **Reconnect.** A lost connection stays in Object Explorer as "{server} — connection lost" with **Reconnect…** and
-  **Remove**. Only Reconnect (prefilled, without the password) replaces it, moving its query tabs to the new
-  connection; their first execution starts with "This query opened a new SQL session. The previous session ended when
-  the SQL backend restarted, so its SET options, temporary tables, and open transaction no longer exist."
+  **Remove**. Only Reconnect (prefilled, without the password, which main fills in when one is remembered for the same
+  credentials) replaces it, moving its query tabs to the new connection; their first execution starts with "This query
+  opened a new SQL session. The previous session ended when the SQL backend restarted, so its SET options, temporary
+  tables, and open transaction no longer exist."
 
 ## Limits
 
@@ -945,11 +949,15 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   retention that was reset because the file or that value was invalid.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
-  password.
+  password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,
+  bound by a SHA-256 hash to its server, login and TLS settings; main decrypts it (async API only) and puts it into a
+  `connections.connect` or `.databases` request whose options have that binding and an empty password, after
+  `validateRequest`, and the frame is zeroed as before. The renderer only learns which history entries have one.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an
   absolute `VARIA_TEST_NODE`), `VARIA_BACKEND_TEST_HOOKS`, `VARIA_RESULT_BUDGET_BYTES`, `VARIA_BACKEND_LIVENESS_MS`,
-  `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, and `window.__variaRecovery.flush()`, AutoRecover's save at once)
-  and `globalThis.__variaTest`. `VARIA_IPC_TRACE=1` (unpackaged only)
+  `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, and `window.__variaRecovery.flush()`, AutoRecover's save at once),
+  `globalThis.__variaTest`, and `VARIA_TEST_SAFE_STORAGE=test` (Remember password's reversible test cipher in place of
+  `safeStorage`, for runs without a keyring). `VARIA_IPC_TRACE=1` (unpackaged only)
   logs each frame's kind, id and length to stderr, never a body.
 
 ## Testing

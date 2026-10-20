@@ -6,7 +6,10 @@
 // messages=40 errors=2 memory=0.92 hold` streams synthetic sets instead (backend/shapes.mjs). results.copy and
 // results.export format text with backend/text-writer.mjs, the C# ResultTextWriter's twin. Its control directory,
 // VARIA_TEST_BACKEND_DIR, holds:
-//   calls.jsonl         one { generation, method, params } line per request, passwords redacted
+//   calls.jsonl         one { generation, method, params } line per request, passwords (and entra.cache.import's data)
+//                       redacted
+//   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
+//                       accepts only the password correct-horse-marker
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -468,7 +471,8 @@ const fixtures = {
 
 async function workbench(id, method, params, credit) {
   if (controlDirectory) {
-    const line = JSON.stringify({ generation, method, params: params?.password === undefined ? params : { ...params, password: '<redacted>' } }) + '\n'
+    const redacted = params?.password === undefined ? params : { ...params, password: '<redacted>' }
+    const line = JSON.stringify({ generation, method, params: method === 'entra.cache.import' && redacted?.data !== undefined ? { ...redacted, data: '<redacted>' } : redacted }) + '\n'
     const entry = logged.then(() => appendFile(join(controlDirectory, 'calls.jsonl'), line))
     logged = entry.catch(() => {})
     await entry
@@ -479,11 +483,14 @@ async function workbench(id, method, params, credit) {
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
+      if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0 }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }
-    case 'connections.databases': return respond(id, workbenchDatabases)
+    case 'connections.databases':
+      if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
+      return respond(id, workbenchDatabases)
     case 'connections.discover': return respond(id, { servers: [] })
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })
     case 'connections.disconnect':
