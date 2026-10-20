@@ -80,9 +80,15 @@ describe('remembered password requests', () => {
     const id = library.profiles[0].id
     expect((await savedPasswords.load()).ids).toEqual([id])
     expect(await readFile(join(directory, 'connections.json'), 'utf8')).not.toContain(marker)
-    // Through another entry with the same credentials (another database): both keep it.
+    // Through another entry with the same credentials (another database): both keep it. History is given the options as
+    // the dialog sent them, never with the password main filled in.
+    const seen: ConnectionOptions[] = []
+    const rememberEntry = connections.rememberEntry.bind(connections)
+    connections.rememberEntry = value => { seen.push(structuredClone(value)); return rememberEntry(value) }
     const other = await request('connections.connect', { ...empty, database: 'Sales' }, { profileId: id, remember: true }, () => ({ ok: true, value: info() }))
     expect(other.prepared.injected).toBe(true)
+    expect(seen.map(value => value.password)).toEqual([''])
+    expect(await readFile(join(directory, 'connections.json'), 'utf8')).not.toContain(marker)
     const salesId = (await connections.load()).library.profiles.find(profile => profile.options.database === 'Sales')!.id
     expect((await savedPasswords.load()).ids.sort()).toEqual([id, salesId].sort())
     // Unchecked: the entry it connected and the one it used both lose theirs.
