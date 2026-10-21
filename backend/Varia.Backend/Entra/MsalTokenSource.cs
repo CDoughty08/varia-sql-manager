@@ -36,8 +36,10 @@ internal sealed class MsalTokenSource : IEntraTokenSource
     private readonly ConcurrentDictionary<string, (TokenCredential Credential, byte[] Secret)> credentials = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (byte[] Hash, DateTimeOffset Until)> passwords = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IManagedIdentityApplication> identities = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Managed identities whose token was fetched since the last clear.</summary>
+    /// <summary>Managed identity and resource pairs whose token was fetched anew since the last clear.</summary>
     private readonly HashSet<string> refreshed = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Counts clears, so a fetch that began before one does not count as fetched after it.</summary>
+    private long clears;
     private readonly Lock gate = new();
 
     /// <summary>Integrated Windows authentication itself; the checks replace it (it needs a domain-joined computer and a tenant).</summary>
@@ -132,12 +134,16 @@ internal sealed class MsalTokenSource : IEntraTokenSource
 
     /// <summary>MSAL's managed identity application, used directly: MSAL keeps managed identity tokens in a cache shared by
     /// the whole process, which a new application (or Azure.Identity credential) reads too, so the first token for each
-    /// identity after a clear (or ever) is fetched anew from the host's endpoint.</summary>
+    /// identity and resource after a clear (or ever) is fetched anew from the host's endpoint. The resource counts because
+    /// MSAL caches one token per identity and resource.</summary>
     public async Task<EntraToken> ManagedIdentityAsync(EntraRequest request, CancellationToken token)
     {
         var key = request.User ?? "";
+        var resource = Resource(request.Scope);
+        var fetched = key + "|" + resource;
         IManagedIdentityApplication application;
         bool force;
+        long generation;
         lock (gate)
         {
             if (!identities.TryGetValue(key, out application!))
@@ -146,10 +152,12 @@ internal sealed class MsalTokenSource : IEntraTokenSource
                 application = ManagedIdentityApplicationBuilder.Create(request.User is { } clientId ? MsalIdentity.WithUserAssignedClientId(clientId) : MsalIdentity.SystemAssigned).Build();
                 identities[key] = application;
             }
-            force = !refreshed.Contains(key);
+            force = !refreshed.Contains(fetched);
+            generation = clears;
         }
-        var result = await application.AcquireTokenForManagedIdentity(Resource(request.Scope)).WithForceRefresh(force).ExecuteAsync(token).ConfigureAwait(false);
-        if (force) lock (gate) refreshed.Add(key);
+        var result = await application.AcquireTokenForManagedIdentity(resource).WithForceRefresh(force).ExecuteAsync(token).ConfigureAwait(false);
+        // A token whose fetch a clear overtook may predate the clear, so the next request fetches again.
+        if (force) lock (gate) if (clears == generation) refreshed.Add(fetched);
         return new EntraToken(result.AccessToken, result.ExpiresOn, null);
     }
 
@@ -175,6 +183,7 @@ internal sealed class MsalTokenSource : IEntraTokenSource
             passwords.Clear();
             identities.Clear();
             refreshed.Clear();
+            clears++;
         }
     }
 

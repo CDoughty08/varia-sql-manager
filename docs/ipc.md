@@ -241,11 +241,12 @@ opens then find that account's token when several are signed in to the tenant. A
 (SqlClient's error 0, class 11, on an Entra connection) answers `AUTH_ENTRA` with SqlClient's own text. Every other open answers `AUTH_ENTRA` ("Your Microsoft Entra
 sign-in for this server has expired or was revoked…") instead. Authority hosts and resources the server names are
 checked against an allowlist (the public, US Government and China clouds; SQL audiences) before any token is requested.
-The allowlist limits where Varia signs in and which audience a token is for, not which server receives it: as with
-Windows authentication's credentials, a connect or Load databases with MFA (a cached account), Integrated or Default sends
-the token to the server named, with no browser step when one is cached, and a hostile server could replay it against
-Azure SQL until it expires (60 to 90 minutes). SqlClient and SSMS behave the same; binding cached tokens to servers the user
-connected to is an owner decision for later.
+The allowlist limits where Varia signs in and which audience a token is for, not which server receives it: every Entra
+mode sends the token to the server the request names, as SqlClient and SSMS do. As with Windows authentication's
+credentials, a connect or Load databases with MFA (a cached account), Integrated, Managed Identity or Default sends it with
+no browser step or prompt, and a hostile server could replay it against Azure SQL until it expires (60 to 90 minutes).
+Main does not gate this: the workbench page can start such a connect without a user gesture, and nothing binds cached
+tokens to servers the user connected to before. That matches SSMS (the owner's rule) and is the owner's to revisit.
 Every connect and Load databases, under any authentication, gives its open up as soon as its token is cancelled, and the
 abandoned connection is closed when SqlClient's login ends, so Stop answers at once.
 

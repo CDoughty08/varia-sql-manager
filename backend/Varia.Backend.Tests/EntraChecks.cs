@@ -773,12 +773,15 @@ internal static class EntraChecks
 
     /// <summary>Managed Identity against a stand-in for an Azure App Service identity endpoint (IDENTITY_ENDPOINT and
     /// IDENTITY_HEADER, which MSAL reads): MSAL caches managed identity tokens for the whole process, so after Help › Clear
-    /// Entra ID Token Cache the next connect must fetch a new one, not get the old one from that cache.</summary>
+    /// Entra ID Token Cache the next connect must fetch a new one, not get the old one from that cache, for every resource,
+    /// and also when the clear came while a fetch was on its way.</summary>
     private static async Task ManagedIdentityAsync(Action<bool, string> check)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var hits = 0;
+        // Set by the race below: the endpoint signals that a request arrived, then answers only once released.
+        TaskCompletionSource? arrived = null, release = null;
         using var stop = new CancellationTokenSource();
         var serving = Task.Run(async () =>
         {
@@ -795,10 +798,14 @@ internal static class EntraChecks
                     read += count;
                 }
                 var hit = Interlocked.Increment(ref hits);
+                var line = Encoding.ASCII.GetString(buffer, 0, read).Split("\r\n")[0];
+                var resource = Uri.UnescapeDataString(line.Split("resource=", 2) is [_, var rest] ? rest.Split(['&', ' '])[0] : "");
+                if (arrived is { } signal && release is { } gate) { signal.TrySetResult(); await gate.Task.WaitAsync(stop.Token); }
                 var body = JsonSerializer.Serialize(new Dictionary<string, string>
                 {
-                    ["access_token"] = "managed-" + hit, ["expires_on"] = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
-                    ["resource"] = "https://database.windows.net/", ["token_type"] = "Bearer"
+                    ["access_token"] = "managed-" + hit + (resource.Contains("synapse", StringComparison.Ordinal) ? "-synapse" : ""),
+                    ["expires_on"] = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+                    ["resource"] = resource, ["token_type"] = "Bearer"
                 });
                 await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n" + body), stop.Token);
             }
@@ -818,6 +825,30 @@ internal static class EntraChecks
             check(before.AccessToken == "managed-1" && again.AccessToken == "managed-1" && after.AccessToken == "managed-2" && hits == 2,
                 "Managed Identity reuses its token until Help › Clear Entra ID Token Cache, then fetches a new one, although MSAL's cache is process-wide: "
                 + string.Join(", ", before.AccessToken, again.AccessToken, after.AccessToken));
+
+            // MSAL caches a token per identity and resource, so each resource is fetched anew after a clear.
+            var synapse = Request() with { Scope = "https://sql.azuresynapse.net/.default" };
+            var synapseBefore = await source.ManagedIdentityAsync(synapse, limit.Token);
+            source.Clear();
+            var databaseAfter = await source.ManagedIdentityAsync(Request(), limit.Token);
+            var synapseAfter = await source.ManagedIdentityAsync(synapse, limit.Token);
+            check(synapseBefore.AccessToken == "managed-3-synapse" && databaseAfter.AccessToken == "managed-4" && synapseAfter.AccessToken == "managed-5-synapse",
+                "Managed Identity fetches a new token after a clear for each resource of the same identity, not only the first one asked for: "
+                + string.Join(", ", synapseBefore.AccessToken, databaseAfter.AccessToken, synapseAfter.AccessToken));
+
+            // A clear while a forced fetch is on its way: that token may predate the clear, so the next one is fetched again.
+            source.Clear();
+            arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var pending = source.ManagedIdentityAsync(Request(), limit.Token);
+            await arrived.Task.WaitAsync(limit.Token);
+            source.Clear();
+            arrived = null;
+            release.TrySetResult();
+            var overtaken = await pending;
+            var next = await source.ManagedIdentityAsync(Request(), limit.Token);
+            check(overtaken.AccessToken == "managed-6" && next.AccessToken == "managed-7",
+                "Managed Identity fetches again after a clear that came while a fetch was on its way: " + string.Join(", ", overtaken.AccessToken, next.AccessToken));
         }
         finally
         {
