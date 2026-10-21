@@ -22,7 +22,8 @@ export interface TableDesign {
   readonly columns: readonly DesignColumn[]
   readonly primaryKey: readonly number[]
 }
-/** What the designer needs of the database: its schemas (dbo first by default), the default filegroup, and the band. */
+/** What the designer needs of the database: its schemas (dbo by default), the default filegroup, the band, and how its
+ *  catalog compares names (column names are unique as the catalog collation compares them). */
 export interface TableDesignerModel {
   readonly database: string
   /** The version band (13 = SQL Server 2016 … 17 = 2025): json and vector need 17. */
@@ -32,6 +33,9 @@ export interface TableDesignerModel {
   /** dbo when the database has it, else its first schema. */
   readonly defaultSchema: string
   readonly defaultFilegroup: string
+  /** Whether the catalog collation tells Id from ID, and e from é. */
+  readonly caseSensitiveNames: boolean
+  readonly accentSensitiveNames: boolean
   /** HAS_PERMS_BY_NAME(CREATE TABLE): advisory; absent when SQL Server could not say. */
   readonly canCreate?: boolean
 }
@@ -51,14 +55,30 @@ export const canonicalNumber = (text: string): string => {
 }
 const nameProblem = (name: string, what: string): string | undefined =>
   name.length === 0 ? `${what} cannot be empty.` : name.length > 128 ? `${what} is longer than 128 characters.` : name.includes('\u0000') ? `${what} cannot contain U+0000.` : undefined
+/** SQL Server makes a table whose name starts with # a temporary table in tempdb, whatever schema it is given, so the
+ *  designer refuses it (SSMS's designer cannot create temporary tables either). */
+export const tempTableMessage = 'A table name cannot start with #: that would make it a temporary table, which the table designer cannot create.'
+/** Why a table name cannot be saved (Choose Name, Properties and Save), or undefined. */
+export const tableNameProblem = (name: string): string | undefined => nameProblem(name, 'The table name') ?? (name.startsWith('#') ? tempTableMessage : undefined)
+/** How the catalog compares column names. Trailing spaces never count (SQL Server pads); case and accents only as its
+ *  collation says. Without the database's answer only trailing spaces are ignored, as main and the backend check, and
+ *  SQL Server refuses the rest (2705) inside the save's transaction, which rolls back. */
+export interface NameComparison { readonly caseSensitive: boolean; readonly accentSensitive: boolean }
+export function columnNameKey(name: string, comparison: NameComparison = { caseSensitive: true, accentSensitive: true }): string {
+  let key = name.replace(/ +$/, '')
+  if (!comparison.caseSensitive) key = key.toLowerCase()
+  if (!comparison.accentSensitive) key = key.normalize('NFD').replace(/\p{M}/gu, '')
+  return key
+}
 /** Every string of the design together, in UTF-16 units: bounded by `designerLimits.designChars`. */
 export const designChars = (design: TableDesign): number => design.schema.length + design.name.length
   + design.columns.reduce((sum, column) => sum + column.name.length + column.type.system.length + (column.identity ? column.identity.seed.length + column.identity.increment.length : 0), 0)
 
-/** Why the design cannot be saved, in order: the table, then each column, then the key. `band` gates json and vector. */
-export function designProblems(design: TableDesign, band = Number.POSITIVE_INFINITY): DesignProblem[] {
+/** Why the design cannot be saved, in order: the table, then each column, then the key. `band` gates json and vector, and
+ *  `comparison` is the database's way of comparing names (the designer has it from the describe). */
+export function designProblems(design: TableDesign, band = Number.POSITIVE_INFINITY, comparison?: NameComparison): DesignProblem[] {
   const problems: DesignProblem[] = []
-  const table = nameProblem(design.name, 'The table name'), schema = nameProblem(design.schema, 'The schema name')
+  const table = tableNameProblem(design.name), schema = nameProblem(design.schema, 'The schema name')
   if (table) problems.push({ property: 'tableName', message: table })
   if (schema) problems.push({ property: 'schema', message: schema })
   if (design.columns.length === 0) problems.push({ message: 'Add at least one column before saving the table.' })
@@ -69,8 +89,8 @@ export function designProblems(design: TableDesign, band = Number.POSITIVE_INFIN
   design.columns.forEach((column, index) => {
     const name = nameProblem(column.name, 'A column name')
     if (name) problems.push({ column: index, property: 'name', message: name })
-    else if (seen.has(column.name)) problems.push({ column: index, property: 'name', message: `The column name ${column.name} is used twice.` })
-    seen.add(column.name)
+    else if (seen.has(columnNameKey(column.name, comparison))) problems.push({ column: index, property: 'name', message: `The column name ${column.name} is used twice.` })
+    seen.add(columnNameKey(column.name, comparison))
     const type = typeProblem(column.type, band)
     if (type) problems.push({ column: index, property: 'dataType', message: type })
     if (typeSpec(column.type.system)?.onePerTable && ++timestamps === 2) problems.push({ column: index, property: 'dataType', message: 'A table can have only one timestamp column.' })

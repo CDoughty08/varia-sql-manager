@@ -80,13 +80,15 @@ export function installActionsStub({ ipcMain }, { statics }) {
     return ok({ deleteTarget: { name: label(target), type: target.kind === 'database' ? 'Database' : 'Table', owner: target.kind === 'database' ? 'sa' : 'dbo', warnings, dependentsTruncated: false,
       ...(target.kind === 'database' ? { isSnapshot: false } : {}) }, elapsedMs: 1 })
   }
-  /** The table designer's Save: NAME_IN_USE for "Taken", a wait until Stop for "Held", otherwise a new table under Tables. */
+  /** The table designer's Save: NAME_IN_USE for "Taken", a wait until Stop for "Held", otherwise a new table under Tables.
+   *  Its steps are the backend's (DesignerSql.Statements and the commit): the key's only for a keyed design. */
   function createTable({ design, requestId }) {
+    const titles = ['Create the table', ...design.primaryKey.length ? ['Add the primary key'] : [], 'Set lock escalation', 'Commit']
     if (design.name === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'An object named Taken already exists in schema dbo.', retryable: false } })
-    if (design.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', message: 'Create the table' }], messages: [], elapsedMs: 1,
-      error: { code: 'CANCELLED', message: 'The action was stopped at "Create the table"; SQL Server cancelled that statement.', retryable: true } }))))
+    if (design.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: titles.map((message, index) => ({ status: index === 0 ? 'cancelled' : 'skipped', message })), messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: 'The action was stopped at "Create the table"; SQL Server cancelled that statement. SQL Server rolled back the transaction; the table was not created.', retryable: true } }))))
     if (design.schema === 'dbo') stub.tables = [...stub.tables, design.name]
-    return ok({ steps: ['Create the table', 'Set lock escalation', 'Commit'].map(message => ({ status: 'done', message })), messages: [], elapsedMs: 1 })
+    return ok({ steps: titles.map(message => ({ status: 'done', message })), messages: [], elapsedMs: 1 })
   }
   function execute(params) {
     const { target } = params
@@ -121,7 +123,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
       case 'actions.describe':
         switch (params.dialog) {
-          case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
+          case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
           default: return describe(params)
         }

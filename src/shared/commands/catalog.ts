@@ -389,7 +389,7 @@ export const commandCatalog = {
     menus: [{ menu: 'query.connection', group: '2_change', order: 1, mnemonic: 'h' }]
   },
   'query.disconnect': {
-    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentConnected && !queryRunning && !documentBusy',
+    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
     unavailableHint: 'This query is not connected.', menus: [{ menu: 'query.connection', group: '1_connect', order: 2, mnemonic: 'd' }]
   },
   'query.disconnectAll': {
@@ -398,7 +398,7 @@ export const commandCatalog = {
   },
   'query.changeDatabase': {
     title: 'Change Database…', category: 'Query', icon: 'database', keywords: ['use', 'catalog'],
-    precondition: 'activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
+    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
     // SSMS's Change Database key; Ctrl/⌘+K Ctrl/⌘+U in editor text still reaches Monaco (the dispatcher passes the chord through).
     keybindings: [{ key: 'mod+u' }], menus: [{ menu: 'query', group: '0_connection', order: 2, mnemonic: 'd' }]
   },

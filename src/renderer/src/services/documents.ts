@@ -32,6 +32,8 @@ export interface CustomDocumentProvider {
   revision(id: string): number
   focus(id: string): void
   closed(id: string): void
+  /** Whether the document moves with a reconnect to a connection on `server`. */
+  follows(id: string, server: string): boolean
 }
 /** A model's indentation, from Tools › Options › Text Editor › Transact-SQL › Tabs. */
 export interface ModelOptions { readonly tabSize: number; readonly indentSize: number; readonly insertSpaces: boolean }
@@ -94,6 +96,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   setDirty(id: string, dirty: boolean): void { if (this.customs.has(id) && this.get(id)?.dirty !== dirty) this.replace(id, { dirty }) }
   /** What changes with every edit: the model's version for text, the provider's revision for a custom document. */
   revision(id: string): number { return this.entries.get(id)?.model.getVersionId() ?? this.provider(id)?.revision(id) ?? 0 }
+  /** Whether a custom document moves to a reconnected connection on `server` (a designer only to its own server). */
+  follows(id: string, server: string): boolean { return this.provider(id)?.follows(id, server) ?? false }
   /** Why the document cannot close now (a custom document saving), or undefined. */
   closeRefusal(id: string): string | undefined { return this.provider(id)?.canClose(id) }
   /** Focus to the active document: the editor's text, or the custom document's own element. */

@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type UIEvent } from 'react'
 import { systemTypes } from '../../../shared/designer/catalog.ts'
 import { defaultType, formatTypeText } from '../../../shared/designer/type-text.ts'
+import { useWorkbench } from '../core/WorkbenchContext'
 import { useMenuTarget } from '../menus/useMenuTarget'
-import { TableDesignerService, type DesignerColumn, type DesignerState } from './TableDesignerService'
+import { selectorPress, TableDesignerService, type DesignerColumn, type DesignerState } from './TableDesignerService'
 
 /** Every row has one height, so only the rows in view (and a few more) are rendered. */
 export const designerRowHeight = 22
@@ -43,6 +44,7 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
     : column === 'type' ? problem.property === 'dataType' || problem.property === 'identity' : problem.property === 'allowNulls'))?.message
   const menuRef = useMenuTarget<HTMLDivElement>(() => ({ kind: 'tableDesigner', tabId: id }))
   const setRoot = (element: HTMLDivElement | null) => { root.current = element; menuRef(element) }
+  const { platform } = useWorkbench()
 
   useLayoutEffect(() => {
     const element = body.current
@@ -75,6 +77,17 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
     if (value) service.setCell(id, value.row, value.column, value.text)
   }
   const move = (row: number, column: DesignerColumn) => service.setCurrent(id, row, column)
+  // Ctrl+S reaches the workbench before the cell's field blurs: Save and Generate Change Script commit what it holds first.
+  useEffect(() => {
+    const registration = service.registerEditor(id, () => {
+      const value = live.current
+      if (!value) return
+      setEditing(undefined)
+      service.setCell(id, value.row, value.column, value.text)
+      root.current?.focus({ preventScroll: true })
+    })
+    return () => registration.dispose()
+  }, [service, id])
 
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return
@@ -127,9 +140,8 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
   const scroll = (event: UIEvent<HTMLDivElement>) => { const top = event.currentTarget.scrollTop; setView(current => current.top === top ? current : { ...current, top }) }
   const { first, last } = visibleRange(view.top, view.height, count)
   const selector = (event: ReactPointerEvent, row: number) => {
-    if (event.button !== 0 && event.button !== 2) return
-    if (event.button === 2 && state.selected.includes(state.rows[row]?.key ?? -1)) return
-    service.select(id, row, event.shiftKey ? 'range' : event.ctrlKey || event.metaKey ? 'toggle' : 'single')
+    const mode = selectorPress(event, platform, state.selected.includes(state.rows[row]?.key ?? -1))
+    if (mode) service.select(id, row, mode)
   }
   const current = state.current
   const activeId = `${id}-cell-${current.row}-${current.column}`

@@ -234,7 +234,7 @@ describe('query documents', () => {
 describe('custom documents', () => {
   function withProvider() {
     const fixture = documentFixture()
-    const provider = { kind: 'tableDesigner' as const, save: async () => true, canClose: () => undefined, revision: () => 7, focus: (id: string) => { focused.push(id) }, closed: (id: string) => { closed.push(id) } }
+    const provider = { kind: 'tableDesigner' as const, save: async () => true, canClose: () => undefined, revision: () => 7, focus: (id: string) => { focused.push(id) }, closed: (id: string) => { closed.push(id) }, follows: () => false }
     const focused: string[] = [], closed: string[] = []
     fixture.documents.registerProvider(provider)
     return { ...fixture, provider, focused, closed }

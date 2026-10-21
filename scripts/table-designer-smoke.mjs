@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, designerScript, installActionsStub } from './fixtures/actions-stub.mjs'
@@ -201,8 +201,57 @@ try {
   await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
   console.log('Table designer checks: Stop cancels a waiting save in the backend, which SQL Server rolled back, and the designer stays dirty.')
 
+  // 8. Generate Change Script… › Yes saves the script to the file main's Save dialog picks.
+  const scriptFile = resolve(profile, 'Held.sql')
+  await application.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, scriptFile)
+  await rows().nth(0).locator('.designer-selector').click({ button: 'right' })
+  await menuNamed('Table Designer').getByRole('menuitem', { name: 'Generate Change Script…', exact: true }).click(fast)
+  await scriptDialog.getByRole('button', { name: 'Yes', exact: true }).click()
+  await expect(scriptDialog).toHaveCount(0)
+  await expect.poll(async () => (await readFile(scriptFile, 'utf8').catch(() => '')).replace(/^﻿/, '').replaceAll('\r', '')).toBe(designerScript('Held').replaceAll('\r', ''))
+  console.log('Table designer checks: Generate Change Script… › Yes saves the script to the chosen file.')
+
+  // 9. A retry save after NAME_IN_USE, with a column still being typed: Ctrl+S sends it (no Choose Name blurs the cell),
+  // the error shows, and after a new name in Properties the next Ctrl+S creates the table.
+  await grid().focus()
+  await page.keyboard.press('F4')
+  await tableProperties.getByLabel('(Name)', { exact: true }).fill('Taken')
+  await grid().focus()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.press('Home')
+  await page.keyboard.type('Extra')
+  await expect(grid().locator('input.designer-editor')).toHaveValue('Extra')
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s')
+  await expect(designer().getByRole('alert')).toHaveText('An object named Taken already exists in schema dbo.')
+  await expect(page.getByRole('dialog', { name: 'Choose Name', exact: true })).toHaveCount(0)
+  const taken = (await stubCalls('actions.execute')).at(-1)
+  expect(taken).toMatchObject({ action: 'createTable', design: { name: 'Taken', columns: [{ name: 'Id' }, { name: 'Extra' }], primaryKey: [] } })
+  await expect(rows().nth(1).locator('.designer-text').first()).toHaveText('Extra')
+  await tableProperties.getByLabel('(Name)', { exact: true }).fill('Fixed')
+  await grid().focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s')
+  await expect(designer().getByRole('status').filter({ hasText: 'dbo.Fixed was created.' })).toBeVisible()
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createTable', design: { name: 'Fixed', columns: [{ name: 'Id' }, { name: 'Extra' }] } })
+  console.log('Table designer checks: a retry after NAME_IN_USE sends the cell being typed, shows the error, and saves under a new name.')
+
+  // 10. File › Save All with an unnamed designer behind a query brings the designer forward with Choose Name.
+  await newTable()
+  await page.keyboard.type('Id')
+  await page.keyboard.press('Enter')
+  const unnamed = page.getByRole('tab', { name: 'server-a.AppData - dbo.Table_4', exact: true })
+  await expect(unnamed).toHaveAttribute('aria-selected', 'true')
+  await menu('file.new')
+  await expect(unnamed).toHaveAttribute('aria-selected', 'false')
+  await menu('file.saveAll')
+  await expect(unnamed).toHaveAttribute('aria-selected', 'true')
+  await expect(chooseName.getByLabel('Enter a name for the table:', { exact: true })).toHaveValue('Table_4')
+  await chooseName.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(chooseName).toHaveCount(0)
+  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+  console.log('Table designer checks: Save All brings an unnamed designer behind a query forward with Choose Name.')
+
   expect(failures).toEqual([])
-  console.log('Table designer checks passed: New › Table…, keyboard editing, the designer menu, Column Properties, F4, Generate Change Script, Choose Name and Save, the close prompt, and Stop.')
+  console.log('Table designer checks passed: New › Table…, keyboard editing, the designer menu, Column Properties, F4, Generate Change Script and its file, Choose Name and Save, the close prompt, Stop, a retry after NAME_IN_USE, and Save All.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'table-designer-failure.png') }).catch(() => {})
   throw error

@@ -2,14 +2,16 @@ import { actionLimits, unknownOutcomeMessage } from '../../../shared/actions/cat
 import type { ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { defaultNewType, defaultTableName, designerCaption, designerStrings, typeSpec } from '../../../shared/designer/catalog.ts'
-import { designProblems, type DesignProblem, type TableDesign, type TableDesignerModel } from '../../../shared/designer/schema.ts'
+import { designProblems, tableNameProblem, type DesignProblem, type TableDesign, type TableDesignerModel } from '../../../shared/designer/schema.ts'
 import { formatTypeText, identityAllowed, parseTypeText, type DesignType } from '../../../shared/designer/type-text.ts'
+import type { Platform } from '../../../shared/commands/keybindings.ts'
 import type { ExplorerNodeRef } from '../../../shared/explorer/refs.ts'
 import { ident } from '../../../shared/explorer/schema.ts'
 import type { DesignerContextState, DesignerKeys } from '../core/contextkeys'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
+import { pressButton } from '../grid/selection'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
@@ -93,6 +95,8 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   /** The request each designer has in flight (describe, script or save), so Stop and a disconnect can cancel it. */
   private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'script' | 'save'; dropped: boolean }>()
   private readonly prompts = new Map<string, (value: string | undefined) => void>()
+  /** Each mounted grid's cell editor: commits what is typed in it, which Save and Generate Change Script read first. */
+  private readonly editors = new Map<string, () => void>()
   private tables = 0
   private rowKeys = 0
   private disposed = false
@@ -297,7 +301,8 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     }
     const rowOf = (column: number | undefined) => column === undefined ? undefined : state.rows.indexOf(rows[column])
     const typeProblems = rows.flatMap((row, column) => row.typeError ? [{ column, property: 'dataType' as const, message: row.typeError }] : [])
-    const problems = [...typeProblems, ...designProblems(design, state.model?.band).filter(problem => !(problem.property === 'dataType' && rows[problem.column ?? -1]?.typeError))]
+    const comparison = state.model ? { caseSensitive: state.model.caseSensitiveNames, accentSensitive: state.model.accentSensitiveNames } : undefined
+    const problems = [...typeProblems, ...designProblems(design, state.model?.band, comparison).filter(problem => !(problem.property === 'dataType' && rows[problem.column ?? -1]?.typeError))]
       .sort((a, b) => (a.column ?? -1) - (b.column ?? -1))
       .map(problem => ({ ...problem, row: rowOf(problem.column) }))
     return { design, problems }
@@ -314,6 +319,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     return promise
   }
   private async runSave(id: string): Promise<boolean> {
+    this.commitEditor(id)
     let state = this.get(id)
     if (!state) return false
     if (state.phase === 'saved') return true
@@ -372,6 +378,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   }
   /** Generate Change Script…: the script Save would run, in SSMS's Save Change Script dialog. */
   async generateScript(id: string): Promise<void> {
+    if (this.canEdit(id) && !this.get(id)?.scripting) this.commitEditor(id)
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId || !this.canEdit(id) || state.scripting) return
     if (!this.live(id)) { this.patch(id, { error: designerStrings.disconnected }); return }
@@ -399,7 +406,8 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     if (!state || state.prompt?.kind !== 'chooseName' || !resolve) return
     if (value !== undefined) {
       const parsed = ident.safeParse(value)
-      if (!parsed.success) { this.patch(id, { prompt: { kind: 'chooseName', value, error: value === '' ? 'Enter a name for the table.' : parsed.error.issues[0]?.message ?? 'The name is not valid.' } }); return }
+      const problem = value === '' ? 'Enter a name for the table.' : !parsed.success ? parsed.error.issues[0]?.message ?? 'The name is not valid.' : tableNameProblem(value)
+      if (problem) { this.patch(id, { prompt: { kind: 'chooseName', value, error: problem } }); return }
     }
     this.prompts.delete(id)
     this.patch(id, { prompt: undefined })
@@ -426,11 +434,23 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   canClose(id: string): string | undefined { return this.get(id)?.phase === 'saving' ? designerStrings.saving : undefined }
   revision(id: string): number { return this.get(id)?.revision ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
+  /** A designer stays bound to the server it was opened on (its caption names it), as SSMS's is: a reconnect moves it only
+   *  to a connection to that same server. */
+  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** The grid's cell editor registers here while it is mounted. */
+  registerEditor(id: string, commit: () => void): Disposable {
+    this.editors.set(id, commit)
+    return { dispose: () => { if (this.editors.get(id) === commit) this.editors.delete(id) } }
+  }
+  private commitEditor(id: string): void {
+    try { this.editors.get(id)?.() } catch (failure) { onUnexpectedError(failure) }
+  }
   closed(id: string): void {
     const request = this.requests.get(id)
     if (request) { this.requests.delete(id); this.cancel([request.id]) }
     this.prompts.get(id)?.(undefined)
     this.prompts.delete(id)
+    this.editors.delete(id)
     this.publish({ designers: Object.fromEntries(Object.entries(this.getSnapshot().designers).filter(([key]) => key !== id)) })
     this.publishContext()
   }
@@ -541,6 +561,15 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
       try { void this.options.api.cancelObjectActions(ids.slice(start, start + actionLimits.cancelIds)).then(result => { if (!result.ok) onUnexpectedError(new Error(result.error)) }, onUnexpectedError) } catch (failure) { onUnexpectedError(failure) }
     }
   }
+}
+
+/** What a press on a row selector does, as the results grid decides (grid/selection.ts' pressButton): on macOS
+ *  Control+click opens the menu (a secondary press, which keeps a selected row's selection) and ⌘ adds; elsewhere Ctrl adds. */
+export function selectorPress(event: { readonly button: number; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly shiftKey: boolean }, platform: Platform, selected: boolean): 'single' | 'toggle' | 'range' | undefined {
+  const press = pressButton(event, platform)
+  if (!press || (press === 'secondary' && selected)) return undefined
+  if (press === 'secondary') return 'single'
+  return event.shiftKey ? 'range' : (platform === 'darwin' ? event.metaKey : event.ctrlKey) ? 'toggle' : 'single'
 }
 
 /** Whether a type takes each parameter, for Column Properties' Length, Precision and Scale rows. */

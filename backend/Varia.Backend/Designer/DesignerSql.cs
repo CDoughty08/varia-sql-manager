@@ -199,17 +199,23 @@ internal static class DesignerSql
     // --- Catalog statements ------------------------------------------------------------------------------------------
 
     /// <summary>In master: the database's state, the login's access and advisory CREATE TABLE permission, whether it is
-    /// read-only, and master's compatibility level (the builders' OPENJSON needs 130).</summary>
+    /// read-only, and master's compatibility level (the builders' OPENJSON needs 130). HAS_PERMS_BY_NAME parses its
+    /// securable, so it takes the name bracketed (a database named [x] would otherwise be checked as x), and only when the
+    /// bracketed name fits its sysname; NULL (unknown) does not refuse.</summary>
     public const string MasterFacts = "SELECT d.state AS state, d.state_desc AS state_desc, d.is_read_only AS is_read_only, "
         + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
-        + "CONVERT(bit, HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CREATE TABLE')) AS can_create, "
+        + "CONVERT(bit, CASE WHEN DATALENGTH(QUOTENAME(d.name)) <= 256 THEN HAS_PERMS_BY_NAME(QUOTENAME(d.name), N'DATABASE', N'CREATE TABLE') END) AS can_create, "
         + "(SELECT m.compatibility_level FROM sys.databases AS m WHERE m.database_id = 1) AS master_level "
         + "FROM sys.databases AS d WHERE d.name = @db;";
 
-    /// <summary>In the database (ModuleCall): at most @take schemas but sys and INFORMATION_SCHEMA, by name, then the default
-    /// rows filegroup.</summary>
-    public const string Describe = "SELECT TOP (@take) s.name AS schema_name FROM sys.schemas AS s WHERE s.schema_id NOT IN (3, 4) ORDER BY s.name;\n"
-        + "SELECT fg.name AS filegroup_name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG';";
+    /// <summary>In the database (ModuleCall): at most @take schemas but sys and INFORMATION_SCHEMA, by name, dbo (schema 1)
+    /// always among them when it exists, as it is the default; then the default rows filegroup; then whether the catalog
+    /// collation, which keeps column names unique, tells case and accents apart.</summary>
+    public const string Describe = "SELECT x.schema_name FROM (SELECT TOP (@take) s.name AS schema_name FROM sys.schemas AS s WHERE s.schema_id NOT IN (3, 4) "
+        + "ORDER BY CASE WHEN s.schema_id = 1 THEN 0 ELSE 1 END, s.name) AS x ORDER BY x.schema_name;\n"
+        + "SELECT fg.name AS filegroup_name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG';\n"
+        + "SELECT CONVERT(bit, CASE WHEN N'a' = N'A' COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS case_sensitive, "
+        + "CONVERT(bit, CASE WHEN N'e' = NCHAR(233) COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS accent_sensitive;";
 
     /// <summary>In the database (ModuleCall, @schema, @name the table and @new the key's name): whether the schema exists,
     /// advisory ALTER on it, whether the table's or the key's name is taken in it, and the default rows filegroup. A check

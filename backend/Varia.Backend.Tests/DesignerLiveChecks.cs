@@ -11,8 +11,8 @@ namespace Varia.Backend.Tests;
 /// every hostile schema, table, column and filegroup name at the sysname limit. With VARIA_TEST_SQL_SCRATCH=1, in a marked
 /// VariaScratch_…_tbd database: each fixture design saved as one table matching it, the displayed script creating the same
 /// table, hostile names creating exactly their objects, taken names and a missing schema refused before any DDL, a key
-/// SQL Server refuses after CREATE TABLE leaving nothing behind, json at SQL Server 2025, and Stop behind another session's
-/// lock, and permissions refused before any DDL.</summary>
+/// SQL Server refuses after CREATE TABLE leaving nothing behind, json at SQL Server 2025, Stop in the preflight and inside
+/// CREATE TABLE, the describe's dbo, collation and permission answers, and permissions refused before any DDL.</summary>
 internal static class DesignerLiveChecks
 {
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
@@ -59,6 +59,14 @@ internal static class DesignerLiveChecks
         var missing = await client.Describe("VariaMissing_" + Guid.NewGuid().ToString("N"));
         check(missing is { Error.Code: "NOT_FOUND", TableDesigner: null }, "describing a database that does not exist for the table designer is NOT_FOUND");
 
+        // A name starting with # is a temporary table in tempdb whatever its schema: refused before anything runs.
+        var temporary = "##VariaDesigner_" + Guid.NewGuid().ToString("N");
+        string? refusal = null;
+        try { await client.Save("master", new TableDesignDto("dbo", temporary, [Column("a", "int")], [])); }
+        catch (RequestException error) { refusal = error.Code; }
+        var inTempdb = (await Sql("SELECT CASE WHEN OBJECT_ID(" + Literal("tempdb.." + temporary) + ") IS NULL THEN 0 ELSE 1 END;")).Scalar;
+        check(refusal == "INVALID_PARAMS" && inTempdb == "0", "saving a table named ##… is INVALID_PARAMS and creates nothing in tempdb (" + refusal + ")");
+
         // Script runs nothing, and warns about a name already taken (master's dbo.spt_monitor).
         var name = "VariaDesigner_" + Guid.NewGuid().ToString("N");
         var design = new TableDesignDto("dbo", name, [Column("Id", "int", nulls: false, identity: new("1", "1")), Column("Name", "nvarchar", 50)], [0]);
@@ -95,6 +103,12 @@ internal static class DesignerLiveChecks
         }
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         var db = await scratch.CreateDesignerAsync();
+        // HAS_PERMS_BY_NAME parses its securable: unbracketed, a name holding "." and "]" reads as no database (NULL), and
+        // [x] would read as x. The describe brackets it, so a sysadmin may create tables there; the catalog is CI_AI.
+        var odd = await scratch.CreateDesignerOddAsync();
+        var oddModel = await client.Describe(odd);
+        check(oddModel is { Error: null, TableDesigner: { CanCreate: true, CaseSensitiveNames: false, AccentSensitiveNames: false, DefaultSchema: "dbo" } },
+            "the designer's describe checks CREATE TABLE in a database named with . and ] as SQL Server grants it, and says its catalog ignores case and accents (" + oddModel.Error?.Message + ")");
         await ScratchAsync(check, client, service, info, json, Sql, db, major);
         await PermissionsAsync(check, service, live, json, Sql, scratch, db);
     }
@@ -222,27 +236,70 @@ internal static class DesignerLiveChecks
             check(Done(saved) && inventory.EndsWith(string.Join(Cells, "TABLE", "PRIMARY", "PRIMARY"), StringComparison.Ordinal), "a json column (SQL Server 2025) saves with TEXTIMAGE_ON beside a vector (" + saved.Error?.Message + "): " + inventory);
         }
 
-        // Stop: another session holds an uncommitted CREATE TABLE of the same name, so the save waits until Stop.
+        // Stop in the preflight: another session's uncommitted CREATE TABLE of the same name blocks the name lookup, so Stop
+        // lands before BEGIN TRANSACTION and nothing ran.
         var holder = Guid.NewGuid().ToString();
         try
         {
             var held = await sql("BEGIN TRANSACTION; CREATE TABLE dbo.Held (id int);", db, holder);
-            using var context = new RequestContext(5, "actions.execute", RequestLane.Actions, 0);
-            var waiting = client.Save(db, new TableDesignDto("dbo", "Held", [Column("a", "int", nulls: false)], [0]), context);
-            var stillWaiting = !await Task.WhenAny(waiting, Task.Delay(2000)).ContinueWith(done => done.Result == waiting);
-            context.Cancel(CancelReason.User);
-            ActionExecuteResult? stopped = null;
-            try { stopped = await waiting; } catch (OperationCanceledException) { }
+            var (stillWaiting, stopped) = await StopAfterWaitAsync(client, db, "Held");
             await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, holder);
             var left = (await Sql("SELECT CASE WHEN OBJECT_ID(N'dbo.Held') IS NULL THEN 0 ELSE 1 END;")).Scalar;
-            check(held.Status == "completed" && stillWaiting && stopped is { Error.Code: "CANCELLED" } && left == "0",
-                "a save waiting behind another session's uncommitted table answers CANCELLED when stopped, and nothing is left once that session rolls back (" + stopped?.Error?.Message + ")");
+            check(held.Status == "completed" && stillWaiting && stopped is { Error.Code: "CANCELLED", Steps.Count: 0 } && stopped.Error.Message.Contains("before it changed anything", StringComparison.Ordinal) && left == "0",
+                "a save whose preflight waits behind another session's uncommitted table answers CANCELLED with no steps when stopped (" + stopped?.Error?.Message + ")");
         }
         finally
         {
             await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, holder);
             await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json);
         }
+
+        // Stop inside the transaction: a database DDL trigger makes CREATE TABLE dbo.Held wait for another session's lock on
+        // dbo.Gate, which the preflight never reads. Stop cancels that statement, the transaction rolls back, and the steps say so.
+        await Sql("CREATE TABLE dbo.Gate (id int);\nINSERT dbo.Gate (id) VALUES (1);\n"
+            + "EXEC (N'CREATE TRIGGER VariaHold ON DATABASE FOR CREATE_TABLE AS IF EVENTDATA().value(''(/EVENT_INSTANCE/ObjectName)[1]'', ''sysname'') = N''Held'' "
+            + "BEGIN DECLARE @n int; SELECT @n = COUNT(*) FROM dbo.Gate WITH (READCOMMITTEDLOCK); END');");
+        var gate = Guid.NewGuid().ToString();
+        try
+        {
+            var locked = await sql("BEGIN TRANSACTION; UPDATE dbo.Gate SET id = 2; SELECT CONVERT(nvarchar(10), @@SPID);", db, gate);
+            var (stillWaiting, stopped) = await StopAfterWaitAsync(client, db, "Held", () => Sql("SELECT COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id = " + (locked.Scalar ?? "0") + ";"));
+            await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, gate);
+            var left = (await Sql("SELECT CASE WHEN OBJECT_ID(N'dbo.Held') IS NULL AND OBJECT_ID(N'dbo.PK_Held') IS NULL THEN 0 ELSE 1 END;")).Scalar;
+            check(locked.Status == "completed" && stillWaiting && stopped is { Error.Code: "CANCELLED" } && stopped.Steps.Select(step => step.Status + ":" + step.Message)
+                .SequenceEqual(["cancelled:Create the table", "skipped:Add the primary key", "skipped:Set lock escalation", "skipped:Commit"])
+                && stopped.Error.Message.EndsWith(ActionService.RolledBack, StringComparison.Ordinal) && left == "0",
+                "Stop during CREATE TABLE cancels that statement and rolls the transaction back: the steps say so and nothing is left (" + stopped?.Error?.Message + ")");
+        }
+        finally
+        {
+            await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, gate);
+            await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(gate), json), json);
+            await Sql("IF EXISTS (SELECT 1 FROM sys.triggers WHERE parent_class = 0 AND name = N'VariaHold') DROP TRIGGER VariaHold ON DATABASE;");
+        }
+
+        // The describe: the scratch database's catalog collation (Latin1_General_100_CS_AS_SC) tells case and accents apart,
+        // and with more schemas than it lists, dbo, the default, is still listed although 2,100 schemas sort before it.
+        await Sql("DECLARE @i int = 1, @s nvarchar(200);\nWHILE @i <= 2100 BEGIN SET @s = N'CREATE SCHEMA ' + QUOTENAME(N'a' + RIGHT(N'0000' + CONVERT(nvarchar(10), @i), 4)); EXEC (@s); SET @i = @i + 1; END;");
+        var many = await client.Describe(db);
+        var limit = (int)Catalog.Limit("schemas");
+        check(many is { Error: null, TableDesigner: { SchemasTruncated: true, DefaultSchema: "dbo", CaseSensitiveNames: true, AccentSensitiveNames: true } model } && model.Schemas.Count == limit
+            && model.Schemas.Contains("dbo") && model.Schemas.Contains("a0001") && !model.Schemas.Contains("sales"),
+            "the designer's describe keeps dbo, the default schema, among the " + limit + " schemas it lists, and says how the catalog compares names (" + many.Error?.Message + ")");
+    }
+
+    /// <summary>Starts a save of a one-column keyed table, Stops it after 2 s of waiting (once <paramref name="blocked"/>, if
+    /// given, sees it blocked), and returns whether it was still waiting then and its answer (null if the reply gave up).</summary>
+    private static async Task<(bool StillWaiting, ActionExecuteResult? Stopped)> StopAfterWaitAsync(Client client, string db, string name, Func<Task<SqlRun>>? blocked = null)
+    {
+        using var context = new RequestContext(5, "actions.execute", RequestLane.Actions, 0);
+        var waiting = client.Save(db, new TableDesignDto("dbo", name, [Column("a", "int", nulls: false)], [0]), context);
+        var stillWaiting = await Task.WhenAny(waiting, Task.Delay(2000)) != waiting && (blocked is null || (await blocked()).Scalar == "1");
+        context.Cancel(CancelReason.User);
+        ActionExecuteResult? stopped = null;
+        // Bounded, so a Stop that cannot reach the statement fails the check rather than the run.
+        try { if (await Task.WhenAny(waiting, Task.Delay(30_000)) == waiting) stopped = await waiting; } catch (OperationCanceledException) { }
+        return (stillWaiting, stopped);
     }
     /// <summary>Save refuses before any DDL when the login may not create a table in the database (CREATE TABLE) or in the
     /// schema (ALTER on it). The designer's own facts and preflight statements are run as a database user with no login,

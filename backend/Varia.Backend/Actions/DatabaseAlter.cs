@@ -35,9 +35,10 @@ internal static partial class DatabaseAlter
     private static string NL => ScriptFormatter.NewLine;
     private static RequestException Invalid(string detail) => new("INVALID_PARAMS", "Invalid object action request: " + detail);
     private static readonly Regex Integer = IntegerPattern();
-    [GeneratedRegex(@"^(0|[1-9][0-9]{0,10})$")]
+    // \z, not $: $ also matches before a final line break, which database.ts' patterns refuse.
+    [GeneratedRegex(@"^(0|[1-9][0-9]{0,10})\z")]
     private static partial Regex IntegerPattern();
-    [GeneratedRegex(@"^[A-Za-z0-9_]{1,128}$")]
+    [GeneratedRegex(@"^[A-Za-z0-9_]{1,128}\z")]
     private static partial Regex CollationPattern();
 
     /// <summary>The catalogue entry of an option or scoped configuration key, or null.</summary>

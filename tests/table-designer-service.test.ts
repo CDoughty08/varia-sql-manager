@@ -9,12 +9,21 @@ import { designerStrings } from '../src/shared/designer/catalog'
 import type { TableDesignerModel } from '../src/shared/designer/schema'
 import { CommandService } from '../src/renderer/src/core/commands'
 import { designerContribution } from '../src/renderer/src/contributions/designer'
-import { TableDesignerService } from '../src/renderer/src/designer/TableDesignerService'
+import { selectorPress, TableDesignerService } from '../src/renderer/src/designer/TableDesignerService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
-import { deferred } from './fixtures/documents'
-import { connectionInfo, workbenchFixture } from './fixtures/workbench'
+import { tempTableMessage } from '../src/shared/designer/schema'
+import { deferred, TestEditor } from './fixtures/documents'
+import { fakeDocument, FakeElement } from './fixtures/elements'
+import { connectionInfo, connectionOptions, workbenchFixture } from './fixtures/workbench'
 
-const model: TableDesignerModel = { database: 'AppData', band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }
+/** The bound query editor, recording the Monaco commands it is asked to run. */
+class FocusableEditor extends TestEditor {
+  trigger = vi.fn()
+  focus = vi.fn()
+  hasTextFocus(): boolean { return false }
+}
+
+const model: TableDesignerModel = { database: 'AppData', band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }
 const tables = (connectionId: string, database = 'AppData'): ExplorerMenuNode => ({
   id: 5, lost: false, kind: 'folder', folder: 'tables', connectionId, label: 'Tables', ref: { type: 'folder', owner: { kind: 'database', name: database }, folder: 'tables' }
 })
@@ -281,8 +290,8 @@ describe('table designer', () => {
     designers.dispose()
     expect(await saving).toBe(false)
   })
-  it('is never written to AutoRecover, and follows its connection when it is reconnected', async () => {
-    const fixture = designer(), { designers, id, api, recovery, targets, documents } = fixture
+  it('is never written to AutoRecover, and follows a reconnect only to the server it was opened on', async () => {
+    const fixture = designer(), { designers, id, api, recovery, targets, documents, connections, state, requests } = fixture
     await settled()
     designers.setCell(id, 0, 'name', 'Id')
     await recovery.flush()
@@ -290,8 +299,87 @@ describe('table designer', () => {
     // A designer has a connection but no SQL session: closing the window never reads one for it.
     expect(await fixture.queries.confirmSessions('exit', [id])).toEqual(new Map())
     expect(api.querySessionState).not.toHaveBeenCalledWith(id)
+    // c1 is lost, and the Reconnect dialog's server is changed to another server: the designer stays on c1, disconnected.
+    connections.markLostBefore(2)
+    connections.replace('c1', { ...connectionInfo('c2', 2), server: 'production.example' }, connectionOptions)
     targets.retarget('c1', 'c2')
-    expect(documents.get(id)?.connectionId).toBe('c2')
+    expect(documents.get(id)?.connectionId).toBe('c1')
+    expect(documents.get(id)?.name).toBe('c1.example.AppData - dbo.Table_1')
+    expect(await designers.save(id)).toBe(false)
+    expect(state().error).toBe(designerStrings.disconnected)
+    expect(requests()).toEqual([])
+    // Reconnected to its own server (named in any case), it follows and saves there.
+    connections.replace('c2', { ...connectionInfo('c3', 2), server: 'C1.EXAMPLE' }, connectionOptions)
+    targets.retarget('c1', 'c3')
+    expect(documents.get(id)?.connectionId).toBe('c3')
+    const saving = designers.save(id)
+    designers.answerName(id, 'Orders')
+    expect(await saving).toBe(true)
+    expect(requests().map(request => request.connectionId)).toEqual(['c3'])
+  })
+  it('commits a cell being edited before Save or Generate Change Script reads the design', async () => {
+    const { designers, id, state, api, requests } = designer()
+    await settled()
+    designers.setCell(id, 0, 'name', 'Id')
+    // The grid's editor holds "Extra" in the empty last row; Ctrl+S reaches the workbench before the field blurs.
+    let pending: string | undefined = 'Extra'
+    const registration = designers.registerEditor(id, () => { if (pending) designers.setCell(id, state().rows.length, 'name', pending); pending = undefined })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'An object named Taken already exists in schema dbo.', retryable: false } } })
+    const saving = designers.save(id)
+    designers.answerName(id, 'Taken')
+    expect(await saving).toBe(false)
+    // The retry save, with no Choose Name to blur the field, sends what is typed too.
+    pending = 'More'
+    designers.setTableProperty(id, 'tableName', 'Orders')
+    expect(await designers.save(id)).toBe(true)
+    expect(requests().map(request => request.action === 'createTable' ? request.design.columns.map(column => column.name) : [])).toEqual([['Id', 'Extra'], ['Id', 'Extra', 'More']])
+    registration.dispose()
+    // Generate Change Script commits it too.
+    const other = designers.open(tables('c1'))
+    await settled()
+    pending = 'Only'
+    const editor = designers.registerEditor(other, () => { if (pending) designers.setCell(other, 0, 'name', pending); pending = undefined })
+    await designers.generateScript(other)
+    expect(api.scriptObjectAction).toHaveBeenCalledWith(expect.objectContaining({ design: expect.objectContaining({ columns: [expect.objectContaining({ name: 'Only' })] }) }))
+    editor.dispose()
+  })
+  it('compares column names as the database\'s catalog does, and refuses a temporary table\'s name', async () => {
+    const { designers, id, state, requests } = designer()
+    await settled()
+    // AppData's catalog is case-insensitive: Id and ID are the same name to SQL Server.
+    designers.setCell(id, 0, 'name', 'Id')
+    designers.setCell(id, 1, 'name', 'ID')
+    expect(await designers.save(id)).toBe(false)
+    expect(state()).toMatchObject({ error: 'The column name ID is used twice.', current: { row: 1, column: 'name' } })
+    designers.setCell(id, 1, 'name', 'Name')
+    const saving = designers.save(id)
+    designers.answerName(id, '##Orders')
+    expect(state().prompt).toMatchObject({ kind: 'chooseName', error: tempTableMessage })
+    designers.answerName(id, '#Orders')
+    expect(state().prompt).toMatchObject({ kind: 'chooseName', error: tempTableMessage })
+    designers.answerName(id, undefined)
+    expect(await saving).toBe(false)
+    // Properties' Name refuses it at Save too, showing Properties.
+    designers.setTableProperty(id, 'tableName', '#Orders')
+    expect(await designers.save(id)).toBe(false)
+    expect(state()).toMatchObject({ error: tempTableMessage, propertiesVisible: true })
+    expect(state().prompt).toBeUndefined()
+    expect(requests()).toEqual([])
+  })
+  it('classifies a press on a row selector as the results grid does on each platform', () => {
+    const press = (button: number, keys: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean } = {}) => ({ button, ctrlKey: false, metaKey: false, shiftKey: false, ...keys })
+    // macOS: Control+click opens the menu, which keeps a selected row's selection; ⌘ adds a row.
+    expect(selectorPress(press(0, { ctrlKey: true }), 'darwin', true)).toBeUndefined()
+    expect(selectorPress(press(0, { ctrlKey: true }), 'darwin', false)).toBe('single')
+    expect(selectorPress(press(0, { metaKey: true }), 'darwin', true)).toBe('toggle')
+    expect(selectorPress(press(2), 'darwin', true)).toBeUndefined()
+    // Windows and Linux: Ctrl adds; the Windows key does nothing special.
+    expect(selectorPress(press(0, { ctrlKey: true }), 'win32', true)).toBe('toggle')
+    expect(selectorPress(press(0, { metaKey: true }), 'linux', false)).toBe('single')
+    expect(selectorPress(press(0, { shiftKey: true }), 'win32', false)).toBe('range')
+    expect(selectorPress(press(2), 'win32', true)).toBeUndefined()
+    expect(selectorPress(press(2), 'win32', false)).toBe('single')
+    expect(selectorPress(press(1), 'win32', false)).toBeUndefined()
   })
   it('turns the text-only commands off while a designer is active, and the editor keys with them', async () => {
     const { context, designers, id } = designer()
@@ -311,6 +399,39 @@ describe('table designer', () => {
       const live = descriptor.keybindings!.filter(binding => /editorFocus|editorTextFocus|activePanel == 'editor'/.test(binding.when ?? '')).some(binding => evaluateWhen(compileWhen(binding.when!), focused))
       expect(live && evaluateWhen(compileWhen(descriptor.precondition ?? 'true'), focused), command).toBe(false)
     }
+    // The Query menu acts on the active query, its keys (Ctrl+U) included: a designer is connected but is not one.
+    const queryCommands = commandIds.filter(command => commandDescriptor(command).category === 'Query')
+    expect(queryCommands).toEqual(expect.arrayContaining(['query.changeDatabase', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'query.execute']))
+    for (const command of queryCommands) expect(evaluateWhen(compileWhen(commandDescriptor(command).precondition ?? 'true'), focused), command).toBe(false)
+  })
+  it('leaves a designer out of Disconnect All Queries: it has no session to close and keeps its server', async () => {
+    const { designers, id, documents, targets, api, context } = designer()
+    await settled()
+    designers.setCell(id, 0, 'name', 'Id')
+    expect(context.getState().anyDocumentConnected).toBe(false)
+    const query = documents.newQuery('SELECT 1', 'Query.sql', 'c1', 'master')
+    expect(context.getState().anyDocumentConnected).toBe(true)
+    await targets.disconnectAll()
+    expect(api.closeQuerySession.mock.calls).toEqual([[query.id]])
+    expect(documents.get(id)?.connectionId).toBe('c1')
+    expect(documents.get(query.id)?.connectionId).toBeUndefined()
+  })
+  it('keeps Edit › Undo and Redo away from the hidden query editor while a designer is active', async () => {
+    const { id, documents, commands } = designer()
+    await settled()
+    const editor = new FocusableEditor()
+    const binding = documents.bindEditor(editor.asEditor())
+    cleanups.push(() => binding.dispose())
+    expect(documents.getSnapshot().activeId).toBe(id)
+    const doc = fakeDocument(), grid = new FakeElement(doc, 'div', { className: 'designer-grid', attributes: { role: 'grid' } })
+    grid.focus()
+    vi.stubGlobal('document', Object.assign(doc, { execCommand: vi.fn(), querySelector: () => null }))
+    vi.stubGlobal('HTMLElement', FakeElement)
+    cleanups.push(() => vi.unstubAllGlobals())
+    expect(await commands.execute('edit.undo', undefined, 'menu')).toBe(true)
+    expect(await commands.execute('edit.redo', undefined, 'keybinding')).toBe(true)
+    expect([editor.focus.mock.calls.length, editor.trigger.mock.calls.length]).toEqual([0, 0])
+    expect(doc.activeElement).toBe(grid)
   })
 })
 

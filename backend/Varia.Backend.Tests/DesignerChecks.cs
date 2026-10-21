@@ -51,6 +51,8 @@ internal static class DesignerChecks
         var id = new DesignIdentityDto("1", "1");
         var good = Design(Column("Id", "int", nulls: false, identity: id), Column("Name", "nvarchar", 50)) with { PrimaryKey = [0] };
         var many = Enumerable.Range(0, 1_025).Select(index => Column("c" + index, "int")).ToArray();
+        var deleteTable = new ActionArgs("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("table", "db", "dbo", "T"), CloseConnections: false, DeleteHistory: false);
+        var properties = new ActionArgs("properties", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), CloseConnections: false, Changes: new(Owner: "sa"));
         var invalid = new (string Name, ActionArgs Args)[]
         {
             ("no design", Create(null)), ("a table target", Create(good, new ObjectRefDto("table", "master", "dbo", "T"))), ("a new name", Create(good) with { NewName = "x" }),
@@ -68,8 +70,15 @@ internal static class DesignerChecks
             ("two timestamps", Create(Design(Column("a", "timestamp"), Column("b", "timestamp")))), ("a key out of range", Create(good with { PrimaryKey = [2] })), ("a key column twice", Create(good with { PrimaryKey = [0, 0] })),
             ("a negative key index", Create(good with { PrimaryKey = [-1] })), ("a nullable key column", Create(good with { PrimaryKey = [1] })),
             ("33 key columns", Create(Design([.. Enumerable.Range(0, 33).Select(index => Column("c" + index, "int", nulls: false))]) with { PrimaryKey = [.. Enumerable.Range(0, 33)] })),
-            ("a design on rename", new("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("table", "db", "dbo", "T"), NewName: "U", Design: good))
+            ("a design on rename", new("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("table", "db", "dbo", "T"), NewName: "U", Design: good)),
+            ("delete history on createTable", Create(good) with { DeleteHistory = false }), ("Database Properties changes on createTable", Create(good) with { Changes = new(Owner: "sa") }),
+            ("a design on delete", deleteTable with { Design = good }), ("a design on properties", properties with { Design = good }),
+            ("a temporary table", Create(good with { Name = "#T" })), ("a global temporary table", Create(good with { Name = "##T" })),
+            ("columns differing only in trailing spaces", Create(Design(Column("a", "int"), Column("a  ", "int")))),
+            ("a seed before a line break", Create(Design(Column("a", "int", nulls: false, identity: new("12\n", "1"))))), ("an increment before a line break", Create(Design(Column("a", "int", nulls: false, identity: new("1", "1\n")))))
         };
+        // Without the member each of these would carry, the requests they extend are accepted.
+        check(Verdict(deleteTable) == "accepted" && Verdict(properties) == "accepted", "the delete and properties requests the misplaced-member checks extend are valid");
         var accepted = invalid.Where(item => Verdict(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "the backend refuses every createTable zod refuses: " + string.Join(", ", accepted));
         var valid = new (string Name, ActionArgs Args)[]

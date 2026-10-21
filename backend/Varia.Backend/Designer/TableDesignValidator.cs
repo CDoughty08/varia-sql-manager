@@ -22,13 +22,14 @@ internal sealed record TablePlan(string Schema, string Name, IReadOnlyList<PlanC
 }
 
 /// <summary>Re-validates what src/shared/designer/schema.ts' zod schema accepts for createTable and normalises it into a
-/// plan: sysname names, catalogue types with parameters in their bounds, at most one identity and one timestamp column, an
+/// plan: sysname names (a table name not starting with #, a temporary table), catalogue types with parameters in their bounds, at most one identity and one timestamp column, an
 /// identity only on the integer types or decimal and numeric with scale 0, whole-number seeds and non-zero increments, a
 /// key of distinct existing columns that do not allow nulls, and the design's string budget. Messages never echo values.</summary>
 internal static partial class TableDesignValidator
 {
     private static RequestException Invalid(string detail) => new("INVALID_PARAMS", "Invalid object action request: " + detail);
-    [GeneratedRegex(@"^-?[0-9]{1,38}$")]
+    // \z, not $: $ also matches before a final line break, which zod's pattern refuses.
+    [GeneratedRegex(@"^-?[0-9]{1,38}\z")]
     private static partial Regex WholeNumber();
 
     /// <summary>SQL Server's way of writing a whole number: no leading zeros, and 0 for -0 (schema.ts' canonicalNumber).</summary>
@@ -54,16 +55,19 @@ internal static partial class TableDesignValidator
         if (design is null) throw Invalid("design is required.");
         if (!ExplorerRefs.Ident(design.Schema)) throw Invalid("design.schema.");
         if (!ExplorerRefs.Ident(design.Name)) throw Invalid("design.name.");
+        // SQL Server puts a table named #… in tempdb whatever its schema (schema.ts' tableNameProblem).
+        if (design.Name.StartsWith('#')) throw Invalid("a table name that starts with # (a temporary table).");
         if (design.Columns is not { Count: > 0 } columns || columns.Count > catalog.Limit("columns")) throw Invalid("design.columns.");
         if (design.PrimaryKey is not { } key || key.Count > catalog.Limit("keyColumns")) throw Invalid("design.primaryKey.");
         long chars = design.Schema.Length + design.Name.Length;
+        // Trailing spaces never tell names apart (SQL Server pads); case and accents are the collation's, which SQL Server checks.
         var names = new HashSet<string>(StringComparer.Ordinal);
         var plan = new List<PlanColumn>(columns.Count);
         var identities = 0;
         var timestamps = 0;
         foreach (var column in columns)
         {
-            if (column is null || !ExplorerRefs.Ident(column.Name) || !names.Add(column.Name)) throw Invalid("a column name.");
+            if (column is null || !ExplorerRefs.Ident(column.Name) || !names.Add(column.Name.TrimEnd(' '))) throw Invalid("a column name.");
             if (column.Type is not { System: { } system } type || catalog.Type(system) is not { } spec) throw Invalid("a column type.");
             chars += column.Name.Length + system.Length;
             var planned = Type(catalog, spec, type, column);

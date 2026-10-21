@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { actionDescribeSchema, actionRequestSchema } from '../src/shared/actions/schema'
 import { designerLimits, systemTypes } from '../src/shared/designer/catalog'
-import { canonicalNumber, createTableSchema, designProblems, tableDesignSchema, type DesignColumn, type TableDesign } from '../src/shared/designer/schema'
+import { canonicalNumber, createTableSchema, designProblems, tableDesignSchema, tempTableMessage, type DesignColumn, type TableDesign } from '../src/shared/designer/schema'
 import { defaultType, formatTypeText, parseTypeText, typeProblem } from '../src/shared/designer/type-text'
 
 const id = { seed: '1', increment: '1' }
@@ -57,7 +57,10 @@ describe('table design schema', () => {
       ['a key out of range', { ...good, primaryKey: [2] }], ['a key column twice', { ...good, primaryKey: [0, 0] }], ['a nullable key column', { ...good, primaryKey: [1] }],
       ['33 key columns', { ...design(...Array.from({ length: 33 }, (_, index) => column('c' + index, 'int', { allowNulls: false }))), primaryKey: Array.from({ length: 33 }, (_, index) => index) }],
       ['max false', design({ name: 'a', type: { system: 'varchar', length: 10, max: false }, allowNulls: true })], ['an unknown member', { ...good, collation: 'Latin1_General_CI_AS' }],
-      ['an unknown column member', design({ ...column('a', 'int'), default: '0' } as DesignColumn)], ['an unknown type member', design({ name: 'a', type: { system: 'int', collation: 'x' } as never, allowNulls: true })]
+      ['an unknown column member', design({ ...column('a', 'int'), default: '0' } as DesignColumn)], ['an unknown type member', design({ name: 'a', type: { system: 'int', collation: 'x' } as never, allowNulls: true })],
+      ['a temporary table', { ...good, name: '#T' }], ['a global temporary table', { ...good, name: '##T' }], ['columns differing only in trailing spaces', design(column('a', 'int'), column('a  ', 'int'))],
+      ['a seed before a line break', design(column('a', 'int', { allowNulls: false, identity: { seed: '12\n', increment: '1' } }))],
+      ['an increment before a line break', design(column('a', 'int', { allowNulls: false, identity: { seed: '1', increment: '1\n' } }))]
     ]
     for (const [name, value] of invalid) expect(tableDesignSchema.safeParse(value).success, name).toBe(false)
     expect(actionRequestSchema.safeParse({ ...request(good), target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'T' } }).success).toBe(false)
@@ -70,6 +73,18 @@ describe('table design schema', () => {
     expect(designProblems(design(column('j', 'json')), 16)[0]).toMatchObject({ column: 0, property: 'dataType' })
     expect(canonicalNumber('-0')).toBe('0')
     expect(canonicalNumber('-007')).toBe('-7')
+  })
+  it('compares column names as the database\'s catalog collation does, and refuses # table names', () => {
+    const twins = design(column('Id', 'int'), column('ID', 'int'), column('café', 'int'), column('cafe', 'int'))
+    const twice = (comparison?: { caseSensitive: boolean; accentSensitive: boolean }) => designProblems(twins, 17, comparison).filter(problem => problem.property === 'name').map(problem => problem.column)
+    // Main and the backend know no collation: SQL Server decides (2705) and the save rolls back.
+    expect(twice()).toEqual([])
+    expect(twice({ caseSensitive: true, accentSensitive: true })).toEqual([])
+    expect(twice({ caseSensitive: false, accentSensitive: true })).toEqual([1])
+    expect(twice({ caseSensitive: false, accentSensitive: false })).toEqual([1, 3])
+    expect(designProblems({ ...good, name: '##Orders' })).toEqual([{ property: 'tableName', message: tempTableMessage }])
+    expect(designProblems({ ...good, name: 'Orders#' })).toEqual([])
+    expect(designProblems({ ...good, schema: '#s' })).toEqual([])
   })
   it('keeps the largest design under the 4 MiB request body and its script under the query limit', () => {
     const name = (index: number) => (index.toString().padStart(4, '0') + ']'.repeat(124))

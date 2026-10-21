@@ -92,9 +92,12 @@ internal sealed partial class ActionService
         if (sets is null) return new(null, 0, missing);
         var schemas = sets[0].Select(row => row.Name("schema_name")).ToList();
         var filegroup = sets.Count > 1 && sets[1].Count > 0 && sets[1][0].Name("filegroup_name") is { Length: > 0 } name ? name : "PRIMARY";
-        var listed = schemas.Take(limit).ToList();
+        // The statement lists dbo whenever the database has it, however many schemas sort before it; so does the cut here.
+        var kept = schemas.Where(schema => schema != "dbo").Take(schemas.Contains("dbo") ? limit - 1 : limit).ToHashSet(StringComparer.Ordinal);
+        var listed = schemas.Where(schema => schema == "dbo" || kept.Contains(schema)).ToList();
+        var comparison = sets.Count > 2 && sets[2].Count > 0 ? sets[2][0] : null;
         var model = new TableDesignerModelDto(database, band, listed, schemas.Count > limit, listed.Contains("dbo") ? "dbo" : listed.FirstOrDefault() ?? "dbo", filegroup,
-            facts.NullableBool("can_create"));
+            comparison?.Bool("case_sensitive") ?? true, comparison?.Bool("accent_sensitive") ?? true, facts.NullableBool("can_create"));
         return new(null, 0, TableDesigner: model);
     }
 

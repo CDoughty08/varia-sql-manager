@@ -176,7 +176,8 @@ internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool All
 internal sealed record DesignTypeDto(string System, int? Length = null, bool? Max = null, int? Precision = null, int? Scale = null, int? Dimensions = null);
 /// <summary>Whole numbers of at most 38 digits, as text (decimal(38, 0) does not fit a C# number).</summary>
 internal sealed record DesignIdentityDto(string Seed, string Increment);
-internal sealed record TableDesignerModelDto(string Database, int Band, List<string> Schemas, bool SchemasTruncated, string DefaultSchema, string DefaultFilegroup, bool? CanCreate = null);
+internal sealed record TableDesignerModelDto(string Database, int Band, List<string> Schemas, bool SchemasTruncated, string DefaultSchema, string DefaultFilegroup,
+    bool CaseSensitiveNames, bool AccentSensitiveNames, bool? CanCreate = null);
 internal sealed record ActionScriptResult(string? Text, string Database, List<string> Warnings, ActionError? Error = null);
 /// <summary>Status: done, failed, skipped or cancelled; Message: the step's title, or SQL Server's text for a failed one.</summary>
 internal sealed record ActionStepDto(string Status, string? Message = null);

@@ -187,8 +187,8 @@ internal static partial class ActionSql
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
-        // The table designer's master facts (Designer/DesignerSql.MasterFacts).
-        "N'CREATE TABLE'"
+        // The table designer's master facts and its describe's collation probes (Designer/DesignerSql).
+        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();

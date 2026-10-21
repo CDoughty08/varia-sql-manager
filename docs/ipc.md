@@ -294,16 +294,21 @@ main's message box on its own channel, `varia:confirm-open-connections` (no payl
 The **Table Designer** uses the same three methods too, with no new method (so no new entry in the five places a method is
 declared). `actions.describe { connectionId, requestId, dialog: 'tableDesigner', target: { kind: 'database', name } }` (any
 database, SQL Server's own included) answers `{ tableDesigner: { database, band, schemas (≤ 2,048, sys and
-INFORMATION_SCHEMA left out), schemasTruncated, defaultSchema, defaultFilegroup, canCreate? }, elapsedMs }`.
+INFORMATION_SCHEMA left out, dbo always among them when it exists), schemasTruncated, defaultSchema, defaultFilegroup,
+caseSensitiveNames, accentSensitiveNames (how the catalog collation compares column names), canCreate? }, elapsedMs }`.
 `actions.script` and `actions.execute` take `{ action: 'createTable', connectionId, requestId, target: { kind: 'database',
 name }, design: { schema, name, columns: [{ name, type: { system, length?, max?, precision?, scale?, dimensions? },
 allowNulls, identity?: { seed, increment } }] (1 to 1,024), primaryKey: [column index] (≤ 32) } }`, strict at every level
-and checked by `designProblems` in main and `TableDesignValidator` in the backend (docs/table-designer.md). Script answers
+and checked by `designProblems` in main and `TableDesignValidator` in the backend (docs/table-designer.md): a table name
+that starts with `#` (a temporary table) and column names that differ only in trailing spaces are INVALID_PARAMS, and
+seeds and increments match their pattern up to the end of the text (.NET's `\z`, never `$`, which also matches before a
+final line break). Script answers
 SSMS's change script (at most 1,000,000 characters, `designerLimits.scriptChars`) with `database` the target and, as
 warnings, what Save would refuse (a missing schema, a taken name); it runs nothing. Execute refuses those before any DDL,
 then runs CREATE TABLE, the primary key and `SET (LOCK_ESCALATION = TABLE)` in one transaction, one step each, and
 `Commit`; a failure or Stop rolls back and its message ends "SQL Server rolled back the transaction; the table was not
-created." The design reaches SQL Server only as one `nvarchar(max)` JSON parameter, which constant builder batches shred
+created." (a Stop during a statement marks that step `cancelled` and the rest `skipped`; one during the preflight answers
+with no steps). The design reaches SQL Server only as one `nvarchar(max)` JSON parameter, which constant builder batches shred
 with OPENJSON (master needs compatibility level 130, else `NOT_SUPPORTED`). The largest design is far below the 4 MiB
 request body.
 

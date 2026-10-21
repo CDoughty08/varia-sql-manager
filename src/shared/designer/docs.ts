@@ -3,6 +3,7 @@ import { unknownOutcomeMessage } from '../actions/catalog.ts'
 import {
   columnPropertySpecs, defaultNewType, designerCommandEntries, designerLimits, designerStrings, reservedKeywords, systemTypes, tablePropertySpecs, type DesignerCommandId, type SystemTypeSpec
 } from './catalog.ts'
+import { tempTableMessage } from './schema.ts'
 import { defaultType, formatTypeText } from './type-text.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -53,7 +54,13 @@ export function renderTableDesignerDocs(): string {
     `  empty last row: typing a name there adds a column of type ${code(formatTypeText(defaultNewType))} (not verified) that allows nulls.`,
     '- Keys in the grid: arrows, Home, End, Ctrl+Home, Ctrl+End, Page Up, Page Down, Tab and Shift+Tab (wrapping rows), F2 or',
     '  Enter to edit, typing to start editing, Escape to cancel an edit, Space to toggle Allow Nulls, and Alt+Down to edit the',
-    '  Data Type with its list of types. Shift and Ctrl with a click on the row selector select several rows.',
+    '  Data Type with its list of types. Shift and Ctrl (⌘ on macOS) with a click on the row selector select several rows; on',
+    '  macOS Control+click opens the menu and keeps the selection, as in the results grid. Save and Generate Change Script',
+    '  first commit the cell being edited.',
+    '- A table name cannot start with # ("' + tempTableMessage + '"): SQL Server would put it',
+    '  in tempdb whatever its schema, and SSMS\'s designer cannot create temporary tables either. Column names must differ as',
+    '  the database\'s catalog collation compares them: trailing spaces never count, and case and accents as the collation',
+    '  says (the describe reports both). Main and the backend check only trailing spaces; SQL Server refuses the rest.',
     '- Column Properties shows the current column\'s properties by category, or alphabetically; Properties (F4) shows the',
     '  table\'s. Edit › Undo and Redo act on the text field being edited only; undoing grid changes is a follow-up.',
     '- Save (File › Save, Ctrl+S, ⌘S) asks Choose Name the first time (verified: learn.microsoft.com, Create tables), with',
@@ -63,7 +70,12 @@ export function renderTableDesignerDocs(): string {
     `- Generate Change Script… shows "${designerStrings.changeScriptTitle}": "${designerStrings.changeScriptPrompt}" (not verified), the`,
     '  script Save would run, Yes (save it to a file) and No.',
     '- Closing a designer with unsaved changes asks to save it, like a query; Save All and closing the window include',
-    '  designers. AutoRecover does not keep designers yet. While a save runs, Stop cancels it and SQL Server rolls it back.',
+    '  designers; a designer whose save needs Choose Name, has a problem or fails comes forward rather than waiting unseen',
+    '  (SSMS 22\'s behaviour here is not verified). AutoRecover does not keep designers yet. While a save runs, Stop cancels it',
+    '  and SQL Server rolls it back.',
+    '- A designer stays bound to the server it was opened on, as SSMS\'s is: after a lost connection, Reconnect moves it only',
+    '  to a connection to that server (otherwise it stays disconnected and cannot save), Disconnect All Queries leaves it',
+    '  connected, and the Query menu\'s commands (Change Database, Disconnect) do not act on it.',
     '',
     '## Data types',
     '',
@@ -119,7 +131,9 @@ export function renderTableDesignerDocs(): string {
     'needs compatibility level 130 or later) and compose each statement from `QUOTENAME`d names, `CONVERT`ed numbers and type',
     'keywords from a constant table generated from the catalogue, then run it in the database. CREATE TABLE, the primary key',
     'and LOCK_ESCALATION run in one transaction, committed only when all succeed; any failure, Stop or lost connection rolls',
-    'it back. DDL waits for locks without a time-out, as the object actions do; Stop is always available.',
+    'it back. DDL waits for locks without a time-out, as the object actions do; Stop is always available: in the preflight it',
+    'answers that nothing changed, and during a statement SQL Server cancels it, the transaction rolls back, and the steps say',
+    'where it stopped.',
     '',
     `If the backend stops while a save runs: "${unknownOutcomeMessage}"`,
     '',
@@ -131,7 +145,9 @@ export function renderTableDesignerDocs(): string {
     '',
     '- Design (changing an existing table), and the Table Designer menubar menu.',
     '- Default Value or Binding, Computed Column Specification, Collation, Description, Condensed Data Type, RowGuid, Not For',
-    '  Replication, Size and the other read-only Table Designer rows, user-defined data types, and Lock Escalation (PR-G2).',
+    '  Replication, Size and the other read-only Table Designer rows, user-defined data types, and Lock Escalation (PR-G2),',
+    '  with the error mappings they need: 2715 (a type that does not exist) and 448 (an invalid collation) as NOT_FOUND. Core',
+    '  offers only system types and no collation, so neither can occur yet.',
     '- Tools › Options › Designers (Table and Database Designers): the transaction time-out and Auto generate change scripts.',
     '- Relationships, indexes and keys other than the primary key, check constraints, and the Database Diagram.',
     '- Undo and Redo of grid changes, and AutoRecover for designers.',
