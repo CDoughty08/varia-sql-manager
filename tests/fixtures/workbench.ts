@@ -41,6 +41,7 @@ import { queryContribution } from '../../src/renderer/src/contributions/query'
 import { shellContribution, type ShellHost } from '../../src/renderer/src/contributions/shell'
 import { themeContribution, type ThemeController } from '../../src/renderer/src/contributions/theme'
 import { backendContribution } from '../../src/renderer/src/contributions/backend'
+import { helpContribution } from '../../src/renderer/src/contributions/help'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
 import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
@@ -226,6 +227,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     createCustomTheme: vi.fn<VariaApi['createCustomTheme']>(async () => ({ ok: true, value: undefined })),
     runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
+    clearEntraTokenCache: vi.fn<VariaApi['clearEntraTokenCache']>(async () => ({ ok: true, value: true })),
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
     revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
     tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
@@ -370,6 +372,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers),
     backendContribution(workbench),
+    helpContribution(workbench, api),
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),

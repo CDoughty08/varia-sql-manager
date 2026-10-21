@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using Varia.Backend.Entra;
 
 namespace Varia.Backend;
 
@@ -11,7 +12,7 @@ internal static class ConnectionSettings
     }
     internal static SqlConnectionStringBuilder Build(ConnectOptions options)
     {
-        if (options.Authentication is not ("windows" or "sql")) throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
+        if (!EntraModes.IsKnown(options.Authentication)) throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
         if (string.IsNullOrWhiteSpace(options.Server)) throw new RequestException("INVALID_PARAMS", "Server name is required.");
         var advanced = options.Advanced ?? new();
         if (advanced.CommandTimeout is < 0 or > 86400 || advanced.ConnectTimeout is < 0 or > 3600
@@ -53,22 +54,51 @@ internal static class ConnectionSettings
                 builder.AttestationProtocol = advanced.AttestationProtocol switch { "None" => SqlConnectionAttestationProtocol.None, "HGS" => SqlConnectionAttestationProtocol.HGS, "AAS" => SqlConnectionAttestationProtocol.AAS, _ => throw new RequestException("INVALID_PARAMS", "Unsupported attestation protocol.") };
                 builder.EnclaveAttestationUrl = Text(advanced.EnclaveAttestationUrl, 2048, "Attestation URL");
             }
-            if (!builder.IntegratedSecurity)
+            if (options.Authentication == "sql")
             {
                 if (string.IsNullOrWhiteSpace(options.Username)) throw new RequestException("INVALID_PARAMS", "SQL authentication requires a username.");
                 builder.UserID = Text(options.Username, 128, "Username");
                 builder.Password = Text(options.Password ?? "", 1024, "Password");
             }
+            else if (EntraModes.IsEntra(options.Authentication)) Entra(builder, options);
             // Force provider validation before opening a server connection.
             using var validated = new SqlConnection(builder.ConnectionString);
             return builder;
         }
         catch (ArgumentException error) { throw new RequestException("INVALID_PARAMS", "Invalid connection properties: " + error.Message); }
     }
+    /// <summary>SqlClient's Authentication keyword (every pool inherits it with the connection string) and only the fields
+    /// the type uses: a user name or client ID where it names one, and a password only for Entra Password and Service
+    /// Principal, so a password sent with any other type never reaches SqlClient.</summary>
+    private static void Entra(SqlConnectionStringBuilder builder, ConnectOptions options)
+    {
+        var mode = options.Authentication;
+        // The provider exists before SqlClient ever needs it for this method.
+        _ = EntraService.Shared;
+#pragma warning disable CS0618 // ActiveDirectoryPassword: see EntraModes.
+        builder.Authentication = EntraModes.Method(mode);
+#pragma warning restore CS0618
+        var user = options.Username;
+        if (EntraModes.RequiresUser(mode))
+        {
+            if (string.IsNullOrWhiteSpace(user)) throw new RequestException("INVALID_PARAMS", mode == "entraServicePrincipal" ? "Microsoft Entra Service Principal requires the application (client) ID in User name." : "Microsoft Entra Password requires a user name.");
+            builder.UserID = Text(user, 128, "User name");
+        }
+        else if (mode != "entraIntegrated" && !string.IsNullOrWhiteSpace(user)) builder.UserID = Text(user, 128, "User name");
+        if (!EntraModes.UsesPassword(mode)) return;
+        var secret = Text(options.Password ?? "", 1024, "Password");
+        if (secret.Length == 0) throw new RequestException("INVALID_PARAMS", mode == "entraServicePrincipal" ? "Microsoft Entra Service Principal requires the client secret in Password." : "Microsoft Entra Password requires a password.");
+        builder.Password = secret;
+    }
+
+    /// <summary>The Connection String tab: what SqlClient builds, with the password (or client secret) of every type that
+    /// takes one shown as &lt;not included&gt;, typed or not (main may fill in a remembered one).</summary>
     internal static object Preview(ConnectOptions options)
     {
-        var builder = Build(options);
-        if (!builder.IntegratedSecurity) builder.Password = "<not included>";
+        const string omitted = "<not included>";
+        var takesPassword = EntraModes.UsesPassword(options.Authentication);
+        var builder = Build(takesPassword ? options with { Password = omitted } : options);
+        if (takesPassword) builder.Password = omitted;
         return new { ConnectionString = builder.ConnectionString };
     }
 }

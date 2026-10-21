@@ -199,6 +199,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `SQL_ERROR` | Yes |
 | `AUTH_KERBEROS` | Yes |
 | `AUTH_UNSUPPORTED` | Yes |
+| `AUTH_ENTRA` | Yes |
 
 ## Limits
 

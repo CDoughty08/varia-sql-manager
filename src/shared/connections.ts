@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { AdvancedConnectionOptions, ConnectionOptions } from './contracts'
+import { authenticationModes, requiresUser, showsIdentity, usesPassword } from './auth'
 
 export const advancedDefaults: AdvancedConnectionOptions = {
   commandTimeout: 0, connectTimeout: 15, columnEncryption: false, secureEnclaves: false,
@@ -44,16 +45,17 @@ export const advancedConnectionSchema = z.object({
   multiSubnetFailover: z.boolean(), serverSpn: z.string().max(512), userInstance: z.boolean()
 }).partial().strict()
 export const connectionOptionsSchema = z.object({
-  server: z.string().trim().min(1, 'Enter a server name.').max(256), database: z.string().trim().max(128), authentication: z.enum(['windows', 'sql']),
+  server: z.string().trim().min(1, 'Enter a server name.').max(256), database: z.string().trim().max(128), authentication: z.enum(authenticationModes),
   username: text.optional(), password: z.string().max(1024).optional(), trustServerCertificate: z.boolean(),
   encrypt: z.enum(['optional', 'mandatory', 'strict']).optional(), hostNameInCertificate: z.string().max(256).optional(),
   displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), advanced: advancedConnectionSchema.optional()
-}).strict().refine(value => value.authentication !== 'sql' || !!value.username?.trim(), 'SQL authentication requires a username.')
+}).strict().refine(value => !requiresUser(value.authentication) || !!value.username?.trim(), { error: issue => (issue.input as ConnectionOptions).authentication === 'sql' ? 'SQL authentication requires a username.' : 'This authentication requires a user name.' })
 
 // Persistence is built from a whitelist; neither passwords nor raw connection strings enter the file.
 export function savedConnection(options: ConnectionOptions): Omit<ConnectionOptions, 'password'> {
   const { password: _password, ...parsed } = connectionOptionsSchema.parse(options)
-  if (parsed.authentication === 'windows') delete parsed.username
+  // Windows Authentication and Entra Integrated show the signed-in identity, which is not the profile's to keep.
+  if (showsIdentity(parsed.authentication)) delete parsed.username
   return parsed
 }
 export interface ConnectionProfile { id: string; options: Omit<ConnectionOptions, 'password'>; favorite: boolean; registered: boolean; lastConnected?: string }
@@ -69,3 +71,37 @@ export function connectionKey(options: ConnectionOptions): string {
   return JSON.stringify([clean.server.toLowerCase(), clean.database.toLowerCase(), clean.authentication, clean.username ?? '',
     clean.encrypt ?? 'mandatory', clean.trustServerCertificate, clean.hostNameInCertificate ?? '', { ...advancedDefaults, ...clean.advanced }])
 }
+
+/** Where the operating system can protect a remembered password; `reason` says why it cannot. */
+export interface SecretStorageState { available: boolean; reason?: 'no-keyring' | 'unknown-backend' | 'unavailable' }
+/** The authentication types whose password the Connect dialog can remember: those with an editable Password box, as SSMS
+ *  (SQL Server Authentication, Microsoft Entra Password, and Service Principal's client secret). */
+export function canRememberPassword(authentication: ConnectionOptions['authentication']): boolean { return usesPassword(authentication) }
+/**
+ * Everything that decides where a password goes and how the server is verified. A remembered password is sent only to
+ * a request with the same binding, so changing the database, name or color keeps it, and anything else needs it typed.
+ */
+export function credentialBinding(options: Omit<ConnectionOptions, 'password'>): string {
+  return JSON.stringify([options.server.trim().toLowerCase(), options.authentication, options.username ?? '', options.encrypt ?? 'mandatory',
+    options.encrypt !== 'strict' && options.trustServerCertificate, options.hostNameInCertificate ?? '', options.advanced?.serverCertificate ?? '',
+    options.advanced?.failoverPartner ?? '', options.advanced?.networkProtocol ?? 'default'])
+}
+const recency = (profile: ConnectionProfile) => [profile.lastConnected ? 0 : profile.favorite ? 1 : 2, profile.lastConnected ?? ''] as const
+/**
+ * The saved entry whose remembered password the form would use: the selected entry when it has one for the same
+ * credentials, otherwise the most recently connected such entry, then a favorite, then a registered one.
+ */
+export function rememberedProfile(profiles: readonly ConnectionProfile[], savedIds: ReadonlySet<string>, options: ConnectionOptions, selectedId?: string): ConnectionProfile | undefined {
+  if (!canRememberPassword(options.authentication)) return undefined
+  const binding = credentialBinding(options)
+  const candidates = profiles.filter(profile => savedIds.has(profile.id) && credentialBinding(profile.options) === binding)
+  const selected = candidates.find(profile => profile.id === selectedId)
+  if (selected) return selected
+  return candidates.sort((a, b) => { const [ra, la] = recency(a), [rb, lb] = recency(b); return ra - rb || lb.localeCompare(la) })[0]
+}
+/** The fourth argument of `varia:request`, for `connections.connect` and `.databases` only. `requestId` is what the
+ *  dialog's Stop cancels the request by (varia:connections-cancel). */
+export const connectContextSchema = z.object({ profileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional() }).strict()
+export type ConnectContext = z.infer<typeof connectContextSchema>
+/** The library with the ids of the entries that have a remembered password; never the password or its ciphertext. */
+export interface ConnectionLibraryView { library: ConnectionLibrary; savedPasswords: string[] }

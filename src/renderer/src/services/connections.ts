@@ -1,7 +1,8 @@
 import type { ConnectionInfo, ConnectionOptions } from '../../../shared/contracts'
 import { SnapshotStore } from '../core/store'
 
-/** Connection settings without the password, which is never kept: a reconnect asks for it again. */
+/** Connection settings without the password, which the renderer never keeps: a reconnect asks for it again, unless main
+ *  remembers one for the same credentials (Remember password) and fills it in itself. */
 export type SavedOptions = Omit<ConnectionOptions, 'password'>
 /** A connection Object Explorer shows. `lost` means its backend generation ended; only Reconnect replaces it. */
 export interface LiveConnection extends ConnectionInfo { readonly options: SavedOptions; readonly lost?: true }

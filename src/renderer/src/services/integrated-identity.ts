@@ -1,6 +1,6 @@
 import type { ApiResult, ConnectionOptions, IntegratedIdentity } from '../../../shared/contracts'
 
-/** Off Windows, the Kerberos principal Windows Authentication signs in with, for the Connect dialog's User Name and its saved
+/** Off Windows, the Kerberos principal Windows Authentication signs in with, for the Connect dialog's User name and its saved
  * Windows Authentication rows. SSMS reads the identity when the dialog opens, so it is asked then whatever the form's
  * authentication, and again each time Windows Authentication is chosen, so a kinit or kdestroy since shows. A new question
  * clears the last answer, so a stale principal never shows while it is pending (a stuck cache can hold it for the deadline).

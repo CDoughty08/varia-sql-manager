@@ -97,6 +97,7 @@ PageChecks.Run(Check);
 HostChecks.Run(Check);
 await ConnectionFailureChecks.RunAsync(Check);
 await ConnectionFailureChecks.IdentityAsync(Check);
+await EntraChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
@@ -141,6 +142,8 @@ Check(retried == 300 && await LiveResultChecks.OnceMore("a measurement in time",
     "a timed live check that misses its bound measures once more, and only once");
 Console.WriteLine("Passed " + passed + " offline .NET checks.");
 
+// Microsoft Entra ID needs a tenant: these run only with their own variables, before and without the SQL Server ones.
+await EntraLiveChecks.RunAsync(Check, json);
 var server = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
 if (string.IsNullOrWhiteSpace(server))
 {
@@ -184,6 +187,7 @@ try
 
     // A Kerberos ticket that expires while connected: every later open says to run kinit, and works again after it.
     var signIn = Guid.NewGuid().ToString();
+    var production = service.Open;
     service.Open = ConnectionFailureChecks.ExpiredTicket;
     try
     {
@@ -206,8 +210,48 @@ try
         Check(node.Error is { Code: "AUTH_KERBEROS", Retryable: true } && node.Error.Message == ConnectionFailures.Messages.Expired && node.Nodes.Count == 0,
             "Object Explorer shows an expired ticket's kinit advice on the node, which Retry loads again");
     }
-    finally { service.Open = ConnectionFailures.OpenAsync; }
+    finally { service.Open = production; }
     Check((await Run("SELECT 1;", session: signIn)).Status == "completed", "after kinit, the tab whose session could not sign in opens a new one");
+
+    // A Microsoft Entra sign-in revoked while connected, through the production open (only the open inside it fails, as
+    // SqlClient does when the provider recorded that a sign-in is needed): every later open says to connect again, a
+    // value where Kerberos's advice is one.
+    var entraSession = Guid.NewGuid().ToString();
+    var opener = service.OpenConnection;
+    service.OpenConnection = (_, _) =>
+    {
+        var id = Guid.NewGuid();
+        service.Entra.Attempts.Record(id, new Varia.Backend.Entra.InteractionRequired(EntraChecks.Request()));
+        throw EntraChecks.ProviderFailure(id);
+    };
+    try
+    {
+        async Task<string> Expired(Func<Task> call)
+        {
+            try { await call(); return "accepted"; }
+            catch (Exception error) { return error is RequestException { Code: "AUTH_ENTRA", Message: Varia.Backend.Entra.EntraFailures.Messages.SignInExpired, Details: null } ? "connect again" : error.GetType().Name + ": " + error.Message; }
+        }
+        var answers = new[]
+        {
+            await Expired(() => Run("SELECT 1;", session: entraSession)),
+            await Expired(() => Call<List<DatabaseInfo>>("databases.list", new ConnectionArgs(info.Id))),
+            await Expired(() => Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects")))
+        };
+        Check(answers.All(answer => answer == "connect again"), "a query session and database and column lists answer AUTH_ENTRA (connect again) when the Entra sign-in must be repeated: " + string.Join(", ", answers));
+        // These answer values; an escaped AUTH_ENTRA becomes a null here, so the check says which.
+        async Task<T?> Value<T>(Func<Task<T>> call) where T : class { try { return await call(); } catch (RequestException) { return null; } }
+        var script = await Value(() => Call<ScriptResult>("scripting.script", new ScriptArgs(info.Id, Guid.NewGuid().ToString(), [new ObjectRefDto("table", "master", "dbo", "VariaNoSuchTable")], "create", ScriptingLiveChecks.Defaults(json))));
+        Check(script?.Error is { Code: "AUTH_ENTRA", Retryable: true } && script.Error.Message.EndsWith(Varia.Backend.Entra.EntraFailures.Messages.SignInExpired, StringComparison.Ordinal) && script.Text is null,
+            "Script As shows a revoked Entra sign-in as its retryable error value: " + (script is null ? "an envelope error" : script.Error?.Code));
+        var node = await Value(() => Call<ExplorerChildrenResult>("explorer.children", new ExplorerChildrenArgs(info.Id, Guid.NewGuid().ToString(), new NodeRefDto("folder", Owner: new ObjectRefDto("server"), Folder: "logins"))));
+        Check(node?.Error is { Code: "AUTH_ENTRA", Retryable: true } && node.Error.Message == Varia.Backend.Entra.EntraFailures.Messages.SignInExpired && node.Nodes.Count == 0,
+            "Object Explorer shows a revoked Entra sign-in on the node, which Retry loads again: " + (node is null ? "an envelope error" : node.Error?.Code));
+        var described = await Value(() => Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("table", "master", "dbo", "VariaNoSuchTable"))));
+        Check(described?.Error is { Code: "AUTH_ENTRA", Retryable: true } && described.Error.Message == Varia.Backend.Entra.EntraFailures.Messages.SignInExpired && described.DeleteTarget is null,
+            "an object action shows a revoked Entra sign-in as its retryable error value: " + (described is null ? "an envelope error" : described.Error?.Code + " " + described.Error?.Message));
+    }
+    finally { service.OpenConnection = opener; }
+    Check((await Run("SELECT 1;", session: entraSession)).Status == "completed", "after connecting again, the tab whose session could not sign in opens a new one");
     var columns = await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects"));
     Check(columns.Columns.Count > 2 && columns.Columns[0] == new ColumnInfo("name", "sysname") && columns.Columns[1] == new ColumnInfo("object_id", "int") && !columns.Truncated, "table columns come in column order with their types");
     try { await Call<TableColumnsResult>("tables.columns", new TableArgs(info.Id, "master", "sys", "objects]")); throw new Exception("A closing bracket matched another table"); }
@@ -334,6 +378,7 @@ try
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
+    await EntraChecks.LiveAsync(Check, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }
 finally { await Call<object>("connections.disconnect", new ConnectionArgs(info.Id)); }
