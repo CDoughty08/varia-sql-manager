@@ -78,9 +78,10 @@ pages, limits, error codes, display formats, benchmarks).
   the ciphertext. Only main reads that file or decrypts; the renderer learns only which entries have one, and main injects
   it into `connections.connect`/`.databases` only for a matching binding. Remember password is disabled where
   safeStorage is unavailable, Linux's backend is `basic_text`/`unknown`, or its keyring cannot be reached (Electron's
-  fallback key, tag `v10`). Microsoft Entra tokens stay in the backend's memory for its lifetime (MSAL and Azure.Identity
-  through Varia's own `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, and
-  never sent to main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
+  fallback key, tag `v10`; only `v11`/`v12` count, not yet confirmed on a Linux desktop, so any other tag disables it).
+  Microsoft Entra tokens stay in the backend's memory for its lifetime (MSAL and Azure.Identity through Varia's own
+  `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, and never sent to
+  main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
   (Stop); sign-in hosts and token resources the server names are allowlisted.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port

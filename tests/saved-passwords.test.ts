@@ -86,6 +86,30 @@ describe('saved passwords', () => {
     await writeFile(path, original)
     expect(await new SavedPasswordStore(path, testCipher()).get(prod, { ...prodOptions, password: '' })).toBe('prod-secret')
   })
+  it('checks the password inside its ciphertext too, so a valid check cannot carry another password', async () => {
+    // The Keychain's and the Linux keyring's AES-CBC has no integrity check, so blocks can be spliced: a ciphertext that
+    // keeps a real check's blocks and replaces the password's must still be refused. The test cipher cannot splice blocks,
+    // so this tests what goes into the seal.
+    const sealed: string[] = []
+    const real = testCipher()
+    const recording: SecretCipher = { ...real, encrypt: async text => { sealed.push(text); return real.encrypt(text) } }
+    const { store: saved, path } = await store(recording)
+    const id = randomUUID()
+    await saved.set(id, options)
+    expect(sealed).toHaveLength(1)
+    expect(sealed[0].endsWith(marker)).toBe(true)
+    const check = sealed[0].slice(0, -marker.length)
+    const bindingOnly = createHash('sha256').update(JSON.stringify([credentialBinding(options)])).digest('hex')
+    const file = JSON.parse(await readFile(path, 'utf8'))
+    for (const forged of [check + 'attacker-pass', bindingOnly + 'attacker-pass', check + marker.slice(1)]) {
+      file.entries[0].cipher = (await real.encrypt(forged)).toString('base64')
+      await writeFile(path, JSON.stringify(file))
+      await expect(new SavedPasswordStore(path, testCipher()).get(id, { ...options, password: '' }), forged.slice(64)).rejects.toThrow(savedPasswordMessages.unreadable)
+    }
+    file.entries[0].cipher = (await real.encrypt(sealed[0])).toString('base64')
+    await writeFile(path, JSON.stringify(file))
+    expect(await new SavedPasswordStore(path, testCipher()).get(id, { ...options, password: '' })).toBe(marker)
+  })
   it('keeps one password per server and login: saving one replaces it in every entry with those credentials', async () => {
     const { store: saved } = await store()
     const [a, b, other] = [randomUUID(), randomUUID(), randomUUID()]
