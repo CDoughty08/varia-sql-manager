@@ -18,21 +18,23 @@ export class ConnectionStore {
     return { library: { version: 1, profiles: [] }, warning: 'The saved connection library was invalid. Its original file was preserved.' }
   }
   async load() { await this.writes; return this.read() }
-  private change(update: (value: ConnectionLibrary) => void): Promise<ConnectionLibrary> {
+  private change<T = undefined>(update: (value: ConnectionLibrary) => T): Promise<{ library: ConnectionLibrary; value: T }> {
     const next = this.writes.then(async () => {
       const { library } = await this.read()
-      update(library)
+      const value = update(library)
       const valid = connectionLibrarySchema.parse(library)
       await writeJsonAtomic(this.path, valid, limit, 'Too many saved connections.')
-      return valid
+      return { library: valid, value }
     })
     this.writes = next.catch(() => {})
     return next
   }
-  save(value: ConnectionProfileInput, connected = false): Promise<ConnectionLibrary> {
+  async save(value: ConnectionProfileInput, connected = false): Promise<ConnectionLibrary> { return (await this.upsert(value, connected)).library }
+  /** Saves the profile and returns the id of the entry it created or updated. */
+  private async upsert(value: ConnectionProfileInput, connected: boolean): Promise<{ library: ConnectionLibrary; id: string }> {
     const input = connectionProfileInputSchema.parse(value)
     const options = savedConnection(input.options)
-    return this.change(library => {
+    const changed = await this.change(library => {
       let profile = input.id ? library.profiles.find(item => item.id === input.id) : library.profiles.find(item => connectionKey(item.options) === connectionKey(options))
       if (input.id && !profile) throw new Error('This saved connection no longer exists.')
       if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false }; library.profiles.push(profile) }
@@ -44,8 +46,12 @@ export class ConnectionStore {
       for (const item of recent.slice(30)) delete item.lastConnected
       library.profiles = library.profiles.filter(item => item.favorite || item.registered || item.lastConnected)
       if (library.profiles.length > 200) throw new Error('The connection library supports up to 200 saved servers.')
+      return profile.id
     })
+    return { library: changed.library, id: changed.value }
   }
   remember(options: ConnectionOptions) { return this.save({ options }, true) }
-  remove(id: string) { return this.change(library => { library.profiles = library.profiles.filter(item => item.id !== id) }) }
+  /** remember(), with the id of the history entry it touched: a remembered password is kept under that id. */
+  rememberEntry(options: ConnectionOptions) { return this.upsert({ options }, true) }
+  async remove(id: string) { return (await this.change(library => { library.profiles = library.profiles.filter(item => item.id !== id) })).library }
 }

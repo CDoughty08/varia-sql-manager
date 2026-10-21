@@ -18,9 +18,10 @@ const menus: Record<MenubarId, ResolvedMenuItem[]> = {
   view: [command('Command Palette…'), separator(), submenu('Theme', 1, [command('Color Theme…'), separator(), submenu('Dark Theme', 3, [command('Varia Dark', -1), command('Harbor', -1)])])],
   query: [submenu('Connection', 1, [command('Connect…'), command('Disconnect')]), command('Execute', 1), command('Cancel Executing Query', 0, false)],
   tools: [command('Options…')],
-  window: [command('Object Explorer')]
+  window: [command('Object Explorer')],
+  help: [command('Clear Entra ID Token Cache')]
 }
-const buttons: Record<MenubarId, Rect> = { file: rect(40, 0, 40, 34), edit: rect(80, 0, 40, 34), view: rect(120, 0, 40, 34), query: rect(160, 0, 50, 34), tools: rect(210, 0, 50, 34), window: rect(260, 0, 60, 34) }
+const buttons: Record<MenubarId, Rect> = { file: rect(40, 0, 40, 34), edit: rect(80, 0, 40, 34), view: rect(120, 0, 40, 34), query: rect(160, 0, 50, 34), tools: rect(210, 0, 50, 34), window: rect(260, 0, 60, 34), help: rect(320, 0, 45, 34) }
 function rect(left: number, top: number, width: number, height: number): Rect { return { left, top, right: left + width, bottom: top + height } }
 const key = (name: string, extra: Partial<MenuKey> = {}): MenuKey => ({ key: name, code: /^[a-z]$/i.test(name) ? `Key${name.toUpperCase()}` : name, alt: false, ctrl: false, meta: false, shift: false, repeat: false, ...extra })
 
@@ -48,10 +49,10 @@ describe('menubar focus (no dropdown)', () => {
     expect(controller.view).toMatchObject({ levels: [], source: null, mnemonics: true, menubar: { focused: 'file', open: null } })
     expect(controller.ownsKeyboard()).toBe(true)
     const focused = () => controller.view.menubar.focused
-    expect([press('ArrowLeft'), focused()]).toEqual(['consumed', 'window'])
+    expect([press('ArrowLeft'), focused()]).toEqual(['consumed', 'help'])
     press('ArrowRight'); expect(focused()).toBe('file')
     press('ArrowRight'); expect(focused()).toBe('edit')
-    press('End'); expect(focused()).toBe('window')
+    press('End'); expect(focused()).toBe('help')
     press('Home'); expect(focused()).toBe('file')
   })
   it('opens the focused menu with Down, Enter, or Space at the first item, and Up at the last', () => {
@@ -130,7 +131,7 @@ describe('keys inside a menu', () => {
     press('ArrowLeft'); press('ArrowLeft')
     expect(controller.view.menubar.open).toBe('file')
     press('ArrowLeft')
-    expect(controller.view.menubar.open).toBe('window')
+    expect(controller.view.menubar.open).toBe('help')
   })
   it('does nothing with Left or Right at a context menu\'s root', () => {
     const { controller, press, active } = harness()

@@ -3,8 +3,9 @@ import { mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConnectionStore } from '../src/main/connection-store'
-import { advancedDefaults, advancedToStore, connectionDefaults, connectionKey, defaultAuthentication, connectionLibrarySchema, connectionOptionsSchema, savedConnection } from '../src/shared/connections'
+import { advancedDefaults, advancedToStore, canRememberPassword, connectContextSchema, connectionDefaults, connectionKey, credentialBinding, defaultAuthentication, connectionLibrarySchema, connectionOptionsSchema, rememberedProfile, savedConnection, type ConnectionProfile } from '../src/shared/connections'
 import { validateRequest, validateResult } from '../src/main/validation'
+import { authenticationModes } from '../src/shared/auth'
 
 const directories: string[] = []
 async function store() {
@@ -21,6 +22,27 @@ describe('connection settings', () => {
     for (const advanced of [{ packetSize: 511 }, { connectRetryInterval: 0 }, { commandTimeout: -1 }, { networkProtocol: 'shell' }, { arbitrarySql: 'SELECT 1' }]) expect(connectionOptionsSchema.safeParse({ ...connectionDefaults('win32'), advanced }).success).toBe(false)
     expect(connectionOptionsSchema.safeParse({ ...connectionDefaults('win32'), color: 'red; background:url(...)' }).success).toBe(false)
     expect(() => validateRequest('connections.discover', { scope: 'azure' })).toThrow()
+  })
+  it('accepts the eight Connect dialog types, and requires a user name where they need one', () => {
+    const base = { ...connectionDefaults('win32'), username: 'alice@contoso.com' }
+    for (const authentication of authenticationModes) expect(connectionOptionsSchema.safeParse({ ...base, authentication }).success, authentication).toBe(true)
+    // Device code flow and workload identity are SqlClient's, not SSMS's.
+    for (const authentication of ['entraDeviceCode', 'entraWorkloadIdentity', 'ActiveDirectoryInteractive']) expect(connectionOptionsSchema.safeParse({ ...base, authentication }).success, authentication).toBe(false)
+    const missing = (authentication: string) => connectionOptionsSchema.safeParse({ ...base, authentication, username: ' ' }).error?.issues.map(issue => issue.message)
+    expect(missing('sql')).toEqual(['SQL authentication requires a username.'])
+    expect(missing('entraPassword')).toEqual(['This authentication requires a user name.'])
+    expect(missing('entraServicePrincipal')).toEqual(['This authentication requires a user name.'])
+    for (const optional of ['windows', 'entraMfa', 'entraIntegrated', 'entraManagedIdentity', 'entraDefault']) expect(missing(optional), optional).toBeUndefined()
+  })
+  it('keeps no user name for types that show the signed-in identity, and never a password', () => {
+    for (const authentication of ['windows', 'entraIntegrated'] as const) expect(savedConnection({ ...connectionDefaults('win32'), authentication, username: 'CONTOSO\\alice', password: 'x' }), authentication).not.toHaveProperty('username')
+    for (const authentication of ['entraMfa', 'entraPassword', 'entraServicePrincipal', 'entraManagedIdentity', 'entraDefault'] as const) {
+      const saved = savedConnection({ ...connectionDefaults('win32'), authentication, username: 'alice@contoso.com', password: 'secret-marker' })
+      expect(saved, authentication).toMatchObject({ username: 'alice@contoso.com' })
+      expect(saved, authentication).not.toHaveProperty('password')
+    }
+    const mfa = { ...connectionDefaults('win32'), authentication: 'entraMfa' as const, username: 'alice@contoso.com' }
+    expect(connectionKey(mfa)).not.toBe(connectionKey({ ...mfa, authentication: 'entraDefault' }))
   })
   it('removes passwords, and separates authentication/advanced settings in saved identities', () => {
     const sql = { ...connectionDefaults('win32'), authentication: 'sql' as const, username: 'reader', password: 'secret' }
@@ -85,6 +107,13 @@ describe('saved connection library', () => {
     expect(state.profiles[0]).toMatchObject({ favorite: false, registered: true, options: { displayName: 'Updated' } })
     expect((await library.remove(id)).profiles).toEqual([])
   })
+  it('keeps a Microsoft Entra MFA connection in history, by its user name and type', async () => {
+    const { store: library, path } = await store()
+    const options = { ...connectionDefaults('linux'), server: 'contoso.database.windows.net', database: 'appdb', authentication: 'entraMfa' as const, username: 'alice@contoso.com' }
+    await library.remember(options)
+    const state = (await new ConnectionStore(path).load()).library
+    expect(state.profiles).toEqual([expect.objectContaining({ options: expect.objectContaining({ authentication: 'entraMfa', username: 'alice@contoso.com' }), lastConnected: expect.any(String) })])
+  })
   it('serializes concurrent writes and caps history without deleting favorites', async () => {
     const { store: library } = await store()
     await library.save({ options: { ...connectionDefaults('win32'), server: 'favorite-old' }, favorite: true })
@@ -93,6 +122,18 @@ describe('saved connection library', () => {
     expect(profiles.filter(profile => profile.lastConnected)).toHaveLength(30)
     expect(profiles.find(profile => profile.options.server === 'favorite-old')?.favorite).toBe(true)
     expect(new Set(profiles.map(profile => profile.id)).size).toBe(profiles.length)
+  })
+  it('returns the id of the history entry a connection touched', async () => {
+    const { store: library, path } = await store()
+    const options = { ...connectionDefaults('win32'), authentication: 'sql' as const, username: 'reader', password: 'secret-marker' }
+    const first = await library.rememberEntry(options)
+    expect(first.library.profiles.map(profile => profile.id)).toEqual([first.id])
+    // The same connection again touches the same entry; another database is another entry.
+    expect((await library.rememberEntry({ ...options, password: 'other' })).id).toBe(first.id)
+    const second = await library.rememberEntry({ ...options, database: 'Sales' })
+    expect(second.id).not.toBe(first.id)
+    expect(second.library.profiles.find(profile => profile.id === second.id)?.options.database).toBe('Sales')
+    expect(await readFile(path, 'utf8')).not.toContain('secret-marker')
   })
   it('refuses to replace a directory found at the library path', async () => {
     const { directory } = await store()
@@ -120,5 +161,53 @@ describe('Advanced Properties OK', () => {
     expect(advancedToStore(draft({ commandTimeout: 0 }), new Set(), { commandTimeout: 0 })).toEqual({ commandTimeout: 0 })
     const options = { ...connectionDefaults('win32'), server: 'db' }
     expect(connectionKey({ ...options, advanced: advancedToStore(draft(), new Set()) })).toBe(connectionKey({ ...options, advanced: advancedDefaults }))
+  })
+})
+
+describe('remembered password bindings', () => {
+  const sql = { ...connectionDefaults('linux'), server: 'Sql-Prod', authentication: 'sql' as const, username: 'reader', password: 'secret' }
+  it('binds a password to where it goes and how the server is verified, not to the database, name or color', () => {
+    const binding = credentialBinding(sql)
+    for (const same of [{ database: 'Sales' }, { displayName: 'Production' }, { color: '#abcdef' }, { password: 'other' }, { server: '  sql-prod ' }, { advanced: { packetSize: 4096, applicationName: 'x' } },
+      { encrypt: 'mandatory' as const }, { advanced: { networkProtocol: 'default' as const } }]) expect(credentialBinding({ ...sql, ...same }), JSON.stringify(same)).toBe(binding)
+    // Strict ignores Trust server certificate, as the connection does.
+    expect(credentialBinding({ ...sql, encrypt: 'strict', trustServerCertificate: true })).toBe(credentialBinding({ ...sql, encrypt: 'strict' }))
+    for (const other of [{ server: 'sql-test' }, { authentication: 'windows' as const }, { username: 'admin' }, { encrypt: 'optional' as const }, { encrypt: 'strict' as const }, { trustServerCertificate: true },
+      { hostNameInCertificate: 'x.example' }, { advanced: { serverCertificate: '/c.cer' } }, { advanced: { failoverPartner: 'mirror' } }, { advanced: { networkProtocol: 'np' as const } }]) expect(credentialBinding({ ...sql, ...other }), JSON.stringify(other)).not.toBe(binding)
+  })
+  it('remembers passwords for the types with an editable Password: SQL Server Authentication, Entra Password and Service Principal', () => {
+    expect(authenticationModes.filter(canRememberPassword)).toEqual(['sql', 'entraPassword', 'entraServicePrincipal'])
+    const entra = { ...sql, authentication: 'entraServicePrincipal' as const, username: 'client-id' }
+    const { password: _password, ...saved } = entra
+    const profiles: ConnectionProfile[] = [{ id: 'sp', options: saved, favorite: true, registered: false }]
+    expect(rememberedProfile(profiles, new Set(['sp']), entra)?.id).toBe('sp')
+    expect(rememberedProfile(profiles, new Set(['sp']), { ...entra, authentication: 'entraMfa' })).toBeUndefined()
+  })
+  it('picks the selected entry, then the most recent, a favorite, and a registered one with the same credentials', () => {
+    const { password: _password, ...saved } = sql
+    const entry = (id: string, patch: Partial<ConnectionProfile> = {}, options: Partial<typeof saved> = {}): ConnectionProfile => ({ id, options: { ...saved, ...options }, favorite: false, registered: false, ...patch })
+    const profiles = [
+      entry('registered', { registered: true }), entry('favorite', { favorite: true }), entry('old', { lastConnected: '2026-01-01T00:00:00.000Z' }),
+      entry('new', { lastConnected: '2026-06-01T00:00:00.000Z' }, { database: 'Sales' }), entry('elsewhere', { lastConnected: '2026-09-01T00:00:00.000Z' }, { server: 'other' }), entry('unsaved', { lastConnected: '2026-10-01T00:00:00.000Z' })
+    ]
+    const all = new Set(['registered', 'favorite', 'old', 'new', 'elsewhere'])
+    expect(rememberedProfile(profiles, all, sql)?.id).toBe('new')
+    expect(rememberedProfile(profiles, all, sql, 'old')?.id).toBe('old')
+    // A selected entry without a password, or for other credentials, falls back to the best match.
+    expect(rememberedProfile(profiles, all, sql, 'unsaved')?.id).toBe('new')
+    expect(rememberedProfile(profiles, all, sql, 'elsewhere')?.id).toBe('new')
+    expect(rememberedProfile(profiles, new Set(['registered', 'favorite']), sql)?.id).toBe('favorite')
+    expect(rememberedProfile(profiles, new Set(['registered']), sql)?.id).toBe('registered')
+    expect(rememberedProfile(profiles, new Set(['elsewhere']), sql)).toBeUndefined()
+    expect(rememberedProfile(profiles, all, { ...sql, username: 'admin' })).toBeUndefined()
+    expect(rememberedProfile(profiles.map(profile => ({ ...profile, options: { ...profile.options, authentication: 'windows' as const } })), all, { ...sql, authentication: 'windows' })).toBeUndefined()
+  })
+  it('accepts only an entry id, the Remember password choice and the request id Stop cancels by as the connect context', () => {
+    const profileId = crypto.randomUUID(), requestId = crypto.randomUUID()
+    expect(connectContextSchema.parse({ profileId, remember: true })).toEqual({ profileId, remember: true })
+    expect(connectContextSchema.parse({ requestId })).toEqual({ requestId })
+    expect(connectContextSchema.safeParse({ requestId: 'stop-1' }).success).toBe(false)
+    expect(connectContextSchema.parse({})).toEqual({})
+    for (const value of [{ profileId: 'abc' }, { profileId, password: 'x' }, { remember: 'yes' }, { profileId, remember: true, server: 'evil' }]) expect(connectContextSchema.safeParse(value).success, JSON.stringify(value)).toBe(false)
   })
 })

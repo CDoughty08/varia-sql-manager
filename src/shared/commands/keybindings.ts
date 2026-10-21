@@ -238,7 +238,7 @@ export function workbenchRules(rules: readonly ResolvedRule[]): ReadonlyMap<stri
   return table
 }
 
-const mnemonics = ['alt+f', 'alt+e', 'alt+v', 'alt+q', 'alt+t', 'alt+w']
+const mnemonics = ['alt+f', 'alt+e', 'alt+v', 'alt+q', 'alt+t', 'alt+w', 'alt+h']
 const reserve = (reason: string, chords: string[]) => chords.map(chord => [chord, reason] as const)
 const windowsAndLinux = [
   ...reserve('opens a menu', [...mnemonics, 'f10']),

@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Actions;
+using Varia.Backend.Entra;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -22,7 +23,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
-        "scripting.script", "actions.describe", "actions.script", "actions.execute"
+        "scripting.script", "actions.describe", "actions.script", "actions.execute",
+        "entra.cache.clear"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -47,6 +49,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
+    private readonly EntraService entra;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
@@ -114,6 +117,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         this.hooks = hooks;
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
+        // Registers the Entra provider with SqlClient before any connection string can name it.
+        entra = EntraService.Shared;
+        Open = (connection, token) => entra.OpenPooledAsync(connection, token, OpenConnection);
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
@@ -138,6 +144,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public ScriptingService Scripting => scripting;
     /// <summary>Object actions (the checks reach its dry run and test options).</summary>
     public ActionService Actions => actions;
+    /// <summary>Microsoft Entra ID (the checks replace its token source).</summary>
+    internal EntraService Entra => entra;
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
     /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads,
@@ -148,7 +156,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" => RequestLane.Control,
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
         _ => RequestLane.Metadata
@@ -191,6 +199,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
         "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context)),
+        "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -205,18 +214,20 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return value;
     }
 
-    private async Task<ConnectionInfo> ConnectAsync(ConnectOptions options, CancellationToken token)
+    internal async Task<ConnectionInfo> ConnectAsync(ConnectOptions options, CancellationToken token)
     {
-        if (options.Authentication is not ("windows" or "sql"))
+        if (!EntraModes.IsKnown(options.Authentication))
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
+        entra.Refuse(options);
         var builder = ConnectBuilder(options);
-        await using var connection = new SqlConnection(builder.ConnectionString);
-        await OpenAsync(connection, options, token);
+        // For MFA without a user name, the connection string kept names the account its token is for.
+        var (opened, connectionString) = await OpenForUserAsync(builder.ConnectionString, options, null, token);
+        await using var connection = opened;
         var profile = await ServerProfile.ProbeAsync(connection, token);
         var id = Guid.NewGuid().ToString();
         profiles[id] = profile;
-        connections[id] = builder.ConnectionString;
-        pools[id] = new() { [builder.ConnectionString] = 0 };
+        connections[id] = connectionString;
+        pools[id] = new() { [connectionString] = 0 };
         var probed = profile.ProductVersion is not null;
         return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
             profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null);
@@ -233,32 +244,109 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return builder;
     }
 
-    /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, and database and
-    /// column lists (ConnectionFailures.OpenAsync). The live checks replace it to fail as an expired Kerberos ticket does.</summary>
-    internal Func<SqlConnection, CancellationToken, Task> Open { get; set; } = ConnectionFailures.OpenAsync;
+    /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, object actions,
+    /// and database and column lists (<see cref="OpenConnection"/>, then the Entra mapping, which never opens a browser). The
+    /// live checks replace it to fail as an expired Kerberos ticket does.</summary>
+    internal Func<SqlConnection, CancellationToken, Task> Open { get; set; }
+    /// <summary>The open inside <see cref="Open"/>; the live checks replace it to fail as a revoked Entra sign-in does, so the
+    /// mapping around it is the production one.</summary>
+    internal Func<SqlConnection, CancellationToken, Task> OpenConnection { get; set; } = ConnectionFailures.OpenAsync;
 
-    private static async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
+    internal async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
     {
         // Use the login's default database to discover choices, even if the typed database is stale.
         var builder = ConnectionSettings.Build(options with { Database = "", Advanced = (options.Advanced ?? new()) with { AttachDbFilename = "" } });
         builder.Pooling = false;
-        await using var connection = new SqlConnection(builder.ConnectionString);
+        entra.Refuse(options);
+        // One budget for the opens and the read; an MFA sign-in in the browser between two opens has its own 3 minutes.
+        var budget = new OpenBudget(DiscoveryLimit);
+        var (opened, _) = await OpenForUserAsync(builder.ConnectionString, options, budget, token);
+        await using var connection = opened;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(30));
-        await OpenAsync(connection, options, deadline.Token);
+        deadline.CancelAfter(budget.Remaining);
         return await ReadDatabasesAsync(connection, deadline.Token);
+    }
+    /// <summary>Load databases' deadline (30 seconds), not counting a browser sign-in; the checks shorten it.</summary>
+    internal TimeSpan DiscoveryLimit { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>A deadline shared by a request's opens and what follows them, which a browser sign-in between two opens does
+    /// not use up.</summary>
+    private sealed class OpenBudget(TimeSpan total)
+    {
+        private TimeSpan spent;
+        internal TimeSpan Remaining => spent < total ? total - spent : TimeSpan.Zero;
+
+        internal async Task<T> SpendAsync<T>(Func<TimeSpan, Task<T>> work)
+        {
+            var watch = Stopwatch.StartNew();
+            try { return await work(Remaining); }
+            finally { spent += watch.Elapsed; }
+        }
     }
 
     /// <summary>Opens a connection the user is choosing (connect and database discovery), so a failure carries its details,
-    /// and integrated authentication on Linux and macOS (Kerberos through SqlClient's managed SNI) says what to fix.
-    /// A cancelled or timed-out attempt is left to the host, which answers it CANCELLED or TIMEOUT.</summary>
-    private static async Task OpenAsync(SqlConnection connection, ConnectOptions options, CancellationToken token)
+    /// integrated authentication on Linux and macOS (Kerberos through SqlClient's managed SNI) says what to fix, and
+    /// Microsoft Entra MFA signs in through the browser when it must (EntraService). A cancelled or timed-out attempt is
+    /// left to the host, which answers it CANCELLED or TIMEOUT; Stop answers at once, even while SqlClient still waits.</summary>
+    /// <param name="budget">The opens' deadline, if any (the sign-in between two opens is not counted).</param>
+    private async Task<(SqlConnection Connection, string ConnectionString)> OpenForUserAsync(string connectionString, ConnectOptions options, OpenBudget? budget, CancellationToken token)
     {
-        try { await connection.OpenAsync(token); }
-        catch (Exception error) when (!token.IsCancellationRequested && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
+        try
         {
-            throw failure;
+            return await entra.OpenForUserAsync(connectionString, options.Server,
+                (text, cancel) => budget is null ? OpenUser(text, null, cancel) : budget.SpendAsync(remaining => OpenUser(text, remaining, cancel)),
+                static connection => connection.ClientConnectionId, token);
         }
+        catch (Exception error) when (!token.IsCancellationRequested && error is not (RequestException or OperationCanceledException)
+            && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
+        {
+            throw EntraFailures.WithClearHint(failure, options.Authentication);
+        }
+    }
+
+    /// <summary>One open of a connection the user is choosing, under its own time limit, if any. The checks replace it to fail
+    /// as a login that needs a Microsoft Entra sign-in does.</summary>
+    internal Func<string, TimeSpan?, CancellationToken, Task<SqlConnection>> OpenUser { get; set; } = OpenAttemptAsync;
+
+    private static async Task<SqlConnection> OpenAttemptAsync(string connectionString, TimeSpan? limit, CancellationToken token)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (limit is { } value) deadline.CancelAfter(value);
+        return await OpenAbandonableAsync(new SqlConnection(connectionString), deadline.Token);
+    }
+
+    /// <summary>Opens the connection, or gives it up at once when the token is cancelled: SqlClient does not stop a login
+    /// while it gets a token (its provider runs synchronously) or while a credential chain runs, so the abandoned open
+    /// finishes on its own, bounded by the connect timeout, and the connection is closed then. Owns the connection: it is
+    /// returned open, or disposed.</summary>
+    /// <param name="open">Replaces SqlConnection.OpenAsync (the checks).</param>
+    internal static async Task<SqlConnection> OpenAbandonableAsync(SqlConnection connection, CancellationToken token, Func<SqlConnection, CancellationToken, Task>? open = null)
+    {
+        Task opening;
+        try { opening = open is null ? connection.OpenAsync(token) : open(connection, token); }
+        catch { await connection.DisposeAsync(); throw; }
+        try
+        {
+            await opening.WaitAsync(token);
+            return connection;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested && !opening.IsCompleted)
+        {
+            _ = opening.ContinueWith(static (task, state) => { _ = task.Exception; ((SqlConnection)state!).Dispose(); }, connection, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            throw;
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>Help › Clear Entra ID Token Cache.</summary>
+    private object ClearEntra(EntraCacheArgs _)
+    {
+        entra.Clear();
+        return new EntraCacheClearResult(true);
     }
 
     /// <summary>Reads the default credential cache's principal for connections.identity (KerberosProbe.Identity); the checks
@@ -598,7 +686,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             if (connection.State != System.Data.ConnectionState.Open)
             {
                 if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
-                // A Kerberos failure answers the request (AUTH_KERBEROS), as SESSION_LOST does: no batch was sent.
+                // A Kerberos or Entra failure answers the request (AUTH_KERBEROS, AUTH_ENTRA), as SESSION_LOST does: no batch was sent.
                 await Open(connection, token);
                 try
                 {

@@ -18,6 +18,10 @@ internal sealed record ConnectionInfo(string Id, string Server, string Database,
 internal sealed record IntegratedIdentity(string? Principal);
 /// <summary>connections.identity takes no parameters; reading them into this record refuses unknown members.</summary>
 internal sealed record IdentityArgs;
+/// <summary>entra.cache.clear (main only) takes no parameters; reading them into this record refuses unknown members.</summary>
+internal sealed record EntraCacheArgs;
+/// <summary>entra.cache.clear: every Microsoft Entra token and credential in this process is gone.</summary>
+internal sealed record EntraCacheClearResult(bool Cleared);
 internal sealed record DiscoveryArgs(string Scope);
 internal sealed record DiscoveredServer(string Server, string Version, string Source);
 internal sealed record DiscoveryResult(List<DiscoveredServer> Servers, string? Warning = null);

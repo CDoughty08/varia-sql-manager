@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
@@ -9,7 +9,7 @@ const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TES
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'connections-profile-'))
-// A credential cache that does not exist: off Windows, Windows Authentication's User Name is then the OS user name.
+// A credential cache that does not exist: off Windows, Windows Authentication's User name is then the OS user name.
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, KRB5CCNAME: 'FILE:' + join(profile, 'no-kerberos-ticket') }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
@@ -19,13 +19,15 @@ await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, 
 let app
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 180000)
-async function launch() {
-  app = await electron.launch(launchOptions)
+const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 300000)
+// Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
+const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
+async function launch(options = launchOptions, ready = /\.NET 10\..*Ready/) {
+  app = await electron.launch(options)
   page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText(ready)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 async function open() {
@@ -48,10 +50,12 @@ try {
   // authentication there. The options read as SSMS's on every platform.
   const defaultAuthentication = process.platform === 'win32' ? 'windows' : 'sql'
   const authentication = dialog.getByLabel('Authentication', { exact: true })
-  const userName = dialog.getByLabel('User Name', { exact: true })
+  const userName = dialog.getByLabel('User name', { exact: true })
   await expect(authentication).toHaveValue(defaultAuthentication)
-  await expect(authentication.locator('option')).toHaveText(['Windows Authentication', 'SQL Server Authentication'])
-  // User Name shows, greyed, the identity Windows Authentication uses, as SSMS does: DOMAIN\user on Windows; elsewhere the
+  // SSMS 22's eight types, in its order.
+  await expect(authentication.locator('option')).toHaveText(['Windows Authentication', 'SQL Server Authentication', 'Microsoft Entra MFA', 'Microsoft Entra Password',
+    'Microsoft Entra Integrated', 'Microsoft Entra Service Principal', 'Microsoft Entra Managed Identity', 'Microsoft Entra Default'])
+  // User name shows, greyed, the identity Windows Authentication uses, as SSMS does: DOMAIN\user on Windows; elsewhere the
   // Kerberos principal, or the OS user name without a ticket (this suite's KRB5CCNAME names no cache).
   const windowsIdentity = process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username
   await authentication.selectOption('windows')
@@ -62,7 +66,8 @@ try {
   await expect(authentication).toHaveValue(defaultAuthentication)
   await dialog.getByLabel('Server Name', { exact: true }).fill('sql-dev')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-  await dialog.getByLabel('User Name', { exact: true }).fill('reader')
+  // SQL Server Authentication's field is Login, as in SSMS 22.
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
   await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
@@ -170,7 +175,7 @@ try {
     // A real failed login: SQL Server's number, severity, state and server under the error, never the password.
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-    await dialog.getByLabel('User Name', { exact: true }).fill('varia_no_such_login_' + crypto.randomUUID().slice(0, 8))
+    await dialog.getByLabel('Login', { exact: true }).fill('varia_no_such_login_' + crypto.randomUUID().slice(0, 8))
     await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog.getByRole('alert')).toBeVisible({ timeout: 30000 })
@@ -193,7 +198,7 @@ try {
     expect(await liveDatabaseDetails.textContent()).not.toMatch(/never-store-this-marker|Password=/i)
     if (liveUser) {
       await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-      await dialog.getByLabel('User Name', { exact: true }).fill(liveUser)
+      await dialog.getByLabel('Login', { exact: true }).fill(liveUser)
       await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
@@ -211,9 +216,26 @@ try {
   await app.evaluate(({ ipcMain }, statics) => {
     globalThis.connectionCalls = []
     globalThis.dbPending = []
+    // A Microsoft Entra MFA connect to 'entra-wait' waits for the browser until the dialog's Stop names its request id.
+    globalThis.entraPending = new Map()
+    globalThis.entraStops = []
+    ipcMain.removeHandler('varia:connections-cancel')
+    ipcMain.handle('varia:connections-cancel', (_event, value) => {
+      globalThis.entraStops.push(...value.requestIds)
+      let cancelled = 0
+      for (const id of value.requestIds) {
+        const resolve = globalThis.entraPending.get(id)
+        if (!resolve) continue
+        globalThis.entraPending.delete(id)
+        cancelled++
+        resolve({ ok: false, code: 'CANCELLED', error: 'The operation was cancelled.' })
+      }
+      return { ok: true, value: { cancelled } }
+    })
     ipcMain.removeHandler('varia:request')
-    ipcMain.handle('varia:request', async (_event, method, params) => {
-      globalThis.connectionCalls.push({ method, params: { ...params, password: params.password ? '<redacted>' : undefined } })
+    ipcMain.handle('varia:request', async (_event, method, params, context) => {
+      globalThis.connectionCalls.push({ method, params: { ...params, password: params.password ? '<redacted>' : undefined }, context })
+      if ((method === 'connections.connect' || method === 'connections.databases') && params.server === 'entra-wait') return new Promise(resolve => { globalThis.entraPending.set(context?.requestId, resolve) })
       if (method === 'connections.discover') return { ok: true, value: { servers: [{ server: params.scope + '-server', version: '17.0', source: params.scope }], warning: 'Discovery can be incomplete.' } }
       if (method === 'connections.databases') {
         if (params.server === 'slow-server') return new Promise(resolve => { globalThis.dbPending.push(resolve) })
@@ -254,28 +276,31 @@ try {
     expect(await identityCalls()).toBe(1)
   }
   await dialog.getByText('Development', { exact: true }).click()
-  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
+  await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   if (process.platform === 'win32') {
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue(windowsIdentity)
     expect(await identityCalls()).toBe(0)
   } else {
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('alice@CONTOSO.COM')
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue('alice@CONTOSO.COM')
     // After a kdestroy, choosing Windows Authentication again never shows the old principal, not even while the new lookup
-    // waits (a stuck cache holds it until the deadline): User Name and the rows show the OS user name.
+    // waits (a stuck cache holds it until the deadline): User name and the rows show the OS user name.
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
     await app.evaluate(() => { globalThis.identityPending = true; globalThis.identityResolve = undefined })
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await expect.poll(() => app.evaluate(() => typeof globalThis.identityResolve)).toBe('function')
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue(windowsIdentity)
     expect(await integratedRows()).toEqual(['master · ' + windowsIdentity])
     expect(await identityCalls()).toBe(3)
     await app.evaluate(() => { globalThis.identityPending = false; globalThis.identityResolve({ ok: true, value: {} }) })
-    await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue(windowsIdentity)
+    await expect(dialog.getByLabel('User name', { exact: true })).toHaveValue(windowsIdentity)
     expect(await integratedRows()).toEqual(['master · ' + windowsIdentity])
   }
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
+  await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
+  await entraChecks(dialog, windowsIdentity)
+  await dialog.getByText('Development', { exact: true }).click()
+  await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await dialog.getByLabel('Server source', { exact: true }).selectOption('network')
   await expect(dialog.getByRole('button', { name: /network-server/ })).toBeVisible()
@@ -352,11 +377,268 @@ try {
   await page.keyboard.insertText('SELECT 1;')
   await page.getByRole('button', { name: /Execute/ }).click()
   await expect.poll(() => app.evaluate(() => globalThis.connectionCalls.find(call => call.method === 'query.execute')?.params.timeoutSeconds)).toBe(7)
+  await clearEntraCache()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, and keyboard focus.')
+  await app.close(); app = undefined
+  await rememberPassword()
+  expect(failures).toEqual([])
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
+  await rm(passwordProfile, { recursive: true, force: true })
+}
+
+/**
+ * Microsoft Entra ID in the Connect dialog (the stubbed requests): each type's fields as SSMS 22 shows them, and Stop, by
+ * button and by Escape, while a sign-in waits for the web browser. The dialog starts on a SQL Server Authentication entry.
+ */
+async function entraChecks(dialog, windowsIdentity) {
+  const authentication = dialog.getByLabel('Authentication', { exact: true })
+  const password = dialog.getByLabel('Password', { exact: true })
+  const connect = dialog.getByRole('button', { name: 'Connect', exact: true })
+  const user = dialog.getByLabel('User name', { exact: true })
+  await authentication.selectOption('entraMfa')
+  await expect(password).toBeDisabled()
+  await user.fill('')
+  await expect(user).toHaveAttribute('placeholder', 'user@contoso.com (optional)')
+  await expect(connect).toBeEnabled()
+  await expect(dialog.getByText('Sign in with your web browser when you connect.', { exact: true })).toBeVisible()
+  await authentication.selectOption('entraServicePrincipal')
+  await expect(user).toHaveAttribute('placeholder', 'Application (client) ID')
+  await expect(connect).toBeDisabled()
+  await user.fill('11111111-2222-3333-4444-555555555555')
+  await expect(connect).toBeEnabled()
+  await expect(password).toBeEnabled()
+  await authentication.selectOption('entraManagedIdentity')
+  await expect(dialog.getByLabel('User assigned identity', { exact: true })).toBeEnabled()
+  await expect(password).toBeDisabled()
+  await authentication.selectOption('entraIntegrated')
+  await expect(user).toBeDisabled()
+  await expect(user).toHaveValue(windowsIdentity)
+  await expect(dialog.getByText(/^Microsoft Entra Integrated needs Windows\./)).toHaveCount(process.platform === 'win32' ? 0 : 1)
+  // Stop, while a sign-in waits for the web browser: the connect's own request id is cancelled, and the form is editable.
+  await authentication.selectOption('entraMfa')
+  await user.fill('alice@contoso.com')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
+  const stopButton = dialog.getByRole('button', { name: 'Stop', exact: true })
+  const connectIds = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'entra-wait').map(call => call.context?.requestId))
+  await connect.click()
+  await expect(stopButton).toBeEnabled()
+  await expect(stopButton).toBeFocused()
+  await expect(dialog.getByText('Complete the sign-in in your web browser. Waiting up to 3 minutes…', { exact: true })).toBeVisible()
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toBeDisabled()
+  await dialog.screenshot({ path: resolve('artifacts', 'connect-dialog-entra.png') })
+  await stopButton.click()
+  await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toBeEnabled()
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled()
+  let ids = await connectIds()
+  expect(ids).toHaveLength(1)
+  expect(await app.evaluate(() => globalThis.entraStops)).toEqual(ids)
+  // Escape is Stop while connecting, and leaves the dialog open.
+  await connect.click()
+  await expect(stopButton).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
+  await expect(dialog).toBeVisible()
+  ids = await connectIds()
+  expect(ids).toHaveLength(2)
+  expect(await app.evaluate(() => globalThis.entraStops)).toEqual(ids)
+  await expect(connect).toBeFocused()
+}
+
+/** Help › Clear Entra ID Token Cache (the custom menubar on Windows and Linux, the palette on macOS): main asks, the real
+ *  backend forgets its tokens, and the workbench says so. */
+async function clearEntraCache() {
+  await app.evaluate(({ dialog }) => {
+    globalThis.entraPrompts = []
+    globalThis.previousShowMessageBox ??= dialog.showMessageBox
+    dialog.showMessageBox = async (_window, options) => { globalThis.entraPrompts.push(options.title); return { response: 0, checkboxChecked: false } }
+  })
+  if (process.platform === 'darwin') {
+    await page.locator('.monaco-editor [role="textbox"]').focus()
+    await page.keyboard.press('F1')
+    await page.keyboard.type('Clear Entra ID Token Cache')
+    await page.keyboard.press('Enter')
+  } else {
+    await page.getByRole('menubar', { name: 'Application menu' }).getByRole('menuitem', { name: 'Help', exact: true }).click({ force: true })
+    await page.getByRole('menu', { name: 'Help', exact: true }).getByRole('menuitem', { name: 'Clear Entra ID Token Cache', exact: true }).click({ force: true })
+  }
+  await expect(page.getByText('Entra ID token cache cleared.', { exact: true })).toBeVisible()
+  expect(await app.evaluate(() => globalThis.entraPrompts)).toEqual(['Clear Entra ID Token Cache'])
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.previousShowMessageBox })
+}
+
+/**
+ * Remember password against the fake backend: only main's injection of the remembered password can satisfy server
+ * password-check when Password is empty. Windows uses DPAPI; elsewhere the test cipher stands in for a keyring CI lacks.
+ */
+async function rememberPassword() {
+  const marker = 'correct-horse-marker', encoded = Buffer.from(marker).toString('base64')
+  const userData = join(passwordProfile, 'user-data'), control = join(passwordProfile, 'control')
+  await mkdir(control, { recursive: true })
+  const passwordsFile = join(userData, 'saved-passwords.json'), connectionsFile = join(userData, 'connections.json'), callsFile = join(control, 'calls.jsonl')
+  const seamless = { ...env, VARIA_TEST_USER_DATA: userData, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
+  delete seamless.VARIA_TEST_SAFE_STORAGE
+  const options = { ...launchOptions, env: { ...seamless, ...process.platform === 'win32' ? {} : { VARIA_TEST_SAFE_STORAGE: 'test' } } }
+  const read = path => readFile(path, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })
+  const entries = async () => JSON.parse(await read(passwordsFile) || '{"entries":[]}').entries
+  const calls = async () => (await read(callsFile)).split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const historyId = async server => JSON.parse(await read(connectionsFile)).profiles.find(item => item.options.server === server && item.lastConnected)?.id
+  async function noSecrets() {
+    for (const [name, text] of [['saved-passwords.json', await read(passwordsFile)], ['connections.json', await read(connectionsFile)], ['calls.jsonl', await read(callsFile)]]) {
+      expect(text.includes(marker) || text.includes(encoded), name).toBe(false)
+    }
+    // No password member (the server's name, password-check, says password too).
+    expect(await read(connectionsFile)).not.toContain('"password"')
+  }
+  const form = dialog => ({ password: dialog.getByLabel('Password', { exact: true }), remember: dialog.getByLabel('Remember password', { exact: true }) })
+  async function fill(dialog, password) {
+    await dialog.getByLabel('Server Name', { exact: true }).fill('password-check')
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+    await dialog.getByLabel('Login', { exact: true }).fill('reader')
+    await form(dialog).password.fill(password)
+  }
+  const choose = dialog => dialog.locator('.connection-choice', { hasText: 'password-check' }).first().click()
+  async function connected(dialog) {
+    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+  }
+  /** Reopened and chosen from history: the remembered password shows only as a placeholder, with the box checked. */
+  async function remembered() {
+    const dialog = await open()
+    await choose(dialog)
+    const { password, remember } = form(dialog)
+    await expect(password).toHaveValue('')
+    await expect(password).toHaveAttribute('placeholder', '••••••••')
+    await expect(remember).toBeChecked()
+    return dialog
+  }
+
+  await launch(options, 'fake · Ready')
+  // (1) Typed and remembered, then (2) only ciphertext under the history entry's id.
+  let dialog = await open()
+  await fill(dialog, marker)
+  await expect(form(dialog).remember).toBeEnabled()
+  await form(dialog).remember.check()
+  await connected(dialog)
+  const id = await historyId('password-check')
+  await expect.poll(async () => (await entries()).map(entry => entry.profileId)).toEqual([id])
+  if (process.platform !== 'win32') expect((await stat(passwordsFile)).mode & 0o777).toBe(0o600)
+  await noSecrets()
+  // (3) The renderer never holds it, not even in the library it loads.
+  dialog = await remembered()
+  await dialog.screenshot({ path: resolve('artifacts', 'connect-remember-password.png') })
+  expect(await page.evaluate(async () => JSON.stringify(await window.varia.loadConnectionLibrary()))).not.toContain(marker)
+  expect(await page.evaluate(() => document.body.innerHTML)).not.toContain(marker)
+  // (4) An empty Password connects with main's injected one.
+  await connected(dialog)
+  expect((await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'password-check').map(call => call.params.password)).toEqual(['<redacted>', '<redacted>'])
+  // (5) A forged request naming the entry gets no password for another server or a weaker certificate check.
+  const forged = await page.evaluate(async profileId => {
+    const base = { server: 'evil-server', database: '', authentication: 'sql', username: 'reader', trustServerCertificate: false, encrypt: 'mandatory' }
+    const evil = await window.varia.connect(base, { profileId, remember: true })
+    const trusting = await window.varia.connect({ ...base, server: 'password-check', trustServerCertificate: true }, { profileId, remember: true })
+    return [evil.ok, trusting.ok, trusting.passwordForgotten ?? null]
+  }, id)
+  expect(forged).toEqual([true, false, null])
+  const forgedCalls = (await calls()).filter(call => call.method === 'connections.connect' && (call.params.server === 'evil-server' || call.params.trustServerCertificate))
+  expect(forgedCalls).toHaveLength(2)
+  for (const call of forgedCalls) expect(call.params).not.toHaveProperty('password')
+  expect((await entries()).map(entry => entry.profileId)).toEqual([id])
+  await noSecrets()
+  // (6) Kept across a restart.
+  await app.close(); app = undefined
+  await launch(options, 'fake · Ready')
+  dialog = await remembered()
+  await connected(dialog)
+  // (7) Rejected after a password change: forgotten, and the dialog says so.
+  await writeFile(join(control, 'reject-passwords'), '')
+  dialog = await remembered()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText("Login failed for user 'reader'.")
+  await expect(dialog.getByText('The saved password was rejected, so it has been removed. Enter the password.', { exact: true })).toBeVisible()
+  await expect(form(dialog).remember).not.toBeChecked()
+  await expect(form(dialog).password).not.toHaveAttribute('placeholder', '••••••••')
+  expect(await entries()).toEqual([])
+  // Another failed connect keeps that notice: the next attempt clears only Stop's "Connection cancelled.".
+  const attempts = async () => (await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'password-check').length
+  const before = await attempts()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect.poll(attempts).toBe(before + 1)
+  await expect(dialog.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+  await expect(dialog.getByRole('alert')).toContainText("Login failed for user 'reader'.")
+  await expect(dialog.getByText('The saved password was rejected, so it has been removed. Enter the password.', { exact: true })).toBeVisible()
+  await rm(join(control, 'reject-passwords'))
+  // (8) Remembered again, then unchecked: connecting forgets it.
+  await form(dialog).password.fill(marker)
+  await form(dialog).remember.check()
+  await connected(dialog)
+  await expect.poll(async () => (await entries()).length).toBe(1)
+  dialog = await remembered()
+  await form(dialog).remember.uncheck()
+  await connected(dialog)
+  expect(await entries()).toEqual([])
+  // (9) Remembered again, then the entry's ×: gone from both files.
+  dialog = await open()
+  await choose(dialog)
+  await form(dialog).password.fill(marker)
+  await form(dialog).remember.check()
+  await connected(dialog)
+  await expect.poll(async () => (await entries()).length).toBe(1)
+  dialog = await remembered()
+  await dialog.getByRole('button', { name: 'Remove saved password-check', exact: true }).first().click()
+  await expect.poll(async () => ({ saved: await entries(), entry: await historyId('password-check') })).toEqual({ saved: [], entry: undefined })
+  // (10) Windows Authentication has no password to remember.
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await expect(form(dialog).remember).toBeDisabled()
+  await expect(form(dialog).remember).not.toBeChecked()
+  await noSecrets()
+  // (11) Stop through main's own handlers (varia:request registers the dialog's requestId, varia:connections-cancel sends
+  // CANCEL): the fake ends a Microsoft Entra sign-in wait only on a CANCEL frame, and logs it.
+  const cancels = async () => (await read(join(control, 'cancels.jsonl'))).split('\n').filter(Boolean).map(line => JSON.parse(line).method)
+  const loading = dialog.getByText('Loading databases…', { exact: true })
+  await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('entraMfa')
+  await dialog.getByLabel('User name', { exact: true }).fill('alice@contoso.com')
+  // Load databases (focusing Database Name) waits for the browser; changing the form stops it.
+  await dialog.getByLabel('Database Name', { exact: true }).focus()
+  await expect(loading).toBeVisible()
+  await dialog.getByLabel('User name', { exact: true }).fill('bob@contoso.com')
+  await expect.poll(cancels).toEqual(['connections.databases'])
+  await expect(loading).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByText('Complete the sign-in in your web browser. Waiting up to 3 minutes…', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
+  expect(await cancels()).toEqual(['connections.databases', 'connections.connect'])
+  // Closing the dialog stops Load databases too.
+  await dialog.getByLabel('Database Name', { exact: true }).focus()
+  await expect(loading).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(cancels).toEqual(['connections.databases', 'connections.connect', 'connections.databases'])
+  await app.close(); app = undefined
+  // (12) Without the test cipher: Windows (DPAPI) and macOS (Keychain) offer it; Linux needs a keyring.
+  await launch({ ...launchOptions, env: seamless }, 'fake · Ready')
+  const backend = await app.evaluate(({ safeStorage }) => process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os')
+  dialog = await open()
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  const note = dialog.getByText('Remember password needs a system keyring (GNOME Keyring or KWallet), and none was found. Passwords are used for this connection only.', { exact: true })
+  if (backend === 'basic_text') {
+    await expect(form(dialog).remember).toBeDisabled()
+    await expect(note).toBeVisible()
+  } else if (backend === 'unknown') {
+    await expect(form(dialog).remember).toBeDisabled()
+    await expect(dialog.getByText(/Remember password is unavailable/)).toBeVisible()
+  } else if (backend === 'os') {
+    await expect(form(dialog).remember).toBeEnabled()
+    await expect(note).toHaveCount(0)
+  }
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await app.close(); app = undefined
 }
 

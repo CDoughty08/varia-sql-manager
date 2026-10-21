@@ -8,7 +8,8 @@ export type MethodKind = 'unary' | 'stream'
  *  one of 16 read slots, and explorer runs at once under Object Explorer's own gates (4 per connection, 8 in all; static
  *  folders need none), and actions runs object action DDL at once under the action service's own gates (1 per connection,
  *  2 in all), so a DROP waiting on a lock never holds a metadata slot. Main reserves 32 extra pending requests for the
- *  control lane. */
+ *  control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user signs in in the web
+ *  browser, for up to 3 minutes; those sign-ins run one at a time. */
 export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
@@ -25,12 +26,16 @@ export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
 const metadata = { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 } as const
 const control = { kind: 'unary', lane: 'control', deadlineMs: 10_000 } as const
 const backstopGraceMs = 5000
+/** How long an Entra MFA connect or Load databases may wait for the browser sign-in (the backend's own limit). */
+export const entraSignInMs = 180_000
+const signIn = (params: { authentication: string }) => params.authentication === 'entraMfa' ? entraSignInMs : 0
 
 export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } = {
   'system.health': control,
-  // Today's rule: the connect timeout plus 30 s, and 0 waits as long as the provider does.
-  'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000, sensitive: true },
-  'connections.databases': { ...metadata, sensitive: true },
+  // The connect timeout plus 30 s, and 0 waits as long as the provider does; Entra MFA adds the browser sign-in's 3 minutes.
+  // Stop (varia:connections-cancel) ends either at any time.
+  'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true },
+  'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => 45_000 + signIn(params), sensitive: true },
   'connections.discover': metadata,
   'connections.preview': { ...control, lane: 'metadata', sensitive: true },
   'connections.disconnect': { ...control, deadlineMs: 30_000 },
@@ -61,11 +66,13 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
+  // Help › Clear Entra ID Token Cache: empties memory only, at once.
+  'entra.cache.clear': control,
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
 
 /** Methods only main sends, on its own behalf: no renderer schema (requestSchemas) or port schema accepts them. */
-export const mainOnlyMethods = ['results.copy', 'results.export', 'debug.results.synthesize'] as const satisfies readonly BackendMethod[]
+export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'debug.results.synthesize'] as const satisfies readonly BackendMethod[]
 
 /** Every method main may call; a backend whose HELLO lacks one of them is from a different build. `debug.*` methods
  *  exist only in a backend started with test hooks, so HELLO need not list them. */

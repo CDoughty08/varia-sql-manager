@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import type { BackendState, QueryEvent } from '../src/shared/contracts'
-import { FrameKind } from '../src/shared/ipc/wire/frames'
+import { FrameKind, encodeFrame } from '../src/shared/ipc/wire/frames'
+import { encodeControl } from '../src/shared/ipc/wire/msgpack'
 import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
@@ -416,6 +418,38 @@ describe('smoke-test backends', () => {
     const calls = (await readFile(join(directory, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { generation: number; method: string; params: { password?: string } })
     expect(calls.map(call => [call.generation, call.method])).toEqual([[1, 'connections.connect'], [1, 'query.execute']])
     expect(calls[0].params.password).toBe('<redacted>')
+  })
+  it('the workbench fake\'s password-check server takes only its password, and the call log never holds a secret', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'varia-fake-backend-'))
+    directories.push(directory)
+    const value = new BackendSupervisor({ ...fakeNode, args: [...fakeNode.args, 'workbench'], env: { ...process.env, VARIA_TEST_BACKEND_DIR: directory }, packaged: false })
+    supervisors.push(value)
+    const checked = { ...options, server: 'password-check', password: 'correct-horse-marker' }
+    expect(await value.request('connections.connect', checked)).toMatchObject({ server: 'password-check' })
+    expect(await value.request('connections.databases', checked)).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'master' })]))
+    const { password: _absent, ...withoutPassword } = checked
+    for (const params of [{ ...checked, password: 'wrong' }, withoutPassword]) {
+      for (const method of ['connections.connect', 'connections.databases'] as const) {
+        expect(await failure(value.request(method, params))).toMatchObject({ code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: 'password-check' } })
+      }
+    }
+    // A password change on the server: even the right one is refused while the cue exists.
+    await writeFile(join(directory, 'reject-passwords'), '')
+    expect(await failure(value.request('connections.connect', checked))).toMatchObject({ details: { number: 18456 } })
+    const text = await readFile(join(directory, 'calls.jsonl'), 'utf8')
+    expect(text).not.toMatch(/correct-horse-marker|wrong/)
+    const calls = text.trim().split('\n').map(line => JSON.parse(line) as { params: { password?: string } })
+    expect(calls.map(call => call.params.password)).toEqual(['<redacted>', '<redacted>', '<redacted>', '<redacted>', undefined, undefined, '<redacted>'])
+    // entra.cache.import (main-only, PR-E) carries a token cache as data: logged as redacted. Sent straight to the process.
+    const fake = spawn(fakeNode.command, [...fakeNode.args, 'workbench'], { cwd: fakeNode.cwd, env: { ...process.env, VARIA_TEST_BACKEND_DIR: directory }, stdio: ['pipe', 'pipe', 'inherit'] })
+    try {
+      fake.stdout.resume()
+      fake.stdin.write(encodeFrame(FrameKind.REQUEST, 1, 0, encodeControl({ method: 'entra.cache.import', params: { data: 'token-cache-marker' } })))
+      await expect.poll(async () => (await readFile(join(directory, 'calls.jsonl'), 'utf8')).includes('entra.cache.import')).toBe(true)
+    } finally { fake.kill() }
+    const log = await readFile(join(directory, 'calls.jsonl'), 'utf8')
+    expect(log).not.toContain('token-cache-marker')
+    expect(log.trim().split('\n').map(line => JSON.parse(line) as { method: string; params: unknown }).find(call => call.method === 'entra.cache.import')?.params).toEqual({ data: '<redacted>' })
   })
 })
 

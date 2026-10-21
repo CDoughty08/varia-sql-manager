@@ -186,7 +186,10 @@ export const actionErrorRetryable = {
   // Stop cancelled the statement in SQL Server; the steps say what completed before it.
   CANCELLED: true,
   // Off Windows, the action's connection could not sign in with Kerberos (run kinit, then retry).
-  AUTH_KERBEROS: true, AUTH_UNSUPPORTED: true
+  AUTH_KERBEROS: true, AUTH_UNSUPPORTED: true,
+  // The action's connection could not get a Microsoft Entra token: a sign-in that expired (connect again) or a failure
+  // that may pass.
+  AUTH_ENTRA: true
 } as const satisfies Record<string, boolean>
 export type ActionErrorCode = keyof typeof actionErrorRetryable
 export const actionErrorCodes = Object.keys(actionErrorRetryable) as ActionErrorCode[]

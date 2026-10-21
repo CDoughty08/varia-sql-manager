@@ -79,7 +79,7 @@ async function fillLogin(dialog, server, user, password) {
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   if (user) {
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-    await dialog.getByLabel('User Name', { exact: true }).fill(user)
+    await dialog.getByLabel('Login', { exact: true }).fill(user)
     await dialog.getByLabel('Password', { exact: true }).fill(password)
   } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
@@ -269,7 +269,7 @@ try {
   await banner().getByRole('button', { name: 'Reconnect…', exact: true }).click()
   dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
-  await expect(dialog.getByLabel('User Name', { exact: true })).toHaveValue('reader')
+  await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
   await dialog.getByLabel('Password', { exact: true }).fill('smoke-password-marker')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()

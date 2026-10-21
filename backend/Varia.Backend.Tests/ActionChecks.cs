@@ -48,7 +48,7 @@ internal static class ActionChecks
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
-        check(Catalog.ErrorCodes.Count() == 14 && Catalog.Retryable("IN_USE") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
+        check(Catalog.ErrorCodes.Count() == 15 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
             && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"]),
             "the catalogue lists the action error codes and the Delete Object and Database Properties dialogs");
     }

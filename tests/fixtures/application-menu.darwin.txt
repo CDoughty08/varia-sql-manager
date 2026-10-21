@@ -127,3 +127,5 @@
   {"type":"separator"}
   {"role":"minimize"}
   {"role":"zoom"}
+{"id":"menu.help","label":"Help"}
+  {"id":"help.clearEntraTokenCache","label":"Clear Entra ID Token Cache","registerAccelerator":false,"type":"normal","click":[["command","help.clearEntraTokenCache"]]}

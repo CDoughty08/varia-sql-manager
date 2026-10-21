@@ -120,3 +120,5 @@ Window
   &Save Window Layout…  ++++
   Lo&ad Window Layout…  ++++
   &Reset Window Layout  ++++
+Help
+  Clear &Entra ID Token Cache  ++++

@@ -1,10 +1,11 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
-import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
+import type { ConnectContext, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
 import type { MenuStyle } from './menu-style'
 import type { ErrorCode } from './ipc/wire/protocol'
+import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
@@ -46,7 +47,8 @@ export interface AdvancedConnectionOptions {
 export interface ConnectionOptions {
   server: string
   database: string
-  authentication: 'windows' | 'sql'
+  /** src/shared/auth.ts lists the types and what each needs. */
+  authentication: AuthenticationMode
   username?: string
   password?: string
   trustServerCertificate: boolean
@@ -211,7 +213,8 @@ export interface ExplorerNode {
   readonly created?: string
 }
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED'] as const
+// AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -267,6 +270,11 @@ export interface JobMethods {
   'results.copy': { params: ResultsCopyParams; result: ResultsJobResult }
   'results.export': { params: ResultsExportParams; result: ResultsJobResult }
 }
+/** Microsoft Entra methods only main sends: no renderer schema accepts them. `entra.cache.clear` empties the backend's
+ *  token cache (Help › Clear Entra ID Token Cache). */
+export interface AuthMethods {
+  'entra.cache.clear': { params: Record<string, never>; result: { cleared: boolean } }
+}
 /** Synthetic result shapes (backend SyntheticRows, the fake backend's shapes.mjs). */
 export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
 /** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
@@ -274,13 +282,14 @@ export interface DebugMethods {
   'debug.results.synthesize': { params: { shape: SyntheticShape; rows: number }; result: BackendResultDescriptor }
 }
 /** Every method main sends to the backend. */
-export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, DebugMethods {}
+export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
  *  server that answered (at most 256 characters). Never the connection string or the password. */
 export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
-/** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails }
+/** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is.
+ *  `passwordForgotten`: SQL Server rejected the remembered password main filled in, so main forgot it. */
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true }
 
 /** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'
@@ -336,15 +345,22 @@ export interface VariaApi {
   showContextMenu(request: ContextMenuRequest): Promise<ApiResult<void>>
   onContextMenuCommand(callback: (command: ContextMenuCommand) => void): () => void
   health(): Promise<ApiResult<BackendHealth>>
-  connect(options: ConnectionOptions): Promise<ApiResult<ConnectionInfo>>
-  discoverDatabases(options: ConnectionOptions): Promise<ApiResult<DatabaseInfo[]>>
+  /** `context` names the history entry whose remembered password main may use (when Password is empty), whether to
+   *  remember the password once connected, and the `requestId` that cancelConnectionRequests stops it by. */
+  connect(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<ConnectionInfo>>
+  discoverDatabases(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<DatabaseInfo[]>>
+  /** The Connect dialog's Stop: cancels connects and Load databases by their `requestId`s (1–16), including a Microsoft
+   *  Entra sign-in waiting for the web browser; `cancelled` counts those still running. They answer `CANCELLED`. */
+  cancelConnectionRequests(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Help › Clear Entra ID Token Cache: main asks first; resolves to false when the user cancels. */
+  clearEntraTokenCache(): Promise<ApiResult<boolean>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
-  loadConnectionLibrary(): Promise<ApiResult<{ library: ConnectionLibrary; windowsIdentity: string; warning?: string }>>
-  /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User Name). */
+  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string }>>
+  /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User name). */
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
-  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibrary>>
-  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibrary>>
+  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibraryView>>
+  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>

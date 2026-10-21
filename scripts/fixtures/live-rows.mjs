@@ -30,7 +30,7 @@ export async function connectLive(page, expect) {
   await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
   if (user) {
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-    await dialog.getByLabel('User Name', { exact: true }).fill(user)
+    await dialog.getByLabel('Login', { exact: true }).fill(user)
     await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
   } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()

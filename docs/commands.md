@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (134)
+## Commands (135)
 
 ### File
 
@@ -354,6 +354,12 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `4_window` | Minimize | Electron role `minimize` | macOS only |
 | `4_window` | Zoom | Electron role `zoom` | macOS only |
 
+#### Help (Alt+H)
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_entra` | Clear **E**ntra ID Token Cache | `help.clearEntraTokenCache` | Always |
+
 ### Context menus
 
 #### Editor context menu (`editor.context`)
@@ -619,7 +625,7 @@ Workbench keybindings never use these keys, because menus, Electron, the operati
 
 | Reason | Windows | Linux | macOS |
 | --- | --- | --- | --- |
-| opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, F10 | — |
+| opens a menu | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, Alt+H, F10 | Alt+F, Alt+E, Alt+V, Alt+Q, Alt+T, Alt+W, Alt+H, F10 | — |
 | an Electron role or system key | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4 | Ctrl+Shift+I, Ctrl+0, Ctrl+=, Ctrl+Shift+=, Ctrl+-, F11, Alt+F4, Ctrl+Q | — |
 | clipboard or text editing | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, Ctrl+Insert, Shift+Insert, Shift+Delete, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+Left, Ctrl+Shift+Left, Ctrl+Right, Ctrl+Shift+Right, Ctrl+Backspace, Ctrl+Shift+Backspace, Ctrl+Delete, Ctrl+Shift+Delete | — |
 | find or comment in the editor | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\ | Ctrl+F, Ctrl+H, F3, Shift+F3, Ctrl+F3, Ctrl+Shift+F3, Alt+Enter, Ctrl+Alt+Enter, Ctrl+Shift+1, Alt+C, Alt+R, Alt+P, Alt+L, Ctrl+/, Shift+Alt+A, Ctrl+Shift+\, Ctrl+Shift+A | ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, ⌘E, ⌘/, ⌥⌘C, ⌥⌘W, ⌥⌘R, ⌥⌘P, ⌥⌘L |

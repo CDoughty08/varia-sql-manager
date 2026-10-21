@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
-import { advancedDefaults, advancedToStore, connectionDefaults, connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../../shared/connections'
+import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, connectionKey, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
 import { trapFocus } from './trap-focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { IntegratedIdentityLookup } from './services/integrated-identity'
+import { authenticationCatalog, authenticationModes, requiresUser, showsIdentity, usesPassword, type AuthenticationMode } from '../../shared/auth'
 
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
@@ -29,6 +30,18 @@ function FailureDetails({ details }: { details: ErrorDetails }) {
   const rows: [string, string | number | undefined][] = [['Error number', details.number], ['Severity', details.class], ['State', details.state], ['Server', details.server]]
   return <details className="connect-error-details"><summary>Error details</summary><dl>{rows.filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
 }
+const storageNotes: Record<NonNullable<SecretStorageState['reason']>, string> = {
+  'no-keyring': 'Remember password needs a system keyring (GNOME Keyring or KWallet), and none was found. Passwords are used for this connection only.',
+  'unknown-backend': 'Remember password is unavailable because the operating system could not encrypt passwords. Passwords are used for this connection only.',
+  unavailable: 'Remember password is unavailable because the operating system could not encrypt passwords. Passwords are used for this connection only.'
+}
+const forgottenNotice = 'The saved password was rejected, so it has been removed. Enter the password.'
+// SSMS's hints for the Entra types whose user name is optional or is not a person's.
+const userPlaceholders: Partial<Record<AuthenticationMode, string>> = {
+  entraMfa: 'user@contoso.com (optional)', entraServicePrincipal: 'Application (client) ID', entraManagedIdentity: 'Client ID (blank: system-assigned)', entraDefault: 'Optional'
+}
+const mfaWaiting = 'Complete the sign-in in your web browser. Waiting up to 3 minutes…'
+const cancelledNotice = 'Connection cancelled.'
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
 /** Advanced Properties. A command timeout the profile does not set is left empty, showing Tools › Options' Execution time-out. */
@@ -63,6 +76,10 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const { active } = useServiceSnapshot(theme)
   const [options, setOptions] = useState<ConnectionOptions>({ ...initial, password: '' })
   const [library, setLibrary] = useState<ConnectionLibrary>({ version: 1, profiles: [] })
+  // The entries with a remembered password (ids only: the password stays in main), and whether the OS can protect one.
+  const [savedIds, setSavedIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [storage, setStorage] = useState<SecretStorageState>()
+  const [remember, setRemember] = useState(false)
   const [identity, setIdentity] = useState('Current Windows user')
   // Off Windows: the Kerberos principal Windows Authentication signs in with, while there is a valid ticket.
   const [principal, setPrincipal] = useState<string>()
@@ -99,10 +116,41 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const labelServer = useRef<string | null>(initial.displayName || initial.color ? initial.server : null)
   const selected = library.profiles.find(profile => profile.id === selectedId)
   const locked = busy || saving
-  const authReady = options.authentication === 'windows' || !!options.username?.trim()
+  const auth = authenticationCatalog[options.authentication]
+  const authReady = !requiresUser(options.authentication) || !!options.username?.trim()
+  // The request Stop cancels: the running connect's, and the running Load databases' (cancelled when the form changes).
+  const connectRequest = useRef<string | undefined>(undefined)
+  const databasesRequest = useRef<string | undefined>(undefined)
+  const stopButton = useRef<HTMLButtonElement>(null)
+  const connectButton = useRef<HTMLButtonElement>(null)
+  // The entry whose remembered password main would use for this form: Password left empty sends that entry's id.
+  const match = rememberedProfile(library.profiles, savedIds, options, selectedId)
+  const rememberable = canRememberPassword(options.authentication) && !!storage?.available
+  const storageNote = canRememberPassword(options.authentication) && storage && !storage.available ? storageNotes[storage.reason ?? 'unavailable'] : ''
+  function showLibrary(view: ConnectionLibraryView) { setLibrary(view.library); setSavedIds(new Set(view.savedPasswords)) }
+  /** Main forgot every remembered password for these credentials, which SQL Server rejected. */
+  function passwordRejected() {
+    const binding = credentialBinding(currentOptions.current)
+    setSavedIds(current => new Set([...current].filter(id => { const profile = library.profiles.find(item => item.id === id); return !!profile && credentialBinding(profile.options) !== binding })))
+    setRemember(false); setNotice(forgottenNotice)
+  }
   // SSMS shows the identity integrated authentication uses: DOMAIN\user on Windows, the ticket's principal elsewhere
-  // (the OS user name without one).
+  // (the OS user name without one). Microsoft Entra Integrated signs in as the Windows user.
   const integratedUser = principal ?? identity
+  const identityOf = (authentication: AuthenticationMode) => authentication === 'windows' ? integratedUser : identity
+  const authNote = options.authentication === 'entraMfa' ? 'Sign in with your web browser when you connect.'
+    : options.authentication === 'entraIntegrated' && platform !== 'win32' ? 'Microsoft Entra Integrated needs Windows. On Linux and macOS use Microsoft Entra MFA or Microsoft Entra Default.' : ''
+  /** Stops a Load databases that no longer matches the form, or whose dialog closed. */
+  function cancelDatabases() {
+    const id = databasesRequest.current
+    databasesRequest.current = undefined
+    if (id) void window.varia.cancelConnectionRequests([id]).catch(() => {})
+  }
+  /** Stop: the connect ends at once, even while it waits for a Microsoft Entra sign-in in the web browser. */
+  function stop() {
+    const id = connectRequest.current
+    if (id) void window.varia.cancelConnectionRequests([id]).catch(() => {})
+  }
   const [identityLookup] = useState(() => new IntegratedIdentityLookup(platform, () => window.varia.integratedIdentity(), value => { if (alive.current) setPrincipal(value) }))
 
   useEffect(() => {
@@ -110,9 +158,12 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     void window.varia.loadConnectionLibrary().then(result => {
       if (!alive.current) return
       const value = unwrap(result)
-      setLibrary(value.library); setIdentity(value.windowsIdentity); setNotice(value.warning ?? ''); setLoaded(true)
+      showLibrary(value); setStorage(value.passwordStorage); setIdentity(value.windowsIdentity); setNotice([value.warning, value.passwordWarning].filter(Boolean).join(' ')); setLoaded(true)
     }).catch(reason => { if (alive.current) { setError(message(reason)); setLoaded(true) } })
-    return () => { alive.current = false; dbRequest.current++; browseRequest.current++ }
+    return () => {
+      alive.current = false; dbRequest.current++; browseRequest.current++
+      cancelDatabases(); stop()
+    }
   }, [])
   useEffect(() => {
     const active = document.activeElement
@@ -120,8 +171,17 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     return () => { if (active instanceof HTMLElement && active.isConnected) active.focus() }
   }, [])
   useEffect(() => { identityLookup.authenticationChanged(options.authentication) }, [identityLookup, options.authentication])
+  // Connect disables the form, so focus moves to Stop, where Escape and Enter still reach the dialog, and back to Connect after.
   useEffect(() => {
-    dbRequest.current++; dbLoadedKey.current = ''; setDatabases([]); setDbNote(''); setDbDetails(undefined); setDbBusy(false)
+    if (busy) stopButton.current?.focus()
+    else if (document.activeElement === stopButton.current) connectButton.current?.focus()
+  }, [busy])
+  // Choosing an entry with a remembered password checks Remember password, as SSMS does; a typed password keeps the choice.
+  useEffect(() => {
+    if (!currentOptions.current.password) setRemember(!!match)
+  }, [match?.id])
+  useEffect(() => {
+    dbRequest.current++; cancelDatabases(); dbLoadedKey.current = ''; setDatabases([]); setDbNote(''); setDbDetails(undefined); setDbBusy(false)
   }, [options.server, options.authentication, options.username, options.password, options.encrypt, options.trustServerCertificate, options.hostNameInCertificate, options.advanced])
   useEffect(() => {
     if (tab !== 'browse' || scope === 'registered') return
@@ -163,6 +223,8 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     if (dbBusy || !authReady || !options.server.trim()) return
     const key = JSON.stringify({ ...options, database: '', displayName: '', color: '' })
     const request = ++dbRequest.current
+    const requestId = crypto.randomUUID()
+    databasesRequest.current = requestId
     setDbBusy(true); setDbNote(''); setDbDetails(undefined)
     // Remember failures too: focusing the field again must not retry a rejected login (lockout policies). Refresh retries.
     const failed = (reason: string, details?: ErrorDetails) => {
@@ -170,9 +232,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
       setDbNote('Could not load databases: ' + reason + ' You can enter a database name manually.'); setDbDetails(details)
     }
     try {
-      const result = await window.varia.discoverDatabases(options)
+      const result = await window.varia.discoverDatabases(options, { ...match ? { profileId: match.id } : {}, requestId })
       if (!alive.current || request !== dbRequest.current) return
-      if (!result.ok) { failed(result.error, result.details); return }
+      if (!result.ok) { failed(result.error, result.details); if (result.passwordForgotten) passwordRejected(); return }
       const values = result.value
       setDatabases(values); dbLoadedKey.current = key
       setDbNote(values.length ? `${values.length} databases available.` : 'No databases are visible to this login. You can still enter a database name.')
@@ -180,7 +242,10 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
       if (!alive.current || request !== dbRequest.current) return
       failed(message(reason))
     }
-    finally { if (alive.current && request === dbRequest.current) setDbBusy(false) }
+    finally {
+      if (databasesRequest.current === requestId) databasesRequest.current = undefined
+      if (alive.current && request === dbRequest.current) setDbBusy(false)
+    }
   }
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile) {
     setSaving(true); setError(''); setNotice('')
@@ -188,26 +253,37 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
       const input = { id: profile?.id ?? selectedId, options: profile?.options ?? options, favorite, registered }
       const value = unwrap(await window.varia.saveConnectionProfile(input))
       if (!alive.current) return
-      setLibrary(value)
-      if (!profile) setSelectedId(value.profiles.find(item => connectionKey(item.options) === connectionKey(options))?.id)
+      showLibrary(value)
+      if (!profile) setSelectedId(value.library.profiles.find(item => connectionKey(item.options) === connectionKey(options))?.id)
     } catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
   async function remove(profile: ConnectionProfile) {
     setSaving(true); setError('')
-    try { const value = unwrap(await window.varia.removeConnectionProfile(profile.id)); if (alive.current) { setLibrary(value); if (selectedId === profile.id) setSelectedId(undefined) } }
+    try { const value = unwrap(await window.varia.removeConnectionProfile(profile.id)); if (alive.current) { showLibrary(value); if (selectedId === profile.id) setSelectedId(undefined) } }
     catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
   async function connect(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError('')
+    // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
+    event.preventDefault(); setBusy(true); setError(''); setNotice(current => current === cancelledNotice ? '' : current)
+    const requestId = crypto.randomUUID()
+    connectRequest.current = requestId
     try {
-      const result = await window.varia.connect(options)
+      const result = await window.varia.connect(options, { ...match ? { profileId: match.id } : {}, remember: remember && rememberable, requestId })
       if (!alive.current) return
       if (result.ok) onConnected(result.value, { ...options, password: '' })
-      else { setError(result.error); setFailure(result.details ? { error: result.error, details: result.details } : undefined) }
+      // Stop: the form is the user's again, with nothing to report.
+      else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
+      else {
+        setError(result.error); setFailure(result.details ? { error: result.error, details: result.details } : undefined)
+        if (result.passwordForgotten) passwordRejected()
+      }
     } catch (reason) { if (alive.current) setError(message(reason)) }
-    finally { if (alive.current) setBusy(false) }
+    finally {
+      if (connectRequest.current === requestId) connectRequest.current = undefined
+      if (alive.current) setBusy(false)
+    }
   }
   const matches = (text: string) => text.toLowerCase().includes(filter.toLowerCase())
   const filtered = library.profiles.filter(profile => matches([profile.options.displayName, profile.options.server, profile.options.database, profile.options.username].join(' ')))
@@ -215,14 +291,16 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const favorite = filtered.filter(profile => profile.favorite)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><strong>{profile.options.displayName || profile.options.server}</strong><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {profile.options.authentication === 'windows' ? integratedUser : profile.options.username}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><strong>{profile.options.displayName || profile.options.server}</strong><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}>{profile.favorite ? '★' : '☆'}</button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>
   }
   function trap(event: KeyboardEvent<HTMLFormElement>) {
     if (advanced) return
-    if (event.key === 'Escape' && !locked) { event.preventDefault(); event.stopPropagation(); onClose() }
+    // While connecting, Escape is Stop, as the footer's button is.
+    if (event.key === 'Escape' && busy) { event.preventDefault(); event.stopPropagation(); stop() }
+    else if (event.key === 'Escape' && !locked) { event.preventDefault(); event.stopPropagation(); onClose() }
     trapFocus(event)
   }
   return <>
@@ -247,10 +325,12 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
         <div id="connection-properties" role="tabpanel" aria-label={properties === 'properties' ? 'Connection Properties' : 'Connection String'}>
           <div className="property-grid" hidden={properties !== 'properties'}>
             <div className="property-row"><label htmlFor="connect-server">Server Name</label><input id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
-            <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as ConnectionOptions['authentication'], password: '' })}><option value="windows">Windows Authentication</option><option value="sql">SQL Server Authentication</option></select></div>
-            <div className="property-row"><label htmlFor="connect-user">User Name</label><input id="connect-user" required={options.authentication === 'sql'} disabled={locked || options.authentication === 'windows'} autoComplete="off" maxLength={128} value={options.authentication === 'windows' ? integratedUser : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
-            <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked || options.authentication === 'windows'} maxLength={1024} value={options.password ?? ''} onChange={event => update({ password: event.target.value })} /></div>
-            <div className="property-row"><span /><p className="field-note">Passwords are used for this connection only.</p></div>
+            <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as AuthenticationMode, password: '' })}>{authenticationModes.map(mode => <option key={mode} value={mode}>{authenticationCatalog[mode].label}</option>)}</select></div>
+            <div className="property-row"><label htmlFor="connect-user">{auth.userLabel}</label><input id="connect-user" required={requiresUser(options.authentication)} disabled={locked || showsIdentity(options.authentication)} autoComplete="off" maxLength={128} placeholder={userPlaceholders[options.authentication]} value={showsIdentity(options.authentication) ? identityOf(options.authentication) : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
+            <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked || !usesPassword(options.authentication)} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => update({ password: event.target.value })} />{match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}</div>
+            <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => setRemember(event.target.checked)} />Remember password</label></div>
+            {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
+            {authNote && <div className="property-row"><span /><p className="field-note" id="connect-auth-note">{authNote}</p></div>}
             <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { const key = JSON.stringify({ ...currentOptions.current, database: '', displayName: '', color: '' }); if (dbLoadedKey.current !== key) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}>{dbBusy ? '…' : '↻'}</button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
             {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
             <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>
@@ -264,9 +344,10 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
           <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => { labelServer.current = null; update({ displayName: event.target.value }) }} /></div>
           <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
         </div><div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}>{selected?.favorite ? '★ Remove favorite' : '☆ Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div></fieldset>
+        {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
         {notice && <p className="field-note" role="status">{notice}</p>}{error && <p className="connect-error" role="alert">{error}</p>}{error && failure?.error === error && <FailureDetails details={failure.details} />}
       </div>
-      <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button type="button" disabled={locked} onClick={onClose}>Cancel</button></div>
+      <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
     </form></div>
     {advanced && <AdvancedProperties value={options.advanced ?? {}} onSave={value => { update({ advanced: value }); setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}
   </>

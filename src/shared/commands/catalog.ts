@@ -4,7 +4,7 @@ import type { SettingKey } from '../settings/catalog'
 import { actionCommandEntries } from '../actions/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer' | 'Help'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = [
   'new-file',
@@ -544,6 +544,11 @@ export const commandCatalog = {
   'developer.toggleDevTools': {
     title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
+  },
+  // SSMS 22's Help › Clear Entra ID Token Cache: main asks first, then the backend forgets every Microsoft Entra token.
+  'help.clearEntraTokenCache': {
+    title: 'Clear Entra ID Token Cache', category: 'Help', icon: 'discard', keywords: ['entra', 'azure', 'token', 'signin', 'login', 'mfa'],
+    menus: [{ menu: 'help', group: '1_entra', order: 1, mnemonic: 'e' }]
   },
   // The Query Output menu and the results grid's keys: the grid copies its selected cells (Ctrl+C reaches its copy
   // event, and Ctrl+A is its own), and Messages its selected text.
