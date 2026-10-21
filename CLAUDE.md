@@ -74,7 +74,7 @@ pages, limits, error codes, display formats, benchmarks).
   the ciphertext. Only main reads that file or decrypts; the renderer learns only which entries have one, and main injects
   it into `connections.connect`/`.databases` only for a matching binding. Remember password is disabled where
   safeStorage is unavailable, Linux's backend is `basic_text`/`unknown`, or its keyring cannot be reached (Electron's
-  fallback key, tag `v10`).
+  fallback key, tag `v10`; only `v11`/`v12` count, not yet confirmed on a Linux desktop, so any other tag disables it).
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.

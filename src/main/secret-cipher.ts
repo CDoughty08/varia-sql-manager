@@ -37,7 +37,8 @@ export function safeStorageCipher(storage: SafeStorageApi, platform: NodeJS.Plat
       if (platform !== 'linux') return { available: true }
       // A desktop mapped to the Secret Service or KWallet with neither reachable passes both checks above, and the
       // encryptor silently falls back to Chromium's hard-coded key (tag v10), which protects nothing. Only a key the
-      // keyring holds (v11; v12 through the secret portal) counts.
+      // keyring holds (v11; v12 through the secret portal) counts. The tags come from Chromium's os_crypt sources, not yet
+      // seen on a Linux desktop: any other tag disables Remember password rather than trust the hard-coded key.
       const tag = (await storage.encryptStringAsync(probe)).subarray(0, 3).toString('latin1')
       return keyringTags.has(tag) ? { available: true } : { available: false, reason: 'no-keyring' }
     } catch { return { available: false, reason: 'unavailable' } }
