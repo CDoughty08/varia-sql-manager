@@ -11,7 +11,9 @@ describe('generated command documentation', () => {
     await expect(docs).toMatchFileSnapshot('../docs/commands.md')
   })
   it('lists every command and context key', () => {
-    for (const id of commandIds) expect(docs, id).toContain(`| \`${id}\` |`)
+    // Within the command tables: a command placed in a menu also appears in the menu tables, which hid a whole category's absence.
+    const commands = docs.slice(docs.indexOf('\n## Commands ('), docs.indexOf('\n## Menus\n'))
+    for (const id of commandIds) expect(commands, id).toContain(`| \`${id}\` |`)
     for (const key of contextKeyNames) expect(docs, key).toContain(`| \`${key}\` |`)
     expect(docs).toContain(`## Commands (${commandIds.length})`)
     expect(paletteLabel('query.execute')).toBe('Query: Execute')

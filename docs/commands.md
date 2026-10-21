@@ -194,6 +194,12 @@ keys it uses are listed below.
 | Reload Window | `developer.reloadWindow` | — | — | — | Always | View › Reload Window |
 | Toggle Developer Tools | `developer.toggleDevTools` | Ctrl+Shift+I * | Ctrl+Shift+I * | ⌥⌘I * | Always | View › Toggle Developer Tools |
 
+### Help
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Clear Entra ID Token Cache | `help.clearEntraTokenCache` | — | — | — | Always | Help › Clear Entra ID Token Cache |
+
 ### Other
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
