@@ -254,6 +254,40 @@ internal static class DatabasePropertiesLiveChecks
         check(partial is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && partial.Error.Message == DatabaseAlter.AfterReadOnlyProblem("Max DOP") && untouched.Options["readOnly"] == "false"
             && untouched.Scoped["maxDop"] == model.Scoped["maxDop"], "Read-Only with a scoped configuration and the owner is refused before anything runs, leaving the database writable (" + partial.Error?.Message + ")");
 
+        // Why FILESTREAM Non-Transacted Access is refusedReadOnly: SET FILESTREAM, which SMO writes after READ_ONLY, fails on a
+        // read-only database (3906 on SQL Server 2025, where it works on a writable one even with FILESTREAM off).
+        var filestreamOff = "ALTER DATABASE " + ScriptFormatterQuote(db) + " SET FILESTREAM( NON_TRANSACTED_ACCESS = OFF ) WITH NO_WAIT;";
+        var writableFilestream = await sql(filestreamOff, "master", null);
+        if (writableFilestream.Status == "completed")
+        {
+            try
+            {
+                var madeReadOnly = await client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "true" }), close: true);
+                var readOnlyFilestream = await sql(filestreamOff, "master", null);
+                check(Done(madeReadOnly) && readOnlyFilestream.Status != "completed",
+                    "SET FILESTREAM (NON_TRANSACTED_ACCESS) fails on a read-only database, so it cannot follow Read-Only's True in one OK (" + readOnlyFilestream.Error + ")");
+            }
+            finally { await client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "false" }), close: true); }
+        }
+        else Console.WriteLine("Database Properties: SET FILESTREAM fails on a writable database here (" + writableFilestream.Error + "); its read-only check is skipped.");
+
+        // The backend's own pooled connection in the database, still in use while execute clears the pools and closed 300 ms
+        // later: SQL Server ends its session only then, after the preflight's first count. Without counting again, a session
+        // the backend itself closes would answer IN_USE.
+        ActionExecuteResult afterOwnPool;
+        await using (var pooled = ((Varia.Backend.Explorer.IExplorerHost)service).Connection(info.Id, db))
+        {
+            await pooled.OpenAsync();
+            var running = client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "true" }));
+            await Task.Delay(300);
+            await pooled.CloseAsync();
+            afterOwnPool = await running;
+        }
+        var ownPoolReadOnly = (await Model()).Options["readOnly"];
+        await client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "false" }), close: true);
+        check(Done(afterOwnPool) && ownPoolReadOnly == "true",
+            "a pooled connection of the backend's own that closes after execute cleared the pools is not counted as another connection (" + afterOwnPool.Error?.Message + ")");
+
         // Stop: ALTER AUTHORIZATION waits behind another session's open transaction that changed the owner, until Stop
         // cancels it in SQL Server.
         var holder = Guid.NewGuid().ToString();

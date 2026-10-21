@@ -130,13 +130,16 @@ describe('Database Properties draft', () => {
     expect(request(model, draft => ({ ...readOnly(draft), owner: 'AppUser' }))).toEqual({ problem: afterReadOnlyProblem('Owner') })
     expect(draftErrors(model, setOption(setOption(readOnly(initialDatabaseDraft(model)), 'targetRecoveryTime', '30'), 'delayedDurability', 'FORCED'), target))
       .toEqual(new Map([['delayedDurability', afterReadOnlyProblem('Delayed Durability')], ['targetRecoveryTime', afterReadOnlyProblem('Target Recovery Time (Seconds)')]]))
+    // SET FILESTREAM fails with 3906 on a read-only database (measured on SQL Server 2025), and SMO writes it after READ_ONLY.
+    const filestream = databaseModel({ server: { ...model.server, filestreamLevel: 2 } })
+    expect(request(filestream, draft => setOption(readOnly(draft), 'filestreamNonTransactedAccess', 'FULL'))).toEqual({ problem: afterReadOnlyProblem('FILESTREAM Non-Transacted Access') })
     // What runs before READ_ONLY, and what SQL Server allows on a read-only database, still goes with it.
     const together = request(model, draft => ['compatibilityLevel:150', 'collation:Latin1_General_BIN2', 'dateCorrelationOptimization:true', 'recoveryModel:SIMPLE', 'restrictAccess:SINGLE_USER',
       'pageVerify:NONE', 'allowSnapshotIsolation:true'].reduce((next, pair) => setOption(next, pair.split(':')[0], pair.split(':')[1]), readOnly(draft))) as DatabaseRequest
     expect(Object.keys(together.changes.options!).sort()).toEqual(['allowSnapshotIsolation', 'collation', 'compatibilityLevel', 'dateCorrelationOptimization', 'pageVerify', 'readOnly', 'recoveryModel', 'restrictAccess'])
     // Turning it off, or a database that already is read-only, is not this rule.
     expect(request(model, draft => setOption(setOption(draft, 'readOnly', 'false'), 'maxDop', '4'))).toMatchObject({ changes: { scoped: { maxDop: '4' } } })
-    expect(all.filter(def => def.settable && def.refusedReadOnly).map(def => def.key).sort()).toEqual(['collation', 'compatibilityLevel', 'dateCorrelationOptimization', 'delayedDurability',
+    expect(all.filter(def => def.settable && def.refusedReadOnly).map(def => def.key).sort()).toEqual(['collation', 'compatibilityLevel', 'dateCorrelationOptimization', 'delayedDurability', 'filestreamNonTransactedAccess',
       'legacyCardinalityEstimation', 'legacyCardinalityEstimationForSecondary', 'maxDop', 'maxDopForSecondary', 'parameterSniffing', 'parameterSniffingForSecondary', 'queryOptimizerFixes',
       'queryOptimizerFixesForSecondary', 'targetRecoveryTime'])
   })

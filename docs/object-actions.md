@@ -103,7 +103,7 @@ database (3906, or 5073 for COLLATE; measured on SQL Server 2025). "Not on": sys
 | Close Cursor on Commit Enabled | Cursor | Yes | `CURSOR_CLOSE_ON_COMMIT` `ON`, `OFF` |  |  |  |  |
 | Default Cursor | Cursor | Yes | `CURSOR_DEFAULT` `GLOBAL`, `LOCAL` |  |  |  |  |
 | FILESTREAM Directory Name | FILESTREAM | No |  |  |  |  |  |
-| FILESTREAM Non-Transacted Access | FILESTREAM | Yes | `FILESTREAM( NON_TRANSACTED_ACCESS = … )` | Yes |  |  |  |
+| FILESTREAM Non-Transacted Access | FILESTREAM | Yes | `FILESTREAM( NON_TRANSACTED_ACCESS = … )` | Yes | Yes |  |  |
 | Is Ledger Database | Ledger | No |  |  |  | 16 |  |
 | Allow Snapshot Isolation | Miscellaneous | Yes | `ALLOW_SNAPSHOT_ISOLATION` |  |  |  | master, msdb |
 | ANSI NULL Default | Miscellaneous | Yes | `ANSI_NULL_DEFAULT` `ON`, `OFF` |  |  |  |  |
@@ -160,7 +160,9 @@ When OK changes an exclusive option and the database has sessions (or they canno
 (Yes or No; No is the default, because Yes rolls back the other sessions' transactions, and Escape answers No).
 No runs nothing. Yes writes the SET options WITH ROLLBACK IMMEDIATE. SSMS counts the connections when OK is pressed, so
 the backend counts them again before anything runs: when sessions have joined since the dialog opened with none, it
-answers `IN_USE` at once and the dialog asks. Without the prompt, WITH NO_WAIT makes SQL Server refuse (`IN_USE`)
+answers `IN_USE` at once and the dialog asks. The backend first closes its own idle pooled connections in the database
+and, because SQL Server lists their sessions for a few milliseconds after that, counts again every 50 ms for up to a
+second while the count is above zero. Without the prompt, WITH NO_WAIT makes SQL Server refuse (`IN_USE`)
 rather than wait for the other sessions' transactions; SQL Server gives up after about 20 seconds. That failure advises
 choosing Yes only after an exclusive change made without closing connections; otherwise (Broker Enabled or Containment
 type with other sessions, which SSMS does not close connections for) it advises closing them first. Script never

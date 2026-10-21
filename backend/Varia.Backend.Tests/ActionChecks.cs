@@ -199,7 +199,7 @@ internal static class ActionChecks
             return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
-        public void ClearPoolsFor(string connectionId, string database) => Cleared.Add(database);
+        public bool ClearPoolsFor(string connectionId, string database) { Cleared.Add(database); return true; }
         public void DatabaseChanged(string connectionId, string database, string? newName) => Cleared.Add(database + " -> " + newName);
     }
 

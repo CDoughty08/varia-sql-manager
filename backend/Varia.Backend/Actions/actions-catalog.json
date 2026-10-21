@@ -25,7 +25,7 @@
     {"control":"bool","key":"closeCursorOnCommit","label":"Close Cursor on Commit Enabled","settable":true,"smoOrder":14,"sql":{"eq":false,"keyword":"CURSOR_CLOSE_ON_COMMIT","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},
     {"control":"choice","key":"defaultCursor","label":"Default Cursor","settable":true,"smoOrder":15,"sql":{"eq":false,"keyword":"CURSOR_DEFAULT ","kind":"set","termination":true,"tokens":{"GLOBAL":"GLOBAL","LOCAL":"LOCAL"}},"tokens":["GLOBAL","LOCAL"]},
     {"control":"text","key":"filestreamDirectoryName","label":"FILESTREAM Directory Name","settable":false,"smoOrder":39},
-    {"control":"choice","exclusive":true,"key":"filestreamNonTransactedAccess","label":"FILESTREAM Non-Transacted Access","settable":true,"smoOrder":38,"sql":{"kind":"filestream"},"tokens":["OFF","READ_ONLY","FULL"]},
+    {"control":"choice","exclusive":true,"key":"filestreamNonTransactedAccess","label":"FILESTREAM Non-Transacted Access","refusedReadOnly":true,"settable":true,"smoOrder":38,"sql":{"kind":"filestream"},"tokens":["OFF","READ_ONLY","FULL"]},
     {"control":"bool","key":"isLedgerDatabase","label":"Is Ledger Database","settable":false,"since":16,"smoOrder":72,"tokens":["true","false"]},
     {"control":"bool","key":"allowSnapshotIsolation","label":"Allow Snapshot Isolation","notOn":["master","msdb"],"settable":true,"smoOrder":60,"sql":{"kind":"snapshotIsolation"},"tokens":["true","false"]},
     {"control":"bool","key":"ansiNullDefault","label":"ANSI NULL Default","settable":true,"smoOrder":4,"sql":{"eq":false,"keyword":"ANSI_NULL_DEFAULT","kind":"set","termination":true,"tokens":{"false":"OFF","true":"ON"}},"tokens":["true","false"]},

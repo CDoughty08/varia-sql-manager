@@ -186,7 +186,7 @@ internal static class DesignerChecks
         public ServerProfile Profile(string connectionId) => throw new RequestException("NOT_CONNECTED", "Not connected.");
         public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId) => throw new InvalidOperationException();
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => Task.CompletedTask;
-        public void ClearPoolsFor(string connectionId, string database) { }
+        public bool ClearPoolsFor(string connectionId, string database) => false;
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 }

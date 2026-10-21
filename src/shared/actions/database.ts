@@ -120,7 +120,7 @@ export const databaseOptionDefs: readonly DatabaseOptionDef[] = [
   { key: 'filestreamDirectoryName', label: 'FILESTREAM Directory Name', category: 'FILESTREAM', control: 'text', settable: false, smoOrder: 39,
     description: 'Specify the directory name for the FILESTREAM data associated with the selected database.' },
   { key: 'filestreamNonTransactedAccess', label: 'FILESTREAM Non-Transacted Access', category: 'FILESTREAM', control: 'choice', choices: filestreamAccess, settable: true, exclusive: true,
-    sql: { kind: 'filestream' }, smoOrder: 38,
+    sql: { kind: 'filestream' }, smoOrder: 38, refusedReadOnly: true,
     description: 'Specify one of the following options for non-transactional access through the file system to FILESTREAM data stored in FileTables: OFF, READ_ONLY, or FULL.' },
   // Ledger.
   { key: 'isLedgerDatabase', label: 'Is Ledger Database', category: 'Ledger', control: 'bool', choices: bool, settable: false, since: 16, smoOrder: 72,
