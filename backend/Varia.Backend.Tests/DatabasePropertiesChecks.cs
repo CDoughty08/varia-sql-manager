@@ -169,13 +169,14 @@ internal static class DatabasePropertiesChecks
         check(Refusal(new(Scoped: new() { ["maxDop"] = "4" }, Options: new() { ["readOnly"] = "true" })) == DatabaseAlter.AfterReadOnlyProblem("Max DOP")
             && Refusal(new(Owner: "sa", Options: new() { ["readOnly"] = "true" })) == DatabaseAlter.AfterReadOnlyProblem("Owner")
             && Refusal(Options(("readOnly", "true"), ("delayedDurability", "FORCED"), ("targetRecoveryTime", "30"))) == DatabaseAlter.AfterReadOnlyProblem("Target Recovery Time (Seconds)")
+            && Refusal(Options(("readOnly", "true"), ("filestreamNonTransactedAccess", "FULL"))) == DatabaseAlter.AfterReadOnlyProblem("FILESTREAM Non-Transacted Access")
             && Refusal(Options(("readOnly", "true"), ("compatibilityLevel", "150"), ("collation", "Latin1_General_BIN2"), ("dateCorrelationOptimization", "true"), ("recoveryModel", "SIMPLE"),
                 ("restrictAccess", "SINGLE_USER"), ("pageVerify", "NONE"), ("allowSnapshotIsolation", "true"))) == ""
             && Refusal(new(Owner: "sa", Options: new() { ["readOnly"] = "false" }, Scoped: new() { ["maxDop"] = "4" })) == "",
             "turning Read-Only on refuses a change SQL Server applies after it and refuses on a read-only database (the owner, scoped configurations, Target Recovery Time, "
-            + "Delayed Durability), and allows what runs before it or works on a read-only database");
+            + "Delayed Durability, FILESTREAM Non-Transacted Access), and allows what runs before it or works on a read-only database");
         var refusedReadOnly = Catalog.DatabaseOptions.Values.Concat(Catalog.ScopedConfigurations.Values).Where(option => option.RefusedReadOnly == true).Select(option => option.Key).Order(StringComparer.Ordinal).ToList();
-        check(refusedReadOnly.SequenceEqual(["collation", "compatibilityLevel", "dateCorrelationOptimization", "delayedDurability", "legacyCardinalityEstimation", "legacyCardinalityEstimationForSecondary",
+        check(refusedReadOnly.SequenceEqual(["collation", "compatibilityLevel", "dateCorrelationOptimization", "delayedDurability", "filestreamNonTransactedAccess", "legacyCardinalityEstimation", "legacyCardinalityEstimationForSecondary",
             "maxDop", "maxDopForSecondary", "parameterSniffing", "parameterSniffingForSecondary", "queryOptimizerFixes", "queryOptimizerFixesForSecondary", "targetRecoveryTime"]),
             "the catalogue marks the changes SQL Server refuses on a read-only database: " + string.Join(", ", refusedReadOnly));
     }
@@ -225,7 +226,7 @@ internal static class DatabasePropertiesChecks
         public ServerProfile Profile(string connectionId) => throw new RequestException("NOT_CONNECTED", "Not connected.");
         public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId) => throw new InvalidOperationException();
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => Task.CompletedTask;
-        public void ClearPoolsFor(string connectionId, string database) { }
+        public bool ClearPoolsFor(string connectionId, string database) => false;
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 }

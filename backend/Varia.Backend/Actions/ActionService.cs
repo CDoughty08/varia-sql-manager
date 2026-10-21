@@ -20,8 +20,9 @@ internal interface IActionHost
     /// <summary>Opens it; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), answered as a value.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
     /// <summary>Clears every pool of the connection whose initial catalog is the database, so none of the backend's idle
-    /// connections blocks DROP DATABASE or MODIFY NAME.</summary>
-    void ClearPoolsFor(string connectionId, string database);
+    /// connections blocks DROP DATABASE or MODIFY NAME. True when it cleared a pool: the server can still list the closed
+    /// connections' sessions for a few milliseconds.</summary>
+    bool ClearPoolsFor(string connectionId, string database);
     /// <summary>A database was renamed (to <paramref name="newName"/>) or dropped (null): a connection whose initial catalog
     /// it was moves to the new name, or to master, so its later connections can still open.</summary>
     void DatabaseChanged(string connectionId, string database, string? newName);
@@ -528,19 +529,21 @@ internal sealed class ActionService : IDisposable
 
     /// <summary>The database as the properties preflight finds it in this connection, the plan, or the refusal. Script and
     /// execute share it; only execute checks access, permission and the new owner's login.</summary>
-    private async Task<(List<AlterStatement>? Plan, ActionError? Error)> PlanPropertiesAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, bool execute, CancellationToken token)
+    private async Task<(List<AlterStatement>? Plan, ActionError? Error)> PlanPropertiesAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, bool execute, CancellationToken token,
+        bool clearedPools = false)
     {
         var display = ScriptingErrors.Display(target.Name!);
-        ScriptPreflight.Row? row = null;
-        await using (var command = connection.CreateCommand())
+        async Task<ScriptPreflight.Row?> Preflight()
         {
+            await using var command = connection.CreateCommand();
             command.CommandText = DatabasePropertiesPreflight;
             command.CommandTimeout = 0;
             Add(command, "@name", SqlDbType.NVarChar, 128, target.Name);
             Add(command, "@owner", SqlDbType.NVarChar, 128, args.Changes!.Owner);
             await using var reader = await command.ExecuteReaderAsync(token);
-            if (await reader.ReadAsync(token)) row = ReadRow(reader);
+            return await reader.ReadAsync(token) ? ReadRow(reader) : null;
         }
+        var row = await Preflight();
         if (row is null) return (null, Error("NOT_FOUND", "The database " + display + " no longer exists. Refresh Object Explorer."));
         if (row.Int("engine_edition") == 8) return (null, Error("NOT_SUPPORTED", "Database Properties on Azure SQL Managed Instance is not supported yet."));
         if (row.Bool("is_snapshot")) return (null, Error("NOT_SUPPORTED", "A database snapshot is read-only."));
@@ -549,15 +552,26 @@ internal sealed class ActionService : IDisposable
         {
             if (!row.Bool("has_access")) return (null, Error("DATABASE_UNAVAILABLE", "The database " + display + " is not accessible to this login."));
             if (!row.Bool("can_alter")) return (null, Error("PERMISSION_DENIED", "You do not have permission to change " + display + " (ALTER on it)."));
-            if (!row.Bool("owner_exists")) return (null, Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Changes.Owner!) + " does not exist."));
+            if (!row.Bool("owner_exists")) return (null, Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Changes!.Owner!) + " does not exist."));
         }
         // SSMS counts the database's connections when OK is pressed. The dialog asks Open Connections from the count it opened
         // with; sessions that joined since would make WITH NO_WAIT wait about 20 s and fail, so the change is refused before
         // anything runs, and the dialog asks.
-        if (execute && args.CloseConnections != true && Exclusive(args.Changes) && row.Long("sessions") > 0) return (null, Error("IN_USE", ActionErrors.OpenConnectionsAdvice));
+        if (execute && args.CloseConnections != true && Exclusive(args.Changes!))
+        {
+            // The pooled connections ClearPoolsFor just closed stay listed until the server ends their sessions (measured on SQL
+            // Server 2025: up to one count in ten right after the clear sees one, gone within 25 ms), so a count that may include them is
+            // taken again for up to a second rather than answered as other connections.
+            for (var wait = 0; clearedPools && row.Long("sessions") > 0 && wait < 20; wait++)
+            {
+                await Task.Delay(50, token);
+                if ((row = await Preflight()) is null) return (null, Error("NOT_FOUND", "The database " + display + " no longer exists. Refresh Object Explorer."));
+            }
+            if (row.Long("sessions") > 0) return (null, Error("IN_USE", ActionErrors.OpenConnectionsAdvice));
+        }
         var facts = new DatabaseAlter.Facts(band, Math.Min(row.Int("major") * 10, catalog.CompatibilityLevels.Max()), row.Bool("auto_create"));
         // Script always writes WITH NO_WAIT: SSMS never closes connections while scripting.
-        var (plan, refusal) = DatabaseAlter.Plan(catalog, target.Name!, args.Changes, execute && args.CloseConnections == true, facts);
+        var (plan, refusal) = DatabaseAlter.Plan(catalog, target.Name!, args.Changes!, execute && args.CloseConnections == true, facts);
         if (refusal is not null) return (null, Error("NOT_SUPPORTED", refusal));
         if (plan!.Count == 0) return (null, Error("NOT_SUPPORTED", "Auto Create Incremental Statistics applies only while Auto Create Statistics is True."));
         return (plan, null);
@@ -592,8 +606,8 @@ internal sealed class ActionService : IDisposable
         var messages = CollectMessages(connection);
         // The backend's own idle pooled connections in the database must not hold it (SET options WITH NO_WAIT, COLLATE), nor
         // count as other connections in the preflight.
-        host.ClearPoolsFor(args.ConnectionId, target.Name!);
-        var (plan, error) = await PlanPropertiesAsync(connection, args, target, band, execute: true, token);
+        var cleared = host.ClearPoolsFor(args.ConnectionId, target.Name!);
+        var (plan, error) = await PlanPropertiesAsync(connection, args, target, band, execute: true, token, cleared);
         if (plan is null) return new([], [], 0, error);
         // Choosing Yes helps only where the dialog asks: an exclusive change made without closing connections. Other
         // changes that need the database to themselves (Broker Enabled, Containment type, COLLATE) are never asked about.

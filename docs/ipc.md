@@ -282,8 +282,10 @@ Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SS
 writes `WITH NO_WAIT` and answers `database: 'master'`; execute runs one step per statement, titled by the option's label.
 Before any statement, execute counts the database's sessions again, as SSMS does when OK is pressed: an option SSMS closes
 connections for, without `closeConnections`, while other sessions are in the database answers `IN_USE` with no steps, and
-the dialog asks Open Connections. Turning Database Read-Only on with a change SQL Server refuses after it on a read-only
-database (the owner, scoped configurations, Target Recovery Time, Delayed Durability) answers `NOT_SUPPORTED` before
+the dialog asks Open Connections. When execute has just closed the backend's own idle pooled connections in the database,
+whose sessions SQL Server can still list for a few milliseconds, a count above zero is taken again every 50 ms for up to a
+second first. Turning Database Read-Only on with a change SQL Server refuses after it on a read-only database (the owner,
+scoped configurations, Target Recovery Time, Delayed Durability, FILESTREAM Non-Transacted Access) answers `NOT_SUPPORTED` before
 anything runs, for Script too.
 A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering

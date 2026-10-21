@@ -341,16 +341,19 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <summary>Idle pooled connections whose initial catalog is the database (Object Explorer's and scripting's per-database
     /// pools, and before PR17 tables.columns) keep it in use: DROP DATABASE and MODIFY NAME would fail while the server
-    /// stays connected. Clearing them closes the idle ones; busy ones are discarded when they return.</summary>
-    public void ClearPoolsFor(string connectionId, string database)
+    /// stays connected. Clearing them closes the idle ones; busy ones are discarded when they return. True when it cleared a pool.</summary>
+    public bool ClearPoolsFor(string connectionId, string database)
     {
-        if (!pools.TryGetValue(connectionId, out var used)) return;
+        if (!pools.TryGetValue(connectionId, out var used)) return false;
+        var cleared = false;
         foreach (var pooled in used.Keys)
         {
             if (!string.Equals(new SqlConnectionStringBuilder(pooled).InitialCatalog, database, StringComparison.OrdinalIgnoreCase)) continue;
             using var connection = new SqlConnection(pooled);
             SqlConnection.ClearPool(connection);
+            cleared = true;
         }
+        return cleared;
     }
 
     /// <summary>After a rename or drop of the database a connection was opened in (the Connect dialog's Database), every
