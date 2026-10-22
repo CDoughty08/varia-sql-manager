@@ -103,7 +103,18 @@ try {
   expect(await page.locator('.status-bar').evaluate(element => [getComputedStyle(element).fontSize, element.getBoundingClientRect().height])).toEqual(['11px', 24])
   expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(element => !element.closest('.monaco-editor') && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
     && parseFloat(getComputedStyle(element).fontSize) < 11).map(element => element.className || element.tagName))).toEqual([])
-  console.log('Theme checks: metric tokens apply, with no text under 11 px.')
+  // Monaco's codicon spinners (the query status bar's, the tree's Loading rows) stop too, not only Varia's own.
+  const spinners = () => page.evaluate(() => Object.fromEntries([['status', 'query-status-state', 'codicon codicon-loading codicon-modifier-spin'], ['tree', 'oe-icon', 'codicon codicon-loading']].map(([name, host, icon]) => {
+    const probe = document.body.appendChild(document.createElement('span'))
+    probe.className = host
+    const glyph = probe.appendChild(document.createElement('span'))
+    glyph.className = icon
+    const animation = getComputedStyle(glyph).animationName
+    probe.remove()
+    return [name, animation]
+  })))
+  expect(await spinners()).toEqual({ status: 'none', tree: 'none' })
+  console.log('Theme checks: metric tokens apply, with no text under 11 px and no spinner turning under reduced motion.')
 
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.
   await page.getByLabel('Move Query output', { exact: true }).selectOption('float')
@@ -219,17 +230,52 @@ try {
   await writeFile(smokeTheme, broken)
   await close()
   await launch({ motion: true })
-  // Without the smoke runs' reduced motion, buttons and menus take the 80 and 120 ms of the motion tokens (none if the
-  // system asks for reduced motion).
+  // Without the smoke runs' reduced motion, a hovered button and menus take the 80 and 120 ms of the motion tokens (none if
+  // the system asks for reduced motion), and the spinners turn.
+  await page.locator('.toolbar-actions button:not(:disabled)').first().hover()
   const motion = await page.evaluate(() => {
     const probe = document.body.appendChild(document.createElement('div'))
     probe.className = 'menu'
     const menu = getComputedStyle(probe).animationDuration
     probe.remove()
-    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector('button')).transitionDuration, menu }
+    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector('.toolbar-actions button:hover')).transitionDuration, menu }
   })
+  await page.mouse.move(0, 0)
   expect(motion).toEqual(motion.reduced ? { reduced: true, button: '0s, 0s, 0s', menu: '0s' } : { reduced: false, button: '0.08s, 0.08s, 0.08s', menu: '0.12s' })
-  console.log(`Theme checks: without emulation, motion is ${motion.reduced ? 'off, as the system asks' : '80 ms for buttons and 120 ms for menus'}.`)
+  expect(await spinners()).toEqual(motion.reduced ? { status: 'none', tree: 'none' } : { status: 'codicon-spin', tree: 'codicon-spin' })
+  // Only hover fades: a tree row moved to with the keys, the current dialog page and a menu-bar button opened from the
+  // keyboard take their colours at once, as in SSMS. A row given a transition of its own shows that this would see one.
+  const states = await page.evaluate(() => {
+    const element = (parent, tag, className, attributes = {}) => {
+      const child = parent.appendChild(document.createElement(tag))
+      if (className) child.className = className
+      for (const [name, value] of Object.entries(attributes)) child.setAttribute(name, value)
+      return child
+    }
+    const colour = key => { const probe = element(document.body, 'div', '', { style: `background: var(--varia-${key})` }); const value = getComputedStyle(probe).backgroundColor; probe.remove(); return value }
+    const host = element(document.body, 'div', '', { style: 'position: fixed; right: 0; bottom: 0; width: 240px' })
+    const tree = element(host, 'div', 'explorer-tree', { tabindex: '-1', style: 'height: 80px' })
+    const [first, second, control] = ['0', '22px', '44px'].map((top, index) => element(tree, 'div', 'explorer-row', { role: 'treeitem', 'aria-selected': String(index === 0), style: `top: ${top}${index === 2 ? '; transition: background-color 1s' : ''}` }))
+    const current = element(element(host, 'div', 'object-dialog-pages'), 'button', '', { type: 'button' })
+    const menu = element(element(host, 'div', 'title-bar-menus'), 'button', '', { type: 'button' })
+    tree.focus()
+    for (const target of [first, second, control, current, menu]) getComputedStyle(target).backgroundColor
+    first.setAttribute('aria-selected', 'false')
+    second.setAttribute('aria-selected', 'true')
+    control.setAttribute('aria-selected', 'true')
+    current.setAttribute('aria-current', 'page')
+    menu.setAttribute('aria-expanded', 'true')
+    const now = target => getComputedStyle(target).backgroundColor
+    const selected = colour(tree.matches(':focus') ? 'list-activeSelectionBackground' : 'list-inactiveSelectionBackground')
+    const result = {
+      selected: now(second) === selected, deselected: now(first) === now(tree), page: now(current) === colour('list-inactiveSelectionBackground'),
+      menu: now(menu) === colour('menubar-selectionBackground'), control: now(control) !== selected
+    }
+    host.remove()
+    return result
+  })
+  expect(states).toEqual({ selected: true, deselected: true, page: true, menu: true, control: true })
+  console.log(`Theme checks: without emulation, motion is ${motion.reduced ? 'off, as the system asks' : '80 ms for hovered buttons and 120 ms for menus'}, and selection changes at once.`)
   const alert = page.locator('.theme-notice[role="alert"]')
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('smoke.json')

@@ -210,8 +210,10 @@ bidirectional-text characters are removed from names, and the window chrome only
   `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key), `--varia-motion-*`, `--varia-header`,
   `--varia-bar`, `--varia-control`, `--varia-row` and `--varia-status`. `tests/theme-css.test.ts` keeps the two equal and
   apart from the color keys' variables; `tests/theme-metrics.test.ts` rejects px font sizes, radii and shadows and literal
-  durations outside the tokens (icon glyphs and 1 px indicator edges excepted), requires every looping animation to stop
-  under `prefers-reduced-motion: reduce` (which sets the transitions to 0 ms), and regenerates [`metrics.md`](metrics.md)
+  durations outside the tokens (icon glyphs and 1 px indicator edges excepted) and font-size literals in renderer code,
+  keeps the fast transition on `:hover` rules (state rules such as a selected row set `transition: none`), requires every
+  looping animation, Monaco's codicon spinners included, to stop under `prefers-reduced-motion: reduce` (which sets the
+  transitions to 0 ms), and regenerates [`metrics.md`](metrics.md)
   with `npx vitest run tests/theme-metrics.test.ts -u`. Smoke runs emulate reduced motion in every window, so their
   checks never read a color partway through a transition.
 - `scripts/theme-smoke.mjs`, part of `npm run test:smoke`, switches themes in the real app and saves

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { colorKeys, colorRegistry, cssVariable, type ColorKey } from '../src/shared/theme/registry'
-import { metricVariables, reducedMotionVariables } from '../src/shared/theme/metrics'
+import { densityVariables, metricVariables, reducedMotionVariables } from '../src/shared/theme/metrics'
 import { editorFontFamily, monoFontFamily, uiFontFamily } from '../src/renderer/src/fonts'
 import { stylesheetRules } from './fixtures/css-rules'
 
@@ -63,7 +63,10 @@ describe('theme tokens in the renderer', () => {
     expect(Object.fromEntries(root.filter(({ property }) => metricNames.includes(property)).map(({ property, value }) => [property, value]))).toEqual(metrics)
     const reduced = defined.filter(({ at, selector }) => at === '@media (prefers-reduced-motion: reduce)' && selector === ':root')
     expect(Object.fromEntries(reduced.map(({ property, value }) => [property, value]))).toEqual(reducedMotionVariables())
-    expect(defined.length).toBe(root.length + reduced.length)
+    // The Comfortable density, once styles.css offers it, overrides exactly the bar and row heights.
+    const comfortable = defined.filter(({ at, selector }) => !at && selector === ':root[data-density="comfortable"]')
+    if (comfortable.length) expect(Object.fromEntries(comfortable.map(({ property, value }) => [property, value]))).toEqual(densityVariables('comfortable'))
+    expect(defined.length).toBe(root.length + reduced.length + comfortable.length)
     // Metric names never meet a color key's variable (a key such as size.xs would be --varia-size-xs) or a font stack.
     expect(metricNames.filter(name => keyByVariable.has(name) || fontVariables.includes(name))).toEqual([])
   })

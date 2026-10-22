@@ -9,13 +9,25 @@ export const minimumFontSize = 11
 export interface TypeStep { readonly size: number; readonly line: number; readonly use: string }
 /** `--varia-size-<step>` and `--varia-line-<step>`, in px. */
 export const typeScale = {
-  xs: { size: 11, line: 16, use: 'Status bars, counts, captions, keys, section labels.' },
-  sm: { size: 12, line: 16, use: 'Secondary text, buttons, menus, inputs, tree rows, result cells.' },
-  md: { size: 13, line: 20, use: 'Body text and section headings.' },
+  xs: { size: 11, line: 16, use: 'Status bars, counts, captions, keys, grid headers, side-bar section titles.' },
+  sm: { size: 12, line: 16, use: 'Secondary text, chips, buttons, menus, result cells.' },
+  md: { size: 13, line: 20, use: 'Body text, tree rows, tabs, dialog fields; the default.' },
   lg: { size: 15, line: 20, use: 'Document and dialog titles.' },
   xl: { size: 20, line: 26, use: 'Headline numbers in live tiles; full-page headings.' }
 } as const satisfies Record<string, TypeStep>
 export type TypeStepName = keyof typeof typeScale
+
+export interface PendingTypeStep { readonly what: string; readonly selectors: readonly string[]; readonly now: TypeStepName; readonly planned: TypeStepName }
+/**
+ * Surfaces that keep the size they had before the type scale until the explorer, shell and results PRs restyle them, with
+ * the styles.css rules that size them. tests/theme-metrics.test.ts holds each rule to its current step, so moving one to
+ * its planned step means removing its entry here.
+ */
+export const typeScalePending: readonly PendingTypeStep[] = [
+  { what: 'Object Explorer rows', selectors: ['.explorer-row'], now: 'sm', planned: 'md' },
+  { what: 'Document tabs (buttons) and dialog fields', selectors: ['button', 'select, input'], now: 'sm', planned: 'md' },
+  { what: 'Results grid column headers', selectors: ['.rg-ch, .rg-corner'], now: 'sm', planned: 'xs' }
+]
 
 /** `--varia-space-0` … `--varia-space-6`, in px: gaps and padding of new surfaces. */
 export const spaceScale = [2, 4, 8, 12, 16, 24, 32] as const
@@ -38,9 +50,10 @@ export const shadows = {
 } as const
 
 /**
- * `--varia-motion-<name>`, in ms, and one easing curve. Transitions are 80 ms for hover and pressed fills and 120 ms for
- * menus, popovers and dialogs; `prefers-reduced-motion: reduce` sets both to 0. The loops (spinners and the live dot)
- * have their own periods and stop under reduced motion through `animation: none` in each rule's own media block.
+ * `--varia-motion-<name>`, in ms, and one easing curve. Transitions are 80 ms for hover and pressed fills, carried only
+ * by `:hover` rules so that selection and other state changes are instant, and 120 ms for menus, popovers and dialogs;
+ * `prefers-reduced-motion: reduce` sets both to 0. The loops (Varia's spinners, Monaco's codicon spinners and the live
+ * dot) have their own periods and stop under reduced motion through `animation: none`.
  */
 export const motion = {
   fast: { ms: 80, use: 'Hover and pressed fills.' },
@@ -52,17 +65,29 @@ export const motionEasing = 'cubic-bezier(0.2, 0, 0, 1)'
 /** The transitions reduced motion turns off; loops are stopped per rule instead. */
 export const reducedMotion = ['fast', 'base'] as const satisfies readonly (keyof typeof motion)[]
 
+/** The planned use of each height; `densityUse` lists the rules that take it today. */
 export interface DensityMetrics {
   /** `--varia-header`: the title bar. */
   readonly header: number
-  /** `--varia-bar`: tab strips, side-bar headers, query bars. */
+  /** `--varia-bar`: tab strips, the query bar, side-bar headers. */
   readonly bar: number
-  /** `--varia-control`: icon buttons, inputs, selects. */
+  /** `--varia-control`: buttons, inputs, selects. */
   readonly control: number
-  /** `--varia-row`: tree and list rows (the results grid keeps its own 20 px rows until its height is a runtime value). */
+  /** `--varia-row`: tree, grid and list rows. */
   readonly row: number
   /** `--varia-status`: the status bars. */
   readonly status: number
+}
+export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
+  header: 'The title bar.', bar: 'Tab strips, the query bar, side-bar headers.', control: 'Buttons, inputs, selects.', row: 'Tree, grid and list rows.', status: 'The status bars.'
+}
+/**
+ * The styles.css rules whose height is each token today; tests/theme-metrics.test.ts checks the list both ways. The title
+ * bar (34 px), toolbar controls (28 px), padded buttons and inputs, the explorer toolbar (32 px), dock headers (28 px) and grid rows
+ * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
+ */
+export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
+  header: [], bar: ['.query-tabs'], control: ['.icon-button'], row: ['.explorer-row'], status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {
@@ -84,8 +109,13 @@ export function metricVariables(density: Density = defaultDensity): Readonly<Rec
     ...Object.fromEntries(Object.entries(shadows).map(([name, shadow]) => [`--varia-shadow-${name}`, `0 ${px(shadow.y)} ${px(shadow.blur)}`])),
     ...Object.fromEntries(Object.entries(motion).map(([name, entry]) => [`--varia-motion-${name}`, ms(entry.ms)])),
     '--varia-motion-ease': motionEasing,
-    ...Object.fromEntries(Object.entries(densities[density]).map(([name, value]) => [`--varia-${name}`, px(value)]))
+    ...densityVariables(density)
   }
+}
+
+/** A density's bar and row heights, `--varia-header` … `--varia-status`. */
+export function densityVariables(density: Density): Readonly<Record<string, string>> {
+  return Object.fromEntries(Object.entries(densities[density]).map(([name, value]) => [`--varia-${name}`, px(value)]))
 }
 
 /** What styles.css's `prefers-reduced-motion: reduce` block sets on :root. */
@@ -98,7 +128,8 @@ const table = (head: readonly string[], rows: readonly (readonly (string | numbe
 
 /** docs/themes/metrics.md. */
 export function renderMetricDocs(): string {
-  const densityRows = (Object.keys(densities.compact) as (keyof DensityMetrics)[]).map(name => [`\`--varia-${name}\``, densities.compact[name], densities.comfortable[name]])
+  const densityRows = (Object.keys(densities.compact) as (keyof DensityMetrics)[]).map(name => [`\`--varia-${name}\``, densities.compact[name], densities.comfortable[name], densityPlanned[name],
+    densityUse[name].length ? densityUse[name].map(selector => `\`${selector}\``).join(', ') : 'Not yet'])
   return [
     '# Metric tokens',
     '',
@@ -111,6 +142,10 @@ export function renderMetricDocs(): string {
     '## Type scale',
     '',
     table(['Size', 'Line height', 'px', 'Use'], Object.entries(typeScale).map(([name, step]) => [`\`--varia-size-${name}\``, `\`--varia-line-${name}\``, `${step.size} / ${step.line}`, step.use])),
+    '',
+    'These surfaces keep their earlier size until they are restyled:',
+    '',
+    table(['Surface', 'Rules', 'Now', 'Planned'], typeScalePending.map(entry => [entry.what, entry.selectors.map(selector => `\`${selector}\``).join(', '), `\`${entry.now}\``, `\`${entry.planned}\``])),
     '',
     '## Spacing',
     '',
@@ -128,15 +163,17 @@ export function renderMetricDocs(): string {
     '',
     '## Motion',
     '',
-    `One easing curve, \`--varia-motion-ease\` (\`${motionEasing}\`). Under \`prefers-reduced-motion: reduce\`, ${reducedMotion.map(name => `\`--varia-motion-${name}\``).join(' and ')} are 0 ms, and every looping animation stops.`,
+    `One easing curve, \`--varia-motion-ease\` (\`${motionEasing}\`). Under \`prefers-reduced-motion: reduce\`, ${reducedMotion.map(name => `\`--varia-motion-${name}\``).join(' and ')} are 0 ms, and every looping animation stops, Monaco's codicon spinners included.`,
+    '',
+    'Only `:hover` rules carry the fast transition, and rules that mark a state (a selected row, the current page or tab, a menu moved to with the keys) set `transition: none`, so state changes are instant.',
     '',
     table(['Token', 'ms', 'Use'], Object.entries(motion).map(([name, entry]) => [`\`--varia-motion-${name}\``, entry.ms, entry.use])),
     '',
     '## Bars and rows',
     '',
-    `Compact is the default and the only density \`:root\` sets; Comfortable is planned as an option.`,
+    `Compact is the default and the only density \`:root\` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, the explorer toolbar (32 px), dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.`,
     '',
-    table(['Token', 'Compact px', 'Comfortable px'], densityRows),
+    table(['Token', 'Compact px', 'Comfortable px', 'Planned for', 'Sized with it now'], densityRows),
     ''
   ].join('\n')
 }

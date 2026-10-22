@@ -11,8 +11,10 @@ body { margin: 0; user-select: none; }
 input, textarea, [contenteditable="true"], .monaco-editor, .messages, [role="alert"] { user-select: text; }
 button, select { user-select: none; }
 button, input, select { font: inherit; }
-button { color: var(--varia-button-secondaryForeground); background: transparent; border: 1px solid transparent; border-radius: var(--varia-radius-sm); cursor: pointer; padding: 6px 9px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), color var(--varia-motion-fast) var(--varia-motion-ease), border-color var(--varia-motion-fast) var(--varia-motion-ease); }
-button:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); }
+button { color: var(--varia-button-secondaryForeground); background: transparent; border: 1px solid transparent; border-radius: var(--varia-radius-sm); cursor: pointer; padding: 6px 9px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; }
+/* Only hover and pressed fills fade in (80 ms; leaving hover is instant): selection, the current page or tab and a menu moved to with the keys
+   change at once, as in SSMS, so a state rule that colours a button or row sets transition: none. */
+button:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), color var(--varia-motion-fast) var(--varia-motion-ease), border-color var(--varia-motion-fast) var(--varia-motion-ease); }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 button:disabled { opacity: .4; cursor: default; }
 button.primary { color: var(--varia-button-foreground); background: var(--varia-button-background); font-weight: 600; }
@@ -32,6 +34,7 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .title-bar-menus { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
 .title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); outline: 1px solid transparent; outline-offset: -1px; }
 .title-bar-menus button:hover, .title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); outline: 1px solid var(--varia-menubar-selectionBorder); outline-offset: -1px; }
+.title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { transition: none; }
 /* A resting pointer highlights its button only while no other one is open or keyboard-focused. */
 .title-bar-menus:has(button[aria-expanded="true"], button:focus-visible) button:hover:not(.active, [aria-expanded="true"], :focus-visible) { background: transparent; color: var(--varia-button-secondaryForeground); outline: none; }
 .title-bar-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 20px; font-size: var(--varia-size-xs); color: var(--varia-titleBar-activeForeground); pointer-events: none; }
@@ -143,11 +146,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
-.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; cursor: default; transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
-.explorer-row:hover { background: var(--varia-list-hoverBackground); }
-.explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); }
-.explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
-.explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; }
+.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; cursor: default; }
+.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
+.explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 .oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
 .oe-indent { flex: none; }
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
@@ -317,7 +320,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
 .output-toolbar { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; height: 42px; border-bottom: 1px solid var(--varia-panel-border); padding-right: 18px; background: var(--varia-panelTitle-background); }
 .output-toolbar button { padding: 12px 19px; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
-.output-toolbar button.active { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px var(--varia-panelTitle-activeBorder); }
+.output-toolbar button.active { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px var(--varia-panelTitle-activeBorder); transition: none; }
 .output-toolbar button .badge { margin-left: 8px; padding: 1px 5px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); }
 .output-toolbar small { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
@@ -462,7 +465,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connection-footer > button { min-width: 78px; border-color: var(--varia-button-border); }
 .connection-tabs { display: flex; gap: 12px; margin: 2px 0 10px; }
 .connection-tabs > button { border-radius: 0; border-bottom: 2px solid transparent; padding: 6px 0; }
-.connection-tabs > button[aria-selected="true"] { color: var(--varia-panelTitle-activeForeground); border-bottom-color: var(--varia-panelTitle-activeBorder); }
+.connection-tabs > button[aria-selected="true"] { color: var(--varia-panelTitle-activeForeground); border-bottom-color: var(--varia-panelTitle-activeBorder); transition: none; }
 .connection-filter { width: 100%; margin-bottom: 7px; }
 .connection-sources { height: 176px; overflow-y: auto; border-bottom: 1px solid var(--varia-dialog-separatorBackground); padding-bottom: 8px; }
 .connection-sources details { margin: 2px 0 8px; }
@@ -569,7 +572,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-caption { padding: 6px 10px; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-settings-headerForeground); }
 .object-dialog-pages { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding-bottom: 6px; }
 .object-dialog-pages > button { display: flex; align-items: center; gap: 6px; border-radius: 0; padding: 3px 10px; text-align: left; }
-.object-dialog-pages > button[aria-current="page"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.object-dialog-pages > button[aria-current="page"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .object-dialog-pages > button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .object-dialog-box { border-top: 1px solid var(--varia-dialog-separatorBackground); padding-bottom: 8px; }
 .object-dialog-box dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 6px; margin: 0; padding: 0 10px; font-size: var(--varia-size-xs); }
@@ -578,6 +581,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-progress { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: var(--varia-size-xs); }
 .object-dialog-spinner { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
 @media (prefers-reduced-motion: reduce) { .object-dialog-spinner { animation: none; } }
+/* Monaco's codicon-modifiers.css spins .codicon-loading and .codicon-modifier-spin (the query status bar, the tree's
+   Loading rows) with selectors up to two classes long; these outrank them (tests/theme-metrics.test.ts compares them). */
+@media (prefers-reduced-motion: reduce) { :root .codicon.codicon-loading, :root .codicon.codicon-modifier-spin, :root .codicon-tree-item-loading::before { animation: none; } }
 .object-dialog-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .object-dialog-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .object-dialog-script { position: relative; display: inline-flex; }
@@ -633,7 +639,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-container[hidden] { display: none; }
 .table-designer { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--varia-editor-background); color: var(--varia-foreground); }
 .table-designer-toolbar { display: flex; align-items: center; gap: 2px; padding: 2px 6px; background: var(--varia-toolbar-background); border-bottom: 1px solid var(--varia-toolbar-border); }
-.table-designer-toolbar .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.table-designer-toolbar .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .table-designer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: var(--varia-size-sm); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border-bottom: 1px solid var(--varia-editorWidget-border); overflow-wrap: anywhere; }
 .table-designer-bar.error { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
 .table-designer-bar > span:not(.codicon) { flex: 1; min-width: 0; }
@@ -648,7 +654,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .table-designer-section-head { display: flex; align-items: center; gap: 2px; padding: 2px 6px 2px 10px; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-panelTitle-activeForeground); background: var(--varia-panelTitle-background); }
 .table-designer-section-head > span { flex: 1; }
 .table-designer-section-head .icon-button { width: 22px; height: 22px; }
-.table-designer-section-head .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.table-designer-section-head .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .table-designer .options-list { font-size: var(--varia-size-sm); }
 .table-designer .options-row input, .table-designer .options-row select { width: 100%; min-width: 0; height: 20px; padding: 0 4px; line-height: 16px; }
 .table-designer-empty, .table-designer-description { margin: 0; padding: 6px 10px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }

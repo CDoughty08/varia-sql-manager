@@ -163,8 +163,9 @@ pages, limits, error codes, display formats, benchmarks).
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
 - Sizes, radii, shadows and motion are metric tokens in `src/shared/theme/metrics.ts`, not theme keys, mirrored on
-  `:root` in `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them, keeps text at 11 px or more, and
-  stops every animation under reduced motion; regenerate `docs/themes/metrics.md` with
+  `:root` in `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (font sizes in renderer code too),
+  keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
+  spinners included; regenerate `docs/themes/metrics.md` with
   `npx vitest run tests/theme-metrics.test.ts -u`.
 
 ## Testing expectations
