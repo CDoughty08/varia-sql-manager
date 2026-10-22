@@ -97,7 +97,7 @@ explorer.context, for a server
   ---
   New &Query  -++-
   ---
-  Copy &Name  -+++
+  Copy N&ame  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a server whose connection was lost
@@ -129,7 +129,7 @@ explorer.context, for a database
       &File…  -++-
       C&lipboard  -+++
   ---
-  Copy &Name  -+++
+  Copy N&ame  -+++
   ---
   Rena&me  F2  -+++
   D&elete  Delete  -+++
@@ -138,10 +138,16 @@ explorer.context, for a database
   ---
   &Properties  -+++
 explorer.context, for a Tables folder
+  &New >
+    &Table…  ----
+  ---
   F&ilter Settings…  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a filtered Tables folder
+  &New >
+    &Table…  ----
+  ---
   F&ilter Settings…  -+++
   Remo&ve Filter  -+++
   ---
@@ -195,7 +201,7 @@ explorer.context, for a table
       &File…  ----
       C&lipboard  ----
   ---
-  Copy &Name  -+++
+  Copy N&ame  -+++
   ---
   Rena&me  F2  -+++
   D&elete  Delete  -+++
@@ -204,11 +210,11 @@ explorer.context, for a table
 explorer.context, for a Columns folder still loading
   Re&fresh  F5  -+++
 explorer.context, for a fully loaded Columns folder
-  Copy &Name  -+++
+  Copy N&ame  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a column
-  Copy &Name  -+++
+  Copy N&ame  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a return value
@@ -228,7 +234,7 @@ explorer.context, for a login
       &File…  -++-
       C&lipboard  -+++
   ---
-  Copy &Name  -+++
+  Copy N&ame  -+++
   ---
   Re&fresh  F5  -+++
 output.context, for a results grid with selected cells

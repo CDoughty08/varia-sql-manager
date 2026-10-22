@@ -557,10 +557,13 @@ async function workbench(id, method, params, credit) {
           files: [], filesTruncated: false, filegroups: [], filegroupsTruncated: false,
           server: { level: 16, sysadmin: true, filestreamLevel: 0, pathSeparator: '\\', edition: 3, containedAuthentication: false }, sessions: 0
         }, elapsedMs: 1 })
+        // The table designer: the database's schemas and default filegroup.
+        case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
         default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
       }
     case 'actions.script':
       switch (params.action) {
+        case 'createTable': return respond(id, { text: `CREATE TABLE ${params.design.schema}.${params.design.name}\r\n\t(\r\n\t)  ON [PRIMARY]\r\nGO\r\n`, database: params.target.name, warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }

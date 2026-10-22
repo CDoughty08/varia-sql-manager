@@ -6,7 +6,7 @@ import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { ResultsService } from '../results/ResultsService'
-import type { SessionNotice } from '../documents'
+import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
 
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number }
@@ -82,7 +82,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /** Whether the query is on a live connection, so it may have a session to read. */
   private connected(id: string): boolean {
-    const connectionId = this.documents.get(id)?.connectionId, connection = connectionId ? this.getConnection(connectionId) : undefined
+    // Only a query has a session: a table designer's connection is not one to read.
+    const document = this.documents.get(id), connectionId = isQueryDocument(document) ? document?.connectionId : undefined, connection = connectionId ? this.getConnection(connectionId) : undefined
     return !this.disposed && !!connection && !connection.lost
   }
   /** Whether the idle query's session may hold a transaction (read now, as transactionState does). */

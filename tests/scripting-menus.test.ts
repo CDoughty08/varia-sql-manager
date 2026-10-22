@@ -66,7 +66,7 @@ describe('Script As in Object Explorer\'s context menu', () => {
     expect(verbs).toEqual([['CREATE To', true], ['ALTER To', false], ['CREATE OR ALTER To', false], ['DROP To', true], ['DROP And CREATE To', true], ['-'],
       ['SELECT To', true], ['INSERT To', true], ['UPDATE To', true], ['DELETE To', true], ['-'], ['EXECUTE To', false]])
     const procedure = resolveFor('linux', { kind: 'procedure', subtype: 'sql' })
-    expect(describe_(procedure).filter(line => !line.startsWith('  '))).toEqual(['Modif&y', '---', '&Script Stored Procedure as >', '---', 'Copy &Name', '---', 'Rena&me', 'D&elete', '---', 'Re&fresh'])
+    expect(describe_(procedure).filter(line => !line.startsWith('  '))).toEqual(['Modif&y', '---', '&Script Stored Procedure as >', '---', 'Copy N&ame', '---', 'Rena&me', 'D&elete', '---', 'Re&fresh'])
     expect(resolveFor('linux', { kind: 'procedure', subtype: 'clr' }).some(item => item.kind === 'command' && item.id === 'explorer.modify')).toBe(false)
     for (const [kind, subtype, title] of [['type', 'clr', 'Script User-Defined Type as'], ['type', 'alias', 'Script User-Defined Data Type as'], ['tableType', undefined, 'Script User-Defined Table Type as']] as const) {
       expect(resolveFor('win32', { kind, subtype }).find(item => item.key === 'explorer.scriptAs'), `${kind} ${subtype}`).toMatchObject({ title })

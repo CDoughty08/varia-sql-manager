@@ -56,6 +56,10 @@ Delete Object for a database also offers "Delete backup and restore history info
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
 confirmation.
 
+The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
+`tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
+[docs/table-designer.md](table-designer.md) describes them.
+
 ## Database Properties
 
 Database Properties opens on General (read-only facts: backups, name, status, owner, date created, size, space available,

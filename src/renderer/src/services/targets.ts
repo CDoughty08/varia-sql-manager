@@ -45,21 +45,30 @@ export class TargetService {
   }
   changeDatabase(tabId: string, database: string): void { this.update(tabId, { database }) }
   /** After an explicit Reconnect, the lost connection's queries move to the new one (keeping their results), and the
-   *  next execution of each says that it runs in a new session. Nothing else ever retargets a query this way. */
+   *  next execution of each says that it runs in a new session. Nothing else ever retargets a query this way. A table
+   *  designer moves only when the new connection is to the server it was opened on: the Connect dialog's server can be
+   *  edited, and its Save must never create the table on a server its tab does not name. */
   retarget(oldId: string, newId: string): void {
-    for (const document of this.documents.getSnapshot().documents) if (document.connectionId === oldId) this.documents.update(document.id, { connectionId: newId, sessionNotice: 'restarted' })
+    const server = this.connections.get(newId)?.server
+    for (const document of this.documents.getSnapshot().documents) {
+      if (document.connectionId !== oldId) continue
+      if (isQueryDocument(document)) this.documents.update(document.id, { connectionId: newId, sessionNotice: 'restarted' })
+      else if (server !== undefined && this.documents.isCustom(document.id) && this.documents.follows(document.id, server)) this.documents.update(document.id, { connectionId: newId })
+    }
   }
   /** Disconnects every query that is not running, ending its session (open transactions are asked about once, first);
    *  the running ones stay connected and are reported, and so does one that finished during the prompt with a transaction
    *  nobody was asked about. */
   async disconnectAll(): Promise<void> {
     await this.runDocumentTask(async () => {
-      const asked = new Set(this.documents.getSnapshot().documents.filter(document => document.connectionId !== undefined && !this.queries.isRunning(document.id)).map(document => document.id))
+      // A table designer has no session to end, and keeps its server, as SSMS's does.
+      const asked = new Set(this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId !== undefined && !this.queries.isRunning(document.id)).map(document => document.id))
       const plan = await this.queries.confirmSessions('disconnectAll', [...asked])
       if (!plan) return
       let running = 0, unasked = 0
-      for (const { id, connectionId } of this.documents.getSnapshot().documents) {
-        if (connectionId === undefined) continue
+      for (const document of this.documents.getSnapshot().documents) {
+        const { id, connectionId } = document
+        if (connectionId === undefined || !isQueryDocument(document)) continue
         if (this.queries.isRunning(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         await this.documents.endSession(id, plan.get(id))

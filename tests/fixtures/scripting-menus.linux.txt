@@ -45,7 +45,7 @@ explorer.context, for a table
       &File… (disabled)
       C&lipboard (disabled)
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete
@@ -98,7 +98,7 @@ explorer.context, for a history table
       &File… (disabled)
       C&lipboard (disabled)
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me (disabled)
   D&elete (disabled)
@@ -151,7 +151,7 @@ explorer.context, for a ledger history table
       &File… (disabled)
       C&lipboard (disabled)
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me (disabled)
   D&elete (disabled)
@@ -204,7 +204,7 @@ explorer.context, for a view
       &File… (disabled)
       C&lipboard (disabled)
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete
@@ -257,7 +257,7 @@ explorer.context, for a ledger view
       &File… (disabled)
       C&lipboard (disabled)
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me (disabled)
   D&elete (disabled)
@@ -293,7 +293,7 @@ explorer.context, for a T-SQL procedure
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete
@@ -327,7 +327,7 @@ explorer.context, for a CLR procedure
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete
@@ -368,7 +368,7 @@ explorer.context, for an inline table-valued function
       &File… (disabled)
       C&lipboard (disabled)
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete
@@ -409,7 +409,7 @@ explorer.context, for a scalar function
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete
@@ -448,7 +448,7 @@ explorer.context, for an aggregate
       &File… (disabled)
       C&lipboard (disabled)
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete (disabled)
@@ -479,7 +479,7 @@ explorer.context, for a DML trigger
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh
 explorer.context, for a database
@@ -503,7 +503,7 @@ explorer.context, for a database
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me
   D&elete
@@ -532,7 +532,7 @@ explorer.context, for a database snapshot
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me (disabled)
   D&elete
@@ -555,7 +555,7 @@ explorer.context, for an index
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh
 explorer.context, for a foreign key
@@ -573,7 +573,7 @@ explorer.context, for a foreign key
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh
 explorer.context, for a user
@@ -591,7 +591,7 @@ explorer.context, for a user
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh
 explorer.context, for a login
@@ -609,7 +609,7 @@ explorer.context, for a login
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh
 explorer.context, for a linked server
@@ -627,21 +627,21 @@ explorer.context, for a linked server
       &File…
       C&lipboard
   ---
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh
 explorer.context, for a certificate (deferred)
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh
 explorer.context, for an extended procedure (deferred)
-  Copy &Name
+  Copy N&ame
   ---
   Rena&me (disabled)
   D&elete (disabled)
   ---
   Re&fresh
 explorer.context, for a table type's index (not scriptable)
-  Copy &Name
+  Copy N&ame
   ---
   Re&fresh

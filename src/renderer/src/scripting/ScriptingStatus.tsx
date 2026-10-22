@@ -24,7 +24,7 @@ export default function ScriptingStatus() {
     return () => {
       if (document.activeElement !== node) return
       if (returnTo.current?.isConnected) returnTo.current.focus()
-      else documents.boundEditor?.focus()
+      else documents.focusActive()
     }
   }, [documents])
   return <span className="status-scripting" role="status" onFocus={entered}>

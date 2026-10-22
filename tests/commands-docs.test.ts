@@ -11,7 +11,9 @@ describe('generated command documentation', () => {
     await expect(docs).toMatchFileSnapshot('../docs/commands.md')
   })
   it('lists every command and context key', () => {
-    for (const id of commandIds) expect(docs, id).toContain(`| \`${id}\` |`)
+    // Within the command tables: a command placed in a menu also appears in the menu tables, which hid a whole category's absence.
+    const commands = docs.slice(docs.indexOf('\n## Commands ('), docs.indexOf('\n## Menus\n'))
+    for (const id of commandIds) expect(commands, id).toContain(`| \`${id}\` |`)
     for (const key of contextKeyNames) expect(docs, key).toContain(`| \`${key}\` |`)
     expect(docs).toContain(`## Commands (${commandIds.length})`)
     expect(paletteLabel('query.execute')).toBe('Query: Execute')
@@ -23,10 +25,10 @@ describe('generated command documentation', () => {
     expect(docs).toContain('Query tab context menu › Open Containing Folder (Windows, Linux only); Query tab context menu › Reveal in Finder (macOS only) |')
     expect(docs).toContain('| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) |')
     expect(docs).toContain('| Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |')
-    expect(docs).toContain('| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `hasActiveDocument` | Edit › Advanced › Uncomment Selection |')
+    expect(docs).toContain('| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `activeDocumentIsText` | Edit › Advanced › Uncomment Selection |')
     // Varia's own editor chords are marked like Monaco's: the editor dispatches them.
-    expect(docs).toContain('| Toggle Bookmark | `edit.toggleBookmark` | Ctrl+K Ctrl+K * | Ctrl+K Ctrl+K * | ⌘K ⌘K * | `hasActiveDocument` | Edit › Bookmarks › Toggle Bookmark |')
-    expect(docs).toContain('| Find Next | `edit.findNext` | F3 * | F3 * | ⌘G *, F3 * | `hasActiveDocument` | Edit › Find and Replace › Find Next |')
+    expect(docs).toContain('| Toggle Bookmark | `edit.toggleBookmark` | Ctrl+K Ctrl+K * | Ctrl+K Ctrl+K * | ⌘K ⌘K * | `activeDocumentIsText` | Edit › Bookmarks › Toggle Bookmark |')
+    expect(docs).toContain('| Find Next | `edit.findNext` | F3 * | F3 * | ⌘G *, F3 * | `activeDocumentIsText` | Edit › Find and Replace › Find Next |')
     expect(docs).toContain('| Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |')
     expect(docs).toContain('| Create Custom Theme… | `preferences.createTheme` | — | — | — | Always | View › Theme › Create Custom Theme… |')
   })

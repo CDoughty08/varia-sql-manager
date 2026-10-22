@@ -42,6 +42,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string ActionsRenamed => Name + "_actr";
     /// <summary>Where the Database Properties checks change options, scoped configurations and the owner (created on demand).</summary>
     public string Properties => Name + "_dbp";
+    /// <summary>Where the table designer checks create tables (created on demand).</summary>
+    public string Designer => Name + "_tbd";
+    /// <summary>A second table designer database, whose name HAS_PERMS_BY_NAME cannot read unbracketed (created on demand).</summary>
+    public string DesignerOdd => Name + "_tbd.]";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
     /// <summary>Held in memory only, never printed.</summary>
@@ -50,8 +54,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public int Major { get; private set; }
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
-    // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database and _tbd the table designer's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd)?$")]
+    // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\])?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -181,6 +185,23 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Creates the empty, marked Database Properties database.</summary>
     public Task<string> CreatePropertiesAsync() => CreateMarkedAsync(Properties);
 
+    /// <summary>Creates the empty, marked table designer database.</summary>
+    public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
+
+    /// <summary>Creates the empty, marked second table designer database, case- and accent-insensitive.</summary>
+    public Task<string> CreateDesignerOddAsync() => CreateMarkedAsync(DesignerOdd, "Latin1_General_100_CI_AI");
+
+    /// <summary>For a bare scratch name: the low-privilege login (named like the database, so the sweep finds it), when the
+    /// server accepts SQL logins; false when it accepts Windows logins only.</summary>
+    public async Task<bool> CreateLoginAsync()
+    {
+        if ((await Exec("SELECT CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly'));")).Scalar != "0") return false;
+        Login = Name;
+        await Exec("CREATE LOGIN " + Bracket(Login) + " WITH PASSWORD = " + Quote(Password) + ", CHECK_POLICY = OFF, DEFAULT_DATABASE = [master];");
+        loginCreated = true;
+        return true;
+    }
+
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()
     {
@@ -197,10 +218,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return ActionsRenamed;
     }
 
-    private async Task<string> CreateMarkedAsync(string name)
+    private async Task<string> CreateMarkedAsync(string name, string collation = "Latin1_General_100_CS_AS_SC")
     {
         created.Add(name);
-        await Exec("CREATE DATABASE " + Bracket(name) + " COLLATE Latin1_General_100_CS_AS_SC;\nALTER DATABASE " + Bracket(name) + " SET RECOVERY SIMPLE;");
+        await Exec("CREATE DATABASE " + Bracket(name) + " COLLATE " + collation + ";\nALTER DATABASE " + Bracket(name) + " SET RECOVERY SIMPLE;");
         await Exec("EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;", name);
         return name;
     }

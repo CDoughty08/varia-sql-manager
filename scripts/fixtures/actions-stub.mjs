@@ -9,6 +9,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * (dbo.ShipOrder). Renaming to "Taken" is NAME_IN_USE; renaming to "Blocked" waits, as on another session's lock, until
  * its Stop arrives and then answers as the backend does once SQL Server cancelled it; a rename returns sp_rename's caution.
  * Database Properties describes AppData (two files, PRIMARY, one session) and master; Script returns `propertiesScript`.
+ * The table designer describes any database (schemas dbo and sales); its script is `designerScript`; saving a table named
+ * "Taken" is NAME_IN_USE, one named "Held" waits until its Stop arrives, and any other in dbo appears under Tables.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -17,6 +19,7 @@ export const caution = 'Caution: Changing any part of an object name could break
 export const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
 export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
 export const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
+export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
@@ -26,6 +29,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
   const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
   const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
+  const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -76,8 +80,19 @@ export function installActionsStub({ ipcMain }, { statics }) {
     return ok({ deleteTarget: { name: label(target), type: target.kind === 'database' ? 'Database' : 'Table', owner: target.kind === 'database' ? 'sa' : 'dbo', warnings, dependentsTruncated: false,
       ...(target.kind === 'database' ? { isSnapshot: false } : {}) }, elapsedMs: 1 })
   }
+  /** The table designer's Save: NAME_IN_USE for "Taken", a wait until Stop for "Held", otherwise a new table under Tables.
+   *  Its steps are the backend's (DesignerSql.Statements and the commit): the key's only for a keyed design. */
+  function createTable({ design, requestId }) {
+    const titles = ['Create the table', ...design.primaryKey.length ? ['Add the primary key'] : [], 'Set lock escalation', 'Commit']
+    if (design.name === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'An object named Taken already exists in schema dbo.', retryable: false } })
+    if (design.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: titles.map((message, index) => ({ status: index === 0 ? 'cancelled' : 'skipped', message })), messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: 'The action was stopped at "Create the table"; SQL Server cancelled that statement. SQL Server rolled back the transaction; the table was not created.', retryable: true } }))))
+    if (design.schema === 'dbo') stub.tables = [...stub.tables, design.name]
+    return ok({ steps: titles.map(message => ({ status: 'done', message })), messages: [], elapsedMs: 1 })
+  }
   function execute(params) {
     const { target } = params
+    if (params.action === 'createTable') return createTable(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', message: key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
@@ -108,12 +123,14 @@ export function installActionsStub({ ipcMain }, { statics }) {
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
       case 'actions.describe':
         switch (params.dialog) {
+          case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
           default: return describe(params)
         }
       case 'actions.script':
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
+          case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)

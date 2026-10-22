@@ -45,6 +45,8 @@ import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { actionsContribution } from '../contributions/actions'
+import { designerContribution } from '../contributions/designer'
+import { TableDesignerService } from '../designer/TableDesignerService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -114,6 +116,8 @@ export interface Workbench extends Disposable {
   readonly actions: ObjectActionService
   /** The object dialog that is open (Delete Object), its requests and its phase. */
   readonly dialogs: ObjectDialogService
+  /** The table designers (New › Table…): their designs, saves and prompts. */
+  readonly designers: TableDesignerService
   readonly theme: ThemeService
 }
 /**
@@ -165,8 +169,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Every Script As request carries the Scripting page's options.
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
-  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.boundEditor?.focus() }) })
+  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  const designers = new TableDesignerService({
+    api, documents, files, connections, explorer,
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -183,6 +191,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     inputMode,
     recentFiles,
     recovery,
+    designer: designers.context,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -240,6 +249,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scripting,
     actions,
     dialogs,
+    designers,
     theme,
     dispose: () => {
       if (disposed) return
@@ -259,6 +269,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       results.dispose()
       resultMemory.dispose()
       resultClient.dispose()
+      // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
+      designers.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()
@@ -295,6 +307,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     helpContribution(workbench, api),
     scriptingContribution(workbench),
     actionsContribution(workbench),
+    designerContribution(workbench),
     settingsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.

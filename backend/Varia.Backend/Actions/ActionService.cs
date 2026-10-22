@@ -3,6 +3,7 @@ using System.Data;
 using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Common;
+using Varia.Backend.Designer;
 using Varia.Backend.Explorer;
 using Varia.Backend.Scripting;
 
@@ -51,10 +52,11 @@ internal sealed record ActionSubject(ObjectRefDto Target, string Display, string
 /// request cancelled by a disconnect throws CANCELLED. The reply never waits on blocked I/O: the request awaits the job
 /// with its token, and the job alone owns the connection and its gate until it ends. Stop on DDL is the exception, bounded
 /// by StopGrace: its reply waits for SQL Server to end the statement, so it says which steps completed.</summary>
-internal sealed class ActionService : IDisposable
+internal sealed partial class ActionService : IDisposable
 {
     private readonly IActionHost host;
     private readonly ActionsCatalog catalog;
+    private readonly DesignerCatalog designer;
     private readonly ExplorerCatalog explorer;
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> readGates = new(StringComparer.Ordinal);
@@ -70,6 +72,7 @@ internal sealed class ActionService : IDisposable
         this.host = host;
         Options = options ?? new ActionServiceOptions();
         this.catalog = catalog ?? ActionsCatalog.Current;
+        designer = DesignerCatalog.Current;
         this.explorer = explorer ?? ExplorerCatalog.Current;
         readTotal = new SemaphoreSlim(Options.ReadTotal);
         executeTotal = new SemaphoreSlim(Options.ExecuteTotal);
@@ -108,10 +111,11 @@ internal sealed class ActionService : IDisposable
     }
 
     /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe: a known
-    /// dialog and a target its action serves.</summary>
+    /// dialog and a target its action serves, or the table designer and a database, SQL Server's own included.</summary>
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
+        if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
@@ -125,21 +129,27 @@ internal sealed class ActionService : IDisposable
         switch (args.Action)
         {
             case "rename":
-                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null) throw Invalid("rename takes no delete options or changes.");
+                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null) throw Invalid("rename takes no delete options or changes.");
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
                 return renamed;
             case "delete":
-                if (args.NewName is not null || args.Changes is not null) throw Invalid("delete takes no new name or changes.");
+                if (args.NewName is not null || args.Changes is not null || args.Design is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
                 return deleted;
             case "properties":
+                if (args.Design is not null) throw Invalid("properties takes no design.");
                 var target = Target(args.Target, "properties");
                 DatabaseAlter.Validate(catalog, args);
                 return target;
+            case "createTable":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null) throw Invalid("createTable takes only a design.");
+                var database = DatabaseTarget(args.Target);
+                TableDesignValidator.Validate(designer, args.Design);
+                return database;
             default:
                 throw Invalid("action.");
         }
@@ -148,6 +158,7 @@ internal sealed class ActionService : IDisposable
     /// <summary>The longest script an action may return.</summary>
     private long ScriptLimit(string action) => action switch
     {
+        "createTable" => designer.Limit("scriptChars"),
         _ => catalog.Limit("scriptChars")
     };
 
@@ -160,6 +171,7 @@ internal sealed class ActionService : IDisposable
         return RunAsync(args.ConnectionId, args.RequestId, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
             {
+                "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
@@ -169,10 +181,12 @@ internal sealed class ActionService : IDisposable
     public Task<ActionScriptResult> ScriptAsync(ActionArgs args, CancellationToken token)
     {
         var target = Validate(args);
-        var database = target.Kind == "database" ? "master" : target.Database!;
+        // A new table's script runs in its database; a database action's in master.
+        var database = args.Action == "createTable" ? target.Name! : target.Kind == "database" ? "master" : target.Database!;
         return RunAsync(args.ConnectionId, args.RequestId, read: true, Options.ScriptBudget, token,
             (connection, profile, band, job) => args.Action switch
             {
+                "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
@@ -186,6 +200,7 @@ internal sealed class ActionService : IDisposable
         return RunAsync(args.ConnectionId, args.RequestId, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
             {
+                "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },

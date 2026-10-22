@@ -2,7 +2,7 @@ import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, VariaApi } from '../../../shared/contracts'
 import type { SessionEnd } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
-import { afterClose, isQueryDocument, kindInfo, type QueryDocument } from '../documents'
+import { afterClose, isQueryDocument, kindInfo, type CustomDocumentKind, type QueryDocument } from '../documents'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -20,6 +20,21 @@ export interface TextDocument { readonly name: string; readonly text: string; re
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
 type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
+/**
+ * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it
+ * cannot close now (a save running), a revision that moves with every change (the close prompt's "changed while
+ * confirming"), focus, and notice that it closed. The provider owns the document's content; DocumentService owns its tab.
+ */
+export interface CustomDocumentProvider {
+  readonly kind: CustomDocumentKind
+  save(id: string, saveAs: boolean): Promise<boolean>
+  canClose(id: string): string | undefined
+  revision(id: string): number
+  focus(id: string): void
+  closed(id: string): void
+  /** Whether the document moves with a reconnect to a connection on `server`. */
+  follows(id: string, server: string): boolean
+}
 /** A model's indentation, from Tools › Options › Text Editor › Transact-SQL › Tabs. */
 export interface ModelOptions { readonly tabSize: number; readonly indentSize: number; readonly insertSpaces: boolean }
 /** Options from settings; `refreshOptions` applies them again after they change. */
@@ -44,6 +59,9 @@ export function settingsDocumentOptions(values: () => SettingsValues): Required<
 
 export class DocumentService extends SnapshotStore<DocumentSnapshot> implements Disposable {
   private entries = new Map<string, DocumentEntry>()
+  /** Custom documents' ids, by kind; they have no model. */
+  private readonly customs = new Map<string, CustomDocumentKind>()
+  private readonly providers = new Map<CustomDocumentKind, CustomDocumentProvider>()
   private editor?: editor.IStandaloneCodeEditor
   private disposed = false
   private queryCounter = 1
@@ -56,6 +74,38 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   get(id: string): QueryDocument | undefined { return this.getSnapshot().documents.find(document => document.id === id) }
   get active(): QueryDocument | undefined { return this.get(this.getSnapshot().activeId) }
   getModel(id: string): editor.ITextModel | undefined { return this.entries.get(id)?.model }
+  /** Whether the document is a custom one (a table designer): no model, and its provider saves and closes it. */
+  isCustom(id: string): boolean { return this.customs.has(id) }
+  private provider(id: string): CustomDocumentProvider | undefined { const kind = this.customs.get(id); return kind ? this.providers.get(kind) : undefined }
+  registerProvider(provider: CustomDocumentProvider): Disposable {
+    if (this.providers.has(provider.kind)) throw new Error(`A ${provider.kind} provider is already registered.`)
+    this.providers.set(provider.kind, provider)
+    return { dispose: () => { if (this.providers.get(provider.kind) === provider) this.providers.delete(provider.kind) } }
+  }
+  /** Opens a custom document's tab at once, active, clean, with no model: the editor shows nothing while it is active. */
+  openCustom(kind: CustomDocumentKind, name: string, connectionId: string | undefined, database: string): QueryDocument {
+    if (this.disposed) throw new Error('The document service is disposed.')
+    if (!this.providers.has(kind)) throw new Error(`No ${kind} provider is registered.`)
+    const document: QueryDocument = { id: crypto.randomUUID(), name, database, connectionId, dirty: false, savedVersionId: null, kind }
+    this.customs.set(document.id, kind)
+    this.changed({ ...this.getSnapshot(), documents: [...this.getSnapshot().documents, document] })
+    this.activate(document.id)
+    return document
+  }
+  /** A custom document's unsaved state, as its provider says. */
+  setDirty(id: string, dirty: boolean): void { if (this.customs.has(id) && this.get(id)?.dirty !== dirty) this.replace(id, { dirty }) }
+  /** What changes with every edit: the model's version for text, the provider's revision for a custom document. */
+  revision(id: string): number { return this.entries.get(id)?.model.getVersionId() ?? this.provider(id)?.revision(id) ?? 0 }
+  /** Whether a custom document moves to a reconnected connection on `server` (a designer only to its own server). */
+  follows(id: string, server: string): boolean { return this.provider(id)?.follows(id, server) ?? false }
+  /** Why the document cannot close now (a custom document saving), or undefined. */
+  closeRefusal(id: string): string | undefined { return this.provider(id)?.canClose(id) }
+  /** Focus to the active document: the editor's text, or the custom document's own element. */
+  focusActive(): void {
+    const id = this.getSnapshot().activeId, provider = this.provider(id)
+    if (provider) provider.focus(id)
+    else this.editor?.focus()
+  }
   private changed(snapshot: DocumentSnapshot): void {
     this.publish(snapshot)
     this.events.emit({ type: 'documents.changed' })
@@ -151,7 +201,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (entry?.viewState) this.editor?.restoreViewState(entry.viewState)
   }
   activate(id: string): void {
-    if (id && !this.entries.has(id)) return
+    if (id && !this.entries.has(id) && !this.customs.has(id)) return
     if (id === this.getSnapshot().activeId) {
       this.events.emit({ type: 'documents.activated', tabId: id })
       return
@@ -220,11 +270,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** The document's file was deleted outside: it has unsaved changes until Save writes the file again. */
   markUnsaved(id: string): void { this.replace(id, { savedVersionId: null, dirty: true }) }
   async save(id: string, saveAs = false): Promise<boolean> {
+    const provider = this.provider(id)
+    if (provider) return provider.save(id, saveAs)
     const document = this.get(id), model = this.entries.get(id)?.model
     if (!document || !model) return false
     model.pushStackElement()
     const content = model.getValue(), savedVersionId = model.getAlternativeVersionId()
-    const result = await this.api.saveSqlFile({ fileId: document.file?.id, name: document.name, content, saveAs, ...document.kind ? { kind: document.kind } : {} })
+    const kind = document.kind === 'tableDesigner' ? undefined : document.kind
+    const result = await this.api.saveSqlFile({ fileId: document.file?.id, name: document.name, content, saveAs, ...kind ? { kind } : {} })
     if (!result.ok) throw new Error(result.error)
     if (!result.value || this.disposed || this.entries.get(id)?.model !== model) return false
     model.pushStackElement()
@@ -243,6 +296,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   // The caller holds runTask and has confirmed dirty state, open transactions (`transaction`) and running queries.
   async close(id: string, transaction?: SessionEnd): Promise<void> {
+    if (this.customs.has(id)) { this.closeCustom(id); return }
     const entry = this.entries.get(id)
     if (!entry) return
     const version = entry.model.getVersionId()
@@ -259,8 +313,19 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.events.emit({ type: 'documents.closed', tabId: id })
     if (current.activeId !== next.activeId) this.events.emit({ type: 'documents.activated', tabId: next.activeId })
   }
+  /** A custom document has no session to end and no model to dispose; its provider forgets it. */
+  private closeCustom(id: string): void {
+    const provider = this.provider(id), current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)
+    this.customs.delete(id)
+    if (current.activeId === id) this.showModel(next.activeId)
+    this.changed({ ...current, documents: next.tabs, activeId: next.activeId })
+    provider?.closed(id)
+    this.events.emit({ type: 'documents.closed', tabId: id })
+    if (current.activeId !== next.activeId) this.events.emit({ type: 'documents.activated', tabId: next.activeId })
+  }
   dispose(): void {
     this.disposed = true
+    this.customs.clear()
     this.editor?.setModel(null)
     this.editor = undefined
     for (const entry of this.entries.values()) { entry.subscription.dispose(); entry.model.dispose() }

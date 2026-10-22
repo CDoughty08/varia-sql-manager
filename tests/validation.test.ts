@@ -107,6 +107,18 @@ describe('IPC validation', () => {
       ['actions.describe', { ...describe, extra: 1 }], ['actions.execute', { ...properties, changes: {} }], ['actions.execute', { ...properties, changes: { options: { autoClose: 'yes' } } }],
       ['actions.execute', { ...properties, closeConnections: true }], ['actions.script', { ...properties, target }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
+    // The table designer: describe and createTable take a database, SQL Server's own included; main refuses malformed designs.
+    const design = { schema: 'dbo', name: "q]'); DROP TABLE x; --", columns: [{ name: 'Id', type: { system: 'int' }, allowNulls: false, identity: { seed: '1', increment: '1' } }], primaryKey: [0] }
+    const createTable = { action: 'createTable', ...ids, target: { kind: 'database', name: 'master' }, design }
+    expect(validateRequest('actions.execute', createTable)).toEqual(createTable)
+    expect(validateRequest('actions.script', createTable)).toEqual(createTable)
+    expect(validateRequest('actions.describe', { ...ids, dialog: 'tableDesigner', target: { kind: 'database', name: 'tempdb' } })).toMatchObject({ dialog: 'tableDesigner' })
+    for (const [method, value] of [
+      ['actions.execute', { ...createTable, target }], ['actions.execute', { ...createTable, newName: 'x' }], ['actions.execute', { ...createTable, design: { ...design, columns: [] } }],
+      ['actions.execute', { ...createTable, design: { ...design, columns: [{ ...design.columns[0], allowNulls: true }] } }], ['actions.script', { ...createTable, design: { ...design, extra: 1 } }],
+      ['actions.execute', { ...createTable, design: { ...design, columns: [{ ...design.columns[0], type: { system: 'varchar', length: 8001 } }] } }],
+      ['actions.describe', { ...ids, dialog: 'tableDesigner', target }]
+    ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // DDL runs on its own lane, without a deadline (Stop ends a lock wait); reads keep metadata deadlines around their budgets.
     expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0 })
     expect(methodPolicies['actions.describe']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 45_000 })

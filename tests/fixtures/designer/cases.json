@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "id": "minimal", "filegroup": "PRIMARY",
+      "design": { "schema": "dbo", "name": "Table_1", "columns": [{ "name": "Column1", "type": { "system": "nchar", "length": 10 }, "allowNulls": true }], "primaryKey": [] }
+    },
+    {
+      "id": "identity-key", "filegroup": "PRIMARY",
+      "design": {
+        "schema": "dbo", "name": "Orders", "primaryKey": [0],
+        "columns": [
+          { "name": "Id", "type": { "system": "int" }, "allowNulls": false, "identity": { "seed": "1", "increment": "1" } },
+          { "name": "Name", "type": { "system": "nvarchar", "length": 50 }, "allowNulls": true }
+        ]
+      }
+    },
+    {
+      "id": "composite-key", "filegroup": "PRIMARY",
+      "design": {
+        "schema": "sales", "name": "OrderLines", "primaryKey": [1, 0],
+        "columns": [
+          { "name": "OrderId", "type": { "system": "bigint" }, "allowNulls": false },
+          { "name": "Line", "type": { "system": "smallint" }, "allowNulls": false },
+          { "name": "Amount", "type": { "system": "decimal", "precision": 19, "scale": 4 }, "allowNulls": false },
+          { "name": "Shipped", "type": { "system": "datetime2", "scale": 3 }, "allowNulls": true },
+          { "name": "Flag", "type": { "system": "bit" }, "allowNulls": true },
+          { "name": "Code", "type": { "system": "char", "length": 3 }, "allowNulls": true }
+        ]
+      }
+    },
+    {
+      "id": "lob", "filegroup": "PRIMARY",
+      "design": {
+        "schema": "dbo", "name": "Documents", "primaryKey": [0],
+        "columns": [
+          { "name": "Id", "type": { "system": "uniqueidentifier" }, "allowNulls": false },
+          { "name": "Body", "type": { "system": "nvarchar", "max": true }, "allowNulls": true },
+          { "name": "Data", "type": { "system": "xml" }, "allowNulls": true },
+          { "name": "Raw", "type": { "system": "varbinary", "max": true }, "allowNulls": true },
+          { "name": "Stamp", "type": { "system": "timestamp" }, "allowNulls": false },
+          { "name": "At", "type": { "system": "datetimeoffset", "scale": 7 }, "allowNulls": true }
+        ]
+      }
+    },
+    {
+      "id": "hostile", "filegroup": "PRIMARY",
+      "design": {
+        "schema": "my schema", "name": "select", "primaryKey": [2],
+        "columns": [
+          { "name": "a]b", "type": { "system": "varchar", "length": 20 }, "allowNulls": false },
+          { "name": "GO", "type": { "system": "int" }, "allowNulls": true },
+          { "name": "x'); DROP TABLE t; --", "type": { "system": "decimal", "precision": 10, "scale": 0 }, "allowNulls": false, "identity": { "seed": "-0100", "increment": "-5" } },
+          { "name": "line\nGO\nbreak", "type": { "system": "money" }, "allowNulls": true },
+          { "name": "_ok@#$", "type": { "system": "time", "scale": 0 }, "allowNulls": true }
+        ]
+      }
+    }
+  ]
+}

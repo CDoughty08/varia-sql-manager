@@ -9,19 +9,22 @@ import {
   type ContextMenuId, type MenuId
 } from './menus'
 
-const categories: readonly (Category | undefined)[] = ['File', 'Edit', 'View', 'Query', 'Connection', 'Object Explorer', 'Preferences', 'Developer', undefined]
+// A Record so that a new Category cannot be left out of the document: its commands would otherwise vanish from it.
+const categoryOrder: Readonly<Record<Category, true>> = { File: true, Edit: true, View: true, Query: true, Connection: true, 'Object Explorer': true, 'Table Designer': true, Preferences: true, Developer: true, Help: true }
+const categories: readonly (Category | undefined)[] = [...Object.keys(categoryOrder) as Category[], undefined]
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(applicationMenus.map(menu => [menu.id, menu.label])) as Record<typeof applicationMenus[number]['id'], string>,
   'file.recent': 'File › Recent Files', 'edit.findReplace': 'Edit › Find and Replace', 'edit.advanced': 'Edit › Advanced', 'edit.bookmarks': 'Edit › Bookmarks', 'edit.intellisense': 'Edit › IntelliSense',
-  theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu',
+  theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu', 'explorer.new': 'Object Explorer context menu › New',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
-  'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
+  'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
 }
 /** How each context menu opens, and what its items act on. */
 const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Right-click the query editor, or press Shift+F10 or the context-menu key in it. A right-click outside the selection moves the caret there first.',
   'explorer.context': 'Right-click an Object Explorer node (which selects it) or the empty area below the servers, or press Shift+F10 or the context-menu key in the tree for the selected node. Items act on that node. Script … as names the node\'s kind (Script Table as, Script View as, …) and greys the verbs it does not support; docs/scripting.md lists them.',
+  'tableDesigner.context': 'Right-click the table designer grid (a row selector selects its row first), or press Shift+F10 or the context-menu key in the grid. Items act on the selected columns.',
   'documentTab.context': 'Right-click a query tab, or press Shift+F10 or the context-menu key on a focused tab. Items act on that tab\'s query.',
   'output.context': 'Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid\'s selection selects that cell first.',
   'dockTab.context': 'Right-click a panel\'s tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.',

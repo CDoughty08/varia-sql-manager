@@ -41,10 +41,17 @@ export const contextKeys = {
   textInputFocus: { type: 'boolean', scope: 'focus', description: '`editorTextFocus || inputFocus`.' },
   activePanel: { type: 'enum', scope: 'focus', values: ['explorer', 'editor', 'output', ''], description: "The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none." },
   outputGridFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in a results grid, which copies its selected cells rather than text.' },
+  designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
   quickInputVisible: { type: 'boolean', scope: 'state', description: 'The command palette or a picker is open.' },
   backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
   backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },
   hasActiveDocument: { type: 'boolean', scope: 'state', description: 'A query is open.' },
+  activeDocumentIsText: { type: 'boolean', scope: 'state', description: 'The active document has text in the editor: a query or a value opened from the results, not a table designer.' },
+  activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
+  designerEditable: { type: 'boolean', scope: 'state', description: "The active table designer has loaded, is not saving or saved, and its server is connected." },
+  designerSaving: { type: 'boolean', scope: 'state', description: 'A table designer is saving its table (Stop cancels it).' },
+  designerRowSelected: { type: 'boolean', scope: 'state', description: 'The active table designer has a column selected.' },
+  designerPrimaryKeyRemovable: { type: 'boolean', scope: 'state', description: "Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key." },
   activeDocumentIsQuery: { type: 'boolean', scope: 'state', description: 'The active document is a query, not an XML, JSON, or execution plan value opened from the results.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
@@ -93,6 +100,10 @@ export const contextKeys = {
   explorerServerLost: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a server whose connection was lost when the SQL backend restarted.' },
   explorerFolderFilterable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that Filter Settings can filter.' },
   explorerFolderFiltered: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that has a filter.' },
+  explorerFolder: {
+    type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...folderIds],
+    description: "The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else."
+  },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel whose tab the menu is for is floating.' }

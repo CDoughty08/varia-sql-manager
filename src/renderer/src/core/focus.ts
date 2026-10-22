@@ -10,10 +10,10 @@ const transient = '.quick-input, .menu-layer, .title-bar-menus'
 /**
  * Returns focus to the element that had it before the quick input or a menu opened, so the chosen command (Undo, Find,
  * Cut) acts on it. When that element is gone, cannot take focus (hidden with its query), or is inside a dialog that is
- * no longer the open one, the query editor gets focus instead, unless a dialog is open. With no query either, a menubar
+ * no longer the open one, the active document (the query editor, or a table designer) gets focus instead, unless a dialog is open. With no query either, a menubar
  * button or menu item gives focus up: once the menus have closed, nothing acts on its keys.
  */
-export function domFocusAdapter(documents: Pick<DocumentService, 'getSnapshot' | 'boundEditor'>): FocusAdapter {
+export function domFocusAdapter(documents: Pick<DocumentService, 'getSnapshot' | 'focusActive'>): FocusAdapter {
   return {
     capture: () => {
       const element = document.activeElement
@@ -27,8 +27,8 @@ export function domFocusAdapter(documents: Pick<DocumentService, 'getSnapshot' |
           if (document.activeElement === target) return
         }
       }
-      const editor = !modalOpen() && documents.getSnapshot().documents.length ? documents.boundEditor : undefined
-      if (editor) { editor.focus(); return }
+      // The active document: the query editor, or a table designer's grid.
+      if (!modalOpen() && documents.getSnapshot().documents.length) { documents.focusActive(); return }
       const element = document.activeElement
       if (element instanceof HTMLElement && element.closest('.menu-layer, .title-bar-menus')) element.blur()
     }

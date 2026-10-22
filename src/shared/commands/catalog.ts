@@ -2,9 +2,10 @@ import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
 import { actionCommandEntries } from '../actions/catalog.ts'
+import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Preferences' | 'Developer' | 'Help'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = [
   'new-file',
@@ -57,7 +58,10 @@ export const codicons = [
   'symbol-snippet',
   'save-all',
   'lock',
-  'history'
+  'history',
+  'key',
+  'insert',
+  'remove'
 ] as const
 export type Codicon = typeof codicons[number]
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
@@ -159,7 +163,7 @@ export const commandCatalog = {
   },
   // SSMS's Save As has no key on Windows: Ctrl+Shift+S is Save All there. macOS keeps ⇧⌘S, its Save As key.
   'file.saveAs': {
-    title: 'Save As…', category: 'File', icon: 'save-as', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
+    title: 'Save As…', category: 'File', icon: 'save-as', precondition: 'activeDocumentIsText && !documentBusy', unavailableHint: openFirst,
     keybindings: [{ mac: 'mod+shift+s' }],
     menus: [{ menu: 'file', group: '1_file', order: 4, mnemonic: 'a' }, { menu: 'documentTab.context', group: '1_save', order: 2, mnemonic: 'a' }]
   },
@@ -259,7 +263,7 @@ export const commandCatalog = {
   },
   // SSMS's F6: between the query editor and its results (the grid that last had focus, else the first, else Messages).
   'window.switchPane': {
-    title: 'Switch Between Query and Results', category: 'View', icon: 'output', keywords: ['results', 'editor', 'focus'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Switch Between Query and Results', category: 'View', icon: 'output', keywords: ['results', 'editor', 'focus'], precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'f6' }, { key: 'shift+f6' }]
   },
   'layout.save': {
@@ -359,6 +363,8 @@ export const commandCatalog = {
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
   ...actionCommandEntries(),
+  // New › Table… and the table designer's commands: generated from src/shared/designer/catalog.ts.
+  ...designerCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),
@@ -376,14 +382,14 @@ export const commandCatalog = {
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
-    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'n', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]
+    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]
   },
   'query.changeConnection': {
     title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy',
     menus: [{ menu: 'query.connection', group: '2_change', order: 1, mnemonic: 'h' }]
   },
   'query.disconnect': {
-    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentConnected && !queryRunning && !documentBusy',
+    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
     unavailableHint: 'This query is not connected.', menus: [{ menu: 'query.connection', group: '1_connect', order: 2, mnemonic: 'd' }]
   },
   'query.disconnectAll': {
@@ -392,7 +398,7 @@ export const commandCatalog = {
   },
   'query.changeDatabase': {
     title: 'Change Database…', category: 'Query', icon: 'database', keywords: ['use', 'catalog'],
-    precondition: 'activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
+    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
     // SSMS's Change Database key; Ctrl/⌘+K Ctrl/⌘+U in editor text still reaches Monaco (the dispatcher passes the chord through).
     keybindings: [{ key: 'mod+u' }], menus: [{ menu: 'query', group: '0_connection', order: 2, mnemonic: 'd' }]
   },
@@ -415,58 +421,58 @@ export const commandCatalog = {
   // Visual Studio's Insert key: overtype replaces the character after the caret. macOS keyboards have no Insert key.
   'editor.toggleOvertype': {
     title: 'Toggle Insert/Overtype Mode', category: 'Edit', keywords: ['insert', 'overtype', 'overwrite', 'ins', 'ovr'], toggled: 'editorOvertype',
-    precondition: 'hasActiveDocument', unavailableHint: openFirst, keybindings: [{ win: 'insert', linux: 'insert', when: 'editorTextFocus' }]
+    precondition: 'activeDocumentIsText', unavailableHint: openFirst, keybindings: [{ win: 'insert', linux: 'insert', when: 'editorTextFocus' }]
   },
   'edit.find': {
-    title: 'Find', category: 'Edit', icon: 'search', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Find', category: 'Edit', icon: 'search', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+f', native: true }], menus: [{ menu: 'edit.findReplace', group: '1_find', order: 1, title: 'Quick Find', mnemonic: 'q' }]
   },
   'edit.replace': {
-    title: 'Replace', category: 'Edit', icon: 'replace', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Replace', category: 'Edit', icon: 'replace', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ win: 'ctrl+h', linux: 'ctrl+h', mac: 'alt+mod+f', native: true }], menus: [{ menu: 'edit.findReplace', group: '1_find', order: 2, title: 'Quick Replace', mnemonic: 'r' }]
   },
   'edit.toggleLineComment': {
-    title: 'Toggle Line Comment', category: 'Edit', icon: 'comment', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Toggle Line Comment', category: 'Edit', icon: 'comment', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+/', native: true }], menus: [{ menu: 'edit.advanced', group: '3_comment', order: 3, mnemonic: 't' }]
   },
   'edit.commentLines': {
-    title: 'Comment Selection', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Comment Selection', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+k mod+c', native: true }], menus: [{ menu: 'edit.advanced', group: '3_comment', order: 1, mnemonic: 'm' }]
   },
   'edit.uncommentLines': {
-    title: 'Uncomment Selection', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Uncomment Selection', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+k mod+u', native: true }], menus: [{ menu: 'edit.advanced', group: '3_comment', order: 2, mnemonic: 'n' }]
   },
   // SSMS's editing commands: Find and Replace, Go To Line, Edit › Advanced, Bookmarks, and IntelliSense's snippets.
   'edit.findNext': {
-    title: 'Find Next', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Find Next', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ win: 'f3', linux: 'f3', mac: 'mod+g', native: true }, { mac: 'f3', native: true }], menus: [{ menu: 'edit.findReplace', group: '2_next', order: 1, mnemonic: 'n' }]
   },
   'edit.findPrevious': {
-    title: 'Find Previous', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Find Previous', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', native: true }, { mac: 'shift+f3', native: true }],
     menus: [{ menu: 'edit.findReplace', group: '2_next', order: 2, mnemonic: 'p' }]
   },
   // SSMS's Ctrl+G; ⌘G is Find Next on macOS, so macOS uses ⌃G, as VS Code does.
   'edit.goToLine': {
-    title: 'Go To Line…', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Go To Line…', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ win: 'ctrl+g', linux: 'ctrl+g', mac: 'ctrl+g', when: 'editorFocus' }], menus: [{ menu: 'edit', group: '3_find', order: 2, mnemonic: 'g' }]
   },
   'edit.makeUppercase': {
-    title: 'Make Uppercase', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Make Uppercase', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+shift+u', when: 'editorTextFocus' }], menus: [{ menu: 'edit.advanced', group: '1_case', order: 1, mnemonic: 'u' }]
   },
   'edit.makeLowercase': {
-    title: 'Make Lowercase', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Make Lowercase', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+shift+l', when: 'editorTextFocus' }], menus: [{ menu: 'edit.advanced', group: '1_case', order: 2, mnemonic: 'l' }]
   },
   // No keys: Tab and Shift+Tab indent selected lines, and SSMS has none for these.
   'edit.increaseIndent': {
-    title: 'Increase Line Indent', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Increase Line Indent', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '4_indent', order: 1, mnemonic: 'i' }]
   },
   'edit.decreaseIndent': {
-    title: 'Decrease Line Indent', category: 'Edit', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Decrease Line Indent', category: 'Edit', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '4_indent', order: 2, mnemonic: 'd' }]
   },
   // No key: SSMS's Ctrl+R Ctrl+W cannot coexist with Ctrl+R alone toggling the results pane.
@@ -476,7 +482,7 @@ export const commandCatalog = {
   },
   'editor.toggleLineNumbers': { title: 'Toggle Line Numbers', category: 'View', toggled: 'editorLineNumbers' },
   'edit.toggleBookmark': {
-    title: 'Toggle Bookmark', category: 'Edit', icon: 'bookmark', precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    title: 'Toggle Bookmark', category: 'Edit', icon: 'bookmark', precondition: 'activeDocumentIsText', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+k mod+k', native: true, bridge: true }], menus: [{ menu: 'edit.bookmarks', group: '1_toggle', order: 1, mnemonic: 't' }]
   },
   'edit.previousBookmark': {

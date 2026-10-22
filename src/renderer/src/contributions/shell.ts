@@ -40,7 +40,8 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo', args?
     if (!modal || focused.closest('[aria-modal="true"]')) document.execCommand(command)
     return
   }
-  if (modal || !documents.getSnapshot().documents.length) return
+  // A table designer has no text to undo: its fields undo their own text above.
+  if (modal || !documents.getSnapshot().documents.length || documents.isCustom(documents.getSnapshot().activeId)) return
   documents.boundEditor?.focus()
   documents.boundEditor?.trigger('menu', command, null)
 }
@@ -72,14 +73,14 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('view.toggleResultsPane', { run: () => {
       if (!panes.getSnapshot().output) { host.reveal('output'); return }
       host.closePane('output')
-      if (documents.getSnapshot().documents.length) documents.boundEditor?.focus()
+      if (documents.getSnapshot().documents.length) documents.focusActive()
     } }),
     // SSMS's F6: from Query Output back to the editor; from anywhere else to the results (DockWorkspace focuses the grid
     // that last had focus, else the first grid, else Messages).
     commands.register('window.switchPane', { run: () => {
       if (typeof document !== 'undefined' && document.activeElement?.closest('[data-pane="output"]')) {
         host.reveal('editor')
-        documents.boundEditor?.focus()
+        documents.focusActive()
         return
       }
       host.reveal('output', { focus: true })

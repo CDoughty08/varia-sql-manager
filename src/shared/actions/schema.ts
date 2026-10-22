@@ -4,10 +4,16 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type DialogId, type ObjectAction } from './catalog.ts'
+import { actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
+import { designerDescribeIds } from '../designer/catalog.ts'
+import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 
-export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DialogId; readonly target: ObjectRef }
+/** What actions.describe describes: an object dialog (PR17's catalogue) or a designer (src/shared/designer/catalog.ts). */
+export const describeIds = [...dialogIds, ...designerDescribeIds] as const
+export type DescribeId = typeof describeIds[number]
+
+export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef }
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
 /** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
 export interface DeleteRequest {
@@ -24,7 +30,7 @@ export interface PropertiesRequest {
   readonly action: 'properties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly changes: DatabaseChanges
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -107,7 +113,9 @@ export interface DatabasePropertiesModel {
   /** Why nothing can change: a snapshot, a database that is not online or not accessible, or Managed Instance. */
   readonly readOnlyReason?: string
 }
-export interface ActionDescribeResult { readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel }
+export interface ActionDescribeResult {
+  readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
+}
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
   readonly text?: string
@@ -144,8 +152,17 @@ export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): stri
 const issue = (context: z.RefinementCtx, path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message })
 const targetIssues = (context: z.RefinementCtx, target: ObjectRef, action: ObjectAction) => { for (const message of actionTargetProblems(target, action)) issue(context, 'target', message) }
 
-export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(dialogIds), target: objectRefSchema }).strict()
-  .superRefine((request, context) => targetIssues(context, request.target, dialogSpecs[request.dialog].action)) satisfies z.ZodType<ActionDescribeRequest>
+export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema }).strict()
+  .superRefine((request, context) => {
+    switch (request.dialog) {
+      // A new table goes in any database, SQL Server's own included, as in SSMS.
+      case 'tableDesigner':
+        if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')
+        break
+      default:
+        targetIssues(context, request.target, dialogSpecs[request.dialog].action)
+    }
+  }) satisfies z.ZodType<ActionDescribeRequest>
 
 /** Option and scoped-configuration changes: known settable keys, each with a token of that option. */
 const tokens = (keys: readonly string[]) => z.record(z.string().max(64), z.string().min(1).max(128)).superRefine((record, context) => {
@@ -167,9 +184,11 @@ const propertiesSchema = z.object({ action: z.literal('properties'), connectionI
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,
-  propertiesSchema
+  propertiesSchema,
+  createTableSchema
 ]).superRefine((request, context) => {
-  targetIssues(context, request.target, request.action)
+  // A new table is not an object row's action: its target is the database, SQL Server's own included.
+  if (request.action !== 'createTable') targetIssues(context, request.target, request.action)
   switch (request.action) {
     case 'rename':
       if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')

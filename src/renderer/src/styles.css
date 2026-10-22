@@ -625,3 +625,49 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (forced-colors: active) {
   .database-field[data-focused], .database-grid .options-row[data-focused] { outline: 1px solid CanvasText; outline-offset: -1px; }
 }
+/* Table Designer: the toolbar strip, its bars, the column grid over Column Properties, and the Properties panel (F4). */
+.editor-container[hidden] { display: none; }
+.table-designer { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--varia-editor-background); color: var(--varia-foreground); }
+.table-designer-toolbar { display: flex; align-items: center; gap: 2px; padding: 2px 6px; background: var(--varia-toolbar-background); border-bottom: 1px solid var(--varia-toolbar-border); }
+.table-designer-toolbar .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.table-designer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border-bottom: 1px solid var(--varia-editorWidget-border); overflow-wrap: anywhere; }
+.table-designer-bar.error { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
+.table-designer-bar > span:not(.codicon) { flex: 1; min-width: 0; }
+.table-designer-main { flex: 1; min-height: 0; display: flex; }
+.table-designer-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.table-designer-top { flex: 0 0 55%; min-height: 60px; display: flex; overflow: hidden; }
+.table-designer-splitter { flex: 0 0 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); }
+.table-designer-splitter:hover, .table-designer-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
+/* The property grids sit on the Options dialog's surface, so its rows keep the colours that pass the contrast checks there. */
+.table-designer-column-properties { flex: 1; min-height: 60px; display: flex; flex-direction: column; overflow: auto; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); }
+.table-designer-properties { flex: 0 0 clamp(220px, 28%, 340px); display: flex; flex-direction: column; overflow: auto; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border-left: 1px solid var(--varia-panel-border); }
+.table-designer-section-head { display: flex; align-items: center; gap: 2px; padding: 2px 6px 2px 10px; font-size: 11px; font-weight: 600; color: var(--varia-panelTitle-activeForeground); background: var(--varia-panelTitle-background); }
+.table-designer-section-head > span { flex: 1; }
+.table-designer-section-head .icon-button { width: 22px; height: 22px; }
+.table-designer-section-head .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.table-designer .options-list { font-size: 12px; }
+.table-designer .options-row input, .table-designer .options-row select { width: 100%; min-width: 0; height: 20px; padding: 0 4px; line-height: 16px; }
+.table-designer-empty, .table-designer-description { margin: 0; padding: 6px 10px; font-size: 11px; color: var(--varia-descriptionForeground); }
+.table-designer-description { border-top: 1px solid var(--varia-panel-border); color: var(--varia-editorWidget-foreground); }
+.table-designer-script { width: 100%; min-height: 180px; resize: vertical; font: 12px/16px var(--varia-font-mono); background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--varia-input-border); white-space: pre; overflow: auto; }
+.table-designer-warning { margin: 0; font-size: 12px; color: var(--varia-editorWidget-foreground); }
+.connection-modal.sub-dialog:has(.table-designer-script) { width: min(720px, calc(100vw - 48px)); }
+.designer-grid { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12px; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-foreground); outline: none; }
+.designer-grid:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.designer-grid-head { display: grid; grid-template-columns: 22px minmax(120px, 2fr) minmax(110px, 1.4fr) 84px; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
+.designer-grid-head > span { padding: 3px 6px; border-right: 1px solid var(--varia-resultsGrid-gridlines); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.designer-grid-body { flex: 1; min-height: 0; overflow: auto; }
+.designer-row { position: absolute; left: 0; right: 0; display: grid; grid-template-columns: 22px minmax(120px, 2fr) minmax(110px, 1.4fr) 84px; border-bottom: 1px solid var(--varia-resultsGrid-gridlines); box-sizing: border-box; }
+.designer-selector { display: flex; align-items: center; justify-content: center; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-rowNumberForeground); border-right: 1px solid var(--varia-resultsGrid-gridlines); }
+.designer-row[data-selected] .designer-selector, .designer-row[data-selected] .designer-cell { background: var(--varia-resultsGrid-selectionBackground); color: var(--varia-resultsGrid-selectionForeground); }
+.designer-cell { position: relative; display: flex; align-items: center; min-width: 0; padding: 0 6px; border-right: 1px solid var(--varia-resultsGrid-gridlines); }
+.designer-cell[data-active] { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
+.designer-nulls { justify-content: center; }
+.designer-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.designer-editor { flex: 1; min-width: 0; height: 20px; padding: 0 4px; border-radius: 0; }
+.designer-problem { flex: none; margin-left: 4px; color: var(--varia-errorForeground); }
+.designer-row[data-selected] .designer-problem { color: inherit; }
+@media (forced-colors: active) {
+  .designer-cell[data-active], .table-designer-splitter:focus-visible { outline: 1px solid CanvasText; }
+  .designer-row[data-selected] .designer-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}

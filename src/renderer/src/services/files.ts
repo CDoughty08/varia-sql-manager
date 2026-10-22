@@ -182,6 +182,13 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   }
   async save(id = this.documents.getSnapshot().activeId, saveAs = false): Promise<void> {
     if (!this.canSave(id)) return
+    // A table designer's save is DDL that can wait on locks: it must not hold the document task, which would block every
+    // other file operation until it ends. Its provider allows one save at a time and reports its own failures.
+    if (this.documents.isCustom(id)) {
+      this.clearError()
+      try { await this.documents.save(id, saveAs) } catch (error) { this.reportError(error instanceof Error ? error.message : 'The save failed.') }
+      return
+    }
     await this.perform(async () => { await this.documents.save(id, saveAs) })
   }
   /**
@@ -213,18 +220,20 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     return saved
   }
   private async confirmClose(id: string): Promise<boolean> {
-    const document = this.documents.get(id), model = this.documents.getModel(id)
-    if (!document?.dirty || !model) return true
-    const version = model.getVersionId()
+    const document = this.documents.get(id), refusal = this.documents.closeRefusal(id)
+    // A table designer that is saving cannot close until its save ends or is stopped.
+    if (refusal) throw new Error(refusal)
+    if (!document?.dirty) return true
+    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : 'query'
     const decision = unwrap(await this.api.confirmClose(document.name))
     if (this.disposed || decision === 'cancel') return false
     if (!this.documents.get(id)) return true
     if (decision === 'save') {
       if (!await this.documents.save(id)) return false
-      if (this.documents.get(id)?.dirty) throw new Error('The query changed while saving. Review the latest changes before closing it.')
+      if (this.documents.get(id)?.dirty) throw new Error(`The ${noun} changed while saving. Review the latest changes before closing it.`)
       return true
     }
-    if (this.documents.getModel(id) !== model || model.getVersionId() !== version) throw new Error('The query changed while confirming close. Review the latest changes before closing it.')
+    if (this.documents.revision(id) !== revision) throw new Error(`The ${noun} changed while confirming close. Review the latest changes before closing it.`)
     return true
   }
   /**
@@ -289,21 +298,19 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   }
   private async closeDocuments(beforeClose: () => Promise<void>): Promise<void> {
     await this.perform(async () => {
-      const approved = new Map<string, { model: NonNullable<ReturnType<DocumentService['getModel']>>; version: number }>()
+      // Each document's revision as approved: a text document's model version, a designer's own revision.
+      const approved = new Map<string, number>()
       for (const document of this.documents.getSnapshot().documents) {
         if (!await this.confirmClose(document.id) || this.disposed) return
-        const model = this.documents.getModel(document.id)
-        if (model) approved.set(document.id, { model, version: model.getVersionId() })
+        if (this.documents.get(document.id)) approved.set(document.id, this.documents.revision(document.id))
       }
       const plan = await this.queries.confirmSessions('exit', [...approved.keys()])
       if (!plan || this.disposed) return
       await beforeClose()
       if (this.disposed) return
       const current = this.documents.getSnapshot().documents
-      if (current.length !== approved.size || current.some(document => {
-        const approval = approved.get(document.id), model = this.documents.getModel(document.id)
-        return !approval || model !== approval.model || model.getVersionId() !== approval.version
-      })) throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
+      if (current.length !== approved.size || current.some(document => approved.get(document.id) !== this.documents.revision(document.id)))
+        throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
       // Each transaction ends in its own session as the user chose; a commit that fails is reported and the window stays.
       for (const [id, transaction] of plan) if (this.documents.get(id)) await this.documents.endSession(id, transaction)
       // The user has confirmed every document, so unloading must no longer be blocked.

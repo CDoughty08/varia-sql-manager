@@ -56,7 +56,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       ariaLabel: 'Go to Query', placeholder: 'Search open queries by name (type > for commands, ? for help)', noun: 'queries', sort: 'score', matchOnDescription: true, items,
       // The previous query is active, so mod+P then Enter switches between the last two.
       activeId: items[1]?.id ?? items[0]?.id,
-      onDidAccept: item => { documents.activate(item.id); documents.boundEditor?.focus() }
+      onDidAccept: item => { documents.activate(item.id); documents.focusActive() }
     }
   }
   // The name replaces what the row shows (an option's children are not read), so it carries the key too.
