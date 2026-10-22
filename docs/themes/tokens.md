@@ -7,357 +7,363 @@ Theme files (format 1) override palette slots, color keys, and SQL token colors.
 key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that name. In CSS, a key is available as
 `var(--varia-editor-background)`: `--varia-` followed by the key with dots replaced by hyphens.
 
-## Palette slots (61)
+## Palette slots (66)
 
 | Slot | Drives | Varia Dark | Varia Light |
 | --- | --- | --- | --- |
-| `canvas` | Editor, active document tab, dock group, app root, and window background. | `#11151c` | `#ffffff` |
-| `panel` | Output panel and results grid. | `#141a23` | `#fafbfc` |
-| `sideBar` | Object Explorer. | `#151b24` | `#f3f5f8` |
-| `chrome` | Title bar, toolbar, tab strips, and panel title bar. | `#181f2a` | `#e9edf2` |
-| `raised` | Grid header, the visible tab of an unfocused group, and the quick-input title. | `#202a39` | `#e1e7ee` |
-| `overlay` | Dialogs, menus, editor widgets, and toasts. | `#1a2230` | `#ffffff` |
-| `input` | Inputs and selects. | `#111721` | `#ffffff` |
-| `accentSurface` | Tinted chrome: the status bar and the active connection row. | `#1d2b40` | `#e3ebf5` |
-| `hover` | Hover fill. | `#263041` | `#d0d8e3` |
-| `active` | Pressed button, open menu, and badge fill. | `#2e3c51` | `#ccd6e3` |
-| `selection` | Unfocused selection and the active dock tab. | `#24324a` | `#d6e3f3` |
-| `selectionStrong` | Focused selection and menu highlight. | `#2e4058` | `#c4daf4` |
-| `textSelection` | Editor text selection. | `#264f78` | `#add6ff` |
-| `text` | Body text. | `#d9e1ec` | `#1f2733` |
-| `textStrong` | Hover and emphasis text. | `#ffffff` | `#0b1220` |
-| `textSecondary` | Buttons, labels, and headings. | `#c3cddd` | `#2f3a49` |
-| `textTertiary` | Captions and section titles. | `#9eafc5` | `#465366` |
-| `textMuted` | Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface, hover included. | `#8a9cb3` | `#525e72` |
-| `textAccent` | Selected or active labels. | `#bcd4fa` | `#0b4f99` |
-| `accentMuted` | Text and glyphs on tinted chrome (status bar, brand icon, object icons, section headers). | `#a3bbdc` | `#2a4f7f` |
-| `border` | Chrome borders and tab dividers. | `#2b3443` | `#d3d9e2` |
-| `borderSubtle` | Section headers and grid lines. | `#252f3d` | `#e3e7ed` |
-| `borderStrong` | Dock splitters. | `#303b4c` | `#c3ccd8` |
-| `separator` | Toolbar, menu, and dialog separators; the keyboard shortcut outline. | `#354359` | `#cdd4de` |
-| `controlBorder` | Outlined buttons and the Dark dialog border. | `#5f7089` | `#7a8596` |
-| `inputBorder` | Input borders. | `#5d6e88` | `#7a8596` |
-| `accent` | Primary button and active indicators. | `#8fb7ff` | `#005fb8` |
-| `accentHover` | Primary button hover. | `#accaff` | `#004c94` |
-| `onAccent` | Text on the accent color. | `#101b2d` | `#ffffff` |
-| `focus` | Focus rings and the active sash. | `#76acff` | `#005fb8` |
-| `error` | Error text. | `#f39c9f` | `#ae2117` |
-| `warning` | Warning text. | `#dfbd82` | `#8a5300` |
-| `success` | Success text. | `#8addac` | `#146c38` |
-| `info` | Information text. Follows `$accent`. | `#8fb7ff` | `#005fb8` |
-| `errorSurface` | Error banner and the status bar error state. | `#48242d` | `#fbe4e6` |
-| `errorSurfaceText` | Text on the error surface. | `#f3bac0` | `#8a1c25` |
-| `warningSurface` | Warning banner. | `#3d3322` | `#fff3d6` |
-| `warningSurfaceText` | Text on the warning surface. | `#f0d49b` | `#6b4400` |
-| `icon` | Glyphs. | `#8aa9d4` | `#3e6696` |
-| `iconMuted` | Secondary glyphs such as tree chevrons. | `#7e93b1` | `#637189` |
-| `iconFolder` | Folder glyphs. | `#d9b370` | `#9a6700` |
-| `red` | Red connection preset; categorical color. | `#e66b73` | `#c42b3c` |
-| `orange` | Orange connection preset; categorical color. | `#e6a15c` | `#b45309` |
-| `yellow` | Yellow connection preset; categorical color. | `#dec766` | `#8f6b00` |
-| `green` | Green connection preset; categorical color. | `#79bb8b` | `#2e7d4f` |
-| `blue` | Blue connection preset; categorical color. | `#71a7df` | `#2563a8` |
-| `purple` | Purple connection preset; categorical color. | `#ad8bd8` | `#7a4bbf` |
-| `neutral` | The "no color" connection swatch. | `#8b9bb0` | `#6b7789` |
-| `syntaxKeyword` | SQL keywords. | `#569cd6` | `#0000ff` |
-| `syntaxString` | SQL strings. | `#ff4040` | `#c41a16` |
-| `syntaxComment` | SQL comments. | `#6a9955` | `#008000` |
-| `syntaxNumber` | SQL numbers. | `#b5cea8` | `#097a50` |
-| `syntaxOperator` | SQL operators. | `#778899` | `#5e6875` |
-| `syntaxFunction` | SQL built-in functions and variables. | `#ff00ff` | `#b000b0` |
-| `syntaxIdentifier` | SQL identifiers and default editor text. | `#d4d4d4` | `#1f2733` |
-| `syntaxDelimiter` | SQL commas, semicolons, and dots. | `#dcdcdc` | `#1f2733` |
-| `syntaxBracket1` | SQL brackets at the outermost level; the editor colors matched brackets by depth. | `#ffd700` | `#0431fa` |
-| `syntaxBracket2` | SQL brackets one level in. | `#da70d6` | `#287a28` |
-| `syntaxBracket3` | SQL brackets two levels in; deeper brackets repeat the three colors. | `#179fff` | `#7b3814` |
-| `shadow` | Shadows. | `#00000099` | `#0000002e` |
-| `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
+| `canvas` | Editor, active document tab, dock group, app root, and window background. | `#16181d` | `#ffffff` |
+| `panel` | Output panel, its tab bar, and the results grid and its headers. | `#16181d` | `#ffffff` |
+| `sideBar` | Object Explorer. | `#111317` | `#f7f8fa` |
+| `chrome` | Title bar, toolbar, tab strips, and the status bar. | `#111317` | `#f7f8fa` |
+| `raised` | The quick-input title. | `#1c1f25` | `#f1f3f6` |
+| `overlay` | Dialogs, menus, editor widgets, toasts, and docking compass cells. | `#1d2026` | `#ffffff` |
+| `input` | Inputs and selects. | `#101216` | `#ffffff` |
+| `accentSurface` | Tinted chrome: the status bars while a query runs, and the active connection row. At least 1.2:1 on the chrome and canvas, so the tint is seen. | `#232842` | `#dde1f9` |
+| `hover` | Hover fill. | `#262a32` | `#dfe2e7` |
+| `active` | Pressed button, open menu, highlighted menu item, and badge fill. | `#30343e` | `#d6dae0` |
+| `selection` | Unfocused selection, and the headers of selected cells. | `#21273b` | `#e7ebfc` |
+| `selectionStrong` | Focused selection, and the docking compass cell under the pointer. | `#29314f` | `#d9e0fb` |
+| `textSelection` | Editor text selection. | `#2f3b66` | `#c8d2fa` |
+| `text` | Body text. | `#d9dce3` | `#1c1f26` |
+| `textStrong` | Hover and emphasis text. | `#f5f6f8` | `#0a0c10` |
+| `textSecondary` | Buttons, labels, and headings. | `#bcc1cb` | `#3a404b` |
+| `textTertiary` | Captions and section titles. | `#a3a9b5` | `#4d5461` |
+| `textMuted` | Hints, counts, and inactive tabs; the lowest text tier that passes AA on every surface, hover included. | `#9298a4` | `#5c6370` |
+| `textAccent` | Selected or active labels. | `#bcc5ff` | `#3240b0` |
+| `accentMuted` | A muted accent for text and glyphs; no built-in key uses it, so themes can point keys at it. | `#aab3d9` | `#3d4887` |
+| `border` | Chrome borders and tab dividers. | `#262a31` | `#e3e6eb` |
+| `borderSubtle` | Section headers and grid lines. | `#1f2228` | `#eceef2` |
+| `borderStrong` | Dock splitters. | `#2e323a` | `#d4d8df` |
+| `separator` | Toolbar, menu, and dialog separators; the keyboard shortcut outline. | `#30343c` | `#dcdfe5` |
+| `controlBorder` | Outlined buttons, the Dark dialog border, result splitters, and docking compass borders. | `#6b7286` | `#878e9b` |
+| `inputBorder` | Input borders. | `#6a7184` | `#878e9b` |
+| `accent` | Primary button, active indicators, the brand icon, and the docking compass. | `#8f9cff` | `#4453d0` |
+| `accentHover` | Primary button hover. | `#a8b2ff` | `#3744b8` |
+| `onAccent` | Text on the accent color. | `#0e1230` | `#ffffff` |
+| `focus` | Focus rings and the active sash. | `#8f9cff` | `#4453d0` |
+| `error` | Error text. | `#f39a9a` | `#b42229` |
+| `warning` | Warning text. | `#e4bb6a` | `#875800` |
+| `success` | Success text. | `#74d19c` | `#146f3b` |
+| `info` | Information text. Follows `$accent`. | `#8f9cff` | `#4453d0` |
+| `errorSurface` | Error banner and the status bar error state. | `#3a1d22` | `#fdecec` |
+| `errorSurfaceText` | Text on the error surface. | `#f6bcc1` | `#8f1d24` |
+| `warningSurface` | Warning banner. | `#33291a` | `#fff5dc` |
+| `warningSurfaceText` | Text on the warning surface. | `#f0d49e` | `#6b4400` |
+| `icon` | Glyphs, Object Explorer object icons included. | `#a3a9b5` | `#4d5461` |
+| `iconMuted` | Secondary glyphs such as tree chevrons. | `#7f8694` | `#6b7280` |
+| `iconFolder` | Folder glyphs. | `#bfa878` | `#7d6532` |
+| `red` | Red connection preset; categorical color. | `#e66767` | `#c42b3c` |
+| `orange` | Orange connection preset; categorical color. | `#e09358` | `#b45309` |
+| `yellow` | Yellow connection preset; categorical color. | `#d8bf5e` | `#8f6b00` |
+| `green` | Green connection preset; categorical color. | `#6fbf8a` | `#2e7d4f` |
+| `blue` | Blue connection preset; categorical color. | `#6ea4ea` | `#2563a8` |
+| `purple` | Purple connection preset; categorical color. | `#ab95ea` | `#7a4bbf` |
+| `neutral` | The "no color" connection swatch. | `#8d939f` | `#6b7280` |
+| `chart1` | First chart series (blue). The five chart slots are one categorical set, checked for color-vision deficiencies and 3:1 on the editor and widget backgrounds; they color chart series only, never state. | `#3987e5` | `#2a78d6` |
+| `chart2` | Second chart series (orange). | `#d95926` | `#d4581f` |
+| `chart3` | Third chart series (green). | `#199e70` | `#12936a` |
+| `chart4` | Fourth chart series (yellow). | `#c98500` | `#a87200` |
+| `chart5` | Fifth chart series (purple). | `#9085e9` | `#6250d6` |
+| `syntaxKeyword` | SQL keywords. | `#93a4ff` | `#3442c2` |
+| `syntaxString` | SQL strings. | `#9fd4a9` | `#2c7440` |
+| `syntaxComment` | SQL comments. | `#868e9b` | `#636a76` |
+| `syntaxNumber` | SQL numbers. | `#e8b97d` | `#965700` |
+| `syntaxOperator` | SQL operators. | `#9ea6b4` | `#575e6b` |
+| `syntaxFunction` | SQL built-in functions and variables. | `#d4a9f2` | `#8338b4` |
+| `syntaxIdentifier` | SQL identifiers and default editor text. | `#d9dce3` | `#1c1f26` |
+| `syntaxDelimiter` | SQL commas, semicolons, and dots. | `#9ea6b4` | `#575e6b` |
+| `syntaxBracket1` | SQL brackets at the outermost level; the editor colors matched brackets by depth. | `#dcc06a` | `#7a5c00` |
+| `syntaxBracket2` | SQL brackets one level in. | `#cd9ff0` | `#8338b4` |
+| `syntaxBracket3` | SQL brackets two levels in; deeper brackets repeat the three colors. | `#74b4ef` | `#1d68ad` |
+| `shadow` | Shadows. | `#00000085` | `#10182824` |
+| `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (205)
+## Color keys (206)
 
 ### Base
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Default text color of the workbench. |
-| `descriptionForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Secondary text: hints, captions, and explanations. |
-| `disabledForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels. |
-| `errorForeground` | VS Code | `$error` | `#f39c9f` | `#ae2117` | Error text. |
-| `warningForeground` | Varia | `$warning` | `#dfbd82` | `#8a5300` | Warning text. |
-| `successForeground` | Varia | `$success` | `#8addac` | `#146c38` | Success text, such as the Execute button and confirmations. |
-| `infoForeground` | Varia | `$info` | `#8fb7ff` | `#005fb8` | Information text. Not used yet; reserved for notifications. |
-| `focusBorder` | VS Code | `$focus` | `#76acff` | `#005fb8` | Focus ring around the focused control. |
-| `icon.foreground` | VS Code | `$icon` | `#8aa9d4` | `#3e6696` | Default glyph color. |
-| `widget.shadow` | VS Code | `$shadow` | `#00000099` | `#0000002e` | Shadow of dialogs, floating dock groups, and editor widgets. |
-| `widget.border` | VS Code | `@editorWidget.border` | `#5f7089` | `#c3ccd8` | Border of floating dock groups and widgets. |
-| `textPreformat.foreground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Preformatted text in the editor. |
-| `sash.hoverBorder` | VS Code | `$focus` | `#76acff` | `#005fb8` | Dock splitter while it is hovered or dragged. |
-| `scrollbarSlider.background` | VS Code | `$textMuted/40` | `#8a9cb366` | `#525e7266` | Scrollbar thumb. |
-| `scrollbarSlider.hoverBackground` | VS Code | `$textMuted/55` | `#8a9cb38c` | `#525e728c` | Scrollbar thumb when hovered. |
-| `scrollbarSlider.activeBackground` | VS Code | `$textMuted/70` | `#8a9cb3b3` | `#525e72b3` | Scrollbar thumb while it is dragged. |
+| `foreground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Default text color of the workbench. |
+| `descriptionForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Secondary text: hints, captions, and explanations. |
+| `disabledForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels. |
+| `errorForeground` | VS Code | `$error` | `#f39a9a` | `#b42229` | Error text. |
+| `warningForeground` | Varia | `$warning` | `#e4bb6a` | `#875800` | Warning text. |
+| `successForeground` | Varia | `$success` | `#74d19c` | `#146f3b` | Success text, such as the Execute button and confirmations. |
+| `infoForeground` | Varia | `$info` | `#8f9cff` | `#4453d0` | Information text. Not used yet; reserved for notifications. |
+| `focusBorder` | VS Code | `$focus` | `#8f9cff` | `#4453d0` | Focus ring around the focused control. |
+| `icon.foreground` | VS Code | `$icon` | `#a3a9b5` | `#4d5461` | Default glyph color. |
+| `widget.shadow` | VS Code | `$shadow` | `#00000085` | `#10182824` | Shadow of dialogs, floating dock groups, and editor widgets. |
+| `widget.border` | VS Code | `@editorWidget.border` | `#6b7286` | `#d4d8df` | Border of floating dock groups and widgets. |
+| `textPreformat.foreground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Preformatted text in the editor. |
+| `sash.hoverBorder` | VS Code | `$focus` | `#8f9cff` | `#4453d0` | Dock splitter while it is hovered or dragged. |
+| `scrollbarSlider.background` | VS Code | `$textMuted/40` | `#9298a466` | `#5c637066` | Scrollbar thumb. |
+| `scrollbarSlider.hoverBackground` | VS Code | `$textMuted/55` | `#9298a48c` | `#5c63708c` | Scrollbar thumb when hovered. |
+| `scrollbarSlider.activeBackground` | VS Code | `$textMuted/70` | `#9298a4b3` | `#5c6370b3` | Scrollbar thumb while it is dragged. |
 
 ### Title bar, menus, and toolbar
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `titleBar.activeBackground` | VS Code | `$chrome` | `#181f2a` | `#e9edf2` | Title bar, and the native window-controls overlay on Windows and Linux. Made opaque over `editor.background`. |
-| `titleBar.activeForeground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Window caption in the title bar. |
-| `titleBar.inactiveBackground` | VS Code | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive. Made opaque over `editor.background`. |
-| `titleBar.inactiveForeground` | VS Code | `@titleBar.activeForeground` | `#9eafc5` | `#465366` | Window caption and menubar labels while the window is inactive. |
-| `titleBar.border` | VS Code | `$border` | `#2b3443` | `#d3d9e2` | Line below the title bar. |
-| `titleBar.iconForeground` | Varia | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Application icon in the title bar. |
-| `titleBar.controlsForeground` | Varia | `$text` | `#d9e1ec` | `#1f2733` | Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. |
-| `menubar.selectionBackground` | VS Code | `$active` | `#2e3c51` | `#ccd6e3` | Open title-bar menu. |
-| `menubar.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Label of the open title-bar menu. |
-| `menubar.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the open, hovered, or focused title-bar menu; none by default. |
-| `menu.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Title-bar and context menus. |
-| `menu.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Title-bar and context menus. |
-| `menu.selectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Highlighted item in title-bar and context menus. |
-| `menu.selectionForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Highlighted item in title-bar and context menus. |
-| `menu.selectionBorder` | VS Code | `$accent/0` | `#8fb7ff00` | `#005fb800` | Outline of the highlighted menu item; none by default. |
-| `menu.separatorBackground` | VS Code | `$separator` | `#354359` | `#cdd4de` | Menu separators. |
-| `menu.border` | VS Code | `@editorWidget.border` | `#5f7089` | `#c3ccd8` | Menu border. |
-| `toolbar.background` | Varia | `@titleBar.activeBackground` | `#181f2a` | `#e9edf2` | Main toolbar. |
-| `toolbar.border` | Varia | `@titleBar.border` | `#2b3443` | `#d3d9e2` | Line below the main toolbar. |
-| `toolbar.hoverBackground` | VS Code | `$text/12` | `#d9e1ec1f` | `#1f27331f` | Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. |
-| `toolbar.separatorBackground` | Varia | `$separator` | `#354359` | `#cdd4de` | Dividers between toolbar groups. |
-| `toolbar.labelForeground` | Varia | `$textTertiary` | `#9eafc5` | `#465366` | Labels of the toolbar server and database fields. |
-| `keybindingLabel.foreground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Keyboard shortcut hints. |
-| `keybindingLabel.border` | VS Code | `$separator` | `#354359` | `#cdd4de` | Outline of keyboard shortcut hints. |
+| `titleBar.activeBackground` | VS Code | `$chrome` | `#111317` | `#f7f8fa` | Title bar, and the native window-controls overlay on Windows and Linux. Made opaque over `editor.background`. |
+| `titleBar.activeForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Window caption in the title bar. |
+| `titleBar.inactiveBackground` | VS Code | `@titleBar.activeBackground` | `#111317` | `#f7f8fa` | Title bar, and the native window-controls overlay on Windows and Linux, while the window is inactive. Made opaque over `editor.background`. |
+| `titleBar.inactiveForeground` | VS Code | `@titleBar.activeForeground` | `#9298a4` | `#5c6370` | Window caption and menubar labels while the window is inactive. |
+| `titleBar.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Line below the title bar. |
+| `titleBar.iconForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Application icon in the title bar. |
+| `titleBar.controlsForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. |
+| `menubar.selectionBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Open title-bar menu. |
+| `menubar.selectionForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the open title-bar menu. |
+| `menubar.selectionBorder` | VS Code | `$accent/0` | `#8f9cff00` | `#4453d000` | Outline of the open, hovered, or focused title-bar menu; none by default. |
+| `menu.background` | VS Code | `$overlay` | `#1d2026` | `#ffffff` | Title-bar and context menus. |
+| `menu.foreground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Title-bar and context menus. |
+| `menu.selectionBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Highlighted item in title-bar and context menus. |
+| `menu.selectionForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Highlighted item in title-bar and context menus. |
+| `menu.selectionBorder` | VS Code | `$accent/0` | `#8f9cff00` | `#4453d000` | Outline of the highlighted menu item; none by default. |
+| `menu.separatorBackground` | VS Code | `$separator` | `#30343c` | `#dcdfe5` | Menu separators. |
+| `menu.border` | VS Code | `@editorWidget.border` | `#6b7286` | `#d4d8df` | Menu border. |
+| `toolbar.background` | Varia | `@titleBar.activeBackground` | `#111317` | `#f7f8fa` | Main toolbar. |
+| `toolbar.border` | Varia | `@titleBar.border` | `#262a31` | `#e3e6eb` | Line below the main toolbar. |
+| `toolbar.hoverBackground` | VS Code | `$text/12` | `#d9dce31f` | `#1c1f261f` | Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. |
+| `toolbar.separatorBackground` | Varia | `$separator` | `#30343c` | `#dcdfe5` | Dividers between toolbar groups. |
+| `toolbar.labelForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Labels of the toolbar server and database fields. |
+| `keybindingLabel.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Keyboard shortcut hints. |
+| `keybindingLabel.border` | VS Code | `$separator` | `#30343c` | `#dcdfe5` | Outline of keyboard shortcut hints. |
 
 ### Buttons and inputs
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `button.background` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Primary button; also the checkbox accent. |
-| `button.foreground` | VS Code | `$onAccent` | `#101b2d` | `#ffffff` | Primary button text. |
-| `button.hoverBackground` | VS Code | `$accentHover` | `#accaff` | `#004c94` | Primary button when hovered. |
-| `button.border` | VS Code | `$controlBorder` | `#5f7089` | `#7a8596` | Outline of secondary buttons. |
-| `button.secondaryForeground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Text of secondary and toolbar buttons. |
-| `button.secondaryHoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Secondary and toolbar buttons when hovered. |
-| `button.secondaryHoverForeground` | Varia | `$textStrong` | `#ffffff` | `#0b1220` | Secondary button text when hovered. |
-| `input.background` | VS Code | `$input` | `#111721` | `#ffffff` | Inputs and selects. |
-| `input.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Input and select text. |
-| `input.border` | VS Code | `$inputBorder` | `#5d6e88` | `#7a8596` | Input and select border. |
-| `input.placeholderForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Placeholder text. |
-| `inputValidation.errorBackground` | VS Code | `$errorSurface` | `#48242d` | `#fbe4e6` | Connection error message. |
-| `inputValidation.errorForeground` | VS Code | `$errorSurfaceText` | `#f3bac0` | `#8a1c25` | Connection error message text. |
+| `button.background` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Primary button; also the checkbox accent. |
+| `button.foreground` | VS Code | `$onAccent` | `#0e1230` | `#ffffff` | Primary button text. |
+| `button.hoverBackground` | VS Code | `$accentHover` | `#a8b2ff` | `#3744b8` | Primary button when hovered. |
+| `button.border` | VS Code | `$controlBorder` | `#6b7286` | `#878e9b` | Outline of secondary buttons. |
+| `button.secondaryForeground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text of secondary and toolbar buttons. |
+| `button.secondaryHoverBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Secondary and toolbar buttons when hovered. |
+| `button.secondaryHoverForeground` | Varia | `$textStrong` | `#f5f6f8` | `#0a0c10` | Secondary button text when hovered. |
+| `input.background` | VS Code | `$input` | `#101216` | `#ffffff` | Inputs and selects. |
+| `input.foreground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Input and select text. |
+| `input.border` | VS Code | `$inputBorder` | `#6a7184` | `#878e9b` | Input and select border. |
+| `input.placeholderForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Placeholder text. |
+| `inputValidation.errorBackground` | VS Code | `$errorSurface` | `#3a1d22` | `#fdecec` | Connection error message. |
+| `inputValidation.errorForeground` | VS Code | `$errorSurfaceText` | `#f6bcc1` | `#8f1d24` | Connection error message text. |
 
 ### Side bar, lists, and Object Explorer
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `sideBar.background` | VS Code | `$sideBar` | `#151b24` | `#f3f5f8` | Object Explorer. |
-| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Side bar section titles. Not used yet; reserved for side bar section titles. |
-| `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Lines around the Object Explorer toolbar and footer. |
-| `list.hoverBackground` | VS Code | `$hover` | `#263041` | `#d0d8e3` | Hovered list row (command palette rows included). |
-| `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#2e4058` | `#c4daf4` | Selected row of a focused list. |
-| `list.activeSelectionForeground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Text of the selected row of a focused list. |
-| `list.inactiveSelectionBackground` | VS Code | `$selection` | `#24324a` | `#d6e3f3` | Selected row of an unfocused list, and the selected result set. |
-| `list.inactiveSelectionForeground` | VS Code | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the selected row of an unfocused list. |
-| `list.focusOutline` | VS Code | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. |
-| `list.highlightForeground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Characters that match a filter, such as in the command palette. |
-| `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9e1ec` | `#1f2733` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
-| `list.filterMatchBackground` | VS Code | `$accent/20` | `#8fb7ff33` | `#005fb833` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
-| `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
-| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#1d2b40` | `#e3ebf5` | Row of the active query's server. |
-| `objectExplorer.headingForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Folder row labels. |
-| `objectExplorer.sublabelForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Text after a row's label, such as a column's type or a database's state. |
-| `objectExplorer.countForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | The (filtered) marker and loading progress next to folder labels. |
-| `objectExplorer.chevronForeground` | Varia | `$iconMuted` | `#7e93b1` | `#637189` | Expand and collapse chevrons. |
-| `objectExplorer.folderIconForeground` | Varia | `$iconFolder` | `#d9b370` | `#9a6700` | Folder glyphs. |
-| `objectExplorer.objectIconForeground` | Varia | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Glyphs of tables and other objects. |
-| `objectExplorer.actionForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Object Explorer toolbar icons. |
+| `sideBar.background` | VS Code | `$sideBar` | `#111317` | `#f7f8fa` | Object Explorer. |
+| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Side bar section titles. Not used yet; reserved for side bar section titles. |
+| `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Lines around the Object Explorer toolbar and footer. |
+| `list.hoverBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Hovered list row (command palette rows included). |
+| `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#29314f` | `#d9e0fb` | Selected row of a focused list. |
+| `list.activeSelectionForeground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of the selected row of a focused list. |
+| `list.inactiveSelectionBackground` | VS Code | `$selection` | `#21273b` | `#e7ebfc` | Selected row of an unfocused list, and the selected result set. |
+| `list.inactiveSelectionForeground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of the selected row of an unfocused list. |
+| `list.focusOutline` | VS Code | `@focusBorder` | `#8f9cff` | `#4453d0` | Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. |
+| `list.highlightForeground` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Characters that match a filter, such as in the command palette. |
+| `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9dce3` | `#1c1f26` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
+| `list.filterMatchBackground` | VS Code | `$accent/20` | `#8f9cff33` | `#4453d033` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
+| `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
+| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Row of the active query's server. |
+| `objectExplorer.headingForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Folder row labels. |
+| `objectExplorer.sublabelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text after a row's label, such as a column's type or a database's state. |
+| `objectExplorer.countForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | The (filtered) marker and loading progress next to folder labels. |
+| `objectExplorer.chevronForeground` | Varia | `$iconMuted` | `#7f8694` | `#6b7280` | Expand and collapse chevrons. |
+| `objectExplorer.folderIconForeground` | Varia | `$iconFolder` | `#bfa878` | `#7d6532` | Folder glyphs. |
+| `objectExplorer.objectIconForeground` | Varia | `$icon` | `#a3a9b5` | `#4d5461` | Glyphs of tables and other objects. |
+| `objectExplorer.actionForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Object Explorer toolbar icons. |
 
 ### Dock and docking compass
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `editorGroupHeader.tabsBackground` | VS Code | `$chrome` | `#181f2a` | `#e9edf2` | Tab strip of dock groups, including floating groups. |
-| `tab.activeBackground` | VS Code | `$selection` | `#24324a` | `#d6e3f3` | Visible tab of the focused dock group. |
-| `tab.inactiveBackground` | VS Code | `@editorGroupHeader.tabsBackground` | `#181f2a` | `#e9edf2` | Hidden tabs of the focused dock group. |
-| `tab.unfocusedActiveBackground` | VS Code | `$raised` | `#202a39` | `#e1e7ee` | Visible tab of an unfocused dock group. |
-| `tab.unfocusedInactiveBackground` | VS Code | `@tab.inactiveBackground` | `#181f2a` | `#e9edf2` | Hidden tabs of an unfocused dock group. |
-| `tab.activeForeground` | VS Code | `$textStrong` | `#ffffff` | `#0b1220` | Label of the visible tab of the focused dock group. |
-| `tab.inactiveForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Labels of hidden tabs of the focused dock group. |
-| `tab.unfocusedActiveForeground` | VS Code | `$textTertiary` | `#9eafc5` | `#465366` | Label of the visible tab of an unfocused dock group. |
-| `tab.unfocusedInactiveForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Labels of hidden tabs of an unfocused dock group. |
-| `tab.border` | VS Code | `$border` | `#2b3443` | `#d3d9e2` | Dividers between dock tabs. |
-| `tab.activeBorderTop` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Top border of the active query tab. |
-| `editorGroup.border` | VS Code | `$borderStrong` | `#303b4c` | `#c3ccd8` | Dock splitters and group separators. |
-| `editorGroup.dropBackground` | VS Code | `$focus/30` | `#76acff4d` | `#005fb84d` | Drop target while a panel is dragged. |
-| `dock.background` | Varia | `@editor.background` | `#11151c` | `#ffffff` | Dock groups. |
-| `dock.guideBackground` | Varia | `#edf4fb` | `#edf4fb` | `#edf4fb` | Docking compass cells. The compass looks the same in every theme by default. |
-| `dock.guideForeground` | Varia | `#2777c7` | `#2777c7` | `#2777c7` | Docking compass arrows. |
-| `dock.guideBorder` | Varia | `#aac4de` | `#aac4de` | `#aac4de` | Border of docking compass cells. |
-| `dock.guideShadow` | Varia | `#00000088` | `#00000088` | `#00000088` | Shadow of docking compass cells. |
-| `dock.guideActiveBackground` | Varia | `#b9d9f7` | `#b9d9f7` | `#b9d9f7` | Docking compass cell under the pointer. |
-| `dock.guideActiveBorder` | Varia | `#247adb` | `#247adb` | `#247adb` | Border of the docking compass cell under the pointer. |
-| `dock.guideActiveRing` | Varia | `#78b9ff` | `#78b9ff` | `#78b9ff` | Ring around the docking compass cell under the pointer. |
-| `dock.previewBackground` | Varia | `#3288d94d` | `#3288d94d` | `#3288d94d` | Area a dragged panel will occupy. |
-| `dock.previewBorder` | Varia | `#64b2ff` | `#64b2ff` | `#64b2ff` | Border of the docking preview. |
-| `dock.previewInnerBorder` | Varia | `#badfff66` | `#badfff66` | `#badfff66` | Inner line of the docking preview. |
+| `editorGroupHeader.tabsBackground` | VS Code | `$chrome` | `#111317` | `#f7f8fa` | Tab strip of dock groups, including floating groups. |
+| `tab.activeBackground` | VS Code | `$canvas` | `#16181d` | `#ffffff` | Visible tab of the focused dock group. |
+| `tab.inactiveBackground` | VS Code | `@editorGroupHeader.tabsBackground` | `#111317` | `#f7f8fa` | Hidden tabs of the focused dock group. |
+| `tab.unfocusedActiveBackground` | VS Code | `$canvas` | `#16181d` | `#ffffff` | Visible tab of an unfocused dock group. |
+| `tab.unfocusedInactiveBackground` | VS Code | `@tab.inactiveBackground` | `#111317` | `#f7f8fa` | Hidden tabs of an unfocused dock group. |
+| `tab.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the visible tab of the focused dock group. |
+| `tab.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Labels of hidden tabs of the focused dock group. |
+| `tab.unfocusedActiveForeground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Label of the visible tab of an unfocused dock group. |
+| `tab.unfocusedInactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Labels of hidden tabs of an unfocused dock group. |
+| `tab.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Dividers between dock tabs. |
+| `tab.activeBorderTop` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Top border of the active query tab. |
+| `editorGroup.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Dock splitters and group separators. |
+| `editorGroup.dropBackground` | VS Code | `$focus/30` | `#8f9cff4d` | `#4453d04d` | Drop target while a panel is dragged. |
+| `dock.background` | Varia | `@editor.background` | `#16181d` | `#ffffff` | Dock groups. |
+| `dock.guideBackground` | Varia | `$overlay` | `#1d2026` | `#ffffff` | Docking compass cells. |
+| `dock.guideForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Docking compass arrows. |
+| `dock.guideBorder` | Varia | `$controlBorder` | `#6b7286` | `#878e9b` | Border of docking compass cells. |
+| `dock.guideShadow` | Varia | `$shadow` | `#00000085` | `#10182824` | Shadow of docking compass cells. |
+| `dock.guideActiveBackground` | Varia | `$selectionStrong` | `#29314f` | `#d9e0fb` | Docking compass cell under the pointer. |
+| `dock.guideActiveBorder` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Border of the docking compass cell under the pointer. |
+| `dock.guideActiveRing` | Varia | `$accent/60` | `#8f9cff99` | `#4453d099` | Ring around the docking compass cell under the pointer. |
+| `dock.previewBackground` | Varia | `$accent/18` | `#8f9cff2e` | `#4453d02e` | Area a dragged panel will occupy. |
+| `dock.previewBorder` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Border of the docking preview. |
+| `dock.previewInnerBorder` | Varia | `$accent/35` | `#8f9cff59` | `#4453d059` | Inner line of the docking preview. |
 
 ### Query tabs and context
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `documentTabs.background` | Varia | `@editorGroupHeader.tabsBackground` | `#181f2a` | `#e9edf2` | Query tab strip. |
-| `documentTabs.activeBackground` | Varia | `@editor.background` | `#11151c` | `#ffffff` | Active query tab. |
-| `documentTabs.activeForeground` | Varia | `$text` | `#d9e1ec` | `#1f2733` | Label of the active query tab. |
-| `documentTabs.inactiveForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Labels of inactive query tabs. |
-| `documentTabs.border` | Varia | `$border` | `#2b3443` | `#d3d9e2` | Dividers between query tabs. |
-| `documentTabs.closeForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Close buttons of query tabs. |
-| `documentTabs.iconForeground` | Varia | `$warning` | `#dfbd82` | `#8a5300` | SQL badge of query tabs. |
-| `documentTabs.modifiedIndicator` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Dot that marks a query with unsaved changes. |
-| `breadcrumb.foreground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | The bar that names an XML, JSON or execution plan document opened from the results. |
-| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#8a9cb3` | `#525e72` | Unused since the query status bar replaced the query context line; themes that set it stay valid. |
+| `documentTabs.background` | Varia | `@editorGroupHeader.tabsBackground` | `#111317` | `#f7f8fa` | Query tab strip. |
+| `documentTabs.activeBackground` | Varia | `@editor.background` | `#16181d` | `#ffffff` | Active query tab. |
+| `documentTabs.activeForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Label of the active query tab. |
+| `documentTabs.inactiveForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Labels of inactive query tabs. |
+| `documentTabs.border` | Varia | `$border` | `#262a31` | `#e3e6eb` | Dividers between query tabs. |
+| `documentTabs.closeForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Close buttons of query tabs. |
+| `documentTabs.iconForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | SQL badge of query tabs. |
+| `documentTabs.modifiedIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Dot that marks a query with unsaved changes. |
+| `breadcrumb.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | The bar that names an XML, JSON or execution plan document opened from the results. |
+| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#9298a4` | `#5c6370` | Unused since the query status bar replaced the query context line; themes that set it stay valid. |
 
 ### Editor, widgets, and empty states
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `editor.background` | VS Code | `$canvas` | `#11151c` | `#ffffff` | Editor and application background; also the native window background. Made opaque over black (Dark) or white (Light). |
-| `editor.foreground` | VS Code | `$syntaxIdentifier` | `#d4d4d4` | `#1f2733` | Default editor text. |
-| `editor.lineHighlightBackground` | VS Code | `$accent/6` | `#181f29` | `#f0f6fb` | Highlight of the current line. Made opaque over `editor.background`. |
-| `editor.selectionBackground` | VS Code | `$textSelection` | `#264f78` | `#add6ff` | Selected text in the editor. |
-| `editorLineNumber.foreground` | VS Code | Dark `$textMuted/80`, Light `$textMuted` | `#728195` | `#525e72` | Line numbers. Made opaque over `editor.background`. |
-| `editorLineNumber.activeForeground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Line number of the current line. |
-| `editorWhitespace.foreground` | VS Code | `$textMuted/50` | `#8a9cb380` | `#525e7280` | Whitespace glyphs when View White Space is on. |
-| `editorBookmark.foreground` | Varia | `$accent` | `#8fb7ff` | `#005fb8` | Bookmark glyph in the editor's indicator margin. |
-| `editorBracketHighlight.foreground1` | VS Code | `$syntaxBracket1` | `#ffd700` | `#0431fa` | Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six. |
-| `editorBracketHighlight.foreground2` | VS Code | `$syntaxBracket2` | `#da70d6` | `#287a28` | Brackets one level in. |
-| `editorBracketHighlight.foreground3` | VS Code | `$syntaxBracket3` | `#179fff` | `#7b3814` | Brackets two levels in. |
-| `editorBracketHighlight.foreground4` | VS Code | `@editorBracketHighlight.foreground1` | `#ffd700` | `#0431fa` | Brackets three levels in. The defaults repeat the first three colors; a transparent value leaves a level out of the cycle. |
-| `editorBracketHighlight.foreground5` | VS Code | `@editorBracketHighlight.foreground2` | `#da70d6` | `#287a28` | Brackets four levels in. |
-| `editorBracketHighlight.foreground6` | VS Code | `@editorBracketHighlight.foreground3` | `#179fff` | `#7b3814` | Brackets five levels in. |
-| `editorBracketHighlight.unexpectedBracket.foreground` | VS Code | `$error` | `#f39c9f` | `#ae2117` | A closing bracket without a matching opening one. |
-| `editorWidget.background` | VS Code | `$overlay` | `#1a2230` | `#ffffff` | Dialogs and editor widgets such as find, suggest, and hover. |
-| `editorWidget.foreground` | VS Code | `$text` | `#d9e1ec` | `#1f2733` | Text of dialogs and editor widgets. |
-| `editorWidget.border` | VS Code | Dark `$controlBorder`, Light `$borderStrong` | `#5f7089` | `#c3ccd8` | Border of dialogs and editor widgets. |
-| `emptyState.foreground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Text of empty views (no query, no results, empty dock). |
-| `emptyState.titleForeground` | Varia | `$textTertiary` | `#9eafc5` | `#465366` | Heading of empty views. |
-| `emptyState.iconForeground` | Varia | `$iconMuted/60` | `#7e93b199` | `#63718999` | Decorative glyph of empty views. Not used yet; reserved for the empty views of the output pane and documents. |
+| `editor.background` | VS Code | `$canvas` | `#16181d` | `#ffffff` | Editor and application background; also the native window background. Made opaque over black (Dark) or white (Light). |
+| `editor.foreground` | VS Code | `$syntaxIdentifier` | `#d9dce3` | `#1c1f26` | Default editor text. |
+| `editor.lineHighlightBackground` | VS Code | `$text/4` | `#1e2025` | `#f6f6f6` | Highlight of the current line. Made opaque over `editor.background`. |
+| `editor.selectionBackground` | VS Code | `$textSelection` | `#2f3b66` | `#c8d2fa` | Selected text in the editor. |
+| `editorLineNumber.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Line numbers. Made opaque over `editor.background`. |
+| `editorLineNumber.activeForeground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Line number of the current line. |
+| `editorWhitespace.foreground` | VS Code | `$textMuted/50` | `#9298a480` | `#5c637080` | Whitespace glyphs when View White Space is on. |
+| `editorBookmark.foreground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Bookmark glyph in the editor's indicator margin. |
+| `editorBracketHighlight.foreground1` | VS Code | `$syntaxBracket1` | `#dcc06a` | `#7a5c00` | Matched brackets at the outermost level: parentheses, braces, and square brackets, including those around identifiers. Deeper levels take the next color, cycling through all six. |
+| `editorBracketHighlight.foreground2` | VS Code | `$syntaxBracket2` | `#cd9ff0` | `#8338b4` | Brackets one level in. |
+| `editorBracketHighlight.foreground3` | VS Code | `$syntaxBracket3` | `#74b4ef` | `#1d68ad` | Brackets two levels in. |
+| `editorBracketHighlight.foreground4` | VS Code | `@editorBracketHighlight.foreground1` | `#dcc06a` | `#7a5c00` | Brackets three levels in. The defaults repeat the first three colors; a transparent value leaves a level out of the cycle. |
+| `editorBracketHighlight.foreground5` | VS Code | `@editorBracketHighlight.foreground2` | `#cd9ff0` | `#8338b4` | Brackets four levels in. |
+| `editorBracketHighlight.foreground6` | VS Code | `@editorBracketHighlight.foreground3` | `#74b4ef` | `#1d68ad` | Brackets five levels in. |
+| `editorBracketHighlight.unexpectedBracket.foreground` | VS Code | `$error` | `#f39a9a` | `#b42229` | A closing bracket without a matching opening one. |
+| `editorWidget.background` | VS Code | `$overlay` | `#1d2026` | `#ffffff` | Dialogs and editor widgets such as find, suggest, and hover. |
+| `editorWidget.foreground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of dialogs and editor widgets. |
+| `editorWidget.border` | VS Code | Dark `$controlBorder`, Light `$borderStrong` | `#6b7286` | `#d4d8df` | Border of dialogs and editor widgets. |
+| `emptyState.foreground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Text of empty views (no query, no results, empty dock). |
+| `emptyState.titleForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Heading of empty views. |
+| `emptyState.iconForeground` | Varia | `$iconMuted/60` | `#7f869499` | `#6b728099` | Decorative glyph of empty views. Not used yet; reserved for the empty views of the output pane and documents. |
 
 ### Output panel and results grid
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `panel.background` | VS Code | `$panel` | `#141a23` | `#fafbfc` | Output panel. |
-| `panel.border` | VS Code | `$border` | `#2b3443` | `#d3d9e2` | Lines inside the output panel. |
-| `panelTitle.background` | Varia | `$chrome` | `#181f2a` | `#e9edf2` | Output panel tab bar. |
-| `panelTitle.activeForeground` | VS Code | `$textAccent` | `#bcd4fa` | `#0b4f99` | Active output tab, and the selected tab of the connection dialog. |
-| `panelTitle.inactiveForeground` | VS Code | `$textMuted` | `#8a9cb3` | `#525e72` | Inactive output tabs. |
-| `panelTitle.activeBorder` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Underline of the active output tab. |
-| `badge.background` | VS Code | `$active` | `#2e3c51` | `#ccd6e3` | Count badges on output tabs. |
-| `badge.foreground` | VS Code | `$textSecondary` | `#c3cddd` | `#2f3a49` | Count badge text. |
-| `resultsGrid.background` | Varia | `@panel.background` | `#141a23` | `#fafbfc` | Results grid. |
-| `resultsGrid.foreground` | Varia | `@foreground` | `#d9e1ec` | `#1f2733` | Results grid cells. |
-| `resultsGrid.headerBackground` | Varia | `$raised` | `#202a39` | `#e1e7ee` | Column headers. |
-| `resultsGrid.headerForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Column names. |
-| `resultsGrid.headerDescriptionForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | The (No column name) placeholder. |
-| `resultsGrid.gridlines` | Varia | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Cell borders. |
-| `resultsGrid.alternateRowBackground` | Varia | `$text/3` | `#d9e1ec08` | `#1f273308` | Tint of every other row. |
-| `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Row numbers. |
-| `resultsGrid.nullForeground` | Varia | Dark `$warning/70`, Light `$warning` | `#dfbd82b3` | `#8a5300` | NULL values. |
-| `resultsGrid.nullBackground` | Varia | Dark `$warning/8`, Light `$warning/12` | `#dfbd8214` | `#8a53001f` | NULL cells, tinted as in SSMS. |
-| `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#dfbd82` | `#8a5300` | Truncation notices and the marker on truncated values. |
-| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Selected cells. |
-| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of selected cells. |
-| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#24324a` | `#d6e3f3` | Selected cells while the grid is not focused; their text keeps its color. |
-| `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#76acff` | `#005fb8` | Outline of the active cell while the grid is focused. |
-| `resultsGrid.hoverBackground` | Varia | `@list.hoverBackground` | `#263041` | `#d0d8e3` | Hovered column or row header. |
-| `resultsGrid.headerSelectionBackground` | Varia | `$selection` | `#24324a` | `#d6e3f3` | Column and row headers of selected cells. |
-| `resultsGrid.headerSelectionForeground` | Varia | `$textAccent` | `#bcd4fa` | `#0b4f99` | Text of the headers of selected cells. |
-| `resultsGrid.linkForeground` | Varia | `$accent` | `#8fb7ff` | `#005fb8` | XML, JSON and plan values that open in a new tab. |
-| `resultsGrid.splitterBackground` | Varia | Dark `$textMuted/60`, Light `$controlBorder` | `#8a9cb399` | `#7a8596` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
-| `resultsMessages.foreground` | Varia | Dark `$accentMuted`, Light `$text` | `#a3bbdc` | `#1f2733` | Text of the Messages tab. |
+| `panel.background` | VS Code | `$panel` | `#16181d` | `#ffffff` | Output panel. |
+| `panel.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Lines inside the output panel. |
+| `panelTitle.background` | Varia | `$panel` | `#16181d` | `#ffffff` | Output panel tab bar. |
+| `panelTitle.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Active output tab, and the selected tab of the connection dialog. |
+| `panelTitle.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Inactive output tabs. |
+| `panelTitle.activeBorder` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Underline of the active output tab. |
+| `badge.background` | VS Code | `$active` | `#30343e` | `#d6dae0` | Count badges on output tabs. |
+| `badge.foreground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Count badge text. |
+| `resultsGrid.background` | Varia | `@panel.background` | `#16181d` | `#ffffff` | Results grid. |
+| `resultsGrid.foreground` | Varia | `@foreground` | `#d9dce3` | `#1c1f26` | Results grid cells. |
+| `resultsGrid.headerBackground` | Varia | `$panel` | `#16181d` | `#ffffff` | Column headers. |
+| `resultsGrid.headerForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Column names. |
+| `resultsGrid.headerDescriptionForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | The (No column name) placeholder. |
+| `resultsGrid.gridlines` | Varia | `$borderSubtle` | `#1f2228` | `#eceef2` | Cell borders. |
+| `resultsGrid.alternateRowBackground` | Varia | `$text/2` | `#d9dce305` | `#1c1f2605` | Tint of every other row. |
+| `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Row numbers. |
+| `resultsGrid.nullForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | NULL values, which are drawn in italics. |
+| `resultsGrid.nullBackground` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | NULL cells; untinted by default, so NULL reads as muted italic text. |
+| `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#e4bb6a` | `#875800` | Truncation notices and the marker on truncated values. |
+| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#29314f` | `#d9e0fb` | Selected cells. |
+| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9dce3` | `#1c1f26` | Text of selected cells. |
+| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#21273b` | `#e7ebfc` | Selected cells while the grid is not focused; their text keeps its color. |
+| `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#8f9cff` | `#4453d0` | Outline of the active cell while the grid is focused. |
+| `resultsGrid.hoverBackground` | Varia | `@list.hoverBackground` | `#262a32` | `#dfe2e7` | Hovered column or row header. |
+| `resultsGrid.headerSelectionBackground` | Varia | `$selection` | `#21273b` | `#e7ebfc` | Column and row headers of selected cells. |
+| `resultsGrid.headerSelectionForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Text of the headers of selected cells. |
+| `resultsGrid.linkForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | XML, JSON and plan values that open in a new tab. |
+| `resultsGrid.splitterBackground` | Varia | `$controlBorder` | `#6b7286` | `#878e9b` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
+| `resultsMessages.foreground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Text of the Messages tab. |
 
 ### Status bar
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `statusBar.background` | VS Code | `$accentSurface` | `#1d2b40` | `#e3ebf5` | Status bar when connected and idle. |
-| `statusBar.foreground` | VS Code | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Status bar text when connected and idle. |
-| `statusBar.separatorForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Dividers between status bar items. |
-| `statusBar.onlineIndicator` | Varia | `$success` | `#8addac` | `#146c38` | Dot shown while connected. |
-| `statusBar.idleIndicator` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Dot shown while not connected. |
-| `statusBar.executingBackground` | Varia | `@statusBar.background` | `#1d2b40` | `#e3ebf5` | Status bar while a query runs. |
-| `statusBar.executingForeground` | Varia | `@statusBar.foreground` | `#a3bbdc` | `#2a4f7f` | Status bar text while a query runs. |
-| `statusBar.disconnectedBackground` | Varia | `@statusBar.background` | `#1d2b40` | `#e3ebf5` | Status bar without a connection. |
-| `statusBar.disconnectedForeground` | Varia | `@statusBar.foreground` | `#a3bbdc` | `#2a4f7f` | Status bar text without a connection. |
-| `statusBar.errorBackground` | Varia | `$errorSurface` | `#48242d` | `#fbe4e6` | Status bar when the backend is unavailable. |
-| `statusBar.errorForeground` | Varia | `$errorSurfaceText` | `#f3bac0` | `#8a1c25` | Status bar text when the backend is unavailable. |
-| `queryStatusBar.background` | Varia | `@statusBar.background` | `#1d2b40` | `#e3ebf5` | Status bar of the query window, below or above the query (as in SSMS), while its query is idle. |
-| `queryStatusBar.foreground` | Varia | `@statusBar.foreground` | `#a3bbdc` | `#2a4f7f` | Query status bar text. |
-| `queryStatusBar.executingBackground` | Varia | `@statusBar.executingBackground` | `#1d2b40` | `#e3ebf5` | Query status bar while its query runs. |
-| `queryStatusBar.executingForeground` | Varia | `@statusBar.executingForeground` | `#a3bbdc` | `#2a4f7f` | Query status bar text while its query runs. |
-| `queryStatusBar.errorBackground` | Varia | `@statusBar.errorBackground` | `#48242d` | `#fbe4e6` | Query status bar after a run failed, was cancelled or timed out, or lost its connection. |
-| `queryStatusBar.errorForeground` | Varia | `@statusBar.errorForeground` | `#f3bac0` | `#8a1c25` | Query status bar text after a run failed, was cancelled or timed out, or lost its connection. |
+| `statusBar.background` | VS Code | `$chrome` | `#111317` | `#f7f8fa` | Status bar when connected and idle. |
+| `statusBar.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Status bar text when connected and idle. |
+| `statusBar.border` | VS Code | `@titleBar.border` | `#262a31` | `#e3e6eb` | Line above the status bar; a connection color takes its place. |
+| `statusBar.separatorForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Dividers between status bar items. |
+| `statusBar.onlineIndicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot shown while connected. |
+| `statusBar.idleIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Dot shown while not connected. |
+| `statusBar.executingBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Status bar while a query runs. |
+| `statusBar.executingForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Status bar text while a query runs. |
+| `statusBar.disconnectedBackground` | Varia | `@statusBar.background` | `#111317` | `#f7f8fa` | Status bar without a connection. |
+| `statusBar.disconnectedForeground` | Varia | `@statusBar.foreground` | `#a3a9b5` | `#4d5461` | Status bar text without a connection. |
+| `statusBar.errorBackground` | Varia | `$errorSurface` | `#3a1d22` | `#fdecec` | Status bar when the backend is unavailable. |
+| `statusBar.errorForeground` | Varia | `$errorSurfaceText` | `#f6bcc1` | `#8f1d24` | Status bar text when the backend is unavailable. |
+| `queryStatusBar.background` | Varia | `$canvas` | `#16181d` | `#ffffff` | Status bar of the query window, below or above the query (as in SSMS), while its query is idle. |
+| `queryStatusBar.foreground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Query status bar text. |
+| `queryStatusBar.executingBackground` | Varia | `@statusBar.executingBackground` | `#232842` | `#dde1f9` | Query status bar while its query runs. |
+| `queryStatusBar.executingForeground` | Varia | `@statusBar.executingForeground` | `#bcc5ff` | `#3240b0` | Query status bar text while its query runs. |
+| `queryStatusBar.errorBackground` | Varia | `@statusBar.errorBackground` | `#3a1d22` | `#fdecec` | Query status bar after a run failed, was cancelled or timed out, or lost its connection. |
+| `queryStatusBar.errorForeground` | Varia | `@statusBar.errorForeground` | `#f6bcc1` | `#8f1d24` | Query status bar text after a run failed, was cancelled or timed out, or lost its connection. |
 
 ### Banners, dialogs, notifications, and quick input
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `banner.errorBackground` | Varia | `$errorSurface` | `#48242d` | `#fbe4e6` | Error banner. |
-| `banner.errorForeground` | Varia | `$errorSurfaceText` | `#f3bac0` | `#8a1c25` | Error banner text. |
-| `banner.warningBackground` | Varia | `$warningSurface` | `#3d3322` | `#fff3d6` | Warning banner, such as theme problems. |
-| `banner.warningForeground` | Varia | `$warningSurfaceText` | `#f0d49b` | `#6b4400` | Warning banner text. |
-| `dialog.backdropBackground` | Varia | `$backdrop` | `#080c14bf` | `#1f273366` | Scrim behind modal dialogs. |
-| `dialog.separatorBackground` | Varia | `$separator` | `#354359` | `#cdd4de` | Separators inside dialogs. |
-| `dialog.labelForeground` | Varia | `$textSecondary` | `#c3cddd` | `#2f3a49` | Field labels in dialogs. |
-| `dialog.descriptionForeground` | Varia | `$textTertiary` | `#9eafc5` | `#465366` | Secondary text in dialogs. |
-| `settings.headerForeground` | VS Code | `$accentMuted` | `#a3bbdc` | `#2a4f7f` | Section headings in dialogs. |
-| `notifications.background` | VS Code | `@editorWidget.background` | `#1a2230` | `#ffffff` | Notification toasts. Not used yet; reserved for notifications. |
-| `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9e1ec` | `#1f2733` | Notification text. Not used yet; reserved for notifications. |
-| `notifications.border` | VS Code | `@widget.border` | `#5f7089` | `#c3ccd8` | Notification border. Not used yet; reserved for notifications. |
-| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39c9f` | `#ae2117` | Error notification icon. Not used yet; reserved for notifications. |
-| `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#dfbd82` | `#8a5300` | Warning notification icon. Not used yet; reserved for notifications. |
-| `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8fb7ff` | `#005fb8` | Information notification icon. Not used yet; reserved for notifications. |
-| `quickInput.background` | VS Code | `@editorWidget.background` | `#1a2230` | `#ffffff` | Command palette and pickers (quick input). |
-| `quickInput.foreground` | VS Code | `@editorWidget.foreground` | `#d9e1ec` | `#1f2733` | Command palette text. |
-| `quickInputTitle.background` | VS Code | `$raised` | `#202a39` | `#e1e7ee` | Title row of pickers that have one. |
-| `quickInputList.focusBackground` | VS Code | `@list.activeSelectionBackground` | `#2e4058` | `#c4daf4` | Active command palette row. |
-| `quickInputList.focusForeground` | VS Code | `@list.activeSelectionForeground` | `#d9e1ec` | `#1f2733` | Text of the active command palette row. |
-| `pickerGroup.foreground` | VS Code | `$accent` | `#8fb7ff` | `#005fb8` | Command palette group labels, such as "recently used". |
-| `pickerGroup.border` | VS Code | `$separator` | `#354359` | `#cdd4de` | Line above each command palette group. |
+| `banner.errorBackground` | Varia | `$errorSurface` | `#3a1d22` | `#fdecec` | Error banner. |
+| `banner.errorForeground` | Varia | `$errorSurfaceText` | `#f6bcc1` | `#8f1d24` | Error banner text. |
+| `banner.warningBackground` | Varia | `$warningSurface` | `#33291a` | `#fff5dc` | Warning banner, such as theme problems. |
+| `banner.warningForeground` | Varia | `$warningSurfaceText` | `#f0d49e` | `#6b4400` | Warning banner text. |
+| `dialog.backdropBackground` | Varia | `$backdrop` | `#0a0c10b3` | `#1c1f2652` | Scrim behind modal dialogs. |
+| `dialog.separatorBackground` | Varia | `$separator` | `#30343c` | `#dcdfe5` | Separators inside dialogs. |
+| `dialog.labelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Field labels in dialogs. |
+| `dialog.descriptionForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Secondary text in dialogs. |
+| `settings.headerForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Section headings in dialogs. |
+| `notifications.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Notification toasts. Not used yet; reserved for notifications. |
+| `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Notification text. Not used yet; reserved for notifications. |
+| `notifications.border` | VS Code | `@widget.border` | `#6b7286` | `#d4d8df` | Notification border. Not used yet; reserved for notifications. |
+| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39a9a` | `#b42229` | Error notification icon. Not used yet; reserved for notifications. |
+| `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#e4bb6a` | `#875800` | Warning notification icon. Not used yet; reserved for notifications. |
+| `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8f9cff` | `#4453d0` | Information notification icon. Not used yet; reserved for notifications. |
+| `quickInput.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Command palette and pickers (quick input). |
+| `quickInput.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Command palette text. |
+| `quickInputTitle.background` | VS Code | `$raised` | `#1c1f25` | `#f1f3f6` | Title row of pickers that have one. |
+| `quickInputList.focusBackground` | VS Code | `@list.activeSelectionBackground` | `#29314f` | `#d9e0fb` | Active command palette row. |
+| `quickInputList.focusForeground` | VS Code | `@list.activeSelectionForeground` | `#d9dce3` | `#1c1f26` | Text of the active command palette row. |
+| `pickerGroup.foreground` | VS Code | `$textAccent` | `#bcc5ff` | `#3240b0` | Command palette group labels, such as "recently used". |
+| `pickerGroup.border` | VS Code | `$separator` | `#30343c` | `#dcdfe5` | Line above each command palette group. |
 
 ### Connection colors
 
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
-| `connection.red` | Varia | `$red` | `#e66b73` | `#c42b3c` | Red connection color. |
-| `connection.orange` | Varia | `$orange` | `#e6a15c` | `#b45309` | Orange connection color. |
-| `connection.yellow` | Varia | `$yellow` | `#dec766` | `#8f6b00` | Yellow connection color. |
-| `connection.green` | Varia | `$green` | `#79bb8b` | `#2e7d4f` | Green connection color. |
-| `connection.blue` | Varia | `$blue` | `#71a7df` | `#2563a8` | Blue connection color. |
-| `connection.purple` | Varia | `$purple` | `#ad8bd8` | `#7a4bbf` | Purple connection color. |
-| `connection.default` | Varia | `$neutral` | `#8b9bb0` | `#6b7789` | Swatch of connections without a color. |
-| `connection.favoriteForeground` | Varia | `$yellow` | `#dec766` | `#8f6b00` | Favorite star in the connection dialog. |
+| `connection.red` | Varia | `$red` | `#e66767` | `#c42b3c` | Red connection color. |
+| `connection.orange` | Varia | `$orange` | `#e09358` | `#b45309` | Orange connection color. |
+| `connection.yellow` | Varia | `$yellow` | `#d8bf5e` | `#8f6b00` | Yellow connection color. |
+| `connection.green` | Varia | `$green` | `#6fbf8a` | `#2e7d4f` | Green connection color. |
+| `connection.blue` | Varia | `$blue` | `#6ea4ea` | `#2563a8` | Blue connection color. |
+| `connection.purple` | Varia | `$purple` | `#ab95ea` | `#7a4bbf` | Purple connection color. |
+| `connection.default` | Varia | `$neutral` | `#8d939f` | `#6b7280` | Swatch of connections without a color. |
+| `connection.favoriteForeground` | Varia | `$yellow` | `#d8bf5e` | `#8f6b00` | Favorite star in the connection dialog. |
 
 ## SQL syntax scopes (16)
 
 Rules in `tokenColors` name these scopes. A sub-scope such as `keyword.block` inherits from its parent unless a rule names it.
-Colors are made opaque over `editor.background`; `fontStyle` defaults to `""`.
+Colors are made opaque over `editor.background`; `fontStyle` defaults to `""` unless the Default column names one.
 
 | Scope | Monaco token | Default | Varia Dark | Varia Light | Matches |
 | --- | --- | --- | --- | --- | --- |
-| `keyword` | `keyword.sql` | `$syntaxKeyword` | `#569cd6` | `#0000ff` | Keywords. |
-| `keyword.block` | `keyword.block.sql` | inherits `keyword` | `#569cd6` | `#0000ff` | BEGIN, END, and CASE. |
-| `keyword.try` | `keyword.try.sql` | inherits `keyword` | `#569cd6` | `#0000ff` | BEGIN TRY and END TRY. |
-| `keyword.catch` | `keyword.catch.sql` | inherits `keyword` | `#569cd6` | `#0000ff` | BEGIN CATCH and END CATCH. |
-| `keyword.choice` | `keyword.choice.sql` | inherits `keyword` | `#569cd6` | `#0000ff` | WHEN and THEN. |
-| `operator` | `operator.sql` | `$syntaxOperator` | `#778899` | `#5e6875` | Operators, including AND, OR, LIKE, and IN. |
-| `predefined` | `predefined.sql` | `$syntaxFunction` | `#ff00ff` | `#b000b0` | Built-in functions, @@ variables, and $ACTION-style pseudo columns. |
-| `string` | `string.sql` | `$syntaxString` | `#ff4040` | `#c41a16` | String literals. |
-| `number` | `number.sql` | `$syntaxNumber` | `#b5cea8` | `#097a50` | Numeric and money literals. |
-| `comment` | `comment.sql` | `$syntaxComment` | `#6a9955` | `#008000` | Comments. |
-| `comment.quote` | `comment.quote.sql` | inherits `comment` | `#6a9955` | `#008000` | The /* and */ of block comments. |
-| `identifier` | `identifier.sql` | `$syntaxIdentifier` | `#d4d4d4` | `#1f2733` | Names of objects, columns, and variables. |
-| `identifier.quote` | `identifier.quote.sql` | inherits `identifier` | `#d4d4d4` | `#1f2733` | Double quotes around identifiers; square brackets take the bracket colors (editorBracketHighlight.*). |
-| `delimiter` | `delimiter.sql` | `$syntaxDelimiter` | `#dcdcdc` | `#1f2733` | Commas, semicolons, and dots. |
-| `delimiter.parenthesis` | `delimiter.parenthesis.sql` | inherits `delimiter` | `#dcdcdc` | `#1f2733` | Parentheses. The editor draws brackets in the bracket colors (editorBracketHighlight.*) instead. |
-| `delimiter.square` | `delimiter.square.sql` | inherits `delimiter` | `#dcdcdc` | `#1f2733` | Square brackets. The editor draws brackets in the bracket colors (editorBracketHighlight.*) instead. |
+| `keyword` | `keyword.sql` | `$syntaxKeyword` | `#93a4ff` | `#3442c2` | Keywords. |
+| `keyword.block` | `keyword.block.sql` | inherits `keyword` | `#93a4ff` | `#3442c2` | BEGIN, END, and CASE. |
+| `keyword.try` | `keyword.try.sql` | inherits `keyword` | `#93a4ff` | `#3442c2` | BEGIN TRY and END TRY. |
+| `keyword.catch` | `keyword.catch.sql` | inherits `keyword` | `#93a4ff` | `#3442c2` | BEGIN CATCH and END CATCH. |
+| `keyword.choice` | `keyword.choice.sql` | inherits `keyword` | `#93a4ff` | `#3442c2` | WHEN and THEN. |
+| `operator` | `operator.sql` | `$syntaxOperator` | `#9ea6b4` | `#575e6b` | Operators, including AND, OR, LIKE, and IN. |
+| `predefined` | `predefined.sql` | `$syntaxFunction` | `#d4a9f2` | `#8338b4` | Built-in functions, @@ variables, and $ACTION-style pseudo columns. |
+| `string` | `string.sql` | `$syntaxString` | `#9fd4a9` | `#2c7440` | String literals. |
+| `number` | `number.sql` | `$syntaxNumber` | `#e8b97d` | `#965700` | Numeric and money literals. |
+| `comment` | `comment.sql` | `$syntaxComment`, `italic` | `#868e9b` | `#636a76` | Comments. |
+| `comment.quote` | `comment.quote.sql` | inherits `comment` | `#868e9b` | `#636a76` | The /* and */ of block comments. |
+| `identifier` | `identifier.sql` | `$syntaxIdentifier` | `#d9dce3` | `#1c1f26` | Names of objects, columns, and variables. |
+| `identifier.quote` | `identifier.quote.sql` | inherits `identifier` | `#d9dce3` | `#1c1f26` | Double quotes around identifiers; square brackets take the bracket colors (editorBracketHighlight.*). |
+| `delimiter` | `delimiter.sql` | `$syntaxDelimiter` | `#9ea6b4` | `#575e6b` | Commas, semicolons, and dots. |
+| `delimiter.parenthesis` | `delimiter.parenthesis.sql` | inherits `delimiter` | `#9ea6b4` | `#575e6b` | Parentheses. The editor draws brackets in the bracket colors (editorBracketHighlight.*) instead. |
+| `delimiter.square` | `delimiter.square.sql` | inherits `delimiter` | `#9ea6b4` | `#575e6b` | Square brackets. The editor draws brackets in the bracket colors (editorBracketHighlight.*) instead. |
 
 ### Scope aliases
 

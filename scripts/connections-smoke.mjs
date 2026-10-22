@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
+import { connectErrorDetails, databaseErrorDetails, part, queryStatus, savedConnections, toolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -31,7 +32,7 @@ async function launch(options = launchOptions, ready = /\.NET 10\..*Ready/) {
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 async function open() {
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   await expect(page.getByRole('dialog', { name: 'Connect', exact: true })).toBeVisible()
   await expect(page.getByText('Loading saved connections…')).toHaveCount(0)
   return page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -104,7 +105,7 @@ try {
   // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
   // OK stores only the fields changed or touched (Always Encrypted and secure enclaves went back to False), so the
   // defaults, and Tools › Options for the command timeout, keep applying to the rest.
-  await expect.poll(async () => ({ advanced: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced, errors: await dialog.locator('.connect-error').allTextContents() })).toEqual({
+  await expect.poll(async () => ({ advanced: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced, errors: await dialog.getByRole('alert').allTextContents() })).toEqual({
     advanced: {
       commandTimeout: 7, connectTimeout: 20, columnEncryption: false, secureEnclaves: false, attestationProtocol: 'HGS', enclaveAttestationUrl: 'https://attestation.example',
       multipleActiveResultSets: true, networkProtocol: 'tcp', applicationIntent: 'ReadOnly', packetSize: 8192
@@ -140,7 +141,7 @@ try {
   await dialog.getByText('Development', { exact: true }).click()
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('#e66b73')
   await dialog.getByRole('tab', { name: 'History', exact: true }).click()
-  const controlMetrics = await dialog.locator('.property-row select').evaluateAll(controls => controls.filter(control => control.getClientRects().length).map(control => {
+  const controlMetrics = await dialog.locator('select').evaluateAll(controls => controls.filter(control => control.getClientRects().length).map(control => {
     const style = getComputedStyle(control)
     return { height: control.getBoundingClientRect().height, contentHeight: control.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom), lineHeight: parseFloat(style.lineHeight) }
   }))
@@ -179,16 +180,16 @@ try {
     await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog.getByRole('alert')).toBeVisible({ timeout: 30000 })
-    await dialog.locator('.connect-error-details summary').click()
-    await expect(dialog.locator('.connect-error-details dt')).toHaveText(['Error number', 'Severity', 'State', 'Server'])
+    await connectErrorDetails(dialog).getByText('Error details', { exact: true }).click()
+    await expect(connectErrorDetails(dialog).locator('dt')).toHaveText(['Error number', 'Severity', 'State', 'Server'])
     // Login failed is 18456, severity 14. A server that accepts only Windows authentication sometimes closes the pipe before
     // SqlClient reads that error, which SqlClient reports as 233, severity 20; either way the details are SqlClient's own.
-    const [number, severity, , answered] = await dialog.locator('.connect-error-details dd').allTextContents()
+    const [number, severity, , answered] = await connectErrorDetails(dialog).locator('dd').allTextContents()
     expect(['18456 14', '233 20']).toContain(number + ' ' + severity)
     expect(answered).toBe(process.env.VARIA_TEST_SQL_SERVER)
-    expect((await dialog.locator('.connect-error, .connect-error-details').allTextContents()).join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
+    expect([...await dialog.getByRole('alert').allTextContents(), ...await connectErrorDetails(dialog).allTextContents()].join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
     // Load databases with the same login fails the same way, and shows the same details under its note.
-    const liveDatabaseDetails = dialog.locator('.property-row .connect-error-details')
+    const liveDatabaseDetails = databaseErrorDetails(dialog)
     await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
     await expect(dialog.getByText(/Could not load databases/)).toBeVisible({ timeout: 35000 })
     await liveDatabaseDetails.getByText('Error details', { exact: true }).click()
@@ -244,8 +245,8 @@ try {
         return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
       }
       if (method === 'connections.connect') {
-        if (params.server === 'connect-error') return { ok: false, error: 'Server unavailable.', code: 'SQL_ERROR', details: { number: 53, state: 0, class: 20, server: 'connect-error' } }
-        if (params.server === 'connect-error-plain') return { ok: false, error: 'Server unavailable without details.' }
+        if (params.server === 'server-down') return { ok: false, error: 'Server unavailable.', code: 'SQL_ERROR', details: { number: 53, state: 0, class: 20, server: 'server-down' } }
+        if (params.server === 'server-down-plain') return { ok: false, error: 'Server unavailable without details.' }
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
       // alice@CONTOSO.COM, unless the suite holds the answer back (identityPending) to look at the dialog while it waits.
@@ -266,7 +267,7 @@ try {
   // Off Windows the dialog asks for the ticket's principal when it opens, as SSMS reads the identity on open, so the saved
   // Windows Authentication rows show it whichever authentication the form starts on (SQL Server Authentication there), and
   // asks again each time Windows Authentication is chosen. Windows shows DOMAIN\user and never asks.
-  const integratedRows = async () => [...new Set(await dialog.locator('.connection-choice', { hasText: 'recent-server' }).locator('small').allTextContents())]
+  const integratedRows = async () => [...new Set(await savedConnections(dialog, 'recent-server').locator('small').allTextContents())]
   const identityCalls = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.identity').length)
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   dialog = await open()
@@ -323,7 +324,7 @@ try {
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: Login failed/)).toBeVisible()
   // A failed Load databases shows the same Error details expander as a failed Connect, under the database note.
-  const databaseDetails = dialog.locator('.property-row .connect-error-details')
+  const databaseDetails = databaseErrorDetails(dialog)
   await expect(databaseDetails).toHaveCount(1)
   await expect(databaseDetails).not.toHaveAttribute('open', '')
   await databaseDetails.getByText('Error details', { exact: true }).click()
@@ -343,25 +344,25 @@ try {
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: Discovery failed without details/)).toBeVisible()
   await expect(databaseDetails).toHaveCount(0)
-  await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable')
   // The details expander starts closed, opens to SQL Server's facts, and goes with the error once the options change.
-  const details = dialog.locator('.connect-error-details')
+  const details = connectErrorDetails(dialog)
   await expect(details).toHaveCount(1)
   await expect(details).not.toHaveAttribute('open', '')
   await details.getByText('Error details', { exact: true }).click()
   await expect(details).toHaveAttribute('open', '')
   expect(await details.locator('dt').allTextContents()).toEqual(['Error number', 'Severity', 'State', 'Server'])
-  expect(await details.locator('dd').allTextContents()).toEqual(['53', '20', '0', 'connect-error'])
+  expect(await details.locator('dd').allTextContents()).toEqual(['53', '20', '0', 'server-down'])
   await details.screenshot({ path: resolve('artifacts', 'connect-error-details.png') })
-  await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error-plain')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-down-plain')
   await expect(details).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable without details')
   await expect(details).toHaveCount(0)
   const history = await page.evaluate(() => window.varia.loadConnectionLibrary())
-  expect(history.value.library.profiles.some(item => item.options.server === 'connect-error')).toBe(false)
+  expect(history.value.library.profiles.some(item => item.options.server === 'server-down')).toBe(false)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connected-server')
   await dialog.getByLabel('Database Name', { exact: true }).fill('AppData')
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
@@ -370,13 +371,13 @@ try {
   await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(page.locator('.query-context')).toContainText('Development')
+  await expect(queryStatus(page)).toContainText('Development')
   // The query status bar sits below the query by default, so the connection's colour is its top edge, facing the query.
-  expect(await page.locator('.query-context').evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 107, 115)')
+  expect(await queryStatus(page).evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 103, 103)')
   // Object Explorer shows the server by its name and color, expanded to its folders.
   const serverRow = await explorerRow(page, 'Development')
   await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
-  expect(await serverRow.locator('.oe-accent').evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(230, 107, 115)')
+  expect(await serverRow.locator(part.explorerAccent).evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(230, 103, 103)')
   await expect(await explorerRow(page, 'Development', 'Server Objects')).toBeVisible()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')
@@ -508,7 +509,7 @@ async function rememberPassword() {
     await dialog.getByLabel('Login', { exact: true }).fill('reader')
     await form(dialog).password.fill(password)
   }
-  const choose = dialog => dialog.locator('.connection-choice', { hasText: 'password-check' }).first().click()
+  const choose = dialog => savedConnections(dialog, 'password-check').first().click()
   async function connected(dialog) {
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0)

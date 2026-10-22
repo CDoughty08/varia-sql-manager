@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
 import { contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
+import { parseThemeSource } from '../src/shared/theme/format'
 import { colorKeys, cssVariable, sqlScopes, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
-import { resolveBuiltin } from '../src/shared/theme/resolve'
+import { resolveBuiltin, resolveTheme } from '../src/shared/theme/resolve'
 import type { ResolvedTheme, ThemeType } from '../src/shared/theme/types'
 
 const types: ThemeType[] = ['dark', 'light']
@@ -70,10 +72,24 @@ describe('built-in theme contrast', () => {
     const missing = rules.filter(({ color, background }) => !contrastExemptions[color!] && !contrastPairs.some(pair => pair.foreground === color && pair.background.at(-1) === background))
     expect(missing.map(rule => `${rule.selector}: ${rule.color} on ${rule.background}`)).toEqual([])
   })
+  it('holds the documentation example themes to the same pairs', () => {
+    // A key default that stops following an override the examples make (the status bar's, say) shows up here.
+    const directory = join('docs', 'themes', 'examples')
+    const files = readdirSync(directory).filter(file => file.endsWith('.json')).sort()
+    expect(files.length).toBeGreaterThan(1)
+    const failures = files.flatMap(file => {
+      const theme = parseThemeSource(readFileSync(join(directory, file)), file).theme!
+      return (theme.type === 'dual' ? types : [theme.type]).flatMap(type => {
+        const resolved = resolveTheme([theme], type).theme
+        return contrastPairs.map(pair => [pair, ratio(resolved, pair)] as const).filter(([pair, value]) => value < pair.minimum).map(([pair, value]) => `${file} ${describePair(type, pair, value)}`)
+      })
+    })
+    expect(failures, failures.join('\n')).toEqual([])
+  })
   it('composites translucent foregrounds and backgrounds before measuring', () => {
     const dark = resolveBuiltin('dark')
-    const pair: ContrastPair = { foreground: 'resultsGrid.nullForeground', background: ['panel.background', 'resultsGrid.alternateRowBackground'], minimum: 4.5 }
-    const striped = composite(hexColor('#d9e1ec08'), hexColor('#141a23'))
-    expect(ratio(dark, pair)).toBeCloseTo(contrast(composite(hexColor('#dfbd82b3'), striped), striped), 6)
+    const pair: ContrastPair = { foreground: 'emptyState.iconForeground', background: ['panel.background', 'resultsGrid.alternateRowBackground'], minimum: 3 }
+    const striped = composite(hexColor('#d9dce305'), hexColor('#16181d'))
+    expect(ratio(dark, pair)).toBeCloseTo(contrast(composite(hexColor('#7f869499'), striped), striped), 6)
   })
 })

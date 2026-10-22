@@ -221,7 +221,7 @@ export default function App() {
 
   return <div className="app">
     <TitleBar title={windowTitle} />
-    <div className="toolbar">
+    <div className="toolbar" role="toolbar" aria-label="Standard">
       <div className="toolbar-actions">
         <button className="primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="add" />Connect</button>
         <span className="toolbar-divider" />
@@ -250,7 +250,7 @@ export default function App() {
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
         <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" /><span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
+          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" role="img" aria-label="Executing" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div>)}</div>
         {active.id ? <>
@@ -261,7 +261,7 @@ export default function App() {
           {!statusTop && statusBar}
         </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
+    <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
