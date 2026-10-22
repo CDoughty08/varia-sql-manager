@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
+using Varia.Backend.Activity;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -26,6 +27,9 @@ internal interface ILiveHost
     SqlConnection PoolConnection(string connectionId, string? database, string suffix);
     /// <summary>Opens it; a Kerberos or Entra sign-in failure throws AUTH_KERBEROS, AUTH_UNSUPPORTED or AUTH_ENTRA.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
+    /// <summary>The Application Name of every open connection: this backend's sessions run under them plus a pool suffix,
+    /// which tells the Activity Monitor which sessions are Varia's own.</summary>
+    IReadOnlyCollection<string> ApplicationNames => [];
 }
 
 /// <summary>One probe of a subscription: its settings, its schedule and its back-off.</summary>
@@ -678,7 +682,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
-        _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql),
+        _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
+            source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
     };
 
@@ -741,6 +746,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             return source.Id switch
             {
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
+                _ when source.Id == ActivityCatalog.Current.Source => ActivityReader.Check(element.Deserialize<ActivityLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), ActivityCatalog.Current),
                 _ => throw Invalid("This source takes no arguments.")
             };
         }

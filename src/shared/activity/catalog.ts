@@ -90,6 +90,20 @@ export const probeSpecs: { readonly [P in ActivityProbe]: ProbeSpec } = {
     defaultIntervalMs: 30_000, minIntervalMs: 15_000, maxIntervalMs: 60_000, floorMs: 30_000, budgetMs: 10_000, minGapMs: 15_000, maxDutyCycle: 0.2, maxdop1: true, filterMode: 'memory', hidden: 'pause'
   }
 }
+/** The probes the live catalogue declares today, in its order (src/shared/live/catalog.ts builds their entries from this
+ *  catalogue). activity.queries joins with Recent Expensive Queries (AM4). */
+export const activityLiveProbes = ['activity.overview', 'activity.sessions', 'activity.resources'] as const satisfies readonly ActivityProbe[]
+/** Probes the live catalogue declares whose sampling arrives later: each opens unavailable with this note and runs no SQL. */
+export const pendingProbes: { readonly [P in ActivityProbe]?: string } = {
+  'activity.resources': 'Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia.'
+}
+/** Status values the sessions probe sends with its first sample on each new connection: what the capability probe found the
+ *  login may do (1 or 0). */
+export const activityStatuses = {
+  serverState: 'The login reads server state (VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before): without it, Processes shows only the monitor\'s own session and Blocking and Active Expensive Queries report PERMISSION_DENIED.',
+  canKill: 'The login holds ALTER ANY CONNECTION, which Kill Process needs.'
+} as const
+export type ActivityStatus = keyof typeof activityStatuses
 /** The load guard's counts (D-live's back-off): a probe's interval doubles, up to its maxIntervalMs, after this many
  *  samples in a row cost more than its maxDutyCycle, and halves back after this many cheap ones. */
 export const activityLoadGuard = { slowSamples: 3, cheapSamples: 10 } as const
@@ -197,10 +211,10 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('blockedBy', 'Blocked By', 'int', 'id', true, 'fix', 'The session it waits on (its longest blocking wait); negative ids show their meaning. SSMS lists a session once per session it blocks.'),
       c('headBlocker', 'Head Blocker', 'bool', '', true, 'fix', 'Blocks another session and waits on none. SSMS marks it on each duplicate row.'),
       c('blocking', 'Blocking', 'int', 'count', true, 'new', 'Sessions downstream of it in its blocking chain.'),
-      c('cpuRate', 'CPU (ms/s)', 'decimal', 'ms/s', true, 'new', 'CPU used per second over the interval: the session\'s CPU plus its running requests\'.'),
+      c('cpuRate', 'CPU (ms/s)', 'decimal', 'ms/s', true, 'new', 'CPU per second over the interval: a running request\'s own CPU while it runs, one that started since the last sample whole, and for one that ended only what the session took in beyond what the request had counted (SQL Server takes it in on a smaller scale), so it is never negative and nothing counts twice.'),
       c('totalCpuMs', 'Total CPU (ms)', 'bigint', 'ms', true, 'ssms', 'The session\'s CPU since login.'),
       c('physicalIoMb', 'Physical I/O (MB)', 'decimal', 'MB', true, 'ssms', 'Pages read and written since login, in MB (cumulative).'),
-      c('logicalReadsRate', 'Logical Reads/s', 'decimal', '/s', true, 'new', 'Logical reads per second over the interval.'),
+      c('logicalReadsRate', 'Logical Reads/s', 'decimal', '/s', true, 'new', 'Logical reads per second over the interval, counted as CPU (ms/s) is.'),
       c('memoryKb', 'Memory Use (KB)', 'bigint', 'KB', true, 'ssms', 'memory_usage pages, in KB.'),
       c('openTransactions', 'Open Transactions', 'int', 'count', true, 'fix', 'The session\'s open transactions. SSMS reads the request\'s count, so an idle session holding a transaction shows 0.'),
       c('elapsedSeconds', 'Elapsed (s)', 'decimal', 's', true, 'new', 'How long the current request has run.'),
@@ -356,6 +370,17 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
     ]
   }
 }
+
+/** The live layer sorts and filters a probe's tables by column id, so ids are unique within a probe: its first table keeps
+ *  its ids and the others take a prefix (Blocking's sessionId is chainSessionId). Sorting Processes then never reorders
+ *  the Blocking tree. */
+export const liveColumnPrefixes: { readonly [T in ActivityTable]?: string } = { blocking: 'chain', activeQueries: 'active', waitTypes: 'type', files: 'io' }
+export const liveColumnId = (table: ActivityTable, column: string): string => {
+  const prefix = liveColumnPrefixes[table]
+  return prefix ? prefix + column[0].toUpperCase() + column.slice(1) : column
+}
+/** The SQL type a live table stores for each column type (every cell is the text a query of that type shows). */
+export const liveColumnTypes: { readonly [T in ColumnType]: string } = { int: 'int', bigint: 'bigint', decimal: 'decimal', text: 'nvarchar', datetime: 'datetime', bool: 'bit' }
 
 export interface PaneSpec {
   readonly title: string
@@ -694,17 +719,20 @@ export function activityCatalogJson(): string {
     `  "exceptions": ${line(waitExceptions.map(({ name, category }) => ({ name, category })))},`,
     `  "hideBenign": ${line({ default: waitToggles.hideBenign.default, tables: waitToggles.hideBenign.tables })},`,
     `  "limits": ${line(activityLimits)},`,
+    `  "liveProbes": ${line(activityLiveProbes)},`,
     `  "loadGuard": ${line(activityLoadGuard)},`,
+    `  "pending": ${line(pendingProbes)},`,
     `  "poolSuffix": ${line(activityPoolSuffix)},`,
     `  "probes": ${block(activityProbes.map(probe => { const spec = probeSpecs[probe]; return { probe, kind: spec.kind, tables: spec.tables, series: probeSeries(probe), defaultIntervalMs: spec.defaultIntervalMs, minIntervalMs: spec.minIntervalMs, maxIntervalMs: spec.maxIntervalMs, floorMs: spec.floorMs, budgetMs: spec.budgetMs, minGapMs: spec.minGapMs, maxDutyCycle: spec.maxDutyCycle, maxdop1: spec.maxdop1, filterMode: spec.filterMode, hidden: spec.hidden } }))},`,
     `  "source": ${line(activitySource)},`,
+    `  "statuses": ${line(Object.keys(activityStatuses))},`,
     `  "tables": ${block(activityTables.map(table => {
       const spec = tableSpecs[table]
       return { table, probe: spec.probe, key: spec.key, identity: spec.identity, rowCap: spec.rowCap, columns: spec.columns.map(column => column.capability ? `${column.id}:${column.type}:${column.capability}` : `${column.id}:${column.type}`),
         textColumns: spec.textColumns, facetColumns: spec.facetColumns, tones: spec.tones, departedLinger: spec.departedLinger }
     }))},`,
     `  "tones": ${line(rowTones)},`,
-    `  "variaSessions": ${line(variaSessionKinds.map(({ suffix, kind }) => ({ suffix, kind })))},`,
+    `  "variaSessions": ${line(variaSessionKinds.map(({ suffix, kind, label }) => ({ suffix, kind, label })))},`,
     `  "version": 1,`,
     `  "views": ${line(viewChips)},`,
     `  "waits": ${block(waitCategories.map(({ id, value, names, patterns }) => ({ id, value, names, patterns })))}`,

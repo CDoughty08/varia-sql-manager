@@ -97,7 +97,8 @@ pages, limits, error codes, display formats, benchmarks).
   probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
-  constant text per probe and band in `Live/LiveSql.cs` (its offline lint refuses metadata built-ins, temporary tables,
+  constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
+  by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
   Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
   the live gates and a per-statement budget, and its failures are values that back off.
@@ -169,8 +170,10 @@ pages, limits, error codes, display formats, benchmarks).
   `Activity/activity-catalog.json` with `npx vitest run tests/activity-catalog.test.ts -u`. Its SQL is constant text per probe,
   statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
   names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
-  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered; the offline lint renders and checks every variant. Filters run
-  in backend memory over a sample (`ActivityFilter`), never in SQL.
+  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do); the offline
+  lint renders and checks every variant. Its live probes are built from this catalogue (`src/shared/live/catalog.ts`), and
+  their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
+  sent as the source's args), never in SQL.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

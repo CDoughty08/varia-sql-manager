@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Varia.Backend.Explorer;
+using Varia.Backend.Activity;
 using Varia.Backend.Live;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -33,12 +34,24 @@ internal static class LiveSchedulerChecks
         var catalog = LiveCatalog.Current;
         check(catalog.Limits is { StatementsPerConnection: 2, Statements: 8, BudgetMs: { Min: 500, Max: 10_000 }, BackoffMs: 60_000, IdleMs: 30_000 },
             "the live limits carry the scheduler's gates (2 per connection, 8 in all), budget range, back-off cap and idle threshold");
-        check(catalog.Sources.TryGetValue("activity", out var activity) && activity is { Scope: "server", TestOnly: false } && activity.Probes.SequenceEqual([LiveSql.OverviewProbe])
-            && catalog.Probes[LiveSql.OverviewProbe] is { IntervalMs: { Default: 2000, Min: 1000 }, MaxDutyCycle: 0.2, Permission: "serverState", Gates: { MinMajor: 13 } } overview
+        check(catalog.Sources.TryGetValue("activity", out var activity) && activity is { Scope: "server", TestOnly: false } && activity.Probes.SequenceEqual(ActivityCatalog.Current.LiveProbes)
+            && activity.Probes.SequenceEqual([ActivityReader.OverviewProbe, ActivityReader.SessionsProbe, "activity.resources"])
+            && catalog.Probes[ActivityReader.OverviewProbe] is { IntervalMs: { Default: 2000, Min: 1000, Max: 60_000 }, MaxDutyCycle: 0.2, Permission: "serverState", Gates: { MinMajor: 13 } } overview
             && overview.Gates.Editions.SequenceEqual([1, 2, 3, 4, 8]) && overview.Budget is { Min: 500, Max: 5000 }
-            && overview.Series.Select(series => series.Id + ":" + series.Counter).SequenceEqual(["cpuPercent:cpuPercent", "runnableTasks:gauge", "batchRequests:rate", "compilations:rate", "recompilations:rate", "userSessions:gauge"]),
-            "the embedded catalogue ships the Activity Monitor source with its overview probe: 2 s by default, a 0.2 load guard, server state, 2016 and later on box and Managed Instance");
+            && overview.Series.Select(series => series.Id).SequenceEqual(ActivityCatalog.Current.Probes[ActivityReader.OverviewProbe].Series)
+            && overview.Series.Take(3).Select(series => series.Id + ":" + series.Counter).SequenceEqual(["cpuPercent:cpuPercent", "schedulerDelay:msPerSecond", "waitingTasks:msPerSecond"])
+            && catalog.Probes[ActivityReader.SessionsProbe] is { Permission: "none", FilterMode: "memory" } sessions && sessions.Status.SequenceEqual(ActivityCatalog.Current.Statuses)
+            && sessions.Series.All(series => series.Counter == "gauge"),
+            "the embedded catalogue ships the Activity Monitor source with the activity catalogue's probes: the overview's 21 series (2 s by default, 1 to 60 s, a 0.2 load guard, server state, 2016 and later on box and Managed Instance) and the sessions probe, which runs without server state and works out its own series");
+        // The reader writes cells in the activity catalogue's column order; the live tables must have the same columns in it.
+        var shapes = activity!.Probes.SelectMany(probe => catalog.Probes[probe].Tables.Select(table => (Live: table, Activity: ActivityCatalog.Current.Table(table.Id))))
+            .Where(pair => pair.Live.Columns.Count != pair.Activity.Columns.Count || pair.Live.Mode != "snapshot"
+                || pair.Live.Columns.Zip(pair.Activity.Columns).Any(column => !column.First.Id.EndsWith(column.Second.Id[1..], StringComparison.Ordinal) || column.First.DataType != LiveType(column.Second.Type)))
+            .Select(pair => pair.Live.Id).ToList();
+        check(shapes.Count == 0, "every live Activity Monitor table has the activity catalogue's columns, in its order and with its types: " + string.Join(", ", shapes));
     }
+
+    private static string LiveType(string activityType) => activityType switch { "text" => "nvarchar", "bool" => "bit", _ => activityType };
 
     private static void SqlChecks(Action<bool, string> check)
     {
@@ -46,15 +59,21 @@ internal static class LiveSchedulerChecks
         var queries = LiveSql.All(catalog).ToList();
         var problems = queries.SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue)).Select(problem => query.Probe + " band " + query.Band + ": " + problem))
             .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.Session).Select(problem => "session: " + problem)).ToList();
-        check(queries.Count == LiveSql.MaxBand - LiveSql.MinBand + 1 && problems.Count == 0,
-            "every SQL probe's text passes the live lint at every band, with the session probe (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0, "every one-batch SQL probe's text passes the live lint at every band, with the session probe (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
+        // The Activity Monitor's statements run through the live layer too, so they pass its lint as well as their own; @@SPID is
+        // theirs to read (the clock names the monitor's session, and Active Expensive Queries leaves it out).
+        var activity = ActivitySql.Renders().SelectMany(render => ActivityCatalog.Current.LiveProbes.SelectMany(probe => ActivitySql.Statements(probe, render)))
+            .Append(ActivitySql.Capabilities).Distinct()
+            .SelectMany(statement => LiveSql.Lint(LiveSql.UncommittedPrologue + statement.Text.Replace("@@SPID", "@spid", StringComparison.Ordinal)).Select(problem => statement.Probe + " " + statement.Id + ": " + problem)).ToList();
+        check(activity.Count == 0 && queries.Count == 0 && LiveSql.For(ActivityReader.OverviewProbe, LiveSql.MaxBand) is null,
+            "the Activity Monitor's statements pass the live lint too (no comments, every TOP ordered at its own level, no remote reads), and no second overview query exists in LiveSql: " + string.Join("; ", activity.Take(5)));
         // Every series of a SQL probe comes from a column its query returns, and the clock columns are among them.
         var unmapped = queries.SelectMany(query => catalog.Probes[query.Probe].Series.Where(series => query.Series.FirstOrDefault(entry => entry.Series == series.Id) is not { } mapping
             || !query.Columns.Contains(mapping.Column) || mapping.Base is { } baseColumn && !query.Columns.Contains(baseColumn)
             || series.Counter is "ratio" or "cpuPercent" && mapping.Base is null).Select(series => query.Probe + "." + series.Id)).ToList();
         check(unmapped.Count == 0 && queries.All(query => query.Columns.Distinct(StringComparer.Ordinal).Count() == query.Columns.Length && query.Columns.Contains(query.MsTicks) && query.Columns.Contains(query.StartTicks))
-            && LiveSql.For(LiveSql.OverviewProbe, 12) is null && LiveSql.For("debug.synthetic.metrics", 17) is null,
-            "every series maps to a column of its probe's one row (ratios and CPU with a base), the clock columns are there, and no query exists below 2016: " + string.Join(", ", unmapped));
+            && LiveSql.For("debug.synthetic.metrics", 17) is null,
+            "every series maps to a column of its probe's one row (ratios and CPU with a base), and the clock columns are there: " + string.Join(", ", unmapped));
         // The lint catches what it is for.
         var bad = new Dictionary<string, string>
         {
@@ -96,7 +115,8 @@ internal static class LiveSchedulerChecks
             "the live lint refuses metadata functions (however spaced), temporary tables, writes, DDL, transactions, waits, dynamic SQL, remote reads, comments, a TOP without an ORDER BY at its own level and a missing prologue, and reads no code as a literal, comment or name it is not: "
             + string.Join(", ", missed) + " | " + string.Join(", ", good));
         // Values are read by declared position, so every read checks what it got against the declaration.
-        var overviewQuery = LiveSql.For(LiveSql.OverviewProbe, LiveSql.MaxBand)!;
+        var overviewQuery = new LiveQuery("check", LiveSql.MaxBand, "SELECT 1;", ["ms_ticks", "start_ticks", "cpu_ms", "schedulers", "runnable_tasks", "batch_requests", "compilations", "recompilations", "user_sessions"],
+            "ms_ticks", "start_ticks", []);
         var declared = overviewQuery.Columns.Select(column => (column, typeof(long))).ToList();
         var swapped = declared.ToList();
         (swapped[5], swapped[6]) = (swapped[6], swapped[5]);
@@ -628,19 +648,24 @@ internal static class LiveSchedulerChecks
     {
         var id = Guid.NewGuid().ToString();
         var activity = LiveCatalog.Current.Sources["activity"];
-        var overview = LiveCatalog.Current.Probes[LiveSql.OverviewProbe];
+        var overview = LiveCatalog.Current.Probes[ActivityReader.OverviewProbe];
         {
             var host = new HangingHost(id);
-            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null) { ConnectBudgetMs = 200 };
+            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host)) { ConnectBudgetMs = 200 };
             var opening = await sampler.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             check(host.Pooled == 0 && host.Opens == 0 && opening is { Spid: null, Probes: [{ State: "ok" }] },
                 "a view subscribed with every probe paused opens no connection and runs no SQL (the session is read when a probe first runs)");
+            var pending = LiveCatalog.Current.Probes["activity.resources"];
+            using var stub = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host));
+            var declared = await stub.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }, new LiveProbeState(pending, 5000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            check(declared.Probes is [{ State: "ok" }, { State: "unavailable", Reason: "NOT_SUPPORTED" } resources] && resources.Note == ActivityCatalog.Current.Pending["activity.resources"] && host.Opens == 0,
+                "a probe the live catalogue declares before its sampling arrives (Resource Waits) opens unavailable with its note, and never runs");
         }
         {
             var host = new HangingHost(id);
             // One gate in the backend: were the connect holding it, the other connection could not have it.
             var gates = new LiveGates(2, 1, other => other == id || other == "other");
-            using var sampler = new SqlSampler(host, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null) { ConnectBudgetMs = 400 };
+            using var sampler = new SqlSampler(host, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host)) { ConnectBudgetMs = 400 };
             var probe = new LiveProbeState(overview, 2000);
             var opening = await sampler.OpenAsync([probe], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             var sampling = sampler.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), probe.BudgetMs, 2000)], CancellationToken.None);
@@ -667,11 +692,15 @@ internal static class LiveSchedulerChecks
         object Subscribe(object? args = null) => new
         {
             subscriptionId = Guid.NewGuid().ToString(), connectionId = Guid.NewGuid().ToString(), source = "activity",
-            probes = new[] { new { probe = LiveSql.OverviewProbe, intervalMs = 2000 } }, args
+            probes = new[] { new { probe = ActivityReader.OverviewProbe, intervalMs = 2000 } }, args
         };
         var plain = await Code(Subscribe());
         var withArgs = await Code(Subscribe(new { rows = 1 }));
-        check(plain == "NOT_CONNECTED" && withArgs == "INVALID_PARAMS" && service.Live.Count == 0,
-            "a production backend (no test hooks) accepts the activity source, which needs a connected id (NOT_CONNECTED), and refuses args it does not take");
+        var focus = await Code(Subscribe(new { focusSession = 51, filters = new[] { new { table = "sessions", view = "blocked" } } }));
+        var badView = await Code(Subscribe(new { filters = new[] { new { table = "sessions", view = "sleeping" } } }));
+        var unknown = await Code(Subscribe(new { filters = new[] { new { table = "sessions", columns = new[] { "login" } } } }));
+        var empty = await Code(Subscribe(new { }));
+        check(plain == "NOT_CONNECTED" && withArgs == "INVALID_PARAMS" && focus == "NOT_CONNECTED" && badView == "INVALID_PARAMS" && unknown == "INVALID_PARAMS" && empty == "INVALID_PARAMS" && service.Live.Count == 0,
+            "a production backend (no test hooks) accepts the activity source and its own args (a filter per table, the focus session), which need a connected id (NOT_CONNECTED), and refuses args it does not take, an invalid filter, an unknown member and empty args");
     }
 }

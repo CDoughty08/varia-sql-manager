@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { activityLiveProbes, activitySource, activityStatuses, liveColumnId, liveColumnTypes, pendingProbes, probeSeries, probeSpecs, seriesSpecs, tableSpecs, type ActivityTable } from '../src/shared/activity/catalog'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
 import { renderLiveDocs } from '../src/shared/live/docs'
@@ -11,6 +12,8 @@ import { liveArgsSchemas } from '../src/shared/live/schema'
 
 const L = limits.live
 const catalogId = /^[a-z][A-Za-z0-9]{0,31}$/
+// Series travel as positions, never ids, so an id may name its family (wait.lock, focus.cpuRate).
+const seriesId = /^(?=.{1,32}$)[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*)?$/
 
 describe('live catalogue', () => {
   it('names every source and probe once, and each probe belongs to exactly one source', () => {
@@ -32,7 +35,7 @@ describe('live catalogue', () => {
       const { min, max } = probe.intervalMs
       expect(min <= probe.intervalMs.default && probe.intervalMs.default <= max && min >= L.intervalMs.min && max <= L.intervalMs.max, id).toBe(true)
       expect((probe.series ?? []).length, id).toBeLessThanOrEqual(L.series)
-      for (const series of probe.series ?? []) { expect(series.id, id).toMatch(catalogId); expect(liveUnits).toContain(series.unit); expect(liveCounters).toContain(series.counter) }
+      for (const series of probe.series ?? []) { expect(series.id, id).toMatch(seriesId); expect(liveUnits).toContain(series.unit); expect(liveCounters).toContain(series.counter) }
       // The scheduler's own settings: a budget the statement gates and LOCK_TIMEOUT fit in, a duty cycle that can trip, a refresh gap.
       const budget = probe.budgetMs ?? defaultBudgetMs
       expect(budget.min >= L.budgetMs.min && budget.min <= budget.max && budget.max <= L.budgetMs.max, id).toBe(true)
@@ -90,9 +93,43 @@ describe('live catalogue', () => {
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
     expect(productionSourceIds).toEqual(['activity'])
-    expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview'] })
+    expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources'] })
     // The Activity Monitor's overview: 2 s by default (owner decision), never below 1 s, a 0.2 load guard, server state.
     expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })
+  })
+  it('builds the Activity Monitor\'s probes from its own catalogue: tables, columns in order, keys, facets, series and gates', () => {
+    expect(activityLiveProbes).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
+    for (const id of activityLiveProbes) {
+      const live = liveProbes[id], spec = probeSpecs[id]
+      expect(live, id).toMatchObject({ source: activitySource, label: spec.title, intervalMs: { default: spec.defaultIntervalMs, min: spec.minIntervalMs, max: spec.maxIntervalMs },
+        budgetMs: { max: spec.budgetMs }, maxDutyCycle: spec.maxDutyCycle, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] } })
+      expect(live.filterMode, id).toBe(spec.filterMode)
+      expect(live.minGapMs, id).toBe(spec.minGapMs)
+      expect((live.series ?? []).map(series => series.id), id).toEqual(probeSeries(id))
+      // A metrics probe's series go through the delta engine by kind; a snapshot probe sends what it worked out itself.
+      for (const series of live.series ?? []) expect(series.counter, `${id} ${series.id}`).toBe(spec.kind === 'metrics' ? seriesSpecs[series.id]!.kind : 'gauge')
+      expect((live.tables ?? []).map(table => table.id), id).toEqual(spec.tables)
+      for (const table of live.tables ?? []) {
+        const source = tableSpecs[table.id as ActivityTable]
+        expect(table.columns.map(column => [column.id, column.name, column.dataType]), table.id).toEqual(source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type]]))
+        expect(table.key, table.id).toEqual(source.key.map(column => liveColumnId(table.id as ActivityTable, column)))
+        expect(table.facets ?? [], table.id).toEqual((source.facetColumns ?? []).map(column => liveColumnId(table.id as ActivityTable, column)))
+        expect(table.departed ?? false, table.id).toBe(source.departedLinger ?? false)
+        expect(table.rowCap, table.id).toBe(source.rowCap)
+        // Names are what Copy with Headers and Save write, so they are the captions, unique within a table.
+        expect(new Set(table.columns.map(column => column.name)).size, table.id).toBe(table.columns.length)
+      }
+    }
+    // A probe's first table keeps the catalogue's ids, so Processes sorts by sessionId; the others are prefixed.
+    expect([liveColumnId('sessions', 'login'), liveColumnId('blocking', 'sessionId'), liveColumnId('activeQueries', 'cpuMs'), liveColumnId('waitCategories', 'waitRate'), liveColumnId('waitTypes', 'waitRate'), liveColumnId('files', 'file')])
+      .toEqual(['login', 'chainSessionId', 'activeCpuMs', 'waitRate', 'typeWaitRate', 'ioFile'])
+    // Without server state, only the sessions probe runs (the monitor's own session); it reports what the login may do.
+    expect([liveProbes['activity.overview'].permission, liveProbes['activity.sessions'].permission, liveProbes['activity.resources'].permission]).toEqual(['serverState', undefined, 'serverState'])
+    expect(liveProbes['activity.sessions'].status).toEqual(Object.keys(activityStatuses))
+    expect(liveProbes['activity.resources'].description).toContain(pendingProbes['activity.resources'])
+    // The opened frame carries a pending probe's note.
+    for (const note of Object.values(pendingProbes)) expect(note.length).toBeLessThanOrEqual(L.noteCharacters)
+    expect(liveProbes['activity.overview'].series?.find(series => series.id === 'pageLifeExpectancy')).toMatchObject({ unit: 'seconds', counter: 'gauge' })
   })
   it('stays erasable TypeScript that plain Node loads, as the fake backend does', () => {
     const file = join('src', 'shared', 'live', 'catalog.ts')

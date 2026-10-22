@@ -160,6 +160,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// CONNECTION_LOST value and a new session id in the next tick, never a silent reconnect under the old one.</summary>
     SqlConnection ILiveHost.PoolConnection(string connectionId, string? database, string suffix) => PoolConnection(connectionId, database, suffix, reconnect: false);
     Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    IReadOnlyCollection<string> ILiveHost.ApplicationNames => [.. connections.Values.Select(text => new SqlConnectionStringBuilder(text).ApplicationName).Distinct(StringComparer.Ordinal)];
 
     /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
     /// connections to one server count as one whatever name, login or database they used; the connection's data source when
