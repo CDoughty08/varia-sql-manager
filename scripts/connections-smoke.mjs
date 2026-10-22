@@ -383,6 +383,14 @@ try {
   await expect(dialog.getByText(/Strict encryption always validates/)).toBeVisible()
   await expect(trust).toHaveCount(0)
   await dialog.getByLabel('Encrypt', { exact: true }).selectOption('mandatory')
+  // A pinned Host Name in Certificate is a check the person chose: trusting would skip it, so the dialog only explains.
+  await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
+  await dialog.getByLabel('Host Name in Certificate', { exact: true }).fill('sql01.contoso.com')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByText(/did not match the Server Certificate or the Host Name in Certificate/)).toBeVisible()
+  await expect(trust).toHaveCount(0)
+  await dialog.getByLabel('Host Name in Certificate', { exact: true }).fill('')
+  await dialog.getByLabel('Trust server certificate', { exact: true }).check()
   // BACKEND_ERROR's sentence is generic; Copy details carries the exception types the backend named.
   await dialog.getByLabel('Server Name', { exact: true }).fill('backend-error')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()

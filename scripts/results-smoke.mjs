@@ -641,7 +641,9 @@ try {
   await rm(join(control, 'hold', 'results.export'))
   await expect(toast).toHaveCount(1, { timeout: 30000 })
   await expect(toast).toHaveAttribute('data-severity', 'info')
+  // Focused, it says its severity and then its sentence.
   await expect(toast).toHaveAccessibleName('Information')
+  await expect(toast).toHaveAccessibleDescription('Saved 5,000 rows to background.csv.')
   await expect(toast.locator('.toast-message')).toHaveText('Saved 5,000 rows to background.csv.')
   await expect(page.locator('.toast-layer > [role="status"]')).toHaveText('Saved 5,000 rows to background.csv.')
   // Above the status bar, inside the window, and not focused: a toast never takes focus by itself.
@@ -649,6 +651,12 @@ try {
   expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(statusBox.y)
   expect(toastBox.x + toastBox.width).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth))
   await expect(toast).not.toBeFocused()
+  // Drawn over the dock (and, below, over a grid): what is laid out there must also be what the pointer reaches.
+  const onTop = () => toast.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    return [[0.5, 0.5], [0.05, 0.1], [0.95, 0.9]].map(([x, y]) => element.contains(document.elementFromPoint(box.left + box.width * x, box.top + box.height * y)))
+  })
+  expect(await onTop()).toEqual([true, true, true])
   await page.screenshot({ path: resolve('artifacts', 'results-toast.png') })
   const focusNotifications = async () => {
     await page.keyboard.press('F1')
@@ -657,13 +665,20 @@ try {
     await page.keyboard.press('Enter')
     await expect(toast).toBeFocused()
   }
-  // Escape dismisses the focused toast and gives focus back to the query it came from.
+  // The focused toast takes the theme's focus ring, as its buttons do; Tab reaches Show results, and Escape there
+  // dismisses the toast and gives focus back to the query it came from.
   await textbox().focus()
   await focusNotifications()
+  expect(await toast.evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineColor] }))
+    .toEqual(['solid', '2px', await tokenColor('focusBorder')])
+  await page.keyboard.press('Tab')
+  await expect(toast.getByRole('button', { name: 'Show results', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(toast).toHaveCount(0)
   await expect(textbox()).toBeFocused()
-  // Again, held while the second query is shown, and this time Show results goes back to the first.
+  // Again, held while the second query shows a grid where the toast appears, and this time Show results, clicked with
+  // the pointer (which waits until nothing covers it), goes back to the first.
+  await run('-- varia-fake: sets=W1*5000')
   await queryTabs().first().click()
   await writeFile(join(control, 'hold', 'results.export'), '')
   await choose(join(saveDir, 'background.csv'))
@@ -671,12 +686,12 @@ try {
   await page.keyboard.press('Control+S')
   await expect(page.locator('.job-strip:not(.job-notice)')).toContainText('Saving background.csv…')
   await queryTabs().nth(1).click()
+  await expect(cell(0, 0)).toBeVisible()
   await rm(join(control, 'hold', 'results.export'))
   await expect(toast).toHaveCount(1, { timeout: 30000 })
-  await focusNotifications()
-  await page.keyboard.press('Tab')
-  await expect(toast.getByRole('button', { name: 'Show results', exact: true })).toBeFocused()
-  await page.keyboard.press('Enter')
+  expect(await onTop()).toEqual([true, true, true])
+  await page.screenshot({ path: resolve('artifacts', 'results-toast-grid.png') })
+  await toast.getByRole('button', { name: 'Show results', exact: true }).click({ timeout: 5000 })
   await expect(toast).toHaveCount(0)
   await expect(queryTabs().first()).toHaveAttribute('aria-selected', 'true')
   expect((await readFile(join(saveDir, 'background.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)

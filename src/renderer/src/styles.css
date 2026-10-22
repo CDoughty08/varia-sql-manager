@@ -749,10 +749,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   [aria-selected="true"] .status-pill { color: inherit; border-color: currentColor; background: transparent; }
 }
 /* Toasts: bottom right, above the status bar and under the quick input, dialogs and menus. */
-/* Fixed, so its hidden live regions never sit in the page flow below the status bar and make it scroll. */
-.toast-layer { position: fixed; right: 0; bottom: 0; }
-.toast-stack { position: fixed; right: var(--varia-space-3); bottom: calc(var(--varia-status) + var(--varia-space-3)); z-index: 14000; display: flex; flex-direction: column; align-items: flex-end; gap: var(--varia-space-2); width: min(380px, calc(100vw - 2 * var(--varia-space-3))); pointer-events: none; }
+/* Fixed, so its hidden live regions never sit in the page flow below the status bar and make it scroll. Being fixed
+   makes it a stacking context, so the layer itself carries the z-index: on the stack it would rank only inside the layer,
+   under the dock and the grid. */
+.toast-layer { position: fixed; right: 0; bottom: 0; z-index: 14000; }
+.toast-stack { position: fixed; right: var(--varia-space-3); bottom: calc(var(--varia-status) + var(--varia-space-3)); display: flex; flex-direction: column; align-items: flex-end; gap: var(--varia-space-2); width: min(380px, calc(100vw - 2 * var(--varia-space-3))); pointer-events: none; }
 .toast { display: flex; align-items: flex-start; gap: var(--varia-space-2); width: 100%; padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-2) var(--varia-space-3); pointer-events: auto; background: var(--varia-notifications-background); color: var(--varia-notifications-foreground); border: 1px solid var(--varia-notifications-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.toast:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .toast > .toast-icon { flex: none; margin-top: 2px; }
 .toast[data-severity="info"] > .toast-icon { color: var(--varia-notificationsInfoIcon-foreground); }
 .toast[data-severity="warning"] > .toast-icon { color: var(--varia-notificationsWarningIcon-foreground); }

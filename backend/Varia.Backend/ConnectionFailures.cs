@@ -53,11 +53,15 @@ internal static class ConnectionFailures
     }
 
     // SEC_E_UNTRUSTED_ROOT and SEC_E_WRONG_PRINCIPAL: Windows' SNI reports them as the error number, and the managed SNI
-    // (Linux and macOS) reports any certificate its validation rejects as SEC_E_UNTRUSTED_ROOT.
-    private static readonly HashSet<int> CertificateErrors = [unchecked((int)0x80090325), unchecked((int)0x80090322)];
+    // (Linux and macOS) reports any certificate its validation rejects as SEC_E_UNTRUSTED_ROOT. Once Host Name in
+    // Certificate is set, Windows' SNI reports an untrusted chain as CERT_E_UNTRUSTEDROOT or CERT_E_CHAINING instead.
+    // CERT_E_WRONG_USAGE (0x800B0110, what a pinned Server Certificate that does not match reports) stays out: that is a
+    // certificate Trust server certificate must not wave through.
+    private static readonly HashSet<int> CertificateErrors = [unchecked((int)0x80090325), unchecked((int)0x80090322), unchecked((int)0x800B0109), unchecked((int)0x800B010A)];
 
     /// <summary>The TLS handshake failed because the server's certificate is not trusted, by its chain or its name: what
-    /// Trust server certificate (or Host Name in Certificate) fixes. The managed SNI can also surface it only as the
+    /// Trust server certificate (or Host Name in Certificate) fixes, unless the person pinned the certificate or its name
+    /// (connect-fix.ts then explains instead). The managed SNI can also surface it only as the
     /// AuthenticationException that SslStream's validation callback raised.</summary>
     internal static bool Untrusted(Exception error, SqlException sql)
     {

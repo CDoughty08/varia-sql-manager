@@ -48,6 +48,8 @@ const cancelledNotice = 'Connection cancelled.'
 const trustLabel = 'Trust server certificate and connect'
 /** Strict encryption validates the certificate whatever Trust server certificate says, so the dialog can only explain. */
 const strictCertificate = "Strict encryption always validates the server's certificate. Install a certificate this computer trusts, set Host Name in Certificate to the name the certificate was issued for, or choose Mandatory encryption and Trust server certificate."
+/** A pinned certificate or name is a check the person chose: trusting would skip it, so the dialog only explains. */
+const pinnedCertificate = "The server's certificate did not match the Server Certificate or the Host Name in Certificate set for this connection, so it was not trusted. Check that this is the server you meant and that those settings are current; Trust server certificate would skip that check."
 const trustNeedsPassword = 'Trust server certificate is now checked. The saved password is kept for the old settings only, so enter the password, then connect.'
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
@@ -375,7 +377,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
         {notice && <p className="field-note" role="status">{notice}</p>}
         {error && <div ref={failureBox} className="connect-failure">
           <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions} />
-          {fix === 'strict' && <p className="field-note">{strictCertificate}</p>}
+          {(fix === 'strict' || fix === 'pinned') && <p className="field-note">{fix === 'strict' ? strictCertificate : pinnedCertificate}</p>}
           {shownFailure?.details && (shownFailure.details.number !== undefined || shownFailure.details.server) && <FailureDetails details={shownFailure.details} />}
         </div>}
       </div>

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { autoHides, NotificationService, notificationLimits } from '../src/renderer/src/core/notifications'
 import Toasts from '../src/renderer/src/kit/Toasts'
 import { connectFix } from '../src/renderer/src/connect-fix'
+import { advancedDefaults } from '../src/shared/connections'
 import { computeContextKeys } from '../src/renderer/src/core/contextkeys'
 import { manualTimers, workbenchFixture } from './fixtures/workbench'
 
@@ -85,13 +86,18 @@ describe('toast stack', () => {
     const { notifications } = service()
     notifications.notify({ severity: 'info', message: 'Saved 400 rows to w1.csv.', actions: [{ label: 'Show results', run: () => {} }] })
     notifications.notify({ severity: 'error', message: 'The package failed.', report: { code: 'SQL_ERROR', details: { number: 50000 } } })
-    const markup = renderToStaticMarkup(createElement(Toasts, { snapshot: notifications.getSnapshot(), notifications: noop }))
+    // Each toast is described by its sentence, which Focus Notifications then reads along with the severity.
+    const ids = (html: string) => [...html.matchAll(/ (?:id|aria-describedby)="([^"]+)"/g)].map(match => match[1])
+    const described = renderToStaticMarkup(createElement(Toasts, { snapshot: notifications.getSnapshot(), notifications: noop }))
+    const [first, firstMessage, second, secondMessage] = ids(described)
+    expect([first === firstMessage, second === secondMessage, first !== second]).toEqual([true, true, true])
+    const markup = described.replaceAll(first, 'm1').replaceAll(second, 'm2')
     expect(markup).toContain('<section class="toast-stack" aria-label="Notifications">')
-    expect(markup).toContain('<div class="toast" data-severity="info" role="group" aria-label="Information" tabindex="-1"><span class="toast-icon codicon codicon-info" aria-hidden="true"></span>'
-      + '<div class="toast-body"><p class="toast-message">Saved 400 rows to w1.csv.</p><div class="toast-actions"><button type="button">Show results</button></div></div>'
+    expect(markup).toContain('<div class="toast" data-severity="info" role="group" aria-label="Information" aria-describedby="m1" tabindex="-1"><span class="toast-icon codicon codicon-info" aria-hidden="true"></span>'
+      + '<div class="toast-body"><p id="m1" class="toast-message">Saved 400 rows to w1.csv.</p><div class="toast-actions"><button type="button">Show results</button></div></div>'
       + '<button type="button" class="icon-button toast-close" aria-label="Dismiss notification" title="Dismiss (Escape)"><span class="codicon codicon-close" aria-hidden="true"></span></button></div>')
     // An error with a report offers Copy details, whose outcome is a status of its own.
-    expect(markup).toContain('aria-label="Error" tabindex="-1"><span class="toast-icon codicon codicon-error" aria-hidden="true"></span><div class="toast-body"><p class="toast-message">The package failed.</p>'
+    expect(markup).toContain('aria-label="Error" aria-describedby="m2" tabindex="-1"><span class="toast-icon codicon codicon-error" aria-hidden="true"></span><div class="toast-body"><p id="m2" class="toast-message">The package failed.</p>'
       + '<div class="toast-actions"><button type="button">Copy details</button><span class="toast-status" role="status"></span></div>')
     expect(markup).toContain('<div class="visually-hidden" role="status"></div><div class="visually-hidden" role="alert">The package failed.</div>')
   })
@@ -128,6 +134,25 @@ describe('notifications in the workbench', () => {
     expect(documents.getSnapshot().activeId).toBe(first)
     expect(notifications.getSnapshot().visible).toEqual([])
   })
+  it('takes Show results off a toast once its query closes, so it never reveals another query\'s output', async () => {
+    const fixture = workbenchFixture()
+    fixtures.push(fixture)
+    const { documents, events, notifications } = fixture
+    documents.newQuery()
+    const first = documents.getSnapshot().activeId
+    documents.newQuery()
+    const second = documents.getSnapshot().activeId
+    events.emit({ type: 'results.saved', tabId: first, text: 'Saved 6 rows to a.csv.' })
+    const [toast] = notifications.getSnapshot().visible
+    expect(toast.actions?.map(action => action.label)).toEqual(['Show results'])
+    const announced = notifications.getSnapshot().announcement
+    await documents.close(first)
+    // The same toast, read once already, now with nothing to click; it leaves by itself as plain information does.
+    expect(notifications.getSnapshot().visible).toMatchObject([{ id: toast.id, message: 'Saved 6 rows to a.csv.', actions: [] }])
+    expect(notifications.getSnapshot().announcement).toBe(announced)
+    expect(autoHides(notifications.getSnapshot().visible[0])).toBe(true)
+    expect(documents.getSnapshot().activeId).toBe(second)
+  })
   it('says a save ended for a closed query too, with nothing to show, and Clear All empties the stack', async () => {
     const fixture = workbenchFixture()
     fixtures.push(fixture)
@@ -151,13 +176,18 @@ describe('notifications in the workbench', () => {
 
 describe('Connect fixes', () => {
   const certificate = { number: -2146893019, class: 20, reason: 'certificate' as const }
-  it('offer to trust an untrusted certificate, explain Strict, and offer nothing else', () => {
+  it('offer to trust an untrusted certificate, explain Strict and a pinned certificate or name, and offer nothing else', () => {
     expect(connectFix({ encrypt: 'mandatory', trustServerCertificate: false }, certificate)).toBe('trust')
     expect(connectFix({ trustServerCertificate: false }, certificate)).toBe('trust')
     expect(connectFix({ encrypt: 'strict', trustServerCertificate: true }, certificate)).toBe('strict')
     // Already trusted (a certificate Varia cannot read, say): nothing more to offer.
     expect(connectFix({ encrypt: 'optional', trustServerCertificate: true }, certificate)).toBeUndefined()
     expect(connectFix({ encrypt: 'mandatory', trustServerCertificate: false }, { number: 18456, class: 14 })).toBeUndefined()
+    // A pinned certificate or host name is a check the person set up: trusting would skip it, so the dialog only explains.
+    expect(connectFix({ encrypt: 'mandatory', trustServerCertificate: false, hostNameInCertificate: 'sql01.contoso.com' }, certificate)).toBe('pinned')
+    expect(connectFix({ encrypt: 'optional', trustServerCertificate: false, advanced: { ...advancedDefaults, serverCertificate: '/etc/ssl/sql01.cer' } }, certificate)).toBe('pinned')
+    expect(connectFix({ encrypt: 'mandatory', trustServerCertificate: false, hostNameInCertificate: ' ', advanced: advancedDefaults }, certificate)).toBe('trust')
+    expect(connectFix({ encrypt: 'strict', trustServerCertificate: false, hostNameInCertificate: 'sql01.contoso.com' }, certificate)).toBe('strict')
     expect(connectFix({ encrypt: 'mandatory', trustServerCertificate: false }, undefined)).toBeUndefined()
   })
 })

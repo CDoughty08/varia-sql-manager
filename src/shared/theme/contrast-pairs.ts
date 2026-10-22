@@ -91,8 +91,10 @@ export const contrastPairs: readonly ContrastPair[] = [
     ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
-  // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' outline, and the focus ring.
-  ...text(['notifications.foreground', 'descriptionForeground'], ['notifications.background']),
+  // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' labels at rest and hovered (Dismiss's
+  // glyph too), their outline, and the focus ring. A theme can set notifications.background apart from editorWidget's.
+  ...text(['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'], ['notifications.background']),
+  ...text(['button.secondaryHoverForeground'], hovered('notifications.background')),
   ...graphic(['button.border', 'focusBorder'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),

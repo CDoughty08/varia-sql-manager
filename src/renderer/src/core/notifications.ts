@@ -76,6 +76,17 @@ export class NotificationService extends SnapshotStore<NotificationSnapshot> imp
     return id
   }
 
+  /**
+   * Takes the actions off the toast with this key, when what they act on is gone (its query closed, say): it stays on
+   * screen, read once already, and then leaves by itself as plain information does.
+   */
+  dropActions(key: string): void {
+    const index = this.toasts.findIndex(toast => toast.key === key)
+    if (index < 0 || !this.toasts[index].actions?.length) return
+    this.toasts[index] = { ...this.toasts[index], actions: [] }
+    this.update()
+  }
+
   dismiss(id: number): void {
     const index = this.toasts.findIndex(toast => toast.id === id)
     if (index < 0) return

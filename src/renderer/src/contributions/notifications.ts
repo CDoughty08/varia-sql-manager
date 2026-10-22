@@ -1,10 +1,13 @@
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 
+const savedKey = (tabId: string) => `results.saved:${tabId}`
+
 /**
  * The toasts' commands, and the outcomes that become toasts. A save that finishes while its query is the active document
  * shows only the output toolbar's notice; one whose query is in the background gets a toast with Show results, and one
- * whose query was closed (the save outlives it) a toast that leaves by itself.
+ * whose query was closed (the save outlives it) a toast that leaves by itself. Closing the query while its toast shows
+ * takes Show results away, which would otherwise reveal another query's output.
  */
 export function notificationsContribution({ commands, notifications, events, documents }: Pick<Workbench, 'commands' | 'notifications' | 'events' | 'documents'>): Disposable {
   const registrations = [
@@ -12,10 +15,11 @@ export function notificationsContribution({ commands, notifications, events, doc
     commands.register('notifications.clearAll', { run: () => notifications.clear() })
   ]
   const saved = events.subscribe(event => {
+    if (event.type === 'documents.closed') notifications.dropActions(savedKey(event.tabId))
     if (event.type !== 'results.saved' || documents.getSnapshot().activeId === event.tabId) return
     const open = !!documents.get(event.tabId)
     notifications.notify({
-      severity: 'info', message: event.text, key: `results.saved:${event.tabId}`,
+      severity: 'info', message: event.text, key: savedKey(event.tabId),
       actions: open ? [{ label: 'Show results', run: () => { documents.activate(event.tabId); void commands.execute('window.output', undefined, 'toolbar') } }] : []
     })
   })

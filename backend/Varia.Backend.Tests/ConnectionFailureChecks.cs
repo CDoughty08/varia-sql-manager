@@ -100,6 +100,17 @@ internal static class ConnectionFailureChecks
             && ConnectionFailures.Describe(Sql(233, 0, 20, "", "No process is on the other end of the pipe."), "x", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason is null,
             "a TLS version mismatch, a failed login or a closed pipe is not a certificate failure");
         check(!JsonSerializer.Serialize(failure!.Details).Contains("assword", StringComparison.OrdinalIgnoreCase), "a certificate failure's details hold nothing more than the reason");
+        // With Host Name in Certificate set, Windows' SNI reports an untrusted chain as a CERT_E code (observed live against a
+        // self-signed certificate), as the error number and as the Win32Exception inside.
+        bool Certificate(int code, bool asCause) => ConnectionFailures.Describe(asCause
+            ? Sql(0, 0, 20, "", "The certificate chain was not trusted.", cause: new System.ComponentModel.Win32Exception(code))
+            : Sql(code, 0, 20, "", "The certificate chain was not trusted."), "sql01", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason == ErrorDetailsLimits.Certificate;
+        int[] chained = [unchecked((int)0x800B0109), unchecked((int)0x800B010A)];
+        check(chained.All(code => Certificate(code, asCause: false) && Certificate(code, asCause: true)),
+            "CERT_E_UNTRUSTEDROOT and CERT_E_CHAINING, as the error number or the Win32Exception inside, are certificate failures");
+        // A pinned Server Certificate that does not match: never one Trust server certificate should wave through.
+        check(!Certificate(unchecked((int)0x800B0110), asCause: false) && !Certificate(unchecked((int)0x800B0110), asCause: true),
+            "CERT_E_WRONG_USAGE (a pinned certificate that does not match) is not an untrusted certificate");
 
         check(KerberosProbe.Classify(0, 36_000) == KerberosState.Valid && KerberosProbe.Classify(0, uint.MaxValue) == KerberosState.Valid, "a credential with time left is a valid ticket");
         check(KerberosProbe.Classify(0, 0) == KerberosState.Expired, "MIT: a credential with no time left is an expired ticket");

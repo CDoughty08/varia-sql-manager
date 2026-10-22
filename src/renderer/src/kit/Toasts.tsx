@@ -1,4 +1,4 @@
-import { useRef, useState, type FocusEvent, type KeyboardEvent } from 'react'
+import { useId, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react'
 import type { NotificationService, NotificationSnapshot, Toast, ToastSeverity } from '../core/notifications'
 import { copyStatus, copyText, errorDetailsText, type CopyRecord } from './format'
 
@@ -14,6 +14,8 @@ const mainClipboard: Clipboard = text => typeof window !== 'undefined' && window
 function ToastView({ toast, notifications, writeClipboard, leave }: { toast: Toast; notifications: Notifications; writeClipboard: Clipboard; leave: (element: HTMLElement | null) => void }) {
   const [copied, setCopied] = useState<CopyRecord>()
   const box = useRef<HTMLDivElement>(null)
+  // Focus Notifications lands on the toast itself: its name says the severity, and its description reads the sentence.
+  const messageId = useId()
   const severity = toastSeverities[toast.severity]
   const details = toast.report && toast.severity === 'error' ? errorDetailsText({ ...toast.report, message: toast.message }) : undefined
   // Focus leaves a dismissed toast for its neighbour, or for where it came from, before the toast goes.
@@ -25,12 +27,12 @@ function ToastView({ toast, notifications, writeClipboard, leave }: { toast: Toa
     dismiss()
   }
   const blur = (event: FocusEvent<HTMLDivElement>) => { if (!event.currentTarget.contains(event.relatedTarget)) notifications.hold(toast.id, false) }
-  return <div ref={box} className="toast" data-severity={toast.severity} role="group" aria-label={severity.label} tabIndex={-1} onKeyDown={keyDown}
+  return <div ref={box} className="toast" data-severity={toast.severity} role="group" aria-label={severity.label} aria-describedby={messageId} tabIndex={-1} onKeyDown={keyDown}
     onPointerEnter={() => notifications.hold(toast.id, true)} onPointerLeave={() => { if (!box.current?.contains(document.activeElement)) notifications.hold(toast.id, false) }}
     onFocus={() => notifications.hold(toast.id, true)} onBlur={blur}>
     <span className={`toast-icon codicon codicon-${severity.icon}`} aria-hidden="true" />
     <div className="toast-body">
-      <p className="toast-message">{toast.message}</p>
+      <p id={messageId} className="toast-message">{toast.message}</p>
       {(!!toast.actions?.length || details !== undefined) && <div className="toast-actions">
         {toast.actions?.map(action => <button key={action.label} type="button" onClick={() => { leave(box.current); notifications.run(toast.id, action) }}>{action.label}</button>)}
         {details !== undefined && <button type="button" onClick={() => { void copyText(writeClipboard, details).then(setCopied) }}>Copy details</button>}
