@@ -215,12 +215,26 @@ internal sealed record SsisPackageModel(string View, long Id, string Folder, str
 internal sealed record SsisVariableDto(string Name, string Type, string? Description, bool Sensitive, string? Value);
 internal sealed record SsisEnvironmentModel(string View, long Id, string Folder, string Name, string? Description, string CreatedBy, string Created, List<SsisVariableDto> Variables, bool Truncated);
 /// <summary>ssis.execute's action (src/shared/ssis/schema.ts SsisAction): the verb and its own members, null for other verbs'.
-/// SsisActionService.Validate refuses a member its verb does not take.</summary>
-internal sealed record SsisActionDto(string Verb, long? OperationId = null);
+/// SsisActionService.Validate refuses a member its verb does not take.
+/// Create Catalog's Password is the catalog's encryption password: the request is sensitive, and the record never prints it.</summary>
+internal sealed record SsisActionDto(string Verb, long? OperationId = null, string? Password = null, bool? EnableClr = null, bool? StartupProcedure = null)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Verb = ").Append(Verb).Append(", OperationId = ").Append(OperationId).Append(", Password = ").Append(Password is null ? "null" : "<redacted>")
+            .Append(", EnableClr = ").Append(EnableClr).Append(", StartupProcedure = ").Append(StartupProcedure);
+        return true;
+    }
+}
 /// <summary>ssis.execute: Revision is a describe's, only for a verb that takes one.</summary>
 internal sealed record SsisExecuteArgs(string ConnectionId, string RequestId, SsisActionDto Action, string? Revision = null);
 /// <summary>The steps the write ran, in order (none when it was refused first), or Error.</summary>
 internal sealed record SsisExecuteResult(List<ActionStepDto> Steps, long ElapsedMs, SsisError? Error = null);
+/// <summary>ssis.catalogSetup (src/shared/ssis/schema.ts): what Create Catalog's dialog reads.</summary>
+internal sealed record SsisCatalogSetupArgs(string ConnectionId, string RequestId);
+/// <summary>What Create Catalog will do on the server: SsisCatalogSetup in src/shared/ssis/schema.ts.</summary>
+internal sealed record SsisCatalogSetupDto(string Catalog, bool ClrEnabled, bool StartupDefault, string BackupFile, string DataFile, string LogFile);
+internal sealed record SsisCatalogSetupResult(SsisCatalogSetupDto? Setup, long ElapsedMs, SsisError? Error = null);
 
 /// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
 /// the server that answered. Never the connection string or the password.</summary>

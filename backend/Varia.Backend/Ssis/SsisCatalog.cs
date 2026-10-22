@@ -19,22 +19,28 @@ internal sealed class SsisCatalog
     private sealed record CodeJson(int Code, string Label, string? Tone = null, int? Since = null);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record ViewJson(string View, string Kind);
-    private sealed record ActionJson(string Verb, string Title, List<string> Steps, List<string> Procedures, bool Revision, bool WindowsAuthOnBox);
-    private sealed record CatalogJson(int Version, List<ActionJson> Actions, string CatalogDatabase, List<ErrorJson> Errors, List<string> Features, List<int> FinalStatuses,
+    private sealed record ActionJson(string Verb, string Title, List<string> Steps, List<string> Procedures, bool Revision, bool WindowsAuthOnBox, string Scope);
+    private sealed record BackupFileJson(int Since, string File);
+    private sealed record CreateJson(List<BackupFileJson> BackupFiles, string AssemblyFile, string CleanupStep);
+    private sealed record CatalogJson(int Version, List<ActionJson> Actions, string CatalogDatabase, CreateJson CreateCatalog, List<ErrorJson> Errors, List<string> Features, List<int> FinalStatuses,
         Dictionary<string, long> Limits, List<CodeJson> LoggingLevels, List<CodeJson> MessageTypes, List<int> OpenStatuses, List<CodeJson> OperationStatuses, List<CodeJson> OperationTypes,
         List<CodeJson> ParameterObjectTypes, List<int> StoppableOperationTypes, List<ViewJson> Views);
 
     private readonly Dictionary<string, bool> errors;
     private readonly Dictionary<string, string> views;
     private readonly Dictionary<string, SsisActionSpec> actions;
+    private readonly (int Since, string File)[] backupFiles;
 
     private SsisCatalog(CatalogJson json)
     {
         if (json.Version != Version) throw new InvalidOperationException("Unsupported SSIS catalogue version.");
         CatalogDatabase = json.CatalogDatabase;
+        backupFiles = [.. json.CreateCatalog.BackupFiles.OrderByDescending(row => row.Since).Select(row => (row.Since, row.File))];
+        AssemblyFile = json.CreateCatalog.AssemblyFile;
+        CleanupStep = json.CreateCatalog.CleanupStep;
         errors = json.Errors.ToDictionary(row => row.Code, row => row.Retryable, StringComparer.Ordinal);
         views = json.Views.ToDictionary(row => row.View, row => row.Kind, StringComparer.Ordinal);
-        actions = json.Actions.ToDictionary(row => row.Verb, row => new SsisActionSpec(row.Verb, row.Title, row.Steps, row.Procedures, row.Revision, row.WindowsAuthOnBox), StringComparer.Ordinal);
+        actions = json.Actions.ToDictionary(row => row.Verb, row => new SsisActionSpec(row.Verb, row.Title, row.Steps, row.Procedures, row.Revision, row.WindowsAuthOnBox, row.Scope switch { "server" => true, "catalog" => false, _ => throw new InvalidOperationException("Unknown SSIS action scope.") }), StringComparer.Ordinal);
         FinalStatuses = json.FinalStatuses.ToHashSet();
         OpenStatuses = json.OpenStatuses.ToHashSet();
         StoppableOperationTypes = json.StoppableOperationTypes.ToHashSet();
@@ -55,6 +61,11 @@ internal sealed class SsisCatalog
     /// <summary>"SSISDB": SSMS fixes the catalog's name.</summary>
     public string CatalogDatabase { get; }
     public IReadOnlyList<string> Features { get; }
+    /// <summary>Create Catalog's assembly beside the catalog backup, and the step a failure after its restore adds.</summary>
+    public string AssemblyFile { get; }
+    public string CleanupStep { get; }
+    /// <summary>The catalog backup Integration Services installs for a band (SSISDBBackup.bak from 2025, SSISDB.bak before).</summary>
+    public string BackupFile(int band) => backupFiles.FirstOrDefault(row => band >= row.Since).File ?? backupFiles[^1].File;
     public IReadOnlyDictionary<string, long> Limits { get; }
     public IReadOnlyDictionary<int, string> LoggingLevels { get; }
     public IReadOnlyDictionary<int, string> OperationStatuses { get; }
@@ -80,5 +91,6 @@ internal sealed class SsisCatalog
 }
 
 /// <summary>One ssis.execute verb (src/shared/ssis/catalog.ts ssisActions): its steps' titles in order, the catalog procedures its
-/// templates may call, whether it takes a describe's revision, and whether a box server's SSISDB refuses it to SQL Server logins.</summary>
-internal sealed record SsisActionSpec(string Verb, string Title, IReadOnlyList<string> Steps, IReadOnlyList<string> Procedures, bool Revision, bool WindowsAuthOnBox);
+/// templates may call, whether it takes a describe's revision, whether a box server's SSISDB refuses it to SQL Server logins, and
+/// whether it runs on the server (in master, from SsisCreateSql: Create Catalog) rather than in the catalog's database.</summary>
+internal sealed record SsisActionSpec(string Verb, string Title, IReadOnlyList<string> Steps, IReadOnlyList<string> Procedures, bool Revision, bool WindowsAuthOnBox, bool Server = false);

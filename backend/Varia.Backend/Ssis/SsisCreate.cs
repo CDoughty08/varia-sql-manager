@@ -1,0 +1,132 @@
+using System.Data;
+using System.Globalization;
+using Microsoft.Data.SqlClient;
+using Varia.Backend.Explorer;
+
+namespace Varia.Backend.Ssis;
+
+/// <summary>What Create Catalog reads on the server before it changes anything (SsisCreateSql.Setup). Paths are the server's.</summary>
+internal sealed record CatalogFacts(bool Sysadmin, string Version, bool Exists, bool ClrEnabled, bool ScanForStartup, string? BackupFile, bool BackupExists, string? AssemblyFile,
+    string? Directory, string? DataFile, bool DataExists, string? LogFile, bool LogExists);
+
+/// <summary>The catalog backup's logical files: one data file (a second, as SSMS allows, goes to an .ndf) and one log file.</summary>
+internal sealed record CatalogBackupLayout(string DataName, string? SecondName, string LogName);
+
+/// <summary>Create Catalog's reads and rules (S9a), shared by the dialog's ssis.catalogSetup and the write's preflight, so both
+/// refuse alike. Messages are SSMS's own where it has one; none carries the password, SQL text or a connection string.</summary>
+internal static class SsisCreate
+{
+    /// <summary>What no server of this kind can do, answered before connecting: no catalog before 2016 or on Linux, and on Azure SQL
+    /// Database (5) and Managed Instance (8) an Azure-SSIS integration runtime creates the catalog (SSMS hides the verb there).</summary>
+    public static SsisError? Unsupported(SsisCatalog catalog, ExplorerProfile served, int engineEdition, bool ignoreLinux)
+    {
+        if (served.Band < 13) return SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog needs SQL Server 2016 or later.");
+        if (served.Linux && !ignoreLinux) return SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux.");
+        if (engineEdition is 5 or 8)
+            return SsisErrors.Create(catalog, "NOT_SUPPORTED", "Create Catalog is not available on Azure SQL Database or Azure SQL Managed Instance: an Azure-SSIS integration runtime in Azure Data Factory creates that catalog.");
+        return null;
+    }
+
+    private static SqlParameter Text(string name, int size, string? value)
+    {
+        // SqlClient cuts longer text to the size without an error; a cut path would name another file.
+        if (value is not null && value.Length > size) throw new InvalidOperationException("A Create Catalog parameter is longer than its declaration: " + name + ".");
+        return new SqlParameter(name, SqlDbType.NVarChar, size) { Value = (object?)value ?? DBNull.Value };
+    }
+    internal static SqlParameter Name(string name, string? value) => Text(name, 128, value);
+    internal static SqlParameter Path(SsisCatalog catalog, string name, string? value) => Text(name, catalog.Limit("serverPath"), value);
+
+    /// <summary>Runs SsisCreateSql.Setup for the catalog <paramref name="name"/> and the band's backup file.</summary>
+    public static async Task<CatalogFacts> ReadAsync(SqlConnection connection, SsisCatalog catalog, string name, int band, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = SsisCreateSql.Setup.Text;
+        command.CommandTimeout = 0;
+        command.Parameters.Add(Name("@catalog", name));
+        command.Parameters.Add(Name("@backup_name", catalog.BackupFile(band)));
+        command.Parameters.Add(Name("@assembly_name", catalog.AssemblyFile));
+        await using var reader = await command.ExecuteReaderAsync(token);
+        // SET NOCOUNT ON, and the INSERT … EXEC of xp_fileexist returns no rows to the client: the one result is the last SELECT.
+        do
+        {
+            if (reader.FieldCount != 13) continue;
+            if (!await reader.ReadAsync(token)) break;
+            string? Value(int index) => reader.IsDBNull(index) ? null : Convert.ToString(reader.GetValue(index), CultureInfo.InvariantCulture);
+            bool Flag(int index) => !reader.IsDBNull(index) && Convert.ToInt32(reader.GetValue(index), CultureInfo.InvariantCulture) == 1;
+            var facts = new CatalogFacts(Flag(0), Value(1) ?? "", Flag(2), Flag(3), Flag(4), Value(5), Flag(6), Value(7), Value(8), Value(9), Flag(10), Value(11), Flag(12));
+            while (await reader.NextResultAsync(token)) { }
+            return facts;
+        }
+        while (await reader.NextResultAsync(token));
+        throw new InvalidOperationException("The Create Catalog setup read returned no row.");
+    }
+
+    /// <summary>Why Create Catalog cannot run, in SSMS's order and words (Catalog.Create): sysadmin, the catalog's database, the
+    /// backup's path and the file, the files' folder, and files already there. CLR is the request's to agree to.</summary>
+    public static SsisError? Refusal(SsisCatalog catalog, CatalogFacts facts, string name)
+    {
+        SsisError Error(string code, string message) => SsisErrors.Create(catalog, code, message);
+        if (!facts.Sysadmin)
+            return Error("PERMISSION_DENIED", "To create and use an SSIS catalog, you must be a member of the SQL Server sysadmin fixed server role and have permissions to enable CLR integration. "
+                + "Contact the administrator of the SQL Server instance to obtain the necessary permissions.");
+        if (facts.Exists) return Error("CATALOG_EXISTS", "There already exists a catalog (" + name + "), and only one catalog is supported on a server.");
+        if (string.IsNullOrEmpty(facts.BackupFile) || string.IsNullOrEmpty(facts.AssemblyFile))
+            return Error("NOT_SUPPORTED", "The path to the catalog backup file could not be determined. Integration Services might not be installed on this server, or the user may not have the appropriate access permissions.");
+        if (!facts.BackupExists)
+            return Error("NOT_SUPPORTED", "The catalog backup file '" + facts.BackupFile + "' could not be accessed. Make sure the database file exists, and the SQL Server service account is able to access it.");
+        if (string.IsNullOrEmpty(facts.Directory) || facts.DataFile is null || facts.LogFile is null)
+            return Error("NOT_SUPPORTED", "The folder of the master database's files could not be determined, so there is no folder for the catalog's files.");
+        var existing = facts.DataExists ? facts.DataFile : facts.LogExists ? facts.LogFile : null;
+        if (existing is not null)
+        {
+            var file = existing[facts.Directory.Length..];
+            return Error("NOT_SUPPORTED", "The database file with name '" + file + "' already exists in directory '" + facts.Directory + "'. Make sure there is no existing database file with the name '"
+                + file + "' under this directory and try again.");
+        }
+        var limit = catalog.Limit("serverPath");
+        if (new[] { facts.BackupFile, facts.AssemblyFile, facts.DataFile, facts.LogFile }.Any(path => path.Length > limit))
+            return Error("NOT_SUPPORTED", "A path of the catalog's files is longer than " + limit.ToString("N0", CultureInfo.InvariantCulture) + " characters.");
+        return null;
+    }
+
+    /// <summary>The backup's logical files (RESTORE FILELISTONLY), or why it cannot serve: unreadable, or not the files a catalog
+    /// backup holds.</summary>
+    public static async Task<(CatalogBackupLayout? Layout, SsisError? Error)> LayoutAsync(SqlConnection connection, SsisCatalog catalog, string backup, CancellationToken token)
+    {
+        var rows = new List<(string Name, string Type)>();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = SsisCreateSql.FileList.Text;
+            command.CommandTimeout = 0;
+            command.Parameters.Add(Path(catalog, "@backup", backup));
+            await using var reader = await command.ExecuteReaderAsync(token);
+            var name = reader.GetOrdinal("LogicalName");
+            var type = reader.GetOrdinal("Type");
+            while (await reader.ReadAsync(token)) rows.Add((reader.GetString(name), reader.GetString(type).Trim()));
+        }
+        // 3201 and the like: the service account cannot open or read the file. Lost connections and locks are the caller's.
+        catch (SqlException error) when (SsisErrors.CodeOf(error, connection) == "SQL_ERROR" && !token.IsCancellationRequested)
+        {
+            return (null, SsisErrors.Create(catalog, "NOT_SUPPORTED", "The catalog backup file '" + backup + "' could not be accessed. Make sure the database file exists, and the SQL Server service account is able to access it. ("
+                + error.Message + ")"));
+        }
+        var data = rows.Where(row => row.Type == "D").Select(row => row.Name).ToList();
+        var logs = rows.Where(row => row.Type == "L").Select(row => row.Name).ToList();
+        if (data.Count is < 1 or > 2 || logs.Count != 1 || rows.Count != data.Count + logs.Count || rows.Any(row => row.Name.Length > 128))
+            return (null, SsisErrors.Create(catalog, "NOT_SUPPORTED", "The catalog backup file '" + backup + "' does not hold what a catalog backup does: one or two data files and one log file."));
+        return (new CatalogBackupLayout(data[0], data.Count > 1 ? data[1] : null, logs[0]), null);
+    }
+
+    /// <summary>Servers before 14.0.800.11 trust the ISSERVER assembly through an asymmetric key and its login (SSMS's version test).</summary>
+    public static bool UsesAsymmetricKey(string version)
+    {
+        var parts = version.Split('.').Select(part => int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out var value) ? value : 0).Concat(Enumerable.Repeat(0, 4)).Take(4).ToArray();
+        var (major, minor, build, revision) = (parts[0], parts[1], parts[2], parts[3]);
+        return !(major > 14 || (major == 14 && (minor > 0 || (minor == 0 && (build > 800 || (build == 800 && revision > 11))))));
+    }
+
+    /// <summary>What the dialog shows from the facts.</summary>
+    public static SsisCatalogSetupDto Setup(string name, CatalogFacts facts) =>
+        new(name, facts.ClrEnabled, facts.ScanForStartup, facts.BackupFile!, facts.DataFile!, facts.LogFile!);
+}

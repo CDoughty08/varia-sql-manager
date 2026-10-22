@@ -61,6 +61,13 @@ internal sealed class SsisOptions
     public Func<CancellationToken, Task>? BeforeWrite { get; set; }
     /// <summary>Runs before Stop Operation reads the operation again after the catalog refuses (the checks end the write's session there).</summary>
     public Func<CancellationToken, Task>? BeforeReread { get; set; }
+    /// <summary>Create Catalog's dry run: it restores into this marked scratch database instead of SSISDB and runs only the steps
+    /// inside it (restore, master key) and their removal, never the server's CLR, assembly trust, startup procedure, logins or
+    /// jobs. The live checks set it; it is never a request field.</summary>
+    public string? CreateScratch { get; set; }
+    /// <summary>Runs before each Create Catalog step after the restore began, with the step's title (the checks hold a step or make
+    /// it fail from another session there). Those steps cannot be stopped, so it takes no token.</summary>
+    public Func<string, Task>? BeforeCreateStep { get; set; }
 }
 
 /// <summary>ssis.describe (D-ssis 4.3): validate, register, take the SSIS read gates (2 per connection, 4 in all; BUSY after
@@ -136,6 +143,56 @@ internal sealed class SsisService : IDisposable
         {
             if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
             return Failed(SsisErrors.Create(catalog, "TIMEOUT", SsisErrors.Timeout(catalog)));
+        }
+        finally { running.Unregister(args.RequestId, entry); }
+    }
+
+    /// <summary>ssis.catalogSetup: what Create Catalog's dialog shows, or why it cannot run here, read on the SSIS read pool (in the
+    /// login's own database: the catalog does not exist yet) under the read gates and the describe budget. It changes nothing.</summary>
+    public async Task<SsisCatalogSetupResult> CatalogSetupAsync(SsisCatalogSetupArgs args, CancellationToken token)
+    {
+        var watch = Stopwatch.StartNew();
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
+        if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
+        var server = host.Profile(args.ConnectionId);
+        var served = server.Explorer(explorer);
+        SsisCatalogSetupResult Failed(SsisError error) => new(null, watch.ElapsedMilliseconds, error);
+        if (SsisCreate.Unsupported(catalog, served, server.EngineEdition, Options.IgnoreLinuxHost) is { } unsupported) return Failed(unsupported);
+        using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var entry = running.Register(args.RequestId, args.ConnectionId, source);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            source.CancelAfter(Options.Budget);
+            var name = Options.CreateScratch ?? catalog.CatalogDatabase;
+            var gate = gates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(Options.PerConnection));
+            if (!await gate.WaitAsync(Options.GateWait, source.Token)) throw Busy();
+            try
+            {
+                if (!await total.WaitAsync(Options.GateWait, source.Token)) throw Busy();
+                try
+                {
+                    await using var connection = host.SsisServerConnection(args.ConnectionId);
+                    try { await host.OpenAsync(connection, source.Token); }
+                    catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return Failed(SsisErrors.Create(catalog, error.Code, error.Message)); }
+                    catch (SqlException error) when (!source.IsCancellationRequested) { return Failed(SsisErrors.Create(catalog, "CONNECTION_LOST", "Could not connect to the server: " + error.Message)); }
+                    try
+                    {
+                        var facts = await SsisCreate.ReadAsync(connection, catalog, name, served.Band, source.Token);
+                        if (SsisCreate.Refusal(catalog, facts, name) is { } refused) return Failed(refused);
+                        var (_, unusable) = await SsisCreate.LayoutAsync(connection, catalog, facts.BackupFile!, source.Token);
+                        return unusable is not null ? Failed(unusable) : new(SsisCreate.Setup(name, facts), watch.ElapsedMilliseconds);
+                    }
+                    catch (SqlException error) when (!source.IsCancellationRequested) { return Failed(SsisErrors.FromSql(catalog, error, connection, "master", "the server")); }
+                }
+                finally { total.Release(); }
+            }
+            finally { gate.Release(); }
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
+            return Failed(SsisErrors.Create(catalog, "TIMEOUT", "Reading the server took longer than " + Options.Budget.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + " seconds. Try again."));
         }
         finally { running.Unregister(args.RequestId, entry); }
     }

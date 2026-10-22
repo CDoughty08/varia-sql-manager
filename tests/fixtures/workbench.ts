@@ -46,6 +46,7 @@ import { scriptingContribution } from '../../src/renderer/src/contributions/scri
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
 import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
+import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
@@ -246,6 +247,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
+    catalogSetupSsis: vi.fn<VariaApi['catalogSetupSsis']>(async () => ({ ok: true, value: { setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: false,
+      backupFile: 'C:\\SSIS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf' }, elapsedMs: 1 } })),
+    executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done', message: 'Restore the catalog database' }], elapsedMs: 1 } })),
+    cancelSsis: vi.fn<VariaApi['cancelSsis']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
     reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' })),
@@ -285,6 +291,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
+  const ssisCatalog = new CreateCatalogService({ api, connections, explorer })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
@@ -356,6 +363,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
+    ssisCatalog,
     designers
   }
   const contributions = [
@@ -404,6 +412,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting.dispose()
     actions.dispose()
     dialogs.dispose()
+    ssisCatalog.dispose()
     designers.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
@@ -430,6 +439,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
+    ssisCatalog,
     designers,
     focusEditor,
     queries,

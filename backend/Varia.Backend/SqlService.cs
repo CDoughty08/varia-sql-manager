@@ -26,7 +26,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear",
-        "ssis.describe", "ssis.execute"
+        "ssis.describe", "ssis.execute", "ssis.catalogSetup"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -166,7 +166,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
-        "ssis.describe" or "ssis.execute" => RequestLane.Ssis,
+        "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -221,6 +221,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
+        "ssis.catalogSetup" => await ssis.CatalogSetupAsync(Read<SsisCatalogSetupArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };

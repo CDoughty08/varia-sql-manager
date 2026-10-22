@@ -51,6 +51,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>The Integration Services feature's own catalog backup restored under a scratch name, so its schema can be read
     /// without a catalog (created on demand; never named SSISDB, never given a master key, CLR or jobs).</summary>
     public string SsisReference => Name + "_ssisref";
+    /// <summary>Where Create Catalog's dry run restores the catalog backup and creates its master key (S9a; the backend creates it).</summary>
+    public string SsisCreate => Name + "_ssiscc";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
     /// <summary>Held in memory only, never printed.</summary>
@@ -62,8 +64,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
-    // _ssis the fake SSIS catalog and _ssisref the restored catalog backup.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_ssis|_ssisref)?$")]
+    // _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's dry run.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_ssis|_ssisref|_ssiscc)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -255,6 +257,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     }
 
     /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
+    /// <summary>A scratch database something else creates (the backend's Create Catalog dry run), dropped with the rest.</summary>
+    public void Adopt(string name) { if (!created.Contains(name)) created.Add(name); }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var name in created) await Drop(run, name, name != Offline);

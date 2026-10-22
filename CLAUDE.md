@@ -47,7 +47,8 @@ pages, limits, error codes, display formats, benchmarks).
   database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never
   print the secret. Without them the offline checks cover Entra through a fake token source.
 - SSIS: `VARIA_TEST_SQL_SCRATCH=1` also builds the fake SSIS catalog (`VariaScratch_…_ssis`, from
-  `tests/fixtures/ssisdb/`); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` and of the Integration Services
+  `tests/fixtures/ssisdb/`) and, where Integration Services is installed, runs Create Catalog's dry run (the catalog
+  backup restored by Varia's own steps as `VariaScratch_…_ssiscc`, no server-level changes); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` and of the Integration Services
   catalog backup (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1`
   rewrites (then regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These checks never
   create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) may, on a

@@ -1,0 +1,165 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ApiResult, VariaApi } from '../src/shared/contracts'
+import type { SsisCatalogSetup, SsisCatalogSetupResult, SsisExecuteResult } from '../src/shared/ssis/schema'
+import { createCatalogMessages, CreateCatalogService } from '../src/renderer/src/ssis/CreateCatalogService'
+import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
+import { ConnectionService } from '../src/renderer/src/services/connections'
+import { deferred } from './fixtures/documents'
+import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
+
+const cleanups: (() => void)[] = []
+afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
+
+const folder = (id = 4, connectionId = 'server-a'): ExplorerMenuNode => ({
+  id, connectionId, ref: { type: 'folder', owner: { kind: 'server' }, folder: 'integrationServicesCatalogs' }, kind: 'folder', folder: 'integrationServicesCatalogs', label: 'Integration Services Catalogs', lost: false
+})
+const setupOf = (changes: Partial<SsisCatalogSetup> = {}): ApiResult<SsisCatalogSetupResult> => ({
+  ok: true, value: { setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: true, backupFile: 'C:\\DTS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf', ...changes }, elapsedMs: 1 }
+})
+const titles = ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
+const created: ApiResult<SsisExecuteResult> = { ok: true, value: { steps: titles.map(message => ({ status: 'done', message })), elapsedMs: 1 } }
+const secret = "Pa'ss]--w0rd-marker"
+
+/** The service over fakes: the setup answers at once unless a test holds it, and Create waits for the test to answer. */
+function setup(answer: ApiResult<SsisCatalogSetupResult> = setupOf()) {
+  const execute = deferred<ApiResult<SsisExecuteResult>>()
+  const api = {
+    catalogSetupSsis: vi.fn<VariaApi['catalogSetupSsis']>(async () => answer),
+    executeSsis: vi.fn<VariaApi['executeSsis']>(() => execute.promise),
+    cancelSsis: vi.fn<VariaApi['cancelSsis']>(async ids => ({ ok: true, value: { cancelled: ids.length } }))
+  }
+  const connections = new ConnectionService()
+  connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
+  const explorer = { refresh: vi.fn() }
+  let ids = 0
+  const service = new CreateCatalogService({ api, connections, explorer, newId: () => `id-${++ids}` })
+  cleanups.push(() => service.dispose())
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  return { service, api, connections, explorer, execute, settle }
+}
+
+describe('CreateCatalogService', () => {
+  it('reads the server for Integration Services Catalogs, with SSMS\'s defaults: CLR as in use, the startup box as scan for startup procs', async () => {
+    const { service, api, settle } = setup()
+    service.open(folder())
+    expect(service.current).toMatchObject({ phase: 'loading', server: 'server-a.example', login: 'sa', nodeId: 4 })
+    expect(api.catalogSetupSsis.mock.calls).toEqual([[{ connectionId: 'server-a', requestId: 'id-1' }]])
+    expect(() => service.open(folder())).toThrow('Close the open dialog first.')
+    await settle()
+    expect(service.current).toMatchObject({ phase: 'ready', enableClr: false, startupProcedure: true, setup: { catalog: 'SSISDB', backupFile: 'C:\\DTS\\Binn\\SSISDBBackup.bak' } })
+  })
+  it('opens only for Integration Services Catalogs on a live server', () => {
+    const { service, connections } = setup()
+    expect(() => service.open({ ...folder(), folder: 'databases', ref: { type: 'folder', owner: { kind: 'server' }, folder: 'databases' } })).toThrow('Select Integration Services Catalogs on a connected server.')
+    connections.remove('server-a')
+    expect(() => service.open(folder())).toThrow('Select Integration Services Catalogs on a connected server.')
+    expect(service.current).toBeUndefined()
+  })
+  it('shows why a server cannot have a catalog, and offers no Create', async () => {
+    const { service, settle } = setup({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_EXISTS', message: 'There already exists a catalog (SSISDB), and only one catalog is supported on a server.', retryable: false } } })
+    service.open(folder())
+    await settle()
+    expect(service.current).toMatchObject({ phase: 'loadFailed', error: { code: 'CATALOG_EXISTS' } })
+    expect(service.current?.setup).toBeUndefined()
+  })
+  it('fixes the CLR box when CLR is in use, and checks the form as SSMS does before anything runs', async () => {
+    const { service, api, settle } = setup()
+    service.open(folder())
+    await settle()
+    await service.create(secret, secret)
+    expect(service.current?.problem).toBe(createCatalogMessages.clr)
+    service.setEnableClr(true)
+    expect(service.current).toMatchObject({ enableClr: true })
+    expect(service.current?.problem).toBeUndefined()
+    await service.create('', '')
+    expect(service.current?.problem).toBe(createCatalogMessages.empty)
+    await service.create(secret, secret + 'x')
+    expect(service.current?.problem).toBe(createCatalogMessages.mismatch)
+    expect(api.executeSsis).not.toHaveBeenCalled()
+    // Already in use: checked, and the box cannot clear it.
+    const other = setup(setupOf({ clrEnabled: true, startupDefault: false }))
+    other.service.open(folder())
+    await other.settle()
+    other.service.setEnableClr(false)
+    expect(other.service.current).toMatchObject({ enableClr: true, startupProcedure: false })
+  })
+  it('creates the catalog with the password only in its request, then reloads the folder and closes', async () => {
+    const { service, api, explorer, execute, settle } = setup()
+    const seen: string[] = []
+    service.subscribe(() => { seen.push(JSON.stringify(service.getSnapshot())) })
+    service.open(folder())
+    await settle()
+    service.setEnableClr(true)
+    service.setStartupProcedure(false)
+    const running = service.create(secret, secret)
+    expect(service.current).toMatchObject({ phase: 'executing' })
+    expect(api.executeSsis.mock.calls).toEqual([[{ connectionId: 'server-a', requestId: 'id-2', action: { verb: 'createCatalog', password: secret, enableClr: true, startupProcedure: false } }]])
+    expect(service.close()).toBe(false)
+    execute.resolve(created)
+    await running
+    expect(service.current).toBeUndefined()
+    expect(explorer.refresh).toHaveBeenCalledWith(4)
+    // The snapshot (what React and every subscriber read) never held the password.
+    expect(seen.length).toBeGreaterThan(3)
+    expect(seen.some(snapshot => snapshot.includes('marker'))).toBe(false)
+  })
+  it('shows a failure with its steps, and the folder reloads when a step completed', async () => {
+    const { service, explorer, execute, settle } = setup(setupOf({ clrEnabled: true }))
+    service.open(folder())
+    await settle()
+    const running = service.create(secret, secret)
+    const message = 'Msg 15118: Password validation failed. Varia removed what Create Catalog had created, so the catalog does not exist.'
+    execute.resolve({ ok: true, value: { elapsedMs: 1, error: { code: 'SQL_ERROR', message, retryable: true }, steps: [
+      { status: 'done', message: titles[1] }, { status: 'failed', message }, { status: 'skipped', message: titles[3] }, { status: 'skipped', message: titles[4] }, { status: 'done', message: 'Remove the incomplete catalog' }
+    ] } })
+    await running
+    expect(service.current).toMatchObject({ phase: 'failed', error: { code: 'SQL_ERROR', message } })
+    expect(service.current?.steps?.map(step => step.status)).toEqual(['done', 'failed', 'skipped', 'skipped', 'done'])
+    expect(explorer.refresh).toHaveBeenCalledWith(4)
+    // The form stays usable: another try runs again.
+    expect(service.close()).toBe(true)
+  })
+  it('stops once, waits for the backend\'s answer, and reports Stopped', async () => {
+    const { service, api, execute, settle } = setup(setupOf({ clrEnabled: true }))
+    service.open(folder())
+    await settle()
+    const running = service.create(secret, secret)
+    service.stop()
+    service.stop()
+    expect(service.current).toMatchObject({ phase: 'executing', stopping: true })
+    expect(api.cancelSsis.mock.calls).toEqual([[['id-2']]])
+    execute.resolve({ ok: true, value: { elapsedMs: 1, steps: [], error: { code: 'CANCELLED', message: 'Create Catalog was stopped before its restore. Nothing changed.', retryable: true } } })
+    await running
+    expect(service.current).toMatchObject({ phase: 'stopped', error: { code: 'CANCELLED' } })
+    expect(service.current?.stopping).toBeUndefined()
+  })
+  it('says the outcome is unknown when the server goes away while it runs, and cancels it', async () => {
+    const { service, api, connections, execute, settle } = setup(setupOf({ clrEnabled: true }))
+    service.open(folder())
+    await settle()
+    const running = service.create(secret, secret)
+    connections.remove('server-a')
+    expect(service.current).toMatchObject({ phase: 'disconnected', error: { code: 'CONNECTION_LOST', message: createCatalogMessages.unknown } })
+    expect(api.cancelSsis).toHaveBeenCalledWith(['id-2'])
+    execute.resolve(created)
+    await running
+    expect(service.current?.phase).toBe('disconnected')
+    expect(service.close()).toBe(true)
+  })
+})
+
+describe('Create Catalog command', () => {
+  it('is offered on Integration Services Catalogs of a live server only, and not while its dialog is open', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+    const target = { kind: 'explorer' as const, node: folder() }
+    expect(fixture.commands.canRun('explorer.createCatalog', { target: { kind: 'explorer', node: { ...folder(), folder: 'databases' } } })).toBe(false)
+    expect(fixture.commands.canRun('explorer.createCatalog', { target })).toBe(true)
+    // The menu selects its node first, so the precondition reads the selection (the smoke suite opens it from the real menu).
+    fixture.ssisCatalog.open(folder())
+    expect(fixture.ssisCatalog.current).toMatchObject({ connectionId: 'server-a', nodeId: 4 })
+    expect(fixture.commands.canRun('explorer.createCatalog', { target })).toBe(false)
+  })
+})

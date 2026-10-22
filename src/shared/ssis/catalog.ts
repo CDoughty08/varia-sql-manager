@@ -145,26 +145,47 @@ export const describeTargets: { readonly [V in SsisDescribeView]: NodeKind } = {
   catalog: 'ssisCatalog', folder: 'ssisFolder', project: 'ssisProject', package: 'ssisPackage', environment: 'ssisEnvironment'
 }
 
-/** What ssis.execute does (D-ssis 4.4), by verb: its title, the steps it runs in order (one statement each, reported back
- *  as done, failed, cancelled or skipped), the only catalog procedures its statements may call (SsisSql's write lint),
- *  whether it takes a describe's `revision` (a write that changes what a document showed compares it first), and whether
- *  SSISDB refuses it to a SQL Server login on a box server (S0, docs/integration-services.md 14.7: error 27123), which the
- *  backend answers WINDOWS_AUTH_REQUIRED before it connects. Later verbs (execute, validate, configure, …) append. */
+/** What ssis.execute does (D-ssis 4.4), by verb: its title, the steps it runs in order (reported back as done, failed,
+ *  cancelled or skipped), the only catalog procedures its statements may call (SsisSql's write lint), whether it takes a
+ *  describe's `revision` (a write that changes what a document showed compares it first), whether SSISDB refuses it to a
+ *  SQL Server login on a box server (S0, docs/integration-services.md 14.7: error 27123), which the backend answers
+ *  WINDOWS_AUTH_REQUIRED before it connects, and where it runs: `catalog` verbs in the catalog's database, one statement
+ *  per step, `server` verbs (Create Catalog) in master from their own templates and lint (SsisCreateSql). Later verbs
+ *  (execute, validate, configure, …) append. */
 export interface SsisActionSpec {
   readonly title: string
   readonly steps: readonly string[]
   readonly procedures: readonly string[]
   readonly revision: boolean
   readonly windowsAuthOnBox: boolean
+  readonly scope: 'catalog' | 'server'
 }
 export const ssisActions = {
   /** catalog.stop_operation: an execution or validation that runs stops after its current work (Stopping, then Canceled). */
-  stopOperation: { title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true }
+  stopOperation: { title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true, scope: 'catalog' },
+  /** SSMS 22's Create Catalog (Catalog.Create): CLR when the user agreed to it, the restore of the Integration Services catalog
+   *  backup, the master key, the ISSERVER assembly's trust and `sp_ssis_startup`, and the maintenance job. The catalog's own
+   *  procedures do not exist yet, so it calls none; SQL Server logins that are sysadmin may run it, as in SSMS. */
+  createCatalog: {
+    title: 'Create Catalog', procedures: [], revision: false, windowsAuthOnBox: false, scope: 'server',
+    steps: ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
+  }
 } as const satisfies { readonly [verb: string]: SsisActionSpec }
 export type SsisActionVerb = keyof typeof ssisActions
 export const ssisActionVerbs = Object.keys(ssisActions) as SsisActionVerb[]
 /** catalog.operations.operation_type values Stop Operation applies to: executions and validations. */
 export const stoppableOperationTypes = [200, 300, 301] as const
+
+/** What Create Catalog restores and trusts, as SSMS 22 finds them: the files Integration Services installs in its
+ *  `<DTSPath>Binn` folder (the registry's `SSISSetupDTSPath` for the server's version, read on the server), the catalog
+ *  backup by the first band that names it so, and the step a failure after the restore adds to remove what was created. */
+export const createCatalog = {
+  backupFiles: [{ since: 17, file: 'SSISDBBackup.bak' }, { since: 13, file: 'SSISDB.bak' }],
+  assemblyFile: 'Microsoft.SqlServer.IntegrationServices.Server.dll',
+  cleanupStep: 'Remove the incomplete catalog'
+} as const
+/** The catalog backup's file name on a server of this band (2025 renamed it). */
+export const catalogBackupFile = (band: number): string => createCatalog.backupFiles.find(item => band >= item.since)?.file ?? createCatalog.backupFiles[createCatalog.backupFiles.length - 1].file
 
 /** SSIS failures as values (D-ssis 5.2), and whether retrying can help. */
 export const ssisErrorRetryable = {
@@ -192,6 +213,10 @@ export const ssisErrorRetryable = {
   /** Varia's Stop ended a write's request before it changed anything, or at the step the reply names (for Stop Operation, the
    *  catalog may then list its own Stop operation as Running until SQL Server restarts). */
   CANCELLED: true,
+  /** Create Catalog on a server whose catalog database already exists: SSMS supports one catalog. */
+  CATALOG_EXISTS: false,
+  /** Create Catalog when CLR integration is off and the request did not agree to enable it. */
+  CLR_REQUIRED: false,
   SQL_ERROR: true
 } as const
 export type SsisErrorCode = keyof typeof ssisErrorRetryable
@@ -232,7 +257,11 @@ export const ssisLimits = {
   preflightLockTimeoutMs: 10_000,
   preflightMs: 25_000,
   /** How long a stopped write's reply waits for SQL Server to end its statement, then answers CANCELLED (outcome unknown). */
-  stopGraceMs: 10_000
+  stopGraceMs: 10_000,
+  /** Create Catalog's encryption password, in UTF-16 code units; the server's password policy applies too. */
+  catalogPassword: 128,
+  /** A path Create Catalog reads on the server (the catalog backup, the assembly, the database files). */
+  serverPath: 1_024
 } as const
 
 // Compact sorted-key JSON, as in explorerCatalogJson(), so each entry diffs as one line.
@@ -248,6 +277,7 @@ export function ssisCatalogJson(): string {
     '{',
     `  "actions": ${block(ssisActionVerbs.map(verb => ({ verb, ...ssisActions[verb] })))},`,
     `  "catalogDatabase": ${line(catalogDatabase)},`,
+    `  "createCatalog": ${line(createCatalog)},`,
     `  "errors": ${block(ssisErrorCodes.map(code => ({ code, retryable: ssisErrorRetryable[code] })))},`,
     `  "features": ${line(ssisFeatures)},`,
     `  "finalStatuses": ${line(finalStatuses)},`,

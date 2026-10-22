@@ -69,9 +69,12 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
   // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).
   'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
-  // SSIS Catalog writes wait for locks as SSMS does, without a deadline; Stop (varia:ssis-cancel) always ends them. Sensitive,
-  // because later verbs carry sensitive parameter and variable values.
+  // SSIS Catalog writes wait for locks as SSMS does, without a deadline; Stop (varia:ssis-cancel) ends them, except Create
+  // Catalog once its restore began, which finishes or removes what it created. Sensitive: Create Catalog carries the catalog's
+  // encryption password, and later verbs sensitive parameter and variable values.
   'ssis.execute': { kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true },
+  // Create Catalog's dialog read answers its own 40 s budget as a TIMEOUT value, as a describe does.
+  'ssis.catalogSetup': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
