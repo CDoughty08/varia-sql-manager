@@ -28,6 +28,7 @@ import { editorContribution } from '../contributions/editor'
 import { paletteContribution } from '../contributions/palette'
 import { themeContribution } from '../contributions/theme'
 import { backendContribution } from '../contributions/backend'
+import { helpContribution } from '../contributions/help'
 import { editContribution } from '../contributions/edit'
 import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
@@ -291,6 +292,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     paletteContribution(workbench),
     themeContribution(workbench, api),
     backendContribution(workbench),
+    helpContribution(workbench, api),
     scriptingContribution(workbench),
     actionsContribution(workbench),
     settingsContribution(workbench)

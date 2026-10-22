@@ -7,7 +7,8 @@ import { compileWhen, type WhenAst } from './when'
 /** The menubar, in title-bar order. Alt plus the mnemonic opens a menu on Windows and Linux. */
 export const applicationMenus = [
   { id: 'file', label: 'File', mnemonic: 'f' }, { id: 'edit', label: 'Edit', mnemonic: 'e' }, { id: 'view', label: 'View', mnemonic: 'v' },
-  { id: 'query', label: 'Query', mnemonic: 'q' }, { id: 'tools', label: 'Tools', mnemonic: 't' }, { id: 'window', label: 'Window', mnemonic: 'w' }
+  { id: 'query', label: 'Query', mnemonic: 'q' }, { id: 'tools', label: 'Tools', mnemonic: 't' }, { id: 'window', label: 'Window', mnemonic: 'w' },
+  { id: 'help', label: 'Help', mnemonic: 'h' }
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
 /** Context menus, one per kind of target: the editor, an Object Explorer node, a query tab, Query Output, a panel tab, a text field. */
@@ -29,7 +30,7 @@ export type MenuId = MenubarId | SubmenuId | ContextMenuId
  * Every menu in native-id order: a submenu follows the menu it first appears in, and context menus come last. One id a
  * line, so menus added later merge line by line. The planned order, where each new menu goes: 'file', 'file.recent',
  * 'edit', 'edit.findReplace', 'edit.advanced', 'edit.bookmarks', 'edit.intellisense', 'view', 'theme', 'query',
- * 'query.connection', 'tools', 'window', 'editor.context', 'explorer.context', 'explorer.new', ...scriptSubmenuIds, then
+ * 'query.connection', 'tools', 'window', 'help', 'editor.context', 'explorer.context', 'explorer.new', ...scriptSubmenuIds, then
  * the remaining context menus.
  */
 export const menuIds: readonly MenuId[] = [
@@ -46,6 +47,7 @@ export const menuIds: readonly MenuId[] = [
   'query.connection',
   'tools',
   'window',
+  'help',
   'editor.context',
   'explorer.context',
   ...scriptSubmenuIds,

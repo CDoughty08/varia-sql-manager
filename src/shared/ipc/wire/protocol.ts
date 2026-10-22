@@ -48,6 +48,8 @@ export const errorCodes = [
   'SESSION_LIMIT', 'AUTH_UNSUPPORTED', 'INVALID_SCRIPT',
   // Backend: integrated authentication on Linux and macOS without a usable Kerberos ticket (AUTH_UNSUPPORTED: no GSSAPI library).
   'AUTH_KERBEROS',
+  // Backend: a Microsoft Entra sign-in failed or must be repeated; the message says what to do.
+  'AUTH_ENTRA',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
   // Backend, results jobs: an export failure (its message is one token: ACCESS, DISK_FULL, IN_USE, NOT_FOUND,

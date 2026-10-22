@@ -27,11 +27,16 @@ export function connectContext(method: string, value: unknown): ConnectContext |
 }
 
 /**
- * Whether SQL Server refused the password itself: Login failed (18456) for SQL Server Authentication. Other failures
- * (network, timeouts, a database that cannot be opened, TLS) say nothing about the password.
+ * Whether the password itself was refused: Login failed (18456) for SQL Server Authentication, or Microsoft Entra's
+ * invalid user name or password (AADSTS50126) for Entra Password and invalid client secret (AADSTS7000215) for Service
+ * Principal. Other failures (network, timeouts, a database that cannot be opened, TLS) say nothing about the password,
+ * and 18456 under Entra means a missing grant or a stale token, not a wrong password.
  */
 export function secretRejected(options: ConnectionOptions, error: unknown): boolean {
-  return options.authentication === 'sql' && error instanceof BackendError && error.code === 'SQL_ERROR' && error.details?.number === 18456
+  if (!(error instanceof BackendError)) return false
+  if (options.authentication === 'sql') return error.code === 'SQL_ERROR' && error.details?.number === 18456
+  return (options.authentication === 'entraPassword' || options.authentication === 'entraServicePrincipal') && error.code === 'AUTH_ENTRA'
+    && (error.details?.number === 50126 || error.details?.number === 7000215)
 }
 
 /**

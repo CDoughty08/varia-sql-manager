@@ -12,10 +12,10 @@ import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { ActionRequests } from './backend/action-requests'
-import { cancellableRequests } from './backend/renderer-requests'
+import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
-import { validateRequest, validateResult } from './validation'
+import { connectionCancelSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema } from './sql-files'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
 import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
@@ -27,6 +27,7 @@ import { SavedPasswordStore } from './saved-passwords'
 import { safeStorageCipher, testCipher } from './secret-cipher'
 import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
 import { connectionLibrary } from './connection-library'
+import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { lossDetails } from '../shared/files/recovery'
@@ -604,6 +605,8 @@ app.whenReady().then(async () => {
   })
   const scriptingRequests = new ScriptingRequests(backend)
   const actionRequests = new ActionRequests(backend)
+  // The Connect dialog's connect and Load databases, which its Stop cancels (a Microsoft Entra sign-in waits for the browser).
+  const connectionRequests = new RendererRequests(backend, connectionRequestLimits, 'connection')
   backend.onState(state => {
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
@@ -698,9 +701,10 @@ app.whenReady().then(async () => {
       const prepared = await prepareConnection(method, validated, context, { savedPasswords })
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
-      // An Object Explorer load, a script or an object action is registered before it is sent, so its cancel channel can always find it.
-      const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests })
-      const load = cancellable?.begin((validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute']['params']).requestId)
+      // An Object Explorer load, a script, an object action or a connect with a requestId is registered before it is sent,
+      // so its cancel channel can always find it.
+      const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, connections: connectionRequests }, prepared.context?.requestId)
+      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute']['params']).requestId)
       let result: unknown
       let outcome: Settled
       try {
@@ -726,6 +730,12 @@ app.whenReady().then(async () => {
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   // Stop in an object dialog: the backend cancels the statement in SQL Server (an attention), so a DROP waiting on a lock ends.
   handle('varia:actions-cancel', value => ({ cancelled: actionRequests.cancel(actionCancelSchema.parse(value).requestIds) }))
+  // The Connect dialog's Stop: a connect waiting for SQL Server or for a Microsoft Entra sign-in in the browser ends at once.
+  handle('varia:connections-cancel', value => ({ cancelled: connectionRequests.cancel(connectionCancelSchema.parse(value).requestIds) }))
+  handle('varia:entra-cache-clear', () => clearEntraTokenCache({
+    confirm: async () => (await pageDialog((window, signal) => dialog.showMessageBox(window, { ...clearEntraPrompt, buttons: [...clearEntraPrompt.buttons], signal }), { response: 1, checkboxChecked: false }, true)).response === 0,
+    clear: () => backend.request('entra.cache.clear', {})
+  }))
   handle('varia:files-open', async () => {
     const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return []

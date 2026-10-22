@@ -15,7 +15,8 @@ internal interface IExplorerHost
     /// <summary>An unopened connection from the connection's Object Explorer pool; with a database, a pool in that database
     /// (cloud editions, which cannot EXEC across databases).</summary>
     SqlConnection Connection(string connectionId, string? database);
-    /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), which the node shows.</summary>
+    /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), and a
+    /// Microsoft Entra token failure AUTH_ENTRA, which the node shows.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
 }
 
@@ -284,7 +285,7 @@ internal sealed class ExplorerService : IDisposable
         {
             return new(partial, 0, Error: ExplorerErrors.From(error, phase, Subject(request), request.Database));
         }
-        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED")
+        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
         {
             return new(partial, 0, Error: ExplorerErrors.SignIn(error));
         }

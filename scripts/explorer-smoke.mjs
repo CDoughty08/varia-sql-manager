@@ -73,7 +73,7 @@ async function connect(server, { keyboard = false } = {}) {
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   if (server === process.env.VARIA_TEST_SQL_SERVER && liveUser) {
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
-    await dialog.getByLabel('User Name', { exact: true }).fill(liveUser)
+    await dialog.getByLabel('Login', { exact: true }).fill(liveUser)
     await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
   } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   if (server === process.env.VARIA_TEST_SQL_SERVER) await dialog.getByLabel('Trust server certificate', { exact: true }).check()

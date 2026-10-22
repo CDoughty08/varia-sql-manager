@@ -193,10 +193,11 @@ internal sealed class ScriptingService : IDisposable
             if (ScriptingErrors.UnpairedSurrogate(text) >= 0) return Result(null, [], ScriptingErrors.Create(catalog, "UNREPRESENTABLE", subject));
             return Result(text, [.. preflight.Warnings, .. warnings]);
         }
-        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED")
+        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
         {
-            // The pool connection could not sign in with Kerberos (an expired ticket, say): the advice is the job's error
-            // value, as Object Explorer shows it on the node, and Script As works again after kinit.
+            // The pool connection could not sign in with Kerberos (an expired ticket, say) or Microsoft Entra (a revoked
+            // sign-in): the advice is the job's error value, as Object Explorer shows it on the node, and Script As works
+            // again after kinit or a new connect.
             return Result(null, [], ScriptingErrors.Create(catalog, error.Code, subject, error.Message));
         }
         catch (Exception error) when (!token.IsCancellationRequested && ScriptingErrors.Classify(catalog, error, subject, resolved?.Encrypted == true, runner?.Target,

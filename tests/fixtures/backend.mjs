@@ -19,6 +19,9 @@
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
+//   cancels.jsonl       one { method } line per entra-wait request a CANCEL frame ended
+// Server 'entra-wait' connects (and lists databases) as a Microsoft Entra MFA sign-in waiting for the browser does: only a
+// CANCEL frame (the Connect dialog's Stop) ends it, answered CANCELLED.
 // A tab's session counts BEGIN TRAN, COMMIT and ROLLBACK in its scripts, and notes SET NOEXEC, PARSEONLY, FMTONLY and
 // SHOWPLAN_* ON and OFF: every summary carries its spid and login, query.session.state answers its @@TRANCOUNT (unchecked
 // while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
@@ -469,6 +472,14 @@ const fixtures = {
   XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
 }
 
+/** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */
+async function entraWait(id, method) {
+  while (!cancelled.has(id)) await sleep(25)
+  cancelled.delete(id)
+  if (controlDirectory) appendFileSync(join(controlDirectory, 'cancels.jsonl'), JSON.stringify({ method }) + '\n')
+  fail(id, 'CANCELLED', 'The operation was cancelled.')
+}
+
 async function workbench(id, method, params, credit) {
   if (controlDirectory) {
     const redacted = params?.password === undefined ? params : { ...params, password: '<redacted>' }
@@ -483,15 +494,18 @@ async function workbench(id, method, params, credit) {
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
+      if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0 }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }
     case 'connections.databases':
+      if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       return respond(id, workbenchDatabases)
     case 'connections.discover': return respond(id, { servers: [] })
+    case 'entra.cache.clear': return respond(id, { cleared: true })
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })
     case 'connections.disconnect':
       for (const [sessionId, session] of sessions) if (session.connectionId === params.connectionId) sessions.delete(sessionId)
