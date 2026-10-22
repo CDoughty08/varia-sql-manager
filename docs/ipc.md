@@ -885,16 +885,25 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   value per device pixel column (stacked bands to each column's mean), so a draw is O(samples in the window) plus at
   most two vertices a column, whatever the history holds; a gap flag or a missing value breaks the line, and a lone
   sample between gaps shows as a one-pixel tick. Colors come only from the active theme's `charts.*` keys (series
-  `charts.blue`, `.orange`, `.green`, `.yellow`, `.purple` in that order, `charts.gray` for Other, `charts.red` only for a
-  failure count; grid lines `charts.lines`, text and crosshair `charts.foreground`); under forced colors it draws in
-  `CanvasText`, `Canvas` and `GrayText`, without fills, and series after the first are dashed (the legend shows the same
-  dashes). Canvas text uses the UI font at the type scale's 11 px step. The canvas is `role="img"` with a name such as
-  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s. The pointer shows a crosshair
-  and a tooltip ("4:10 ago · 93 %"); with the canvas focused, Left and Right step it one sample, Home and End go to the
-  window's ends, Escape hides it, and each step is announced through a polite status region (these are the chart's own
-  keys, as the grid's arrows are the grid's, not workbench commands). Charts joined to one `ChartLink` show the same
-  moment together. "View as table" lists the window newest first, at most 120 rows (a longer window is sampled evenly),
-  rows after a gap marked. The tooltip, announcements and table are Text nodes or React text, never markup.
+  `charts.blue`, `.orange`, `.green`, `.yellow`, `.purple` in that order and `charts.gray` for Other; `charts.red` is a
+  status mark, never a series; grid lines `charts.lines`, text and crosshair `charts.foreground`); under forced colors it
+  draws in `CanvasText`, `Canvas` and `GrayText`, without fills, and each series after the first takes the dash of its
+  place in the chart, as the legend shows it. A change of device pixel ratio alone (a move to a display of another scale)
+  redraws it, through a `resolution` media query, since it resizes nothing. Canvas text uses the UI font at the type scale's 11 px step. The canvas is `role="img"` with a name such as
+  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s, `aria-roledescription="chart"`,
+  and a description of its keys. The pointer shows a crosshair and a tooltip ("4:10 ago · 93 %") inside the plot, beside
+  the crosshair; with the canvas focused, Left and Right step it one sample, Home and End go to the window's ends, Escape
+  or a blur hides it, and each step is announced through a polite status region (these are the chart's own keys, as the
+  grid's arrows are the grid's, not workbench commands). Charts joined to one `ChartLink` show the same moment together,
+  and a chart disposed while it drives the crosshair takes it off the others. "View as table" shows the window in the
+  plot's place, at its size and scrolling there, newest first, at most 120 rows (a longer window is sampled evenly), a
+  row marked when any sample since the row before it follows a gap; the table, `latest()` and the keys read the window,
+  not the canvas, so they work whatever size the canvas has. `LiveChart` keeps the table's state itself or takes it as
+  `tableShown`/`onTableShownChange`, and `tableToggle: false` drops its button for a document that offers the command
+  from its catalogue. A live window ends at the newest sample, so history stays in view when collection stops; once that
+  sample is older than twice the step between samples (at least 2 s), a timer wakes the chart and its times read as
+  clock times rather than "now" and "ago", and its name, like a fixed window's, gives the clock range ("… from 13:05:00
+  to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup.
 - **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
   `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
   probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment

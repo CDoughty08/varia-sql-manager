@@ -1,6 +1,7 @@
 // The React shell of a live chart: it mounts the canvas, the legend and "View as table", and hands everything else to
-// ChartView, which draws from the probe's ring and redraws on the view's ticks. Sparklines (a tile's trace) have no
-// legend, labels, crosshair or table; the tile around them says the value.
+// ChartView, which draws from the probe's ring and redraws on the view's ticks. The table takes the plot's place, at its
+// size, and scrolls there, so neither the card nor the canvas changes size when it shows. Sparklines (a tile's trace) have
+// no legend, labels, crosshair or table; the tile around them says the value.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import type { ChartSurface } from '../../../shared/theme/charts'
@@ -23,6 +24,12 @@ export interface LiveChartProps {
   readonly link?: ChartLink
   /** Rows "View as table" shows at most (up to 120). */
   readonly tableRows?: number
+  /** Whether the table shows instead of the plot; the chart keeps this itself unless it is given. */
+  readonly tableShown?: boolean
+  readonly onTableShownChange?: (shown: boolean) => void
+  /** The "View as table" button under the plot; true by default. A document that offers the command from its catalogue
+   *  instead passes false, and drives the table with `tableShown`. */
+  readonly tableToggle?: boolean
   readonly className?: string
   /** The chart's view once it exists, and undefined when it goes: for a tile's headline value, or tests. */
   readonly onView?: (view: ChartView | undefined) => void
@@ -38,10 +45,13 @@ function subscribeForced(listener: () => void): () => void {
 const forcedNow = () => typeof matchMedia === 'function' && matchMedia(forcedQuery).matches
 
 export function LiveChart(props: LiveChartProps) {
-  const { handle, probe, title, series, scale, window, variant = 'chart', labels, surface, link, tableRows, className, onView } = props
+  const { handle, probe, title, series, scale, window, variant = 'chart', labels, surface, link, tableRows, className, onView, onTableShownChange, tableToggle = true } = props
   const { theme, live } = useWorkbench()
   const rootRef = useRef<HTMLDivElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), viewRef = useRef<ChartView | undefined>(undefined)
-  const [tableShown, setTableShown] = useState(false)
+  const [view, setView] = useState<ChartView>()
+  const [ownTableShown, setOwnTableShown] = useState(false)
+  const tableShown = props.tableShown ?? ownTableShown
+  const toggleTable = () => { const next = !tableShown; if (props.tableShown === undefined) setOwnTableShown(next); onTableShownChange?.(next) }
   const [table, setTable] = useState<{ rows: readonly ChartTableRow[]; total: number }>({ rows: [], total: 0 })
   const forced = useSyncExternalStore(subscribeForced, forcedNow)
   const onViewRef = useRef(onView)
@@ -56,6 +66,7 @@ export function LiveChart(props: LiveChartProps) {
       window: initial.window, colors: theme.getSnapshot().active.colors, variant, labels, surface, page: live.page, link
     })
     viewRef.current = view
+    setView(view)
     onViewRef.current?.(view)
     const ticks = handle.onTick(() => view.invalidate())
     const themed = theme.subscribe(() => view.setTheme(theme.getSnapshot().active.colors))
@@ -64,6 +75,7 @@ export function LiveChart(props: LiveChartProps) {
       themed()
       view.dispose()
       if (viewRef.current === view) viewRef.current = undefined
+      setView(current => current === view ? undefined : current)
       try { onViewRef.current?.(undefined) } catch (error) { onUnexpectedError(error) }
     }
   }, [handle, probe, theme, live, variant, labels, surface, link])
@@ -71,21 +83,22 @@ export function LiveChart(props: LiveChartProps) {
   useEffect(() => { viewRef.current?.setSeries(series, scale) }, [seriesKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { viewRef.current?.setWindow(window) }, [windowKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { viewRef.current?.setTitle(title) }, [title])
-  // The table follows the ticks only while it shows.
-  const limit = Math.min(tableRows ?? chartLimits.tableRows, chartLimits.tableRows)
+  // The table follows the ticks only while it shows, and the moment its newest sample goes stale (no tick says so).
+  const limit = Math.max(1, Math.min(tableRows ?? chartLimits.tableRows, chartLimits.tableRows))
   useEffect(() => {
-    if (!tableShown) return
-    const refresh = () => { const view = viewRef.current; if (view) setTable(view.table(limit)) }
+    if (!tableShown || !view) return
+    const refresh = () => setTable(view.table(limit))
     refresh()
-    const ticks = handle.onTick(refresh)
-    return () => ticks.dispose()
-  }, [tableShown, handle, limit, seriesKey, windowKey])
+    const ticks = handle.onTick(refresh), stale = view.subscribe(refresh)
+    return () => { ticks.dispose(); stale.dispose() }
+  }, [tableShown, view, handle, limit, seriesKey, windowKey])
   const keyDown = (event: KeyboardEvent<HTMLCanvasElement>) => {
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
   }
   const chart = variant === 'chart'
   const legend = useMemo(() => series.map((entry, at) => ({ ...entry, at })), [series])
-  return <div ref={rootRef} className={`live-chart${className ? ' ' + className : ''}`} data-variant={variant}>
+  const tableOn = chart && tableShown
+  return <div ref={rootRef} className={`live-chart${className ? ' ' + className : ''}`} data-variant={variant} data-table={tableOn ? '' : undefined}>
     {chart && series.length > 1 && <ul className="live-chart-legend" aria-label={`${title} series`}>
       {legend.map(entry => <li key={entry.index}>
         <svg className="live-chart-swatch" viewBox="0 0 16 8" aria-hidden="true">
@@ -95,11 +108,11 @@ export function LiveChart(props: LiveChartProps) {
       </li>)}
     </ul>}
     <canvas ref={canvasRef} className="live-chart-canvas" tabIndex={chart ? 0 : -1} onKeyDown={chart ? keyDown : undefined} />
-    {chart && <button type="button" className="live-chart-toggle" aria-pressed={tableShown} onClick={() => setTableShown(shown => !shown)}>View as table</button>}
-    {chart && tableShown && <table className="live-chart-table">
+    {tableOn && <div className="live-chart-table-wrap"><table className="live-chart-table">
       <caption>{table.total === 0 ? `${title}: no samples yet` : `${title}: ${table.rows.length < table.total ? `${table.rows.length} of ${table.total}` : table.total} samples, newest first`}</caption>
       <thead><tr><th scope="col">Time</th>{series.map(entry => <th key={entry.index} scope="col">{entry.label}</th>)}</tr></thead>
       <tbody>{table.rows.map((row, at) => <tr key={at}><th scope="row">{row.gapBefore ? `${row.time} (after a gap)` : row.time}</th>{row.values.map((value, column) => <td key={column}>{value}</td>)}</tr>)}</tbody>
-    </table>}
+    </table></div>}
+    {chart && tableToggle && <button type="button" className="live-chart-toggle" aria-pressed={tableShown} onClick={toggleTable}>View as table</button>}
   </div>
 }

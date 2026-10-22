@@ -104,12 +104,14 @@ export class FakeChartEnvironment implements ChartEnvironment {
   visibility?: (visible: boolean) => void
   size?: () => void
   forcedListener?: () => void
+  ratioListener?: () => void
   requestFrame(callback: () => void): number { this.requested++; this.frames.push(callback); return this.frames.length }
   cancelFrame(): void { this.frames = [] }
   observeVisibility(_element: Element, listener: (visible: boolean) => void): () => void { this.visibility = listener; return () => { this.visibility = undefined } }
   observeSize(_element: Element, listener: () => void): () => void { this.size = listener; return () => { this.size = undefined } }
   forcedColors(): boolean { return this.forced }
   observeForcedColors(listener: () => void): () => void { this.forcedListener = listener; return () => { this.forcedListener = undefined } }
+  observeDevicePixelRatio(listener: () => void): () => void { this.ratioListener = listener; return () => { this.ratioListener = undefined } }
   devicePixelRatio(): number { return this.ratio }
   now(): number { return this.time }
   setTimeout(callback: () => void, ms: number): unknown { const id = this.timers.length + 1; this.timers.push({ at: this.time + ms, callback, id }); return id }

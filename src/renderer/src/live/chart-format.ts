@@ -70,11 +70,13 @@ export function formatSpanShort(ms: number): string {
 }
 
 export interface SeriesSummary { readonly label: string; readonly latest: number; readonly min: number; readonly max: number }
-/** The chart's accessible name: "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", one clause per series. */
-export function chartLabel(title: string, unit: LiveUnit, spanMs: number, series: readonly SeriesSummary[]): string {
+/** The chart's accessible name: "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", one clause per series. A
+ *  window that does not end now (a fixed one, or a live one whose newest sample is stale) is named by its clock times:
+ *  "… from 13:05:00 to 13:10:00". */
+export function chartLabel(title: string, unit: LiveUnit, window: { readonly spanMs: number } | { readonly from: number; readonly to: number }, series: readonly SeriesSummary[]): string {
   const known = series.filter(entry => Number.isFinite(entry.min))
   if (!known.length) return `${title}: no data yet`
-  const over = ` over the last ${formatSpan(spanMs)}`
+  const over = 'spanMs' in window ? ` over the last ${formatSpan(window.spanMs)}` : ` from ${formatClock(window.from)} to ${formatClock(window.to)}`
   const clause = (entry: SeriesSummary) => {
     const now = Number.isFinite(entry.latest) ? formatChartValue(entry.latest, unit) : 'no current value'
     const range = entry.min === entry.max ? `steady at ${formatChartValue(entry.min, unit)}` : `${formatChartValue(entry.min, unit)} to ${formatChartValue(entry.max, unit)}`

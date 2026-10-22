@@ -352,7 +352,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `charts.green` | VS Code | `$chart3` | `#199e70` | `#12936a` | Third series of a chart. |
 | `charts.yellow` | VS Code | `$chart4` | `#c98500` | `#a87200` | Fourth series of a chart. |
 | `charts.purple` | VS Code | `$chart5` | `#9085e9` | `#6250d6` | Fifth series of a chart. |
-| `charts.red` | VS Code | `$error` | `#f39a9a` | `#b42229` | A series that counts failures, such as failed executions; never a categorical series. |
+| `charts.red` | VS Code | `$error` | `#f39a9a` | `#b42229` | A status mark on a chart, such as a failed execution on a timeline; never the color of a series. |
 | `charts.gray` | Varia | `$neutral` | `#8d939f` | `#6b7280` | "Other" in a stacked chart: everything the named series leave out. |
 
 ## SQL syntax scopes (16)

@@ -257,7 +257,7 @@ const groups = {
     'charts.green': ['V', '$chart3', 'Third series of a chart.', 'script'],
     'charts.yellow': ['V', '$chart4', 'Fourth series of a chart.', 'script'],
     'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'script'],
-    'charts.red': ['V', '$error', 'A series that counts failures, such as failed executions; never a categorical series.', 'script'],
+    'charts.red': ['V', '$error', 'A status mark on a chart, such as a failed execution on a timeline; never the color of a series.', 'script'],
     'charts.gray': ['X', '$neutral', '"Other" in a stacked chart: everything the named series leave out.', 'script']
   }
 } as const satisfies Record<string, Record<string, Entry>>

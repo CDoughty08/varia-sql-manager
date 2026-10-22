@@ -52,10 +52,9 @@ export async function start(root: Root): Promise<void> {
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
       __variaRecovery: { flush: () => workbench.recovery.flush() },
       // Live views on the synthetic source, charts of them, and the window's visibility (live-smoke.mjs, chart-smoke.mjs).
-      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, (props, container) => {
+      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, container => {
         const chart = createRoot(container)
-        chart.render(<WorkbenchProvider workbench={workbench}><LiveChart {...props} /></WorkbenchProvider>)
-        return () => chart.unmount()
+        return { render: props => chart.render(<WorkbenchProvider workbench={workbench}><LiveChart {...props} /></WorkbenchProvider>), unmount: () => chart.unmount() }
       })
     })
   }

@@ -1,4 +1,4 @@
-import { chartSeriesColors, chartSurfaces } from './charts'
+import { chartSeriesColors, chartStatusColors, chartSurfaces } from './charts'
 import { sqlScopes, type ColorKey, type SqlScope } from './registry'
 
 /**
@@ -168,9 +168,10 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
   ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground']),
-  // Charts sit on documents, cards and widgets: their labels and legends are text, their series marks (WCAG 1.4.11).
+  // Charts sit on documents, cards and widgets: their labels and legends are text, their series and status marks are
+  // graphics (WCAG 1.4.11).
   ...text(['charts.foreground'], ...surfacesOfCharts),
-  ...graphic([...chartSeriesColors], ...surfacesOfCharts)
+  ...graphic([...chartSeriesColors, ...chartStatusColors], ...surfacesOfCharts)
 ]
 
 /**

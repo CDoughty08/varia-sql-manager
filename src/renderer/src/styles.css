@@ -693,11 +693,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .live-chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 3px 7px; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .live-chart-toggle { align-self: flex-end; margin-top: 4px; padding: 2px 6px; font-size: var(--varia-size-xs); }
 .live-chart-toggle[aria-pressed="true"] { border-color: var(--varia-button-border); transition: none; }
-.live-chart-table { margin-top: 4px; border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
+.live-chart[data-table] .live-chart-canvas { display: none; }
+/* The table takes the plot's place at its size and scrolls there, so it never spills over the card or what is around it. */
+.live-chart-table-wrap { flex: 1; min-height: 0; overflow: auto; }
+.live-chart-table { border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
 .live-chart-table caption { padding-bottom: 2px; text-align: left; color: var(--varia-charts-foreground); }
 .live-chart-table th, .live-chart-table td { padding: 1px 8px 1px 0; text-align: right; font-weight: 400; white-space: nowrap; }
 .live-chart-table th[scope="col"] { color: var(--varia-charts-foreground); }
-.live-chart-table th[scope="row"] { text-align: left; }
+.live-chart-table th[scope="row"], .live-chart-table thead th:first-child { text-align: left; }
 @media (forced-colors: active) {
   .live-chart-swatch line { stroke: CanvasText; }
   .live-chart-toggle[aria-pressed="true"] { outline: 1px solid CanvasText; }

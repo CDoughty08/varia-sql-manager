@@ -1463,8 +1463,8 @@
         },
         "charts.red": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) A series that counts failures, such as failed executions; never a categorical series. Default $error (Dark #f39a9a, Light #b42229).",
-          "markdownDescription": "(VS Code) A series that counts failures, such as failed executions; never a categorical series. Default `$error` (Dark `#f39a9a`, Light `#b42229`)."
+          "description": "(VS Code) A status mark on a chart, such as a failed execution on a timeline; never the color of a series. Default $error (Dark #f39a9a, Light #b42229).",
+          "markdownDescription": "(VS Code) A status mark on a chart, such as a failed execution on a timeline; never the color of a series. Default `$error` (Dark `#f39a9a`, Light `#b42229`)."
         },
         "charts.gray": {
           "$ref": "#/definitions/value",

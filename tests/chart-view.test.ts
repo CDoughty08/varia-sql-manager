@@ -51,10 +51,10 @@ describe('chart text', () => {
     expect([45_000, 60_000, 900_000, 3_600_000, 5_400_000].map(formatSpan)).toEqual(['45 seconds', '1 minute', '15 minutes', '1 hour', '1.5 hours'])
   })
   it('names a chart by its current value and range over the window', () => {
-    expect(chartLabel('SQL Server CPU', 'percent', 300_000, [{ label: 'CPU', latest: 12, min: 3, max: 40 }])).toBe('SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes')
-    expect(chartLabel('Database I/O', 'bytesPerSecond', 60_000, [{ label: 'Read', latest: 1048576, min: 0, max: 2097152 }, { label: 'Write', latest: Number.NaN, min: 5, max: 5 }]))
+    expect(chartLabel('SQL Server CPU', 'percent', { spanMs: 300_000 }, [{ label: 'CPU', latest: 12, min: 3, max: 40 }])).toBe('SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes')
+    expect(chartLabel('Database I/O', 'bytesPerSecond', { spanMs: 60_000 }, [{ label: 'Read', latest: 1048576, min: 0, max: 2097152 }, { label: 'Write', latest: Number.NaN, min: 5, max: 5 }]))
       .toBe('Database I/O: Read 1 MB/s, 0 B/s to 2 MB/s; Write no current value, steady at 5 B/s over the last 1 minute')
-    expect(chartLabel('Waits', 'msPerSecond', 60_000, [{ label: 'Lock', latest: Number.NaN, min: Number.NaN, max: Number.NaN }])).toBe('Waits: no data yet')
+    expect(chartLabel('Waits', 'msPerSecond', { spanMs: 60_000 }, [{ label: 'Lock', latest: Number.NaN, min: Number.NaN, max: Number.NaN }])).toBe('Waits: no data yet')
   })
 })
 
@@ -141,7 +141,7 @@ describe('ChartView', () => {
     expect(view.stats.draws).toBe(3)
     // A size, pixel ratio, forced colors or theme change redraws.
     canvas.clientWidth = 500; env.size!(); env.flush()
-    env.ratio = 2; view.invalidate(); env.flush()
+    env.ratio = 2; env.ratioListener!(); env.flush()
     env.forced = true; env.forcedListener!(); env.flush()
     view.setTheme(light); env.flush()
     expect(view.stats.draws).toBe(7)
@@ -171,8 +171,10 @@ describe('ChartView', () => {
     expect(new Set(canvas.context.styles)).toEqual(new Set(['CanvasText', 'Canvas', 'GrayText']))
     // No translucent area and no filled band; only the end markers are filled.
     expect(canvas.context.fills.every(fill => fill.alpha === 1 && fill.vertices === 0)).toBe(true)
+    // Each series takes the dash of its place in the chart, as the legend shows it: the stacked band (C, third) is
+    // stroked first, then the area (A, first) and the line (B, second).
     const lines = canvas.context.strokes.filter(stroke => stroke.width === 1.75)
-    expect(lines.map(stroke => stroke.dash)).toEqual([[...forcedColorsDashes[0]], [...forcedColorsDashes[0]], [...forcedColorsDashes[1]]])
+    expect(lines.map(stroke => stroke.dash)).toEqual([[...forcedColorsDashes[2]], [...forcedColorsDashes[0]], [...forcedColorsDashes[1]]])
   })
   it('stacks bands on each other, parted by the surface', () => {
     const ring = ringOf(20, 3, (index, series) => series === 2 && index === 5 ? null : [100, 50, 25][series])
@@ -250,7 +252,6 @@ describe('ChartView', () => {
     const tip = root.children[0] as FakeElement
     expect(tip.text).toBe('0:30 ago · 30 %')
     expect(tip.hidden).toBe(false)
-    expect(tip.style.top).toBe('-20px')
     canvas.listeners.get('pointerleave')!({})
     env.flush()
     expect(tip.hidden).toBe(true)
@@ -295,6 +296,187 @@ describe('ChartView', () => {
     const { view } = chart({ ringValue: ring, series: [{ index: 0, label: 'A', color: 'charts.blue' }, { index: 1, label: 'B', color: 'charts.orange' }] })
     expect(view.latest()).toEqual([4, 6])
   })
+  it('lists the table and the latest values whatever size the canvas has', () => {
+    // A chart whose table took its place (or a tile collapsed in a narrow layout) has no canvas size.
+    const ring = ringOf(30, 1, index => index)
+    const { view, canvas } = chart({ ringValue: ring, width: 0, height: 0 })
+    expect(view.table().total).toBe(30)
+    expect(view.table().rows[0]).toEqual({ time: 'now', values: ['29 %'], gapBefore: false })
+    expect(view.latest()).toEqual([29])
+    expect(view.key({ key: 'Home', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })).toBe(true)
+    canvas.clientWidth = 400; canvas.clientHeight = 100
+    expect(view.table().total).toBe(30)
+  })
+  it('leaves no tooltip behind when the canvas loses its size', () => {
+    const ring = ringOf(30, 1, index => index)
+    const { canvas, env, root } = chart({ ringValue: ring })
+    env.flush()
+    canvas.listeners.get('pointermove')!({ clientX: 200 })
+    env.flush()
+    const tip = root.children[0] as FakeElement
+    expect(tip.hidden).toBe(false)
+    canvas.clientWidth = 0; canvas.clientHeight = 0; env.size!(); env.flush()
+    expect(tip.hidden).toBe(true)
+  })
+  it('scales to the series that have values when one has none in the window', () => {
+    const ring = ringOf(296, 2, (index, series) => series === 0 ? 100 + index : null)
+    const series: ChartSeries[] = [{ index: 0, label: 'Read', color: 'charts.blue' }, { index: 1, label: 'Write', color: 'charts.orange' }]
+    const { canvas, env } = chart({ ringValue: ring, series, scale: { unit: 'count' }, window: { spanMs: 600_000, end: 'live' } })
+    env.flush()
+    expect(canvas.context.texts.map(text => text.text)).toEqual(['500'])
+    const ys = seriesStrokes(canvas, dark['charts.blue'])[0].points.map(([, y]) => y)
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(40)
+  })
+  it('marks a table row after a gap that fell between two sampled rows', () => {
+    const ring = ringOf(600, 1, index => index, index => index === 301 ? ringGap : 0)
+    const { view } = chart({ ringValue: ring, window: { spanMs: 600_000, end: 'live' } })
+    const { rows, total } = view.table(120)
+    expect(total).toBe(600)
+    expect(rows.filter(row => row.gapBefore)).toHaveLength(1)
+    // The row that is marked is the oldest sampled one after the gap.
+    const marked = rows.findIndex(row => row.gapBefore)
+    expect(Number.parseInt(rows[marked].values[0])).toBeGreaterThanOrEqual(301)
+    expect(Number.parseInt(rows[marked + 1].values[0])).toBeLessThan(301)
+  })
+  it('hides the keyboard crosshair, here and on linked charts, when focus leaves the canvas', () => {
+    const ring = ringOf(10, 1, index => index)
+    const link = new ChartLink()
+    const one = chart({ ringValue: ring, link }), two = chart({ ringValue: ring, link })
+    one.env.flush(); two.env.flush()
+    one.view.key({ key: 'ArrowLeft', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
+    one.env.flush(); two.env.flush()
+    const tip = one.root.children[0] as FakeElement
+    expect(tip.hidden).toBe(false)
+    two.canvas.context.reset()
+    one.canvas.listeners.get('blur')!({})
+    one.env.flush(); two.env.flush()
+    expect(tip.hidden).toBe(true)
+    expect(two.view.stats.draws).toBe(3)
+    expect(two.canvas.context.strokes.filter(stroke => stroke.dash.join() === '2,2')).toHaveLength(0)
+    // A pointer's crosshair stays: the pointer is still over the chart.
+    one.canvas.listeners.get('pointermove')!({ clientX: 200 })
+    one.env.flush()
+    one.canvas.listeners.get('blur')!({})
+    one.env.flush()
+    expect(tip.hidden).toBe(false)
+  })
+  it('clears the crosshair it drove on linked charts when disposed', () => {
+    const ring = ringOf(10, 1, index => index)
+    const link = new ChartLink()
+    const one = chart({ ringValue: ring, link }), two = chart({ ringValue: ring, link })
+    one.env.flush(); two.env.flush()
+    one.view.key({ key: 'Home', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
+    two.env.flush()
+    const crosshair = () => two.canvas.context.strokes.filter(stroke => stroke.dash.join() === '2,2')
+    expect(crosshair()).toHaveLength(1)
+    one.view.dispose()
+    two.canvas.context.reset(); two.view.setTitle('Other'); two.env.flush()
+    expect(crosshair()).toHaveLength(0)
+  })
+  it('steps right, clamps at the newest sample, and hides a crosshair whose sample left the live window', () => {
+    const ring = ringOf(61, 1, index => index)
+    const { view, env, root } = chart({ ringValue: ring })
+    env.flush()
+    const press = (key: string) => view.key({ key, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
+    const status = () => (root.children.find(child => (child as FakeElement).attributes?.get('role') === 'status') as FakeElement).text
+    press('Home')
+    expect(status()).toBe('1:00 ago · 0 %')
+    press('ArrowRight')
+    expect(status()).toBe('0:59 ago · 1 %')
+    press('End'); press('ArrowRight')
+    expect(status()).toBe('now · 60 %')
+    press('Home')
+    env.flush()
+    const tip = root.children[0] as FakeElement
+    expect(tip.hidden).toBe(false)
+    // A new sample moves the window on: the oldest sample, under the crosshair, is no longer in it.
+    env.time = start + 1000
+    ring.push(start + 1000, [61])
+    view.invalidate(); env.flush()
+    expect(tip.hidden).toBe(true)
+  })
+  it('maps the pointer to the plot inside the value axis\'s labels', () => {
+    const ring = ringOf(61, 1, index => index)
+    const { canvas, env, root } = chart({ ringValue: ring, width: 400, labels: 'axes' })
+    env.flush()
+    // "100 %" is the widest label: 30 px in the fake context, so the plot runs from 36 px to 395 px.
+    canvas.listeners.get('pointermove')!({ clientX: 36 + (395 - 36) / 2 })
+    env.flush()
+    expect((root.children[0] as FakeElement).text).toBe('0:30 ago · 30 %')
+  })
+  it('places the tooltip inside the plot, beside the crosshair on the side with room', () => {
+    const ring = ringOf(61, 1, index => index)
+    const { canvas, env, root } = chart({ ringValue: ring, width: 400 })
+    env.flush()
+    const tip = root.children[0] as FakeElement
+    canvas.listeners.get('pointermove')!({ clientX: 100 })
+    env.flush()
+    const crosshairX = () => canvas.context.strokes.find(stroke => stroke.dash.join() === '2,2')!.points[0][0]
+    // The plot's top is the 'max' label's line (11 + 4 px); the tip sits 2 px below it.
+    expect(tip.style.top).toBe('17px')
+    expect(Number.parseFloat(tip.style.left)).toBeGreaterThan(crosshairX())
+    canvas.context.reset()
+    canvas.listeners.get('pointermove')!({ clientX: 390 })
+    env.flush()
+    expect(Number.parseFloat(tip.style.left) + tip.offsetWidth).toBeLessThan(crosshairX())
+    expect(Number.parseFloat(tip.style.left)).toBeGreaterThanOrEqual(1)
+  })
+  it('says when the newest sample is stale instead of calling it now', () => {
+    const ring = ringOf(30, 1, index => index)
+    const changes: number[] = []
+    const { view, canvas, env } = chart({ ringValue: ring, labels: 'axes', scale: { unit: 'count' }, window: { spanMs: 60_000, end: 'live' } })
+    view.subscribe(() => changes.push(env.time))
+    env.flush()
+    expect(canvas.context.texts.slice(3).map(text => text.text)).toEqual(['1 min ago', 'now'])
+    expect(view.table().rows[0].time).toBe('now')
+    // Collection stopped (a pause, a lost backend): no tick comes, yet within a few seconds the chart stops saying "now".
+    canvas.context.reset()
+    env.advance(2001)
+    expect(changes).toEqual([start + 2001])
+    env.flush()
+    expect(canvas.context.texts.slice(3).map(text => text.text)).toEqual([formatClock(start - 60_000), formatClock(start)])
+    expect(view.table().rows[0].time).toBe(formatClock(start))
+    env.advance(5000)
+    expect(view.ariaLabel).toBe(`Wave: 29, 0 to 29 from ${formatClock(start - 60_000)} to ${formatClock(start)}`)
+    // A new sample makes it current again.
+    ring.push(env.time, [30])
+    view.invalidate(); env.flush()
+    expect(view.table().rows[0].time).toBe('now')
+  })
+  it('names a fixed window by its clock times', () => {
+    expect(chartLabel('SQL Server CPU', 'percent', { from: new Date(2026, 9, 22, 13, 5, 0).getTime(), to: new Date(2026, 9, 22, 13, 10, 0).getTime() }, [{ label: 'CPU', latest: 12, min: 3, max: 40 }]))
+      .toBe('SQL Server CPU: 12 %, 3 % to 40 % from 13:05:00 to 13:10:00')
+    const ring = ringOf(30, 1, index => index)
+    const { view, env } = chart({ ringValue: ring, window: { spanMs: 20_000, end: start - 5000 } })
+    env.flush()
+    expect(view.ariaLabel).toBe(`Wave: 24 %, 4 % to 24 % from ${formatClock(start - 25_000)} to ${formatClock(start - 5000)}`)
+  })
+  it('redraws when the pixel ratio alone changes', () => {
+    const ring = ringOf(10, 1, index => index)
+    const { view, canvas, env } = chart({ ringValue: ring, width: 400 })
+    env.flush()
+    expect(canvas.width).toBe(400)
+    env.ratio = 2
+    env.ratioListener!()
+    env.flush()
+    expect(canvas.width).toBe(800)
+    expect(view.stats.draws).toBe(2)
+  })
+  it('describes its keys to assistive technology', () => {
+    const { canvas, root } = chart({ ringValue: ringOf(5, 1, index => index) })
+    expect(canvas.getAttribute('aria-roledescription')).toBe('chart')
+    const id = canvas.getAttribute('aria-describedby')!
+    const described = root.children.find(child => (child as FakeElement).attributes?.get('id') === id) as FakeElement
+    expect(described.text).toMatch(/Left and Right .*Home and End .*Escape/)
+    const spark = chart({ ringValue: ringOf(5, 1, index => index), variant: 'sparkline' })
+    expect(spark.canvas.getAttribute('aria-describedby')).toBeNull()
+  })
+  it('keeps status colors out of the series colors', () => {
+    expect(chartSeriesColors).not.toContain('charts.red')
+    // @ts-expect-error charts.red is a status color: charts never use it as a series.
+    const red: ChartSeries = { index: 0, label: 'Failed', color: 'charts.red' }
+    expect(red.color).toBe('charts.red')
+  })
   it('lets go of everything when disposed', () => {
     const ring = ringOf(5, 1, index => index)
     const link = new ChartLink()
@@ -305,7 +487,8 @@ describe('ChartView', () => {
     expect(env.frames).toHaveLength(0)
     expect(root.children).toHaveLength(0)
     expect(canvas.listeners.size).toBe(0)
-    expect([env.visibility, env.size, env.forcedListener]).toEqual([undefined, undefined, undefined])
+    expect([env.visibility, env.size, env.forcedListener, env.ratioListener]).toEqual([undefined, undefined, undefined, undefined])
+    expect(env.timers).toEqual([])
     other.view.key({ key: 'End', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
     view.invalidate()
     expect(env.frames).toHaveLength(0)

@@ -33,11 +33,16 @@ export interface ChartOptions {
   readonly unit?: LiveUnit
   readonly max?: number
   readonly spanMs?: number
+  readonly title?: string
+  /** The "View as table" button (true by default), and the table shown from outside, as a catalogue command would. */
+  readonly tableToggle?: boolean
+  readonly tableShown?: boolean
   readonly width?: number
   readonly height?: number
 }
-/** Renders a LiveChart into a container (start.tsx, inside the workbench's provider) and returns how to unmount it. */
-export type RenderChart = (props: LiveChartProps, container: HTMLElement) => () => void
+/** Renders a LiveChart into a container (start.tsx, inside the workbench's provider): render again with new props, or
+ *  unmount it. */
+export type RenderChart = (container: HTMLElement) => { render(props: LiveChartProps): void; unmount(): void }
 
 /** How many of the canvas's pixels are exactly each chart color of the active theme, and how many are drawn at all. */
 function pixelsOf(canvas: HTMLCanvasElement, colors: readonly ChartSeriesColor[]): { drawn: number; colors: Record<string, number> } {
@@ -59,7 +64,19 @@ function pixelsOf(canvas: HTMLCanvasElement, colors: readonly ChartSeriesColor[]
 export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, renderChart?: RenderChart) {
   const handles = new Map<string, LiveHandle>()
   const handle = (id: string) => handles.get(id)
-  const charts = new Map<string, { container: HTMLElement; unmount: () => void; view?: ChartView; colors: ChartSeriesColor[] }>()
+  interface MountedChart { container: HTMLElement; owner: LiveHandle; options: ChartOptions; root: ReturnType<RenderChart>; view?: ChartView; colors: ChartSeriesColor[] }
+  const charts = new Map<string, MountedChart>()
+  const propsOf = (entry: MountedChart): LiveChartProps => {
+    const o = entry.options, probe = o.probe ?? 'debug.synthetic.metrics', specs = liveProbes[probe].series ?? []
+    const indexes = o.series ?? [1]
+    entry.colors = indexes.map((_, at) => chartColor(at))
+    return {
+      handle: entry.owner, probe, title: o.title ?? liveProbes[probe].label, variant: o.variant, labels: o.labels, onView: view => { entry.view = view },
+      series: indexes.map((index, at) => ({ index, label: specs[index]?.label ?? String(index), color: entry.colors[at], style: o.style })),
+      scale: { unit: o.unit ?? specs[indexes[0]]?.unit ?? 'count', ...o.max !== undefined ? { max: o.max } : {} }, window: { spanMs: o.spanMs ?? 60_000, end: 'live' },
+      ...o.tableToggle !== undefined ? { tableToggle: o.tableToggle } : {}, ...o.tableShown !== undefined ? { tableShown: o.tableShown } : {}
+    }
+  }
   return {
     snapshot: (id?: string) => id === undefined ? live.getSnapshot() : handle(id)?.getSnapshot(),
     frames: (id: string) => live.frames(id),
@@ -84,21 +101,24 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
     mountChart: (id: string, o: ChartOptions = {}): string | undefined => {
       const owner = handle(id)
       if (!owner || !renderChart) return undefined
-      const probe = o.probe ?? 'debug.synthetic.metrics', specs = liveProbes[probe].series ?? []
-      const indexes = o.series ?? [1], key = crypto.randomUUID()
+      const key = crypto.randomUUID()
       const container = document.createElement('div')
       container.dataset.chartTest = key
       container.style.cssText = `position: fixed; left: 40px; top: 80px; width: ${o.width ?? 480}px; height: ${o.height ?? 200}px; z-index: 20000; display: grid; padding: 8px; background: var(${cssVariable('panel.background')})`
       document.body.append(container)
-      const colors = indexes.map((_, at) => chartColor(at))
-      const entry: { container: HTMLElement; unmount: () => void; view?: ChartView; colors: ChartSeriesColor[] } = { container, unmount: () => {}, colors }
+      const entry: MountedChart = { container, owner, options: o, root: renderChart(container), colors: [] }
       charts.set(key, entry)
-      entry.unmount = renderChart({
-        handle: owner, probe, title: liveProbes[probe].label, variant: o.variant, labels: o.labels, onView: view => { entry.view = view },
-        series: indexes.map((index, at) => ({ index, label: specs[index]?.label ?? String(index), color: colors[at], style: o.style })),
-        scale: { unit: o.unit ?? specs[indexes[0]]?.unit ?? 'count', ...o.max !== undefined ? { max: o.max } : {} }, window: { spanMs: o.spanMs ?? 60_000, end: 'live' }
-      }, container)
+      entry.root.render(propsOf(entry))
       return key
+    },
+    /** Renders a mounted chart again with some of its options changed (its series, window, title or table), as a
+     *  document does when its settings change; the chart keeps its view. */
+    updateChart: (key: string, o: ChartOptions): boolean => {
+      const entry = charts.get(key)
+      if (!entry) return false
+      entry.options = { ...entry.options, ...o }
+      entry.root.render(propsOf(entry))
+      return true
     },
     /** A mounted chart's draws, accessible name, latest values, newest table rows and canvas pixels. */
     chart: (key: string) => {
@@ -106,6 +126,6 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
       const canvas = entry?.container.querySelector('canvas')
       return view && canvas ? { ...view.stats, label: view.ariaLabel, latest: view.latest(), rows: view.table(5).rows, width: canvas.width, height: canvas.height, pixels: pixelsOf(canvas, entry.colors) } : undefined
     },
-    unmountChart: (key: string) => { const entry = charts.get(key); entry?.unmount(); entry?.container.remove(); charts.delete(key) }
+    unmountChart: (key: string) => { const entry = charts.get(key); entry?.root.unmount(); entry?.container.remove(); charts.delete(key) }
   }
 }
