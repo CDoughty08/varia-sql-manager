@@ -21,21 +21,29 @@ interface FieldProps {
  */
 export function EnvironmentField({ id, value, disabled, onChange }: FieldProps) {
   const [custom, setCustom] = useState(() => !!value?.trim() && !environmentPreset(value))
-  // A profile chosen from history, or Reset, replaces the value from outside.
-  useEffect(() => { if (value === undefined) setCustom(false); else if (value.trim() && !environmentPreset(value)) setCustom(true) }, [value])
+  // A profile chosen from history, a saved entry matched by the typed server, or Reset replaces the value from outside:
+  // a preset then shows as itself, never as a Custom label that spells it. What the field passed on itself (a Custom
+  // label being typed, even one that spells a preset) keeps the field as it is.
+  const emitted = useRef(value)
+  const emit = (next: string | undefined) => { emitted.current = next; onChange(next) }
+  useEffect(() => {
+    if (value === emitted.current) return
+    emitted.current = value
+    setCustom(!!value?.trim() && !environmentPreset(value))
+  }, [value])
   const choice = custom ? 'custom' : environmentPreset(value) ?? ''
   return <div className="property-input-action environment-field">
     <select id={id} value={choice} disabled={disabled} onChange={event => {
       const next = event.target.value
       setCustom(next === 'custom')
-      onChange(next === 'custom' ? '' : next || undefined)
+      emit(next === 'custom' ? '' : next || undefined)
     }}>
       <option value="">{'<none>'}</option>
       {environmentPresets.map(preset => <option key={preset} value={preset}>{preset}</option>)}
       <option value="custom">Custom…</option>
     </select>
     {custom && <input id={`${id}-custom`} aria-label="Custom environment label" placeholder="Label, such as UAT" maxLength={maxEnvironmentLength} disabled={disabled} autoComplete="off" spellCheck={false}
-      value={value ?? ''} onChange={event => onChange(event.target.value)} />}
+      value={value ?? ''} onChange={event => emit(event.target.value)} />}
   </div>
 }
 
@@ -59,7 +67,7 @@ export default function EnvironmentDialog({ connectionId, onClose }: { readonly 
   const ok = async () => {
     if (busy || !parsed.ok) return
     setBusy(true); setError('')
-    const outcome = await applyEnvironment({ connections, save: profile => window.varia.saveConnectionProfile(profile) }, connectionId, value)
+    const outcome = await applyEnvironment({ connections, setEnvironment: input => window.varia.setConnectionEnvironment(input) }, connectionId, value)
     if (!alive.current) return
     setBusy(false)
     if (outcome.ok) close()
@@ -77,7 +85,7 @@ export default function EnvironmentDialog({ connectionId, onClose }: { readonly 
       <p className="field-note" id="environment-server">{connection ? server : 'This server is no longer connected.'}</p>
       <div className="property-grid">
         <div className="property-row"><label htmlFor="environment-choice">Environment</label><EnvironmentField id="environment-choice" value={value} disabled={busy || !connection} onChange={next => { setValue(next); setError('') }} /></div>
-        <div className="property-row"><span />{parsed.ok ? parsed.environment ? <span className="environment-preview">Shown as <EnvironmentTag environment={parsed.environment} place="list" /></span> : <span className="field-note">No environment tag.</span> : <p className="field-note" id="environment-hint">{parsed.error}</p>}</div>
+        <div className="property-row"><span />{parsed.ok ? parsed.environment ? <span className="environment-preview"><span>Shown as</span><EnvironmentTag environment={parsed.environment} place="list" /></span> : <span className="field-note">No environment tag.</span> : <p className="field-note" id="environment-hint">{parsed.error}</p>}</div>
       </div>
       <p className="field-note">Saved with this connection in Varia on this computer. Production shows a red PROD tag on the server, its query tabs and the status bars, beside the connection colour.</p>
       {error && <p className="connect-error" role="alert">{error}</p>}

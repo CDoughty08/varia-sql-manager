@@ -90,7 +90,10 @@ builder = ConnectionSettings.Build(settings with { Authentication = "windows", E
 Check(builder.ColumnEncryptionSetting.ToString() == "Enabled" && builder.AttestationProtocol.ToString() == "None" && builder.Password == "", "enclaves and Windows authentication map without SQL credentials");
 builder = ConnectionSettings.Build(settings with { Environment = new string('P', 32) });
 Check(!builder.ConnectionString.Contains("PPPP"), "a connection's environment label is accepted up to 32 characters and never reaches the connection string");
-foreach (var (environment, problem) in new[] { (new string('P', 33), "over 32 characters"), (" ", "that is blank"), ("PROD\u0007", "with a control character") })
+builder = ConnectionSettings.Build(settings with { Environment = "  " + new string('P', 32) + "  " });
+Check(!builder.ConnectionString.Contains("PPPP"), "backend measures an environment label after trimming, as main does");
+foreach (var (environment, problem) in new[] { (new string('P', 33), "over 32 characters"), (" ", "that is blank"), ("PROD\u0007", "with a control character"),
+    ("PR\u202eOD", "with a bidirectional override"), ("PR\u200bOD", "with a zero-width space"), ("PR\u2028OD", "with a line separator"), ("PR\u2029OD", "with a paragraph separator"), ("PR\U000E0041OD", "with a tag character") })
 {
     try { ConnectionSettings.Build(settings with { Environment = environment }); throw new Exception("Invalid environment accepted"); }
     catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects an environment label " + problem); }

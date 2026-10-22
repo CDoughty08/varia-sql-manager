@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Entra;
 
@@ -10,6 +12,16 @@ internal static class ConnectionSettings
         if (value is null || value.Length > length) throw new RequestException("INVALID_PARAMS", field + " exceeds its supported length.");
         return value;
     }
+    /// <summary>The bounds main's zod schema sets: 1 to 32 characters after trimming, with no control, format, line or
+    /// paragraph separator character, which could hide or reorder what the tag shows or break its line.</summary>
+    internal static bool IsEnvironmentLabel(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length is 0 or > 32) return false;
+        foreach (var rune in trimmed.EnumerateRunes())
+            if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator) return false;
+        return true;
+    }
     internal static SqlConnectionStringBuilder Build(ConnectOptions options)
     {
         if (!EntraModes.IsKnown(options.Authentication)) throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
@@ -21,8 +33,8 @@ internal static class ConnectionSettings
         if (advanced.SecureEnclaves && !advanced.ColumnEncryption) throw new RequestException("INVALID_PARAMS", "Secure enclaves require Always Encrypted.");
         if (advanced.SecureEnclaves && advanced.AttestationProtocol is "HGS" or "AAS" && string.IsNullOrWhiteSpace(advanced.EnclaveAttestationUrl))
             throw new RequestException("INVALID_PARAMS", "An attestation URL is required for HGS or AAS.");
-        if (options.Environment is { } environment && (string.IsNullOrWhiteSpace(environment) || environment.Length > 32 || environment.Any(char.IsControl)))
-            throw new RequestException("INVALID_PARAMS", "Environment exceeds its supported length or contains control characters.");
+        if (options.Environment is { } environment && !IsEnvironmentLabel(environment))
+            throw new RequestException("INVALID_PARAMS", "Environment exceeds its supported length or contains control or formatting characters.");
         var server = Text(options.Server.Trim(), 256, "Server name");
         if (advanced.NetworkProtocol != "default")
         {

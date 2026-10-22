@@ -388,7 +388,7 @@ try {
   expect(failures).toEqual([])
   await environmentLabels()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, and bounded in main).')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
@@ -661,7 +661,7 @@ async function environmentLabels() {
   const connectionsFile = join(userData, 'connections.json')
   const fake = { ...env, VARIA_TEST_USER_DATA: userData, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
   await launch({ ...launchOptions, env: fake }, 'fake · Ready')
-  const saved = async () => JSON.parse(await readFile(connectionsFile, 'utf8')).profiles.find(item => item.options.server === 'prod-server')?.options.environment
+  const saved = async () => JSON.parse(await readFile(connectionsFile, 'utf8')).profiles.find(item => item.options.server.toLowerCase() === 'prod-server')?.options.environment
   const tag = place => page.locator(`.environment-tag[data-place="${place}"] .status-pill`)
   async function shows(text, tone) {
     for (const place of ['explorer', 'tab', 'query', 'status']) {
@@ -740,6 +740,99 @@ async function environmentLabels() {
   await dialog.getByLabel('Server Name', { exact: true }).fill('other-server')
   await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue('')
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('')
+  // (4b) A preset chosen from history after a custom label shows as itself, not as a Custom label that spells it.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('uat-server')
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('custom')
+  await dialog.getByLabel('Custom environment label', { exact: true }).fill('UAT-EU')
+  await dialog.getByRole('button', { name: '☆ Add favorite', exact: true }).click()
+  const uatEntry = dialog.locator('.connection-choice', { hasText: 'uat-server' }).first()
+  await expect(uatEntry.locator('.status-pill')).toHaveText('UAT-EU')
+  for (const [chosen, value, custom] of [[entry, 'Staging', 0], [uatEntry, 'custom', 1], [entry, 'Staging', 0]]) {
+    await chosen.click()
+    await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue(value)
+    await expect(dialog.getByLabel('Custom environment label', { exact: true })).toHaveCount(custom)
+  }
+  // Typing a Custom label that spells a preset keeps the box, so "Test" can become "Testing".
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('custom')
+  await dialog.getByLabel('Custom environment label', { exact: true }).fill('Test')
+  await dialog.getByLabel('Custom environment label', { exact: true }).pressSequentially('ing')
+  await expect(dialog.getByLabel('Custom environment label', { exact: true })).toHaveValue('Testing')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  // (4c) The dialog opens on the last connection, whose form still says Production: the saved entry's label wins.
+  // Typing the server's name by hand (in another case) shows the entry's label, and connecting keeps it.
+  dialog = await open()
+  await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue('Staging')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('other-server')
+  await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue('')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('PROD-SERVER')
+  await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue('Staging')
+  await dialog.getByLabel('Password', { exact: true }).fill('any-password')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('.query-tab.active .environment-tag .status-pill')).toHaveText('STAGING')
+  await expect(tag('query')).toHaveText('STAGING')
+  await expect(tag('status')).toHaveText('STAGING')
+  expect(await saved()).toBe('Staging')
+  // A connect without a label (the history not loaded yet) keeps the entry's, and main says which, so it is shown.
+  const typed = await page.evaluate(async () => {
+    const result = await window.varia.connect({ server: 'Prod-Server', database: '', authentication: 'sql', username: 'reader', password: 'any-password', trustServerCertificate: false, encrypt: 'mandatory' })
+    return result.ok ? result.value.environment : result.error
+  })
+  expect(typed).toBe('Staging')
+  expect(await saved()).toBe('Staging')
+  // The status bars say what the tag labels.
+  await expect(page.locator('.query-status-bar .query-status-environment')).toHaveText('Environment: STAGING')
+  await expect(page.locator('.status-bar .status-environment')).toHaveText('Active connection environment: STAGING')
+  // (4d) A 32-character custom label is cut short in every place, so the server's name, the tab and the bars keep
+  // their room; the full label stays in the tooltip.
+  const long = 'W'.repeat(32)
+  labelling = await serverMenu(row)
+  await labelling.getByLabel('Environment', { exact: true }).selectOption('custom')
+  await labelling.getByLabel('Custom environment label', { exact: true }).fill(long)
+  const preview = await labelling.evaluate(form => {
+    const scroll = form.querySelector('.connection-scroll'), shown = form.querySelector('.environment-preview')
+    return { dialog: form.scrollWidth <= form.clientWidth && scroll.scrollWidth <= scroll.clientWidth, line: shown.getBoundingClientRect().height <= 24 }
+  })
+  expect(preview).toEqual({ dialog: true, line: true })
+  await labelling.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(labelling).toHaveCount(0)
+  await expect.poll(saved).toBe(long)
+  await expect(tag('explorer').first()).toHaveAttribute('title', `${long} environment`)
+  const bounded = await page.evaluate(() => {
+    const tree = document.querySelector('.explorer-tree'), em = element => parseFloat(getComputedStyle(element).fontSize)
+    // Each server row keeps its name (at least a quarter of the row, or all of a shorter one) and the tag inside the row.
+    const rows = [...tree.querySelectorAll('.explorer-row.server')].filter(item => item.querySelector('.environment-tag')).map(item => {
+      const outer = item.getBoundingClientRect(), name = item.querySelector('.oe-label'), pill = item.querySelector('.environment-tag .status-pill').getBoundingClientRect()
+      return name.getBoundingClientRect().width >= Math.min(name.scrollWidth, outer.width * 0.25) - 0.5 && pill.right <= outer.right + 0.5 && pill.width <= outer.width * 0.4 + 0.5
+    })
+    const tabTag = document.querySelector('.query-tab.active .environment-tag'), tab = document.querySelector('.query-tab.active').getBoundingClientRect().width
+    const sized = ['query', 'status'].map(place => { const element = document.querySelector(`.environment-tag[data-place="${place}"]`); return element.querySelector('.status-pill').getBoundingClientRect().width <= 12 * em(element) + 0.5 })
+    const label = document.querySelector('.environment-tag[data-place="status"] .status-pill-label')
+    return { rows, tree: tree.scrollWidth <= tree.clientWidth, tab: tabTag.getBoundingClientRect().width <= 10 * em(tabTag) + 0.5 && tab <= 220 + 10 * em(tabTag) + 120, bars: sized, ellipsis: label.scrollWidth > label.clientWidth }
+  })
+  expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true, true], ellipsis: true })
+  await page.screenshot({ path: resolve('artifacts', 'environment-long-label.png') })
+  // A long name and a long label in history: the name gives way and the tag stays inside the row, as PROD does.
+  dialog = await open()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('sql-reporting-replica-eastus2.corp.example.com')
+  await dialog.getByLabel('Name', { exact: true }).fill('Finance data warehouse - primary replica (EU West)')
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('custom')
+  await dialog.getByLabel('Custom environment label', { exact: true }).fill(long)
+  await dialog.getByRole('button', { name: '☆ Add favorite', exact: true }).click()
+  for (const label of [long, 'PROD']) {
+    if (label === 'PROD') {
+      await dialog.getByLabel('Environment', { exact: true }).selectOption('Production')
+      await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+    }
+    const longEntry = dialog.locator('.connection-choice', { hasText: 'Finance data warehouse' }).first()
+    await expect(longEntry.locator('.status-pill')).toHaveText(label)
+    const fits = await longEntry.evaluate(button => {
+      const outer = button.getBoundingClientRect(), pill = button.querySelector('.status-pill').getBoundingClientRect(), name = button.querySelector('strong').getBoundingClientRect()
+      return { inside: pill.width > 0 && pill.left >= outer.left && pill.right <= outer.right + 0.5, name: name.width > 0 }
+    })
+    expect(fits, label).toEqual({ inside: true, name: true })
+  }
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   // (5) The page cannot store or send a label main refuses: too long, or with a character that reorders text.
@@ -750,6 +843,6 @@ async function environmentLabels() {
     return [long.ok, hidden.ok]
   })
   expect(forged).toEqual([false, false])
-  expect(await saved()).toBe('Staging')
+  expect(await saved()).toBe(long)
   await app.close(); app = undefined
 }

@@ -63,6 +63,10 @@ export interface ConnectionProfile { id: string; options: Omit<ConnectionOptions
 export interface ConnectionLibrary { version: 1; profiles: ConnectionProfile[] }
 export interface ConnectionProfileInput { id?: string; options: ConnectionOptions; favorite?: boolean; registered?: boolean }
 export const connectionProfileInputSchema = z.object({ id: z.uuid().optional(), options: connectionOptionsSchema, favorite: z.boolean().optional(), registered: z.boolean().optional() }).strict()
+/** Set Connection Environment: the live connection's options name its entry (by connectionKey), and only the entry's label
+ *  changes; `environment` absent is None. */
+export interface ConnectionEnvironmentInput { options: ConnectionOptions; environment?: string }
+export const connectionEnvironmentInputSchema = z.object({ options: connectionOptionsSchema, environment: environmentSchema.optional() }).strict()
 const savedOptionsSchema = connectionOptionsSchema.refine(value => value.password === undefined, 'Saved connections cannot contain passwords.')
 export const connectionLibrarySchema = z.object({
   version: z.literal(1), profiles: z.array(z.object({ id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), registered: z.boolean(), lastConnected: z.iso.datetime().optional() }).strict()).max(200)
@@ -101,8 +105,9 @@ export function rememberedProfile(profiles: readonly ConnectionProfile[], savedI
   return candidates.sort((a, b) => { const [ra, la] = recency(a), [rb, lb] = recency(b); return ra - rb || lb.localeCompare(la) })[0]
 }
 /** The fourth argument of `varia:request`, for `connections.connect` and `.databases` only. `requestId` is what the
- *  dialog's Stop cancels the request by (varia:connections-cancel). */
-export const connectContextSchema = z.object({ profileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional() }).strict()
+ *  dialog's Stop cancels the request by (varia:connections-cancel). `setsEnvironment` says the user set the form's
+ *  Environment (or cleared it); without it a connect that carries no label keeps the one its entry has. */
+export const connectContextSchema = z.object({ profileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional(), setsEnvironment: z.boolean().optional() }).strict()
 export type ConnectContext = z.infer<typeof connectContextSchema>
 /** The library with the ids of the entries that have a remembered password; never the password or its ciphertext. */
 export interface ConnectionLibraryView { library: ConnectionLibrary; savedPasswords: string[] }
