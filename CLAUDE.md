@@ -173,6 +173,11 @@ pages, limits, error codes, display formats, benchmarks).
   `docs/settings.md` with `npx vitest run tests/settings-catalog.test.ts -u`.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
+- Sizes, radii, shadows and motion are metric tokens in `src/shared/theme/metrics.ts`, not theme keys, mirrored on
+  `:root` in `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (font sizes in renderer code too),
+  keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
+  spinners included; regenerate `docs/themes/metrics.md` with
+  `npx vitest run tests/theme-metrics.test.ts -u`.
 
 ## Testing expectations
 
@@ -217,6 +222,9 @@ pages, limits, error codes, display formats, benchmarks).
   context menus on macOS.
 - SQL Server 2016-2025. Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft
   Entra ID next.
-- Visuals: SSMS layout, density, and behaviours. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's
-  SSMS icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
+- Visuals: the modern Calm Pro design language (graphite neutrals, one iris accent, Compact density by default and
+  Comfortable as an option), not SSMS's look; SSMS's features, behaviours, names and keys stay the parity target. Dense
+  Power's environment and status indicators are in (the red Production tag on connections, live Object Explorer status
+  chips), showing only what a probe produces. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's SSMS
+  icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
   system like VS Code or opencode.
