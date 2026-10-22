@@ -29,7 +29,7 @@ const column = (id: string) => ({ id, name: id, dataType: 'int' })
 const fixtureProbes: Record<string, LiveProbeSpec> = {
   'one.all': {
     id: 'one.all', source: 'one', label: 'All', description: 'All', intervalMs: { default: 1000, min: 1000, max: 60_000 }, views: ['blocked'], filterMode: 'memory',
-    series: [{ id: 'a', unit: 'count', label: 'A' }],
+    series: [{ id: 'a', unit: 'count', label: 'A', counter: 'gauge' }],
     tables: [
       { id: 's0', mode: 'snapshot', key: ['k0'], columns: [column('k0'), column('v0')] }, { id: 's1', mode: 'snapshot', key: [], columns: [column('k1')] },
       { id: 's2', mode: 'snapshot', key: ['k2'], columns: [column('k2')] }, { id: 's3', mode: 'snapshot', key: ['k3'], columns: [column('k3')] },
@@ -39,7 +39,7 @@ const fixtureProbes: Record<string, LiveProbeSpec> = {
     status: ['state']
   },
   'one.plain': { id: 'one.plain', source: 'one', label: 'Plain', description: 'Plain', intervalMs: { default: 1000, min: 1000, max: 60_000 }, tables: [{ id: 't', mode: 'snapshot', key: ['x'], columns: [column('x')] }] },
-  'two.only': { id: 'two.only', source: 'two', label: 'Two', description: 'Two', intervalMs: { default: 1000, min: 1000, max: 60_000 }, series: [{ id: 'b', unit: 'count', label: 'B' }] },
+  'two.only': { id: 'two.only', source: 'two', label: 'Two', description: 'Two', intervalMs: { default: 1000, min: 1000, max: 60_000 }, series: [{ id: 'b', unit: 'count', label: 'B', counter: 'rate' }] },
   'two.rows': { id: 'two.rows', source: 'two', label: 'Rows', description: 'Rows', intervalMs: { default: 1000, min: 1000, max: 60_000 }, tables: [{ id: 't', mode: 'snapshot', key: ['y'], columns: [column('y')] }] }
 }
 const fixtureSources: Record<string, LiveSourceSpec> = {
@@ -59,6 +59,14 @@ describe('live request schemas', () => {
     expect(ok(testPortRequestSchema, update)).toBe(true)
     expect(ok(fixture.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(false)
     expect(ok(fixtureTest.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(true)
+  })
+  it('accepts the Activity Monitor source on the production port, with no args', () => {
+    const activity = (patch: Record<string, unknown> = {}) => ({ t: 'live', rid: 1, generation: 1, params: subscribe({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }], ...patch }) })
+    expect(ok(portRequestSchema, activity())).toBe(true)
+    expect(ok(portRequestSchema, activity({ args: {} }))).toBe(false)
+    expect(ok(portRequestSchema, activity({ probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }] }))).toBe(false)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 5000 }], refresh: true } })).toBe(true)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { rows: 1 } } })).toBe(false)
   })
   it('is strict and bounded at every level', () => {
     const schema = testLiveSubscribeParamsSchema
@@ -225,6 +233,9 @@ describe('live event schemas', () => {
   it('checks the end and the update answer', () => {
     expect(ok(liveEndSchema, { ended: 'sourceEnded', kept: [3], ticks: 2, elapsedMs: 5 })).toBe(true)
     expect(ok(liveEndSchema, { ended: 'failed', code: 'BACKEND_ERROR', message: 'A live update was too large to send.', ticks: 0, elapsedMs: 0 })).toBe(true)
+    // Every probe stopped for good: the end carries the first probe's own error code.
+    for (const code of liveErrorCodes) expect(ok(liveEndSchema, { ended: 'failed', code, message: 'Stopped.', ticks: 0, elapsedMs: 0 }), code).toBe(true)
+    expect(ok(liveEndSchema, { ended: 'failed', code: 'NO_SUCH_CODE', message: 'Stopped.', ticks: 0, elapsedMs: 0 })).toBe(false)
     for (const value of [
       { ended: 'cancelled', kept: [3], ticks: 2, elapsedMs: 5 }, { ended: 'failed', ticks: 0, elapsedMs: 0 }, { ended: 'failed', code: 'BACKEND_ERROR', ticks: 0, elapsedMs: 0 },
       { ended: 'cancelled', code: 'CANCELLED', message: 'Cancelled.', ticks: 0, elapsedMs: 0 }, { ended: 'paused', ticks: 0, elapsedMs: 0 },

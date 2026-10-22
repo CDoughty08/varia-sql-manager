@@ -20,7 +20,9 @@ export const liveArgsSchemas = {
     tickMs: z.number().int().min(10).max(60_000).optional(),
     endAfterTicks: z.number().int().min(1).max(10_000).optional(),
     errorEvery: z.number().int().min(1).max(1000).optional()
-  }).strict()
+  }).strict(),
+  // The Activity Monitor's probes take only their own settings (interval, pause) for now: no args.
+  activity: z.never()
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 
@@ -107,10 +109,11 @@ export type BackendLiveEvent = LiveOpenedEvent | LiveTickEvent
 export type LiveEvent = LiveOpenedEvent | LiveTickEvent<ResultDescriptor>
 export type LiveTick = LiveTickEvent<ResultDescriptor>
 /** The final RESPONSE. Every end but `sourceEnded` releases the subscription's results; `sourceEnded` keeps `kept`
- *  readable until the renderer closes them. `code` and `message` come with `failed` only. */
+ *  readable until the renderer closes them. `code` and `message` come with `failed` only: a request error, or, when every
+ *  probe stopped for good (each terminal, such as PERMISSION_DENIED), the first probe's error code. */
 export interface LiveEnd {
   ended: 'cancelled' | 'disconnected' | 'sourceEnded' | 'failed' | 'shutdown'
-  code?: ErrorCode
+  code?: ErrorCode | LiveErrorCode
   message?: string
   kept?: number[]
   resume?: string
@@ -317,7 +320,7 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
 
   const end = z.object({
     ended: z.enum(['cancelled', 'disconnected', 'sourceEnded', 'failed', 'shutdown']),
-    code: z.enum(errorCodes).optional(),
+    code: z.enum([...new Set<string>([...errorCodes, ...liveErrorCodes])] as [string, ...string[]]).optional(),
     message: z.string().min(1).max(L.messageCharacters).optional(),
     kept: z.array(u32).max(L.kept).optional(),
     resume: resumeToken.optional(),

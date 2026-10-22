@@ -12,7 +12,13 @@ export type LiveUnit = typeof liveUnits[number]
 /** A snapshot table is replaced by each sample (a new stored result, two revisions kept); an append table grows. */
 export type LiveTableMode = 'snapshot' | 'append'
 
-export interface LiveSeriesSpec { readonly id: string; readonly unit: LiveUnit; readonly label: string }
+/** How the backend turns a series' raw value into what a sample carries (Live/LiveDeltas.cs): the value itself
+ *  (gauge); a cumulative counter's change per second of the server's own clock (rate, msPerSecond); a counter's change
+ *  over its base counter's change (ratio); or the schedulers' summed CPU milliseconds as a percentage of the elapsed
+ *  time across them (cpuPercent). Every kind but gauge has no value until a second sample. */
+export const liveCounters = ['gauge', 'rate', 'msPerSecond', 'ratio', 'cpuPercent'] as const
+export type LiveCounter = typeof liveCounters[number]
+export interface LiveSeriesSpec { readonly id: string; readonly unit: LiveUnit; readonly label: string; readonly counter: LiveCounter }
 /** `id` names the column in requests (sort, filter); `name` and `dataType` are what the stored result's columns carry. */
 export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string }
 export interface LiveTableSpec {
@@ -37,6 +43,21 @@ export interface LiveProbeSpec {
   /** How a text filter applies: to stored cells in backend memory, or by restarting an append table under a predicate.
    *  A probe without one refuses filters. */
   readonly filterMode?: 'memory' | 'restart'
+  /** A statement's budget: 0.8 × the probe's interval, clamped to this range (within limits.live.budgetMs). Defaults to
+   *  500 to 5,000 ms, the range for cheap DMV reads; an expensive probe may raise it. */
+  readonly budgetMs?: { readonly min: number; readonly max: number }
+  /** `refresh` never runs the probe again within this many ms of its last sample (0: no gap). */
+  readonly minGapMs?: number
+  /** The load guard: when the probe's smoothed cost passes this share of its effective interval for 3 samples in a row,
+   *  the interval doubles (up to the back-off cap); under 10 % for 10 samples, it halves back toward the requested one.
+   *  Defaults to 0.25. */
+  readonly maxDutyCycle?: number
+  /** Where the probe runs: from this SQL Server major version, on these EngineEdition values. Elsewhere it opens
+   *  unavailable (NOT_SUPPORTED) and never runs. Absent: everywhere its source runs. */
+  readonly gates?: { readonly minMajor: number; readonly editions: readonly number[] }
+  /** serverState: the probe reads server DMVs, so it needs VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later) or
+   *  VIEW SERVER STATE (earlier versions, Managed Instance); without it, it opens unavailable (PERMISSION_DENIED). */
+  readonly permission?: 'serverState'
 }
 export interface LiveSourceSpec {
   readonly id: string
@@ -50,16 +71,23 @@ export interface LiveSourceSpec {
 
 const column = (id: string, dataType: string): LiveColumnSpec => ({ id, name: id, dataType })
 const anyInterval = { default: 1000, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }
+/** A probe's statement budget and load guard when its entry names none. */
+export const defaultBudgetMs = { min: limits.live.budgetMs.min, max: 5000 } as const
+export const defaultDutyCycle = 0.25
 
-export const liveSourceIds = ['debug.synthetic'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
-export const liveProbeIds = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status'] as const
+export const liveProbeIds = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'activity.overview'] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
 export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'debug.synthetic': {
     id: 'debug.synthetic', label: 'Synthetic', scope: 'none', testOnly: true, probes: ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status'],
     description: 'Generated values for protocol, renderer and smoke tests. It runs no SQL, so any connection id is accepted; a disconnect of that id still ends it.'
+  },
+  activity: {
+    id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: ['activity.overview'],
+    description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW).'
   }
 }
 
@@ -67,7 +95,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   'debug.synthetic.metrics': {
     id: 'debug.synthetic.metrics', source: 'debug.synthetic', label: 'Synthetic metrics', intervalMs: anyInterval,
     description: 'Three series: the sample number, a wave between 0 and 100, and a rate that follows it.',
-    series: [{ id: 'counter', unit: 'count', label: 'Samples' }, { id: 'wave', unit: 'percent', label: 'Wave' }, { id: 'rate', unit: 'perSecond', label: 'Rate' }]
+    series: [{ id: 'counter', unit: 'count', label: 'Samples', counter: 'gauge' }, { id: 'wave', unit: 'percent', label: 'Wave', counter: 'gauge' }, { id: 'rate', unit: 'perSecond', label: 'Rate', counter: 'gauge' }]
   },
   'debug.synthetic.table': {
     id: 'debug.synthetic.table', source: 'debug.synthetic', label: 'Synthetic rows', intervalMs: anyInterval,
@@ -77,6 +105,19 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   'debug.synthetic.status': {
     id: 'debug.synthetic.status', source: 'debug.synthetic', label: 'Synthetic status', intervalMs: anyInterval,
     description: 'The phase (even or odd) and the sample count.', status: ['phase', 'samples']
+  },
+  'activity.overview': {
+    id: 'activity.overview', source: 'activity', label: 'Overview', intervalMs: { default: 2000, min: 1000, max: limits.live.intervalMs.max },
+    description: 'The server at a glance, in one DMV query: SQL Server\'s CPU (its schedulers\' non-preemptive time), runnable tasks, batch requests, compilations and re-compilations per second, and user sessions. Rates use the server\'s own clock (ms_ticks), and a restart starts them again.',
+    maxDutyCycle: 0.2, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] }, permission: 'serverState',
+    series: [
+      { id: 'cpuPercent', unit: 'percent', label: 'SQL Server CPU (non-preemptive)', counter: 'cpuPercent' },
+      { id: 'runnableTasks', unit: 'count', label: 'Runnable tasks', counter: 'gauge' },
+      { id: 'batchRequests', unit: 'perSecond', label: 'Batch requests/sec', counter: 'rate' },
+      { id: 'compilations', unit: 'perSecond', label: 'SQL compilations/sec', counter: 'rate' },
+      { id: 'recompilations', unit: 'perSecond', label: 'SQL re-compilations/sec', counter: 'rate' },
+      { id: 'userSessions', unit: 'count', label: 'User sessions', counter: 'gauge' }
+    ]
   }
 }
 
@@ -95,7 +136,10 @@ const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + 
 export function liveCatalogJson(): string {
   const probes = liveProbeIds.map(id => {
     const spec = liveProbes[id]
-    return { ...spec, series: spec.series ?? [], tables: spec.tables ?? [], status: spec.status ?? [], views: spec.views ?? [], filterMode: spec.filterMode ?? 'none' }
+    return {
+      ...spec, series: spec.series ?? [], tables: spec.tables ?? [], status: spec.status ?? [], views: spec.views ?? [], filterMode: spec.filterMode ?? 'none',
+      budgetMs: spec.budgetMs ?? defaultBudgetMs, minGapMs: spec.minGapMs ?? 0, maxDutyCycle: spec.maxDutyCycle ?? defaultDutyCycle, gates: spec.gates ?? null, permission: spec.permission ?? 'none'
+    }
   })
   return [
     '{',

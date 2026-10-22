@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { limits } from '../src/shared/ipc/wire/protocol'
-import { liveCatalogJson, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
+import { defaultBudgetMs, liveCatalogJson, liveCounters, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
 import { renderLiveDocs } from '../src/shared/live/docs'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 
@@ -32,7 +32,15 @@ describe('live catalogue', () => {
       const { min, max } = probe.intervalMs
       expect(min <= probe.intervalMs.default && probe.intervalMs.default <= max && min >= L.intervalMs.min && max <= L.intervalMs.max, id).toBe(true)
       expect((probe.series ?? []).length, id).toBeLessThanOrEqual(L.series)
-      for (const series of probe.series ?? []) { expect(series.id, id).toMatch(catalogId); expect(liveUnits).toContain(series.unit) }
+      for (const series of probe.series ?? []) { expect(series.id, id).toMatch(catalogId); expect(liveUnits).toContain(series.unit); expect(liveCounters).toContain(series.counter) }
+      // The scheduler's own settings: a budget the statement gates and LOCK_TIMEOUT fit in, a duty cycle that can trip, a refresh gap.
+      const budget = probe.budgetMs ?? defaultBudgetMs
+      expect(budget.min >= L.budgetMs.min && budget.min <= budget.max && budget.max <= L.budgetMs.max, id).toBe(true)
+      expect(probe.maxDutyCycle === undefined || (probe.maxDutyCycle > 0.1 && probe.maxDutyCycle <= 1), id).toBe(true)
+      expect(probe.minGapMs === undefined || (Number.isInteger(probe.minGapMs) && probe.minGapMs >= 0 && probe.minGapMs <= L.intervalMs.max), id).toBe(true)
+      if (probe.gates) expect(probe.gates.minMajor >= 13 && probe.gates.editions.length > 0 && probe.gates.editions.every(edition => Number.isInteger(edition) && edition > 0), id).toBe(true)
+      // A probe that reads SQL Server belongs to a source with a scope that has a pool; a test source reads none.
+      expect(probe.permission === undefined || liveSources[probe.source as keyof typeof liveSources].scope === 'server', id).toBe(true)
       expect(new Set((probe.series ?? []).map(series => series.id)).size).toBe((probe.series ?? []).length)
       const tables = probe.tables ?? []
       expect(tables.filter(table => table.mode === 'snapshot').length, id).toBeLessThanOrEqual(L.tablesPerProbe)
@@ -56,6 +64,10 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
+    expect(productionSourceIds).toEqual(['activity'])
+    expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview'] })
+    // The Activity Monitor's overview: 2 s by default (owner decision), never below 1 s, a 0.2 load guard, server state.
+    expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })
   })
   it('stays erasable TypeScript that plain Node loads, as the fake backend does', () => {
     const file = join('src', 'shared', 'live', 'catalog.ts')

@@ -155,6 +155,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     bool ILiveHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
     string? ILiveHost.ServerOf(string connectionId) => ServerOf(connectionId);
     ResultStore ILiveHost.Store => store;
+    ServerProfile? ILiveHost.Profile(string connectionId) => connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : null;
+    /// <summary>The live views' pools: idle connection resiliency is off, so a session that was killed or dropped is a
+    /// CONNECTION_LOST value and a new session id in the next tick, never a silent reconnect under the old one.</summary>
+    SqlConnection ILiveHost.PoolConnection(string connectionId, string? database, string suffix) => PoolConnection(connectionId, database, suffix, reconnect: false);
+    Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
     /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
     /// connections to one server count as one whatever name, login or database they used; the connection's data source when
@@ -497,10 +502,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
     Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
-    private SqlConnection PoolConnection(string connectionId, string? database, string suffix)
+    private SqlConnection PoolConnection(string connectionId, string? database, string suffix, bool reconnect = true)
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = true, CommandTimeout = 30 };
+        if (!reconnect) builder.ConnectRetryCount = 0;
         var name = builder.ApplicationName + suffix;
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
         if (database is not null) builder.InitialCatalog = database;

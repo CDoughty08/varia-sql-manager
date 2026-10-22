@@ -96,6 +96,7 @@ ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
 await LiveChecks.RunAsync(Check);
+await LiveSchedulerChecks.RunAsync(Check);
 await ConnectionFailureChecks.RunAsync(Check);
 await ConnectionFailureChecks.IdentityAsync(Check);
 await EntraChecks.RunAsync(Check);
@@ -372,6 +373,7 @@ try
     result = await Run("SELECT * FROM #VariaBatchTest;");
     Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");
     await LiveChecks.LiveAsync(Check, service, info, Live("tempdb"), json);
+    await LiveDataChecks.RunAsync(Check, service, info, Live, json);
     await ExecutionLiveChecks.RunAsync(Check, service, info, json);
     await TransactionLiveChecks.RunAsync(Check, service, info, json);
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
