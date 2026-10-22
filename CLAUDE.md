@@ -55,8 +55,9 @@ pages, limits, error codes, display formats, benchmarks).
   cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
   cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
   holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
-  `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, and `window.__variaTestShellFault()`,
-  which makes the workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
+  `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, `window.__variaLive`, which opens views on
+  the synthetic live source and stands in for a hidden window, and `window.__variaTestShellFault()`, which makes the
+  workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
   that took 500 ms or more.
@@ -93,7 +94,9 @@ pages, limits, error codes, display formats, benchmarks).
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
 - Periodic data (Activity Monitor, SSIS monitoring, later Object Explorer status) flows only through the results port's
   `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
-  EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). Sources and
+  EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
+  worker relays live events undecoded and grants an event's bytes back only once the page has applied it and called the
+  stream's `ack` (`ResultClient.live`), never more than the stream's events took. Sources and
   probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
@@ -101,6 +104,8 @@ pages, limits, error codes, display formats, benchmarks).
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
   Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
   the live gates and a per-statement budget, and its failures are values that back off.
+  Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
+  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
