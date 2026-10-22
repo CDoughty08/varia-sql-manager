@@ -170,8 +170,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     SqlConnection IActivityHost.MonitorConnection(string connectionId) => PoolConnection(connectionId, null, LiveConnections.ServerSuffix, reconnect: false);
     SqlConnection IActivityHost.KillConnection(string connectionId) => ((IActionHost)this).Connection(connectionId);
     Task IActivityHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
-    string IActivityHost.ApplicationName(string connectionId) => connections.TryGetValue(connectionId, out var connectionString)
-        ? new SqlConnectionStringBuilder(connectionString).ApplicationName : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+    IReadOnlyCollection<string> IActivityHost.ApplicationNames() =>
+        connections.Values.Select(connectionString => new SqlConnectionStringBuilder(connectionString).ApplicationName).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
     /// connections to one server count as one whatever name, login or database they used; the connection's data source when

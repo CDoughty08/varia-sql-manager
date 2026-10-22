@@ -11,19 +11,22 @@ namespace Varia.Backend.Tests;
 
 /// <summary>A host for the session actions that reaches no SQL Server: its opens wait until cancelled (or refuse), and it
 /// counts the connections asked of it, so a check can prove a request ran no SQL.</summary>
-internal sealed class ActivityFixtureHost(string connectionId, ServerProfile profile, bool hang = true) : IActivityHost, ILiveHost
+internal sealed class ActivityFixtureHost(string connectionId, ServerProfile profile, bool hang = true, bool pretendOpen = false, string[]? applicationNames = null) : IActivityHost, ILiveHost
 {
     public int Connections;
     public bool IsConnected(string id) => id == connectionId;
     public ServerProfile? Profile(string id) => id == connectionId ? profile : null;
     public SqlConnection MonitorConnection(string id) { Interlocked.Increment(ref Connections); return new SqlConnection(); }
     public SqlConnection KillConnection(string id) { Interlocked.Increment(ref Connections); return new SqlConnection(); }
+    /// <summary>Waits until cancelled; refuses the sign-in without <paramref name="hang"/>; or, with <paramref name="pretendOpen"/>,
+    /// returns at once and leaves the connection closed, so the first command throws something other than a SqlException.</summary>
     public async Task OpenAsync(SqlConnection connection, CancellationToken token)
     {
+        if (pretendOpen) return;
         if (!hang) throw new RequestException("AUTH_KERBEROS", "Run kinit to get a ticket.");
         await Task.Delay(Timeout.Infinite, token);
     }
-    public string ApplicationName(string id) => "Varia SQL Manager";
+    public IReadOnlyCollection<string> ApplicationNames() => applicationNames ?? ["Varia SQL Manager"];
     public bool TestHooks => false;
     public string? ServerOf(string id) => id == connectionId ? "server:FIXTURE" : null;
     public ResultStore Store { get; } = new(64L * 1024 * 1024, 32L * 1024 * 1024);
@@ -63,9 +66,20 @@ internal static class ActivityActionChecks
             "Kill's outcomes, the budgets inside main's 15 s and 30 s deadlines, and the text sizes come from the catalogue");
         var names = Catalog.PoolProgramNames("Varia SQL Manager");
         var long128 = Catalog.PoolProgramNames(new string('a', 120));
-        check(names.Count == ActivitySql.PoolNames && names.Count == 6 && names.Contains("Varia SQL Manager - Object Explorer") && names.Contains("Varia SQL Manager - Activity Monitor")
+        check(names.Count == 6 && names.Contains("Varia SQL Manager - Object Explorer") && names.Contains("Varia SQL Manager - Activity Monitor")
             && names.Contains("Varia SQL Manager - Object Actions") && !names.Contains("Varia SQL Manager") && long128.All(name => name.Length == 128),
             "Kill refuses this backend's pool sessions by their program names (cut to 128 characters as SqlService names its pools), never its query tabs");
+        // Every connection may set its own Application Name: Kill's @pools holds the pool names of all of them, not only the
+        // requesting connection's, each between line feeds so CHARINDEX matches whole names only.
+        var host = new ActivityFixtureHost(Guid.NewGuid().ToString(), new ServerProfile(17, null, 3, null, false, true, true, 16),
+            applicationNames: ["Varia SQL Manager", "Reporting", new string('b', 120)]);
+        var list = new SessionActions(host, new LiveService(host)).PoolList();
+        var listed = list.Split('\n');
+        check(list.StartsWith('\n') && list.EndsWith('\n') && listed.Length == 2 + 12 + Catalog.PoolProgramNames(new string('b', 120)).Distinct().Count() && listed.Distinct().Count() == listed.Length - 1 && listed[1..^1].All(name => name.Length is > 0 and <= 128)
+            && listed.Contains("Varia SQL Manager - Object Explorer") && listed.Contains("Reporting - Object Explorer") && listed.Contains("Reporting - Activity Monitor")
+            && listed.Contains("Reporting - Integration Services Actions") && Catalog.PoolProgramNames(new string('b', 120)).All(listed.Contains)
+            && !listed.Contains("Varia SQL Manager") && !listed.Contains("Reporting"),
+            "Kill's @pools lists the pool program names of every connection of this backend, whatever Application Name each set (cut to 128 characters), and no query tab: " + listed.Length);
     }
 
     private static void Template(Action<bool, string> check)
@@ -76,7 +90,8 @@ internal static class ActivityActionChecks
         // The checks run in order: own session, gone, system, a different session under the id, then this backend's pools.
         check(At("@session_id = @@SPID THEN 2") < At("WHERE s.session_id = @session_id) THEN 1") && At(") THEN 1") < At("s.is_user_process = 0) THEN 4")
             && At("THEN 4") < At("s.login_time = @login_time") && At("ISNULL(s.host_process_id, -1) = ISNULL(@host_process_id, -1)) THEN 3") < At("s.host_process_id = @backend_pid")
-            && text.Contains("AND s.program_name IN (@pool0, @pool1, @pool2, @pool3, @pool4, @pool5)) THEN 5", StringComparison.Ordinal)
+            && text.Contains("s.host_process_id = @backend_pid\n                 AND CHARINDEX(NCHAR(10) + s.program_name + NCHAR(10), @pools) > 0) THEN 5", StringComparison.Ordinal)
+            && kill.Parameters.Single(parameter => parameter.Name == "@pools") is { Type: SqlDbType.NVarChar, Size: -1 }
             && text.EndsWith("SELECT @state AS state;\nIF @state = 0 EXEC (@kill_text);", StringComparison.Ordinal)
             && kill.Parameters.Single(parameter => parameter.Name == "@session_id").Type == SqlDbType.Int && kill.Parameters.Single(parameter => parameter.Name == "@login_time").Type == SqlDbType.DateTime
             && kill.Columns.SequenceEqual(["state"]) && ActivitySql.KillPrologue == "SET NOCOUNT ON; SET LOCK_TIMEOUT 10000;\n",
@@ -104,6 +119,8 @@ internal static class ActivityActionChecks
             ("KILL from an nvarchar session id", kill with { Parameters = [.. kill.Parameters.Select(parameter => parameter.Name == "@session_id" ? parameter with { Type = SqlDbType.NVarChar, Size = 11 } : parameter)] }),
             ("a second EXEC", kill with { Text = kill.Text + "\nEXEC (@kill_text);" }),
             ("EXEC of anything else", With(kill, "EXEC (@kill_text)", "EXEC (@other)")),
+            ("KILL text reassigned from a string parameter", With(kill, "SELECT @state AS state;", "SELECT @kill_text = N'KILL ' + @pools + N';';\nSELECT @state AS state;")),
+            ("KILL text reassigned in a query", With(kill, "SELECT @state AS state;", "SELECT @kill_text = s.program_name FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id ORDER BY s.session_id;\nSELECT @state AS state;")),
             ("an unlisted literal in Kill", With(kill, "N';'", "N'; SHUTDOWN;'")),
             ("a TOP over 20 in Details", With(details.Single(statement => statement.Id == "waits"), $"TOP ({Catalog.Limit("detailsWaits")})", "TOP (21)")),
             ("an unordered TOP in Details", With(details.Single(statement => statement.Id == "texts"), "\nORDER BY CASE WHEN r.blocking_session_id > 0 THEN 0 ELSE 1 END, r.request_id;", ";")),
@@ -138,10 +155,11 @@ internal static class ActivityActionChecks
     {
         check(SessionActions.ParseLoginTime("2026-10-22T06:50:12") == new DateTime(2026, 10, 22, 6, 50, 12) && SessionActions.ParseLoginTime("2026-10-22T06:50:12.347") == new DateTime(2026, 10, 22, 6, 50, 12, 347)
             && SessionActions.ParseLoginTime("2026-10-22T06:50:12.3470000") == new DateTime(2026, 10, 22, 6, 50, 12, 347)
-            && new[] { "2026-10-22 06:50:12", "2026-10-22T06:50:12Z", "2026-10-22T06:50:12+02:00", "2026-10-22T06:50:12.12345678", "2026-10-22T06:50", "1752-12-31T23:59:59", "2026-13-22T06:50:12",
+            && SessionActions.ParseLoginTime("1753-01-01T00:00:00") == new DateTime(1753, 1, 1) && SessionActions.ParseLoginTime("9999-12-31T23:59:59.997") == new DateTime(9999, 12, 31, 23, 59, 59, 997)
+            && new[] { "9999-12-31T23:59:59.998", "9999-12-31T23:59:59.999", "9999-12-31T23:59:59.9999999", "2026-10-22 06:50:12", "2026-10-22T06:50:12Z", "2026-10-22T06:50:12+02:00", "2026-10-22T06:50:12.12345678", "2026-10-22T06:50", "1752-12-31T23:59:59", "2026-13-22T06:50:12",
                 "2026-10-22T06:50:12\n", "", " 2026-10-22T06:50:12" }.All(value => SessionActions.ParseLoginTime(value) is null) && SessionActions.ParseLoginTime(null) is null
             && SessionActions.FormatLoginTime(new DateTime(2026, 10, 22, 6, 50, 12, 347)) == "2026-10-22T06:50:12.347",
-            "a login time is server local time to at most 7 fractional digits, without an offset, within datetime's range, and Details answers it in the same form");
+            "a login time is server local time to at most 7 fractional digits, without an offset, within datetime's range (1753 to 9999-12-31T23:59:59.997), and Details answers it in the same form");
         var id = Guid.NewGuid().ToString();
         var host = new ActivityFixtureHost(id, new ServerProfile(17, null, 3, null, false, true, true, 16));
         var actions = new SessionActions(host, new LiveService(host));
@@ -150,7 +168,8 @@ internal static class ActivityActionChecks
         var badDetails = new[]
         {
             good with { ConnectionId = "x" }, good with { RequestId = "" }, good with { SessionId = 0 }, good with { SessionId = 32_768 }, good with { LoginTime = "2026-10-22 06:50:12" },
-            good with { LoginTime = new string('1', 41) }, good with { LoginTime = null! }, good with { Text = "plan" }, good with { Text = "batch", Locks = true }
+            good with { LoginTime = new string('1', 41) }, good with { LoginTime = null! }, good with { Text = "plan" }, good with { Text = "batch", Locks = true },
+            good with { LoginTime = "9999-12-31T23:59:59.999" }
         };
         var answers = new List<string>();
         foreach (var args in badDetails) answers.Add(await Code(() => actions.DetailsAsync(args, CancellationToken.None)));
@@ -160,7 +179,9 @@ internal static class ActivityActionChecks
         {
             killGood with { ConnectionId = "x" }, killGood with { Sessions = [] }, killGood with { Sessions = null! }, killGood with { Sessions = [.. Enumerable.Range(1, 65).Select(index => new ActivityKillSessionDto(index, "2026-10-22T06:50:12", null))] },
             killGood with { Sessions = [new(69, "2026-10-22T06:50:12", null), new(69, "2026-10-22T06:50:13", null)] }, killGood with { Sessions = [null] },
-            killGood with { Sessions = [new(0, "2026-10-22T06:50:12", null)] }, killGood with { Sessions = [new(69, "yesterday", null)] }
+            killGood with { Sessions = [new(0, "2026-10-22T06:50:12", null)] }, killGood with { Sessions = [new(69, "yesterday", null)] },
+            // Past datetime's range SqlClient throws an OverflowException after the sessions before it were killed.
+            killGood with { Sessions = [new(69, "2026-10-22T06:50:12", null), new(70, "9999-12-31T23:59:59.999", null)] }
         };
         foreach (var args in badKills) answers.Add(await Code(() => actions.KillAsync(args, CancellationToken.None)));
         var killNotConnected = await Code(() => actions.KillAsync(killGood with { Sessions = [.. Enumerable.Range(1, 64).Select(index => new ActivityKillSessionDto(index, "2026-10-22T06:50:12", null))] }, CancellationToken.None));
@@ -202,10 +223,48 @@ internal static class ActivityActionChecks
         using var stop = new CancellationTokenSource();
         var holding = actions.KillAsync(new ActivityKillArgs(id, [new(69, "2026-10-22T06:50:12", null)]), stop.Token);
         await Task.Delay(50);
-        var busy = await Code(() => actions.KillAsync(new ActivityKillArgs(id, [new(70, "2026-10-22T06:50:12", null)]), CancellationToken.None));
+        string? busyMessage = null;
+        try { await actions.KillAsync(new ActivityKillArgs(id, [new(70, "2026-10-22T06:50:12", null)]), CancellationToken.None); }
+        catch (RequestException error) when (error.Code == "BUSY") { busyMessage = error.Message; }
         var held = await holding;
-        check(busy == "BUSY" && held is { Results.Count: 0, Error: { Code: "TIMEOUT", Retryable: true } },
-            "a second Kill on a connection whose Kill is still running is BUSY, and a Kill past its budget is a TIMEOUT value that tried no session: " + busy + ", " + held.Error?.Code);
+        // The kill gates are one per connection and two in the backend: the message names the window, not the server.
+        check(busyMessage == SessionActions.KillBusy && busyMessage == "Other Kill Process requests are running in this window. Retry when they finish."
+            && held is { Results.Count: 0, Error: { Code: "TIMEOUT", Retryable: true } },
+            "a second Kill on a connection whose Kill is still running is BUSY (worded for the window's kill gates), and a Kill past its budget is a TIMEOUT value that tried no session: "
+            + busyMessage + ", " + held.Error?.Code);
+
+        // Details waits for a live gate as long as its budget allows (C-critic G12), not Kill's fixed gate wait.
+        var gates = new List<IDisposable>();
+        for (var index = 0; index < LiveCatalog.Current.Limits.StatementsPerConnection; index++) gates.Add((await live.Gates.WaitAsync(id, 0, CancellationToken.None))!);
+        var patient = new SessionActions(host, live) { DetailsBudgetMs = 2_000, GateWaitMs = 100 };
+        started = Environment.TickCount64;
+        var waiting = patient.DetailsAsync(new ActivityDetailsArgs(id, Guid.NewGuid().ToString(), 69, "2026-10-22T06:50:12"), CancellationToken.None);
+        await Task.Delay(600);
+        foreach (var gate in gates) gate.Dispose();
+        gates.Clear();
+        ActivityDetailsResult? afterWait = null;
+        string? waitCode = null;
+        try { afterWait = await waiting; } catch (RequestException error) { waitCode = error.Code; }
+        var waitedMs = Environment.TickCount64 - started;
+        check(waitCode is null && afterWait is { State: "unknown", Error.Code: "TIMEOUT" } && waitedMs >= 1_500 && live.Gates.Busy == 0,
+            $"Details waits past Kill's gate wait for a live gate freed within its budget, then reads (here until its budget ends): {waitCode ?? afterWait?.Error?.Code} after {waitedMs} ms");
+        for (var index = 0; index < LiveCatalog.Current.Limits.StatementsPerConnection; index++) gates.Add((await live.Gates.WaitAsync(id, 0, CancellationToken.None))!);
+        var full = new SessionActions(host, live) { DetailsBudgetMs = 300 };
+        string? fullCode = null, fullMessage = null;
+        started = Environment.TickCount64;
+        try { await full.DetailsAsync(new ActivityDetailsArgs(id, Guid.NewGuid().ToString(), 69, "2026-10-22T06:50:12"), CancellationToken.None); }
+        catch (RequestException error) { (fullCode, fullMessage) = (error.Code, error.Message); }
+        var fullMs = Environment.TickCount64 - started;
+        foreach (var gate in gates) gate.Dispose();
+        check(fullCode == "BUSY" && fullMessage == SessionActions.DetailsBusy && fullMs < 4_000 && live.Gates.Busy == 0,
+            $"Details whose whole budget goes waiting for a live gate answers BUSY, not TIMEOUT: {fullCode} after {fullMs} ms");
+
+        // Something other than a SqlException in one session's batch still answers the outcomes gathered, as values.
+        var closed = new ActivityFixtureHost(id, new ServerProfile(17, null, 3, null, false, true, true, 16), pretendOpen: true);
+        var odd = await new SessionActions(closed, new LiveService(closed)).KillAsync(new ActivityKillArgs(id, [new(69, "2026-10-22T06:50:12", null), new(70, "2026-10-22T06:50:12", null)]), CancellationToken.None);
+        check(odd is { Results: [{ SessionId: 69, Outcome: "failed" }], Error.Code: "CONNECTION_LOST" } && odd.Results[0].Message == ActivityErrors.KillFailed,
+            "a Kill whose batch throws something other than a SqlException answers that session failed (outcome unknown) and stops on a closed connection, as values: "
+            + string.Join(", ", odd.Results.Select(result => result.Outcome)) + " " + odd.Error?.Code);
         var refusing = new ActivityFixtureHost(id, new ServerProfile(17, null, 3, null, false, true, true, 16), hang: false);
         var signIn = await new SessionActions(refusing, new LiveService(refusing)).KillAsync(new ActivityKillArgs(id, [new(69, "2026-10-22T06:50:12", null)]), CancellationToken.None);
         check(signIn is { Results.Count: 0, Error: { Code: "AUTH_KERBEROS", Message: "Run kinit to get a ticket." } }, "a Kill whose sign-in fails says what to fix, as a value, and tried nothing");

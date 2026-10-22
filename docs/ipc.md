@@ -194,11 +194,11 @@ deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes o
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
 `actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
 for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot; Kill Process (`activity.kill`)
-runs there too, under gates of its own (1 per connection, 2 in all, waited for at most 5 s), so it never queues behind a
+runs there too, under gates of its own (1 per connection, 2 in all, waited for at most 5 s, then `BUSY`), so it never queues behind a
 DROP that may be waiting on the very session it kills. `live` takes no slot either: a live subscription samples on its
 own task, and its statements, like those of a unary method on lane `live` (`activity.details`, through
 `LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
-statement's budget, 5 s for Details, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names
+statement's budget, and for Details at most its 10 s budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names
 never pile up).
 
 | Method | Renderer path | Kind | Lane | Header deadline |
@@ -320,8 +320,9 @@ failure. The backend's DryRun, which selects a statement instead of running it, 
 not reachable from the wire.
 
 **Activity Monitor session actions** (docs/activity-monitor.md, Session actions) name a session by its id and its login
-time, `YYYY-MM-DDTHH:MM:SS[.fffffff]` (server local time, as `sys.dm_exec_sessions` has it, ≤ 40 characters), since SQL
-Server reuses session ids. `activity.details { connectionId, requestId, sessionId: 1–32,767, loginTime, text?: statement |
+time, `YYYY-MM-DDTHH:MM:SS[.fffffff]` (server local time, as `sys.dm_exec_sessions` has it, ≤ 40 characters; main checks the form, and the backend also
+refuses a time outside `datetime`'s range, 1753-01-01 to 9999-12-31T23:59:59.997, as `INVALID_PARAMS`), since SQL Server
+reuses session ids. `activity.details { connectionId, requestId, sessionId: 1–32,767, loginTime, text?: statement |
 batch | inputBuffer, locks?: bool }` (not `text` with `locks`) reads on the Activity Monitor's pool (" - Activity Monitor",
 READ UNCOMMITTED, LOCK_TIMEOUT 1000) under one live gate, within 10 s in all, and answers `{ sessionId, state: present |
 ended | changed | unknown (with `error`), session?, statement?, batch?, inputBuffer?, waits? (≤ 20), transactions? (≤ 50), transactionsTruncated?,
@@ -336,7 +337,8 @@ pool. `activity.kill { connectionId, sessions: { sessionId, loginTime, hostProce
 opens the object actions' own connection (" - Object Actions": unpooled, never retried, in master) and runs, per session in
 order, one batch (`SET NOCOUNT ON; SET LOCK_TIMEOUT 10000;`, then `ActivitySql`'s kill template) that checks the id is not
 its own session's, exists, is a user session, still has the row's login time and host process id, and is not one of this
-backend's pool sessions (host process id and program name), and only then runs `KILL`, built on the server from the int
+backend's pool sessions (its host process id, and a program name among the pool names of every connection of this backend,
+whatever Application Name each set), and only then runs `KILL`, built on the server from the int
 parameter. It answers `{ results: { sessionId, outcome: killed | ended | changed | own | system | varia | denied |
 failed, message? (≤ 2,000) }[], elapsedMs, error? }`: SQL Server's refusals map to outcomes (6102 `denied`, 6104 `own`,
 6106 `ended`, 6107 `system`), a session not in `results` was not tried, and `error` says why (`CONNECTION_LOST`, `TIMEOUT`

@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.SqlTypes;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -21,8 +22,9 @@ internal interface IActivityHost
     SqlConnection KillConnection(string connectionId);
     /// <summary>Opens it; a Kerberos or Entra sign-in failure throws AUTH_KERBEROS, AUTH_UNSUPPORTED or AUTH_ENTRA.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
-    /// <summary>The connection's Application Name, which its pools' program names start with.</summary>
-    string ApplicationName(string connectionId);
+    /// <summary>The Application Names of every connection of this backend, which their pools' program names start with.
+    /// Each connection may set its own, and Kill refuses the pool sessions of all of them.</summary>
+    IReadOnlyCollection<string> ApplicationNames();
 }
 
 /// <summary>activity.details and activity.kill (D-am §5.5, §8; docs/activity-monitor.md, Session actions). Details reads one
@@ -49,25 +51,32 @@ internal sealed partial class SessionActions
         KillBudgetMs = (int)this.catalog.Limit("killBudgetMs");
     }
 
-    /// <summary>The budgets (the catalogue's) and the gate waits; the checks shorten them.</summary>
+    /// <summary>The budgets (the catalogue's) and Kill's gate wait; the checks shorten them. Details waits for a live gate
+    /// as long as its budget allows (C-critic G12).</summary>
     internal int DetailsBudgetMs { get; set; }
     internal int KillBudgetMs { get; set; }
     internal int GateWaitMs { get; set; } = 5_000;
+    /// <summary>The BUSY answers: the live gates are shared with every live view, the kill gates with this window's kills
+    /// (one per connection, two in all).</summary>
+    internal const string DetailsBusy = "Too many live views are reading this server at once. Retry in a moment.";
+    internal const string KillBusy = "Other Kill Process requests are running in this window. Retry when they finish.";
 
     // --- Validation (src/shared/activity/schema.ts) ---------------------------------------------------------------------
 
     [GeneratedRegex(@"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?\z")]
     private static partial Regex LoginTimePattern();
     private static readonly string[] LoginTimeFormats = ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF"];
-    /// <summary>datetime's range: a parameter outside it fails when the command runs.</summary>
-    private static readonly DateTime Earliest = new(1753, 1, 1);
+    /// <summary>datetime's range: a parameter outside it throws (an OverflowException, not a SqlException) before the
+    /// command is sent. Past .997 a time rounds up into the year 10000.</summary>
+    private static readonly DateTime Earliest = SqlDateTime.MinValue.Value;
+    private static readonly DateTime Latest = SqlDateTime.MaxValue.Value;
 
     private static RequestException Invalid(string detail) => new("INVALID_PARAMS", "Invalid Activity Monitor request: " + detail);
 
     /// <summary>A login time as the rows carry it (server local time, up to 7 fractional digits, no offset), or null.</summary>
     internal static DateTime? ParseLoginTime(string? value) =>
         value is { Length: <= 40 } && LoginTimePattern().IsMatch(value)
-        && DateTime.TryParseExact(value, LoginTimeFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) && parsed >= Earliest ? parsed : null;
+        && DateTime.TryParseExact(value, LoginTimeFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) && parsed >= Earliest && parsed <= Latest ? parsed : null;
 
     /// <summary>A login time as Details answers it: what sys.dm_exec_sessions holds (datetime, so milliseconds suffice).</summary>
     internal static string FormatLoginTime(DateTime value) => value.ToString("yyyy-MM-dd'T'HH:mm:ss.fff", CultureInfo.InvariantCulture);
@@ -123,9 +132,19 @@ internal sealed partial class SessionActions
         var permission = Permission(args.ConnectionId, host);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         budget.CancelAfter(DetailsBudgetMs);
+        var gated = false;
         try
         {
-            return await live.RunGatedAsync(args.ConnectionId, GateWaitMs, gated => ReadDetailsAsync(args, loginTime, render, permission, watch, gated), budget.Token).ConfigureAwait(false);
+            return await live.RunGatedAsync(args.ConnectionId, DetailsBudgetMs, inside =>
+            {
+                gated = true;
+                return ReadDetailsAsync(args, loginTime, render, permission, watch, inside);
+            }, budget.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!gated && budget.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            // The whole budget went waiting for a live gate (the live views hold them all), as when the wait itself gives up.
+            throw new RequestException("BUSY", DetailsBusy);
         }
         catch (Exception error) when (budget.IsCancellationRequested && !token.IsCancellationRequested && error is OperationCanceledException or SqlException or InvalidOperationException)
         {
@@ -325,14 +344,14 @@ internal sealed partial class SessionActions
         var results = new List<ActivityKillOutcomeDto>();
         if (RenderOf(args.ConnectionId) is not { } render) return new(results, watch.ElapsedMilliseconds, ActivityErrors.Create("NOT_SUPPORTED", catalog.UnavailableMessage));
         var statement = ActivitySql.Statements("activity.kill", render).Single();
-        var pools = catalog.PoolProgramNames(host.ApplicationName(args.ConnectionId));
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         budget.CancelAfter(KillBudgetMs);
         var current = 0;
         try
         {
-            using var lease = await killGates.WaitAsync(args.ConnectionId, GateWaitMs, budget.Token).ConfigureAwait(false)
-                ?? throw new RequestException("BUSY", "Another Kill Process is running on this server. Retry when it finishes.");
+            using var lease = await killGates.WaitAsync(args.ConnectionId, GateWaitMs, budget.Token).ConfigureAwait(false) ?? throw new RequestException("BUSY", KillBusy);
+            // Read once the gate is held, so a connection made while this kill waited is in it.
+            var pools = PoolList();
             await using var connection = host.KillConnection(args.ConnectionId);
             try { await host.OpenAsync(connection, budget.Token).ConfigureAwait(false); }
             catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return new(results, watch.ElapsedMilliseconds, ActivityErrors.SignIn(error)); }
@@ -355,9 +374,19 @@ internal sealed partial class SessionActions
         }
     }
 
+    /// <summary>Kill's @pools: the pool program names of every connection of this backend (each Application Name with each
+    /// pool suffix, cut to 128 characters as SqlService names its pools), each between line feeds. A name holding a line feed
+    /// of its own still matches itself; it can only add refusals (of a session with this backend's host process id).</summary>
+    internal string PoolList()
+    {
+        var names = host.ApplicationNames().SelectMany(catalog.PoolProgramNames).Distinct(StringComparer.Ordinal);
+        return "\n" + string.Join("", names.Select(name => name + "\n"));
+    }
+
     /// <summary>One session's guarded batch. SQL Server's own refusals of KILL (permission, own, not active, not a user
-    /// process) map to their outcomes; a connection that breaks during it leaves the outcome unknown.</summary>
-    private async Task<ActivityKillOutcomeDto> KillOneAsync(SqlConnection connection, ActivityStatement statement, IReadOnlyList<string> pools,
+    /// process) map to their outcomes; a connection that breaks during it leaves the outcome unknown, and so does anything
+    /// else that goes wrong, so the outcomes already gathered still reach the user.</summary>
+    private async Task<ActivityKillOutcomeDto> KillOneAsync(SqlConnection connection, ActivityStatement statement, string pools,
         (int SessionId, DateTime LoginTime, int? HostProcessId) session, CancellationToken token)
     {
         var messages = new StringBuilder();
@@ -379,10 +408,10 @@ internal sealed partial class SessionActions
                     "@login_time" => session.LoginTime,
                     "@host_process_id" => session.HostProcessId,
                     "@backend_pid" => Environment.ProcessId,
-                    var name when name.StartsWith("@pool", StringComparison.Ordinal) => pools[int.Parse(name.AsSpan(5), CultureInfo.InvariantCulture)],
+                    "@pools" => pools,
                     _ => throw new InvalidOperationException("No value for " + parameter.Name)
                 };
-                command.Parameters.Add(new SqlParameter(parameter.Name, parameter.Type) { Value = value ?? DBNull.Value, Size = parameter.Size > 0 ? parameter.Size : 0 });
+                command.Parameters.Add(new SqlParameter(parameter.Name, parameter.Type) { Value = value ?? DBNull.Value, Size = parameter.Size });
             }
             int state;
             try
@@ -395,6 +424,10 @@ internal sealed partial class SessionActions
             catch (SqlException error) when (!token.IsCancellationRequested)
             {
                 return KillFailure(session.SessionId, error, connection.State == ConnectionState.Open);
+            }
+            catch (Exception error) when (!token.IsCancellationRequested && error is not OperationCanceledException)
+            {
+                return new(session.SessionId, "failed", ActivityErrors.KillFailed);
             }
             var outcome = KillOutcome(state);
             var message = outcome == "killed" && messages.Length > 0 ? Clip(messages.ToString()) : outcome == "failed" ? "The kill check returned no state." : null;
@@ -450,6 +483,7 @@ internal static class ActivityErrors
 {
     public const string KillLost = "The connection was lost while killing sessions; those not listed were not tried.";
     public const string KillUnknown = "The connection broke or time ran out while this session was being killed: whether it ended is unknown. Refresh to see.";
+    public const string KillFailed = "Kill Process could not finish for this session: whether it ended is unknown. Refresh to see.";
 
     public static string DetailsTimeout(int budgetMs) => "Reading the session took longer than " + Seconds(budgetMs) + ". Refresh to try again.";
     public static string KillTimeout(int budgetMs) => "Kill Process took longer than " + Seconds(budgetMs) + "; the sessions not listed were not tried.";

@@ -174,6 +174,41 @@ internal static class ActivityActionLiveChecks
             check(refused.Results.Select(result => result.Outcome).SequenceEqual(systemSpid is null ? ["varia"] : ["varia", "system"]) && await Works(pooled),
                 "Kill refuses this window's own Activity Monitor pool session (varia) and a SQL Server system session (system), killing neither: "
                 + string.Join(", ", refused.Results.Select(result => result.Outcome)));
+            // Nor the pool sessions of this backend's other connections, whose Application Names differ (one long enough that
+            // its pool names are cut to 128 characters).
+            var others = new List<string>();
+            try
+            {
+                var pooledOthers = new List<Victim>();
+                foreach (var name in new[] { marker + "_B", (marker + "_C").PadRight(120, 'c') })
+                {
+                    var options = live("master") with { Advanced = new AdvancedConnectionOptions(ApplicationName: name) };
+                    var connected = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(options, json), json);
+                    others.Add(connected.Id);
+                    var otherPool = ((ILiveHost)service).PoolConnection(connected.Id, null, LiveConnections.ServerSuffix);
+                    opened.Add(otherPool);
+                    await ((ILiveHost)service).OpenAsync(otherPool, CancellationToken.None);
+                    pooledOthers.Add(await Identify(otherPool, otherPool.ServerProcessId));
+                }
+                var programs = new List<string>();
+                foreach (var pooledOther in pooledOthers)
+                {
+                    await using var program = new SqlCommand("SELECT program_name FROM sys.dm_exec_sessions WHERE session_id = @spid;", monitor);
+                    program.Parameters.Add(new SqlParameter("@spid", SqlDbType.Int) { Value = pooledOther.Spid });
+                    programs.Add(Convert.ToString(await program.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture) ?? "");
+                }
+                var refusedOthers = await Kill([.. pooledOthers.Select(pooledOther => pooledOther.Kill())]);
+                var alive = new List<bool>();
+                foreach (var pooledOther in pooledOthers) alive.Add(await Works(pooledOther.Connection));
+                check(refusedOthers is { Error: null } && refusedOthers.Results.Select(result => result.Outcome).SequenceEqual(["varia", "varia"]) && alive.All(item => item)
+                    && programs[0] == marker + "_B" + LiveConnections.ServerSuffix && programs[1].Length == 128,
+                    "Kill from one connection refuses the pool sessions of this backend's other connections with other Application Names, also when the name is cut to 128 characters: "
+                    + string.Join(", ", refusedOthers.Results.Select(result => result.Outcome)) + " " + string.Join(", ", alive));
+            }
+            finally
+            {
+                foreach (var otherId in others) await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(otherId), json), json);
+            }
             // The batch's own session: the template answers 2 (own) for @@SPID, before KILL could refuse it.
             await using (var self = new SqlCommand(ActivitySql.KillPrologue + ActivitySql.Statements("activity.kill", render).Single().Text, other.Connection))
             {

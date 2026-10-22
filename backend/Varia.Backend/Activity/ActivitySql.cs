@@ -320,11 +320,11 @@ internal static partial class ActivitySql
     /// <summary>Kill's batch for one session (D-am §5.5, run after <see cref="KillPrologue"/>): the state of the session
     /// (0 kill, 1 ended, 2 own, 3 changed, 4 system, 5 one of this backend's pool sessions), and KILL only for state 0. KILL
     /// takes no variable, so its text is built on the server from the int parameter; nothing typed reaches it. The checks and
-    /// KILL are one batch on one connection, so only a reuse inside the batch itself could slip between them.</summary>
-    private static ActivityStatement Kill()
-    {
-        var pools = Enumerable.Range(0, PoolNames).Select(index => "@pool" + index).ToList();
-        return new("activity.kill", "kill",
+    /// KILL are one batch on one connection, so only a reuse inside the batch itself could slip between them. @pools holds the
+    /// pool program names of every connection of this backend, whatever its Application Name (SessionActions.PoolList), each
+    /// framed by line feeds, so one parameter serves any number of connections and names cut to 128 characters.</summary>
+    private static ActivityStatement Kill() =>
+        new("activity.kill", "kill",
             "DECLARE @state int = CASE\n"
             + "    WHEN @session_id = @@SPID THEN 2\n"
             + "    WHEN NOT EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id) THEN 1\n"
@@ -332,17 +332,13 @@ internal static partial class ActivitySql
             + "    WHEN NOT EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id AND s.login_time = @login_time\n"
             + "                     AND ISNULL(s.host_process_id, -1) = ISNULL(@host_process_id, -1)) THEN 3\n"
             + "    WHEN EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id AND s.host_process_id = @backend_pid\n"
-            + "                 AND s.program_name IN (" + string.Join(", ", pools) + ")) THEN 5\n"
+            + "                 AND CHARINDEX(NCHAR(10) + s.program_name + NCHAR(10), @pools) > 0) THEN 5\n"
             + "    ELSE 0 END;\n"
             + "DECLARE @kill_text nvarchar(32) = N'KILL ' + CONVERT(nvarchar(11), @session_id) + N';';\n"
             + "SELECT @state AS state;\n"
             + "IF @state = 0 EXEC (@kill_text);",
-            ["state"], [Session(), LoginTime(), Int("@host_process_id"), Int("@backend_pid"), .. pools.Select(name => new ActivityParameter(name, SqlDbType.NVarChar, 128))],
+            ["state"], [Session(), LoginTime(), Int("@host_process_id"), Int("@backend_pid"), new("@pools", SqlDbType.NVarChar, -1)],
             ["kill"], new HashSet<string> { "N'KILL '", "N';'" });
-    }
-
-    /// <summary>The pool program names Kill refuses: one per pool kind of Varia's sessions in the catalogue.</summary>
-    public static int PoolNames => ActivityCatalog.Current.VariaSuffixes.Count(entry => entry.Kind == "pool");
 
     /// <summary>Statements of the session actions, which are methods rather than probes: their lint knows them by name.</summary>
     private static readonly HashSet<string> Methods = new(["activity.details", "activity.kill"], StringComparer.Ordinal);
@@ -416,6 +412,8 @@ internal static partial class ActivitySql
     private static partial Regex Variable();
     [GeneratedRegex(@"\bDECLARE\s+(@\w+)", RegexOptions.IgnoreCase)]
     private static partial Regex Local();
+    [GeneratedRegex(@"@kill_text\b", RegexOptions.IgnoreCase)]
+    private static partial Regex KillTextUse();
 
     /// <summary>The one dynamic statement any Activity Monitor SQL may run, and the text it is built from: KILL and the
     /// session id, converted on the server from an int parameter.</summary>
@@ -434,10 +432,11 @@ internal static partial class ActivitySql
         foreach (var token in Forbidden)
             if (code.Contains(token, StringComparison.OrdinalIgnoreCase) && !(token == "dm_tran_locks" && IsLocks(statement))) problems.Add("uses " + token);
         if (code.Contains('#')) problems.Add("names a temporary object");
-        // Only Kill runs dynamic SQL: once, and only KILL with the session id an int parameter gives it.
+        // Only Kill runs dynamic SQL: once, and only KILL with the session id an int parameter gives it. @kill_text appears only
+        // where it is declared and run, so no assignment (SELECT @kill_text = ...) can feed EXEC other text.
         if (IsKill(statement))
         {
-            if (code.Split(KillExec).Length != 2 || !text.Contains(KillText, StringComparison.Ordinal)
+            if (code.Split(KillExec).Length != 2 || !text.Contains(KillText, StringComparison.Ordinal) || KillTextUse().Matches(code).Count != 2
                 || statement.Parameters.SingleOrDefault(parameter => parameter.Name == "@session_id")?.Type != SqlDbType.Int)
                 problems.Add("builds KILL from something other than the int @session_id");
             code = code.Replace(KillExec, " ", StringComparison.Ordinal);

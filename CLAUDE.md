@@ -173,7 +173,7 @@ pages, limits, error codes, display formats, benchmarks).
   in backend memory over a sample (`ActivityFilter`), never in SQL. The session actions (`Activity/SessionActions.cs`)
   have the only exemptions: `activity.details` reads `dm_tran_locks` only on request, on the monitor's pool under the live
   gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
-  checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions, and
+  checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and
   only then runs a dynamic KILL built on the server from an int parameter. Neither logs session ids, logins, hosts or SQL.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
