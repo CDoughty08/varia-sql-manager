@@ -12,7 +12,8 @@ using Varia.Backend.Scripting;
 
 namespace Varia.Backend.Ssis;
 
-/// <summary>What the service needs from SqlService: a connection's server profile, its SSIS read pool, and how it signed in.</summary>
+/// <summary>What the SSIS services need from SqlService: a connection's server profile, its SSIS read pool, the actions
+/// connection, and how it signed in.</summary>
 internal interface ISsisHost
 {
     /// <summary>Throws NOT_CONNECTED for an unknown connection.</summary>
@@ -21,6 +22,9 @@ internal interface ISsisHost
     SqlConnection SsisConnection(string connectionId, string catalogDatabase);
     /// <summary>The same pool's connection in the login's own database, for when the catalog's cannot be opened.</summary>
     SqlConnection SsisServerConnection(string connectionId);
+    /// <summary>An unopened connection of its own for one write (D-ssis 4.4): unpooled, never retried, without a command timeout,
+    /// in the catalog's database, under the program name plus " - Integration Services Actions".</summary>
+    SqlConnection SsisActionConnection(string connectionId, string catalogDatabase);
     /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), and a
     /// Microsoft Entra one AUTH_ENTRA, which the request answers as a value.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
@@ -43,6 +47,18 @@ internal sealed class SsisOptions
     /// <summary>Describes on SQL Server on Linux too, where no real catalog can exist, so the fake catalog's checks run on CI's
     /// Linux engine. The tree needs no such option: it lists the catalog's database wherever it exists.</summary>
     public bool IgnoreLinuxHost { get; set; }
+
+    public int WritePerConnection { get; init; } = SsisCatalog.Current.Limit("writePerConnection");
+    public int WriteTotal { get; init; } = SsisCatalog.Current.Limit("writeTotal");
+    public int MaxRegisteredWrites { get; init; } = SsisCatalog.Current.Limit("registeredWrites");
+    public TimeSpan PreflightBudget { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("preflightMs"));
+    /// <summary>How long Stop on a write waits for SQL Server to end the statement before the request answers CANCELLED.</summary>
+    public TimeSpan StopGrace { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("stopGraceMs"));
+    /// <summary>Writes for SQL Server logins too, which a box server's SSISDB refuses (27123) but the fake catalog need not, so its
+    /// checks run on CI, which connects with SQL Server authentication.</summary>
+    public bool IgnoreSqlAuthentication { get; set; }
+    /// <summary>Runs between a write's preflight and its first step, on the write's connection (the checks change the catalog there).</summary>
+    public Func<CancellationToken, Task>? BeforeWrite { get; set; }
 }
 
 /// <summary>ssis.describe (D-ssis 4.3): validate, register, take the SSIS read gates (2 per connection, 4 in all; BUSY after
@@ -208,7 +224,9 @@ internal sealed class SsisService : IDisposable
         finally { gate.Release(); }
     }
 
-    private async Task<SsisError> OpenFailureAsync(string connectionId, string name, CancellationToken token)
+    /// <summary>Why the catalog's database could not be opened (4060 and the unavailable errors), read on the SSIS read pool
+    /// outside it: missing, unavailable to everyone, or closed to this login. Writes ask it too.</summary>
+    internal async Task<SsisError> OpenFailureAsync(string connectionId, string name, CancellationToken token)
     {
         try
         {

@@ -3,7 +3,8 @@
 import { z } from 'zod'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { objectRefSchema } from '../explorer/schema.ts'
-import { describeTargets, describeViews, ssisLimits, type SsisDescribeView, type SsisErrorCode, type SsisFeature } from './catalog.ts'
+import { describeTargets, describeViews, ssisActions, ssisLimits, type SsisActionVerb, type SsisDescribeView, type SsisErrorCode, type SsisFeature } from './catalog.ts'
+import type { ActionStep } from '../actions/schema.ts'
 
 export interface SsisDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly view: SsisDescribeView; readonly target: ObjectRef }
 export interface SsisCancelRequest { readonly requestIds: readonly string[] }
@@ -12,6 +13,24 @@ export const ssisDescribeSchema = z.object({ connectionId: z.uuid(), requestId: 
   .superRefine((request, context) => {
     if (request.target.kind !== describeTargets[request.view]) context.addIssue({ code: 'custom', path: ['target'], message: `The ${request.view} view describes a ${describeTargets[request.view]}.` })
   }) satisfies z.ZodType<SsisDescribeRequest>
+
+/** Stop Operation: the operation's id (`catalog.operations.operation_id`, a bigint; ids past 2^53 - 1 cannot cross JSON exactly). */
+export interface SsisStopOperation { readonly verb: 'stopOperation'; readonly operationId: number }
+/** What ssis.execute runs, by verb (src/shared/ssis/catalog.ts `ssisActions`); later verbs join the union. */
+export type SsisAction = SsisStopOperation
+/** `revision` is a describe's, for a verb that changes what a document showed (`ssisActions[verb].revision`); others refuse it. */
+export interface SsisExecuteRequest { readonly connectionId: string; readonly requestId: string; readonly action: SsisAction; readonly revision?: string }
+
+const operationId = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+export const ssisActionSchema = z.discriminatedUnion('verb', [
+  z.object({ verb: z.literal('stopOperation'), operationId }).strict()
+]) satisfies z.ZodType<SsisAction>
+export const ssisExecuteSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(), action: ssisActionSchema, revision: z.string().length(ssisLimits.revision).regex(/^[0-9a-f]+$/).optional()
+}).strict().superRefine((request, context) => {
+  const verb: SsisActionVerb = request.action.verb
+  if (request.revision !== undefined && !ssisActions[verb].revision) context.addIssue({ code: 'custom', path: ['revision'], message: `${ssisActions[verb].title} takes no revision.` })
+}) satisfies z.ZodType<SsisExecuteRequest>
 
 export const ssisCancelSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(ssisLimits.cancelIds).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')
@@ -119,6 +138,13 @@ export type SsisModel = SsisCatalogModel | SsisFolderModel | SsisProjectModel | 
 export interface SsisDescribeResult {
   readonly model?: SsisModel
   readonly revision?: string
+  readonly elapsedMs: number
+  readonly error?: SsisError
+}
+/** One ssis.execute: the steps it ran in order (done, failed, cancelled or skipped; a refusal before any step has none), or
+ *  `error`. ALREADY_FINAL is information (Stop Operation found nothing running), not a failure. */
+export interface SsisExecuteResult {
+  readonly steps: readonly ActionStep[]
   readonly elapsedMs: number
   readonly error?: SsisError
 }

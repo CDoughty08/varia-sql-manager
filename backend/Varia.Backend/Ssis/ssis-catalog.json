@@ -1,4 +1,7 @@
 {
+  "actions": [
+    {"procedures":["stop_operation"],"revision":false,"steps":["Stop the operation"],"title":"Stop Operation","verb":"stopOperation","windowsAuthOnBox":true}
+  ],
   "catalogDatabase": "SSISDB",
   "errors": [
     {"code":"CATALOG_MISSING","retryable":false},
@@ -13,15 +16,22 @@
     {"code":"AUTH_KERBEROS","retryable":true},
     {"code":"AUTH_UNSUPPORTED","retryable":false},
     {"code":"AUTH_ENTRA","retryable":false},
+    {"code":"WINDOWS_AUTH_REQUIRED","retryable":false},
+    {"code":"ALREADY_FINAL","retryable":false},
+    {"code":"NOT_RUNNING","retryable":true},
+    {"code":"CANCELLED","retryable":true},
     {"code":"SQL_ERROR","retryable":true}
   ],
   "features": ["customizedLoggingLevels","scaleOut","eventMessageGuid","executedCount","operationLogSize","checkSchemaVersion"],
-  "limits": {"cancelIds":64,"describeBytes":4000000,"describeMs":40000,"description":1024,"gateWaitMs":30000,"messageChars":2048,"name":128,"packageName":260,"profileLockTimeoutMs":1000,"readLockTimeoutMs":5000,"readPerConnection":2,"readTotal":4,"registered":256,"revision":64,"rows":2048,"tombstoneMs":60000,"tombstones":64,"value":4000},
+  "finalStatuses": [3,4,6,7,9],
+  "limits": {"cancelIds":64,"describeBytes":4000000,"describeMs":40000,"description":1024,"gateWaitMs":30000,"messageChars":2048,"name":128,"packageName":260,"preflightLockTimeoutMs":10000,"preflightMs":25000,"profileLockTimeoutMs":1000,"readLockTimeoutMs":5000,"readPerConnection":2,"readTotal":4,"registered":256,"registeredWrites":64,"revision":64,"rows":2048,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64,"value":4000,"writePerConnection":1,"writeTotal":2},
   "loggingLevels": [{"code":0,"label":"None"},{"code":1,"label":"Basic"},{"code":2,"label":"Performance"},{"code":3,"label":"Verbose"},{"code":4,"label":"Runtime lineage","since":13},{"code":100,"label":"Custom","since":13}],
   "messageTypes": [{"code":-1,"label":"Unknown","tone":"info"},{"code":10,"label":"Pre-validate","tone":"info"},{"code":20,"label":"Post-validate","tone":"info"},{"code":30,"label":"Pre-execute","tone":"info"},{"code":40,"label":"Post-execute","tone":"info"},{"code":50,"label":"Status change","tone":"info"},{"code":60,"label":"Progress","tone":"muted"},{"code":70,"label":"Information","tone":"info"},{"code":80,"label":"Variable value changed","tone":"info"},{"code":90,"label":"Diagnostic","tone":"muted"},{"code":100,"label":"Query cancel","tone":"info"},{"code":110,"label":"Warning","tone":"warning"},{"code":120,"label":"Error","tone":"error"},{"code":130,"label":"Task failed","tone":"error"},{"code":140,"label":"Diagnostic (extended)","tone":"info"},{"code":200,"label":"Custom","tone":"info"},{"code":400,"label":"Non-diagnostic","tone":"info"}],
+  "openStatuses": [1,2,5,8],
   "operationStatuses": [{"code":1,"label":"Created"},{"code":2,"label":"Running"},{"code":3,"label":"Canceled"},{"code":4,"label":"Failed"},{"code":5,"label":"Pending"},{"code":6,"label":"Ended unexpectedly"},{"code":7,"label":"Succeeded"},{"code":8,"label":"Stopping"},{"code":9,"label":"Completed"}],
   "operationTypes": [{"code":1,"label":"Integration Services initialization"},{"code":2,"label":"Operation cleanup"},{"code":3,"label":"Project version cleanup"},{"code":101,"label":"Deploy project"},{"code":102,"label":"Export project"},{"code":106,"label":"Restore project"},{"code":200,"label":"Create and start execution"},{"code":202,"label":"Stop operation"},{"code":300,"label":"Validate project"},{"code":301,"label":"Validate package"},{"code":1000,"label":"Configure catalog"}],
   "parameterObjectTypes": [{"code":20,"label":"Project"},{"code":30,"label":"Package"},{"code":50,"label":"System"}],
+  "stoppableOperationTypes": [200,300,301],
   "version": 1,
   "views": [
     {"kind":"ssisCatalog","view":"catalog"},

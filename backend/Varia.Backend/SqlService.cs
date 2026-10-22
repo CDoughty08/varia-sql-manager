@@ -26,7 +26,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear",
-        "ssis.describe"
+        "ssis.describe", "ssis.execute"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -52,6 +52,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
     private readonly SsisService ssis;
+    private readonly SsisActionService ssisActions;
     private readonly EntraService entra;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
@@ -127,6 +128,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
         ssis = new SsisService(this);
+        ssisActions = new SsisActionService(this, ssis);
         if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
     }
 
@@ -150,6 +152,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public ActionService Actions => actions;
     /// <summary>The SSIS Catalog's reads (the checks point it at a fake catalog through its options).</summary>
     public SsisService Ssis => ssis;
+    /// <summary>The SSIS Catalog's writes (the checks reach its session seam; it shares Ssis's options).</summary>
+    public SsisActionService SsisActions => ssisActions;
     /// <summary>Microsoft Entra ID (the checks replace its token source).</summary>
     internal EntraService Entra => entra;
 
@@ -162,12 +166,15 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
-        "ssis.describe" => RequestLane.Ssis,
+        "ssis.describe" or "ssis.execute" => RequestLane.Ssis,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
         _ => RequestLane.Metadata
     };
+
+    /// <summary>Stop on DDL and on SSIS Catalog writes answers with the steps that completed, once SQL Server ends the statement.</summary>
+    public bool AnswersStop(string method) => method is "actions.execute" or "ssis.execute";
 
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
     public (long GlobalBytes, long QueryBytes) ResultBudget => (store.GlobalBytes, store.QueryBytes);
@@ -208,6 +215,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
+        "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -386,6 +394,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
         ssis.Forget(args.ConnectionId);
+        ssisActions.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
@@ -490,6 +499,17 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     SqlConnection ISsisHost.SsisServerConnection(string connectionId) => PoolConnection(connectionId, null, SsisPool);
     Task ISsisHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
     private const string SsisPool = " - Integration Services";
+
+    /// <summary>A write's own connection (D-ssis 4.4), as object actions have: unpooled, so its settings and session end with the
+    /// request, and never retried, so a write is never sent twice.</summary>
+    SqlConnection ISsisHost.SsisActionConnection(string connectionId, string catalogDatabase)
+    {
+        if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+        var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = catalogDatabase };
+        var name = builder.ApplicationName + " - Integration Services Actions";
+        builder.ApplicationName = name.Length > 128 ? name[..128] : name;
+        return new SqlConnection(builder.ConnectionString);
+    }
 
     /// <summary>How a connection signed in, from its settings: Windows (Kerberos off Windows), Microsoft Entra ID, or SQL Server authentication.</summary>
     string ISsisHost.Authentication(string connectionId)
@@ -1315,6 +1335,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         scripting.CancelAll();
         actions.CancelAll();
         ssis.CancelAll();
+        ssisActions.CancelAll();
     }
     public void Dispose()
     {
@@ -1323,6 +1344,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         scripting.Dispose();
         actions.Dispose();
         ssis.Dispose();
+        ssisActions.Dispose();
         CancelAll();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();

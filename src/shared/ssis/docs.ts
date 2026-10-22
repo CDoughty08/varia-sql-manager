@@ -3,7 +3,7 @@
 import {
   catalogDatabase, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
-  valueTypes, finalStatuses, type CodeLabel
+  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, stoppableOperationTypes, type CodeLabel
 } from './catalog.ts'
 import { folderSpecs, kindSpecs } from '../explorer/catalog.ts'
 
@@ -26,7 +26,7 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   revision: 'Characters in a revision (a SHA-256 in hex)',
   messageChars: 'Characters in an error message',
   describeMs: 'A describe\'s budget, in ms, answered as `TIMEOUT`',
-  gateWaitMs: 'How long a request waits for an SSIS read gate before `BUSY`, in ms',
+  gateWaitMs: 'How long a request waits for an SSIS read or write gate before `BUSY`, in ms',
   readPerConnection: 'SSIS reads at once per connection',
   readTotal: 'SSIS reads at once in all',
   registered: 'SSIS requests registered at once',
@@ -34,7 +34,13 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   tombstones: 'Ids main remembers that were cancelled before they were sent',
   tombstoneMs: 'How long main remembers them, in ms',
   readLockTimeoutMs: 'LOCK_TIMEOUT of the tree\'s and describe\'s reads, in ms',
-  profileLockTimeoutMs: 'LOCK_TIMEOUT of the profile read (its role checks), in ms'
+  profileLockTimeoutMs: 'LOCK_TIMEOUT of the profile read (its role checks), in ms',
+  writePerConnection: 'SSIS writes (`ssis.execute`) at once per connection',
+  writeTotal: 'SSIS writes at once in all',
+  registeredWrites: 'SSIS writes registered at once',
+  preflightLockTimeoutMs: 'LOCK_TIMEOUT of a write\'s preflight, in ms (`BLOCKED`)',
+  preflightMs: 'A write\'s preflight budget, in ms, answered as `TIMEOUT`',
+  stopGraceMs: 'How long a stopped write\'s reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown)'
 }
 
 const viewNotes: Readonly<Record<typeof describeViews[number], string>> = {
@@ -87,6 +93,30 @@ export function renderSsisDocs(): string {
     table(['Feature', 'Found when the catalog has'], ssisFeatures.map(feature => [code(feature), code(ssisFeatureSources[feature])])),
     '',
     table(['Error', 'Retry helps'], ssisErrorCodes.map(item => [code(item), ssisErrorRetryable[item] ? 'Yes' : 'No'])),
+    '',
+    '### Writes (`ssis.execute`)',
+    '',
+    'A write runs on a connection of its own, opened for the request and closed after it: unpooled, never retried, in the catalog\'s',
+    'database, under the program name plus " - Integration Services Actions", so DBAs can tell it from the read pool. It takes the SSIS',
+    `write gates (${ssisLimits.writePerConnection} per connection, ${ssisLimits.writeTotal} in all), then runs a preflight in the same connection at READ COMMITTED with`,
+    `\`LOCK_TIMEOUT ${ssisLimits.preflightLockTimeoutMs}\` (within ${ssisLimits.preflightMs / 1000} s), then its steps in order, each one statement from \`SsisSql\`'s constant templates`,
+    'with values as parameters, waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), with no outer transaction. Stop (`varia:ssis-cancel`)',
+    `ends it at any time: the reply waits up to ${ssisLimits.stopGraceMs / 1000} s for SQL Server to end the statement and lists the steps that completed (done,`,
+    'failed, cancelled, skipped). On a box server SSISDB changes nothing for a SQL Server login (error 27123), so a verb that needs',
+    'Windows authentication answers `WINDOWS_AUTH_REQUIRED` before it connects. Nothing is logged: not names, values, SQL or messages.',
+    '',
+    table(['Verb', 'Title', 'Steps', 'Calls', 'Takes a revision', 'On a box server'], ssisActionVerbs.map(verb => {
+      const spec = ssisActions[verb]
+      return [code(verb), spec.title, spec.steps.join('; '), spec.procedures.map(name => code('catalog.' + name)).join(', '), spec.revision ? 'Yes' : 'No',
+        spec.windowsAuthOnBox ? 'Windows authentication only' : 'Any authentication']
+    })),
+    '',
+    'Stop Operation\'s preflight reads the operation from `catalog.operations`: one this login cannot see, or that no longer exists,',
+    `answers \`NOT_FOUND\`; one that is not an execution or validation (types ${stoppableOperationTypes.map(code).join(', ')}), \`NOT_SUPPORTED\`; one that has`,
+    'ended or is already stopping, `ALREADY_FINAL`. Otherwise it calls `catalog.stop_operation`, which records a stop operation (type 202)',
+    'of its own and makes the operation Stopping (8) until the package ends (Canceled, 3). When the catalog refuses because the operation',
+    'is not running (27124) or already stopping (27126), the operation is read again: `ALREADY_FINAL` if it ended or is stopping, and',
+    '`NOT_RUNNING` (retry once it runs) if it is created or pending.',
     '',
     '### Code tables',
     '',
