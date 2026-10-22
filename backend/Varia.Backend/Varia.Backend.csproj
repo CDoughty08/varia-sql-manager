@@ -24,5 +24,7 @@
     <EmbeddedResource Include="Actions/actions-catalog.json" LogicalName="Varia.Backend.Actions.actions-catalog.json" />
     <!-- Generated from src/shared/designer/catalog.ts by tests/table-designer-catalog.test.ts. -->
     <EmbeddedResource Include="Designer/designer-catalog.json" LogicalName="Varia.Backend.Designer.designer-catalog.json" />
+    <!-- Generated from src/shared/activity/catalog.ts by tests/activity-catalog.test.ts. -->
+    <EmbeddedResource Include="Activity/activity-catalog.json" LogicalName="Varia.Backend.Activity.activity-catalog.json" />
   </ItemGroup>
 </Project>
