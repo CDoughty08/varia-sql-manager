@@ -6,7 +6,8 @@
 
 /**
  * Varia's icons, drawn to codicon metrics: a 16 px grid with the drawing inside 1-15 px, `iconStroke` px strokes with
- * round caps and joins, `currentColor`, no fills. Straight lines sit on half pixels so they stay sharp at 100 % zoom.
+ * round caps and joins, `currentColor`, no fills. Straight lines sit on half pixels, so they are sharp at 100 % zoom where
+ * the icon's box starts on a whole pixel; one placed after text of fractional width (document tabs after the first) is not.
  * An id here replaces the codicon of the same name (server, database, table, key): objects look the same in Object
  * Explorer, menus, the palette and dialogs.
  */
@@ -80,8 +81,10 @@ export function renderIconDocs(): string {
     '',
     'Catalogues (commands, Object Explorer kinds and folders, document kinds, dialog pages) name icons only by these ids, and',
     'the renderer draws them only through `Icon.tsx`. Varia\'s own icons are drawn to codicon metrics: a 16 px grid with the',
-    `drawing inside 1-15 px, ${iconStroke} px strokes with round caps and joins, \`currentColor\` and no fills. An id below replaces the`,
-    'codicon of the same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured',
+    `drawing inside 1-15 px, ${iconStroke} px strokes with round caps and joins, \`currentColor\` and no fills. Straight lines sit on`,
+    'half pixels, so they are sharp at 100 % zoom where the icon\'s box starts on a whole pixel; one placed after text of',
+    'fractional width (document tabs after the first) is not. An id below replaces the codicon of the',
+    'same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured',
     'with theme keys; Microsoft\'s SSMS icons are never used.',
     '',
     `## Varia's icons (${Object.keys(svgIcons).length})`,

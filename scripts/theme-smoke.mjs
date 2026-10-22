@@ -150,6 +150,12 @@ try {
     return { brand: [brand?.tagName.toLowerCase(), brand?.dataset.icon, box(brand), brand && getComputedStyle(brand.querySelector('path')).strokeLinecap], tab: [tab?.dataset.icon, box(tab), tab?.closest('.tab-select')?.textContent] }
   })
   expect(icons).toEqual({ brand: ['svg', 'varia', [16, 16], 'round'], tab: ['database', [16, 16], expect.stringMatching(/^SQLQuery\d+\.sql$/)] })
+  // Under forced colours an svg keeps a colour set on itself (Chromium's preserve-parent-color), so the tab's kind icon
+  // would stay the theme's pale amber on the system's Canvas; it takes the tab text's system colour instead.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const forcedTab = await page.locator('.query-tab .tab-select').first().evaluate(tab => [getComputedStyle(tab.querySelector('.tab-icon path')).stroke, getComputedStyle(tab.querySelector('.tab-name')).color])
+  await page.emulateMedia({ forcedColors: null })
+  expect(forcedTab[0]).toBe(forcedTab[1])
   // Every glyph size rule wins over Monaco's codicon.css (16px/1 codicon), so each icon glyphUse names is drawn at its size.
   const glyphs = await page.evaluate(use => Object.fromEntries(Object.entries(use).flatMap(([name, selectors]) => selectors.map(selector => {
     // A probe that matches the selector (class compounds joined by descendant or child combinators): Icon.tsx draws a

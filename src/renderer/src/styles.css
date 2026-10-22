@@ -21,6 +21,10 @@ button.primary { color: var(--varia-button-foreground); background: var(--varia-
 button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackground); }
 /* Varia's SVG icons are 1em square, so font-size sizes them as it sizes codicons (src/shared/icons.ts). */
 .icon { display: block; width: 1em; height: 1em; flex: 0 0 1em; font-size: var(--varia-glyph-md); }
+/* Chromium gives svg preserve-parent-color, which keeps a colour set on the svg itself (a tab's kind icon) under forced
+   colours, and its stroke's currentColor ignores forced-color-adjust: auto. An inherited colour is the parent's forced
+   one, so the stroke follows the system colour of the text around it. :root outranks every rule that colours an icon. */
+@media (forced-colors: active) { :root svg.icon { color: inherit; } }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 4px; }
 .app { display: flex; flex-direction: column; height: 100vh; min-width: 900px; }
 .title-bar { height: 34px; flex-shrink: 0; background: var(--varia-titleBar-activeBackground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; }
@@ -323,7 +327,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-sm); }
 .output-empty strong { font-weight: 500; color: var(--varia-emptyState-titleForeground); }
 .output-empty p { font-size: var(--varia-size-xs); margin-top: 8px; }
-.output-empty .output-empty-icon { color: var(--varia-emptyState-iconForeground); font-size: var(--varia-glyph-lg); margin-bottom: 8px; }
 .output-toolbar { gap: 8px; padding-right: 10px; }
 .output-toolbar > div { display: flex; flex-shrink: 0; }
 .output-toolbar small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -490,7 +493,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .property-row input:disabled, .property-row select:disabled { opacity: .5; }
 .property-input-action { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .property-input-action > input:not([type="color"]), .property-input-action > select { flex: 1; }
-.property-input-action > button { padding: 4px 8px; border: 1px solid var(--varia-button-border); }
+.property-input-action > button { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--varia-button-border); }
 .property-input-action input[type="color"] { width: 36px; height: 28px; padding: 2px; flex-shrink: 0; cursor: pointer; }
 .property-row .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .advanced-action { display: flex; justify-content: flex-end; }

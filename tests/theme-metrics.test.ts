@@ -82,6 +82,13 @@ describe('metric tokens', () => {
     }
     expect(found, 'use var(--varia-size-*), or var(--varia-glyph-*) for an icon, from src/shared/theme/metrics.ts').toEqual([])
   })
+  it('lists only glyph rules whose classes the renderer draws', () => {
+    // theme-smoke's size probe builds its own elements, so a rule no markup uses would pass it and stay in the docs.
+    const files = readdirSync('src/renderer/src', { recursive: true, encoding: 'utf8' }).filter(file => /\.tsx?$/.test(file)).map(file => join('src/renderer/src', file))
+    const code = [...files, 'src/shared/icons.ts'].map(file => readFileSync(file, 'utf8')).join('\n')
+    const classes = [...new Set(Object.values(glyphUse).flat().flatMap(selector => [...selector.matchAll(/\.([\w-]+)/g)].map(match => match[1])))]
+    expect(classes.filter(name => !new RegExp(`(?<![\\w-])${name}(?![\\w-])`).test(code))).toEqual([])
+  })
   it('sizes icons only with the glyph sizes, as glyphUse lists them, on the codicon font\'s grid', () => {
     // Only the icon rules glyphUse names take a glyph size (theme-smoke checks that no text is under 11 px).
     for (const name of Object.keys(glyphSizes) as GlyphSizeName[]) {

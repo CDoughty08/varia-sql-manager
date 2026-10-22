@@ -305,6 +305,8 @@ describe('generated catalogue files', () => {
     expect(docs).toContain('| `function` | `inline`, `tableValued`, `clrTableValued` | Columns, Parameters |')
     expect(docs).toContain('| `parameter` | Parameter | `child` | `symbol-parameter` | Parameter | No | the name as is (`@name`) |')
     expect(docs).toContain('| `pageSize` | 2,000 |')
+    // The badge's size comes from its glyph token, which the stylesheet draws it with.
+    expect(docs).toContain('A 9 px badge (`--varia-glyph-badge`) at the bottom right of the row icon.')
     expect(docs).toContain(`## Node kinds (${nodeKinds.length})`)
   })
 })

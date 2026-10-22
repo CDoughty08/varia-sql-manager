@@ -162,7 +162,7 @@ const groups = {
     'editorWidget.border': ['V', pair('$controlBorder', '$borderStrong'), 'Border of dialogs and editor widgets.', 'css monaco'],
     'emptyState.foreground': ['X', '$textMuted', 'Text of empty views (no query, no results, empty dock).', 'css'],
     'emptyState.titleForeground': ['X', '$textTertiary', 'Heading of empty views.', 'css'],
-    'emptyState.iconForeground': ['X', '$iconMuted/60', 'Decorative glyph of empty views.', 'css']
+    'emptyState.iconForeground': ['X', '$iconMuted/60', 'Decorative glyph of empty views.', '', { reserved: 'the empty views of the output pane and documents' }]
   },
   'Output panel and results grid': {
     'panel.background': ['V', '$panel', 'Output panel.', 'css'],

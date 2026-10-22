@@ -3,6 +3,7 @@ import {
   childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, scopeFields, statusBadges,
   subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
+import { glyphSizes } from '../theme/metrics.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -140,8 +141,8 @@ export function renderExplorerDocs(): string {
     '',
     '## Status badges',
     '',
-    'An 8×8 badge at the bottom right of the row icon. Disabled, unavailable and inaccessible nodes are dimmed as well;',
-    'read-only databases are not, because their sublabel says it.',
+    `A ${glyphSizes.badge.px} px badge (\`--varia-glyph-badge\`) at the bottom right of the row icon.`,
+    'Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.',
     '',
     table(['Status', 'Badge'], Object.entries(statusBadges).map(([status, badge]) => [code(status), code(badge)])),
     '',

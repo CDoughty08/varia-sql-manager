@@ -129,9 +129,14 @@ describe('icon registry', () => {
     expect(classes, 'use <Icon name> or codiconClass() from src/shared/icons.ts').toEqual([])
     const svgs = sources.filter(({ file, code }) => !own.has(file) && !diagrams.has(file) && /<svg\b|createElementNS\(/.test(code)).map(({ file }) => file)
     expect(svgs, 'add the icon to src/shared/icons.ts').toEqual([])
-    // Text glyphs standing in for icons (stars, crosses, arrows) are icons too.
-    const glyphs = sources.flatMap(({ file, code }) => [...code.matchAll(/>\s*\{?[^<>{}]*?['"]?([★☆✓✗✕×⚠▶■▲▼◀►])['"]?/gu)].map(match => `${file}: ${match[1]}`))
+    // Text glyphs standing in for icons (stars, crosses, arrows, refresh) are icons too: the arrows, technical symbols,
+    // geometric shapes, miscellaneous symbols and dingbats blocks, and ×. Key names (⌘ ⌥ ⇧ ⌃) are text.
+    const symbol = /[×←-⇿⌀-⏿■-➿⟰-⟿⤀-⥿⬀-⯿]/u, keys = new Set(['⌘', '⌥', '⇧', '⌃'])
+    const glyph = new RegExp(String.raw`>\s*\{?[^<>{}]*?['"]?(${symbol.source})['"]?`, 'gu')
+    const glyphs = sources.flatMap(({ file, code }) => [...code.matchAll(glyph)].filter(match => !keys.has(match[1])).map(match => `${file}: ${match[1]}`))
     expect(glyphs).toEqual([])
+    // The lint itself: the glyphs that slipped past it once are found.
+    expect(['<button>↻</button>', "<button>{busy ? '…' : '⟳'}</button>", '<span>★</span>'].map(text => [...text.matchAll(glyph)].map(match => match[1]))).toEqual([['↻'], ['⟳'], ['★']])
   })
   it('loads in plain Node 24, as the catalogues that name icons do', () => {
     const file = join('src', 'shared', 'icons.ts')

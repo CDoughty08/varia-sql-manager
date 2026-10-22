@@ -220,8 +220,8 @@ used verbatim (never trimmed), without U+0000.
 
 ## Status badges
 
-An 8×8 badge at the bottom right of the row icon. Disabled, unavailable and inaccessible nodes are dimmed as well;
-read-only databases are not, because their sublabel says it.
+A 9 px badge (`--varia-glyph-badge`) at the bottom right of the row icon.
+Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.
 
 | Status | Badge |
 | --- | --- |

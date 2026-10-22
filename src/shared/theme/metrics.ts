@@ -81,7 +81,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: ['.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon'],
   md: ['.icon'],
-  lg: ['.explorer-empty > .icon', '.output-empty .output-empty-icon']
+  lg: ['.explorer-empty > .icon']
 }
 
 /** The planned use of each height; `densityUse` lists the rules that take it today. */

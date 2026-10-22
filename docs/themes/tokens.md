@@ -237,7 +237,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `editorWidget.border` | VS Code | Dark `$controlBorder`, Light `$borderStrong` | `#5f7089` | `#c3ccd8` | Border of dialogs and editor widgets. |
 | `emptyState.foreground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Text of empty views (no query, no results, empty dock). |
 | `emptyState.titleForeground` | Varia | `$textTertiary` | `#9eafc5` | `#465366` | Heading of empty views. |
-| `emptyState.iconForeground` | Varia | `$iconMuted/60` | `#7e93b199` | `#63718999` | Decorative glyph of empty views. |
+| `emptyState.iconForeground` | Varia | `$iconMuted/60` | `#7e93b199` | `#63718999` | Decorative glyph of empty views. Not used yet; reserved for the empty views of the output pane and documents. |
 
 ### Output panel and results grid
 
