@@ -50,6 +50,8 @@ const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
 // Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
 const dockTabFocusRing = () => page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] })
+// The neutral status bar shares Object Explorer's fill; without a connection color its own top line sets it apart.
+const statusBarEdge = () => page.locator('.status-bar').evaluate(bar => { const style = getComputedStyle(bar); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
 const contextMenuBorder = () => page.locator('.menu').evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
 // A theme color as the browser resolves it, to compare with computed styles.
 const colorOf = key => page.evaluate(name => {
@@ -101,6 +103,7 @@ try {
     return { xs: style.getPropertyValue('--varia-size-xs').trim(), fast: style.getPropertyValue('--varia-motion-fast').trim(), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }
   })).toEqual({ xs: '11px', fast: '0ms', reduced: true })
   expect(await page.locator('.status-bar').evaluate(element => [getComputedStyle(element).fontSize, element.getBoundingClientRect().height])).toEqual(['11px', 24])
+  expect(await statusBarEdge()).toBe('1px solid rgb(38, 42, 49)')
   expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(element => !element.closest('.monaco-editor') && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
     && parseFloat(getComputedStyle(element).fontSize) < 11).map(element => element.className || element.tagName))).toEqual([])
   // Monaco's codicon spinners (the query status bar's, the tree's Loading rows) stop too, not only Varia's own.
@@ -172,6 +175,7 @@ try {
   expect(await menuItem('theme.mode.light')).toMatchObject({ checked: true })
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(68, 83, 208)'])
   await expect.poll(bracketColors).toEqual(['rgb(122, 92, 0)', 'rgb(131, 56, 180)'])
+  expect(await statusBarEdge()).toBe('1px solid rgb(227, 230, 235)')
   await page.screenshot({ path: resolve('artifacts', 'theme-light.png') })
   console.log('Theme checks: switching to Light updates CSS, Monaco, Dockview, native chrome, and the preference without a reload.')
 

@@ -14,7 +14,10 @@ function parsed(file: Record<string, unknown>, name = 'test.json'): ParsedTheme 
 const resolve = (file: Record<string, unknown>, variant: ThemeType = 'dark') => resolveTheme([parsed(file)], variant)
 
 // The Calm Pro design's resolved Dark and Light values (its contrast-checked proposal), transcribed independently of the
-// registry defaults. One key departs: the active connection row keeps its tint, the only mark of the active query's server.
+// registry defaults. Where they depart: the active connection row keeps its tint, the only mark of the active query's
+// server; accentSurface is deeper, so the executing tint reaches 1.2:1 on the chrome and canvas; the status bar has a top
+// line (statusBar.border) to set it apart from Object Explorer's fill; and the disconnected text follows the status
+// bar's text, so a theme that recolors the bar keeps it readable.
 const specValues = `
 foreground #d9dce3 #1c1f26|descriptionForeground #9298a4 #5c6370|disabledForeground #9298a4 #5c6370|errorForeground #f39a9a #b42229
 warningForeground #e4bb6a #875800|successForeground #74d19c #146f3b|infoForeground #8f9cff #4453d0|focusBorder #8f9cff #4453d0
@@ -36,7 +39,7 @@ sideBarTitle.foreground #a3a9b5 #4d5461|sideBarSectionHeader.border #1f2228 #ece
 list.activeSelectionBackground #29314f #d9e0fb|list.activeSelectionForeground #d9dce3 #1c1f26|list.inactiveSelectionBackground #21273b #e7ebfc
 list.inactiveSelectionForeground #d9dce3 #1c1f26|list.focusOutline #8f9cff #4453d0|list.highlightForeground #8f9cff #4453d0
 list.focusHighlightForeground #d9dce3 #1c1f26|list.filterMatchBackground #8f9cff33 #4453d033|tree.indentGuidesStroke #1f2228 #eceef2
-objectExplorer.activeConnectionBackground #1c2136 #eef0fd|objectExplorer.headingForeground #d9dce3 #1c1f26
+objectExplorer.activeConnectionBackground #232842 #dde1f9|objectExplorer.headingForeground #d9dce3 #1c1f26
 objectExplorer.sublabelForeground #bcc1cb #3a404b|objectExplorer.countForeground #9298a4 #5c6370|objectExplorer.chevronForeground #7f8694 #6b7280
 objectExplorer.folderIconForeground #bfa878 #7d6532|objectExplorer.objectIconForeground #a3a9b5 #4d5461
 objectExplorer.actionForeground #a3a9b5 #4d5461|editorGroupHeader.tabsBackground #111317 #f7f8fa|tab.activeBackground #16181d #ffffff
@@ -68,11 +71,11 @@ resultsGrid.selectionBackground #29314f #d9e0fb|resultsGrid.selectionForeground 
 resultsGrid.inactiveSelectionBackground #21273b #e7ebfc|resultsGrid.activeCellBorder #8f9cff #4453d0|resultsGrid.hoverBackground #262a32 #dfe2e7
 resultsGrid.headerSelectionBackground #21273b #e7ebfc|resultsGrid.headerSelectionForeground #bcc5ff #3240b0|resultsGrid.linkForeground #8f9cff #4453d0
 resultsGrid.splitterBackground #6b7286 #878e9b|resultsMessages.foreground #d9dce3 #1c1f26|statusBar.background #111317 #f7f8fa
-statusBar.foreground #a3a9b5 #4d5461|statusBar.separatorForeground #9298a4 #5c6370|statusBar.onlineIndicator #74d19c #146f3b
-statusBar.idleIndicator #9298a4 #5c6370|statusBar.executingBackground #1c2136 #eef0fd|statusBar.executingForeground #bcc5ff #3240b0
-statusBar.disconnectedBackground #111317 #f7f8fa|statusBar.disconnectedForeground #9298a4 #5c6370|statusBar.errorBackground #3a1d22 #fdecec
+statusBar.foreground #a3a9b5 #4d5461|statusBar.border #262a31 #e3e6eb|statusBar.separatorForeground #9298a4 #5c6370
+statusBar.onlineIndicator #74d19c #146f3b|statusBar.idleIndicator #9298a4 #5c6370|statusBar.executingBackground #232842 #dde1f9|statusBar.executingForeground #bcc5ff #3240b0
+statusBar.disconnectedBackground #111317 #f7f8fa|statusBar.disconnectedForeground #a3a9b5 #4d5461|statusBar.errorBackground #3a1d22 #fdecec
 statusBar.errorForeground #f6bcc1 #8f1d24|queryStatusBar.background #16181d #ffffff|queryStatusBar.foreground #a3a9b5 #4d5461
-queryStatusBar.executingBackground #1c2136 #eef0fd|queryStatusBar.executingForeground #bcc5ff #3240b0|queryStatusBar.errorBackground #3a1d22 #fdecec
+queryStatusBar.executingBackground #232842 #dde1f9|queryStatusBar.executingForeground #bcc5ff #3240b0|queryStatusBar.errorBackground #3a1d22 #fdecec
 queryStatusBar.errorForeground #f6bcc1 #8f1d24|banner.errorBackground #3a1d22 #fdecec|banner.errorForeground #f6bcc1 #8f1d24
 banner.warningBackground #33291a #fff5dc|banner.warningForeground #f0d49e #6b4400|dialog.backdropBackground #0a0c10b3 #1c1f2652
 dialog.separatorBackground #30343c #dcdfe5|dialog.labelForeground #bcc1cb #3a404b|dialog.descriptionForeground #a3a9b5 #4d5461
@@ -110,10 +113,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 66 slots, 205 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 66 slots, 206 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(66)
-    expect(colorKeys).toHaveLength(205)
-    expect(new Set(colorKeys).size).toBe(205)
+    expect(colorKeys).toHaveLength(206)
+    expect(new Set(colorKeys).size).toBe(206)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -128,7 +131,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(205)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(206)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -156,6 +159,8 @@ describe('theme resolution', () => {
     const { theme, problems } = resolve({ palette: { deepSea: '#0b3d4a' }, colors: { 'statusBar.background': '$deepSea', 'focusBorder': '$nope', 'menu.border': '$deepSea/50' } })
     expect(theme.colors['statusBar.background']).toBe('#0b3d4a')
     expect(theme.colors['statusBar.disconnectedBackground']).toBe('#0b3d4a')
+    // The disconnected state's text follows a recolored bar's text as its fill follows the bar's.
+    expect(resolve({ colors: { 'statusBar.background': '#0b3d4a', 'statusBar.foreground': '#cfeff2' } }).theme.colors['statusBar.disconnectedForeground']).toBe('#cfeff2')
     expect(theme.colors['focusBorder']).toBe('#8f9cff')
     expect(theme.colors['menu.border']).toBe('#0b3d4a80')
     expect(problems).toEqual([expect.objectContaining({ code: 'W_REF_UNKNOWN', file: 'test.json', path: '/colors/focusBorder', severity: 'warning' })])
@@ -228,7 +233,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(205)
+      expect(Object.keys(theme.colors)).toHaveLength(206)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

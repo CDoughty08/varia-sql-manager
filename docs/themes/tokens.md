@@ -18,7 +18,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `raised` | The quick-input title. | `#1c1f25` | `#f1f3f6` |
 | `overlay` | Dialogs, menus, editor widgets, toasts, and docking compass cells. | `#1d2026` | `#ffffff` |
 | `input` | Inputs and selects. | `#101216` | `#ffffff` |
-| `accentSurface` | Tinted chrome: the status bars while a query runs, and the active connection row. | `#1c2136` | `#eef0fd` |
+| `accentSurface` | Tinted chrome: the status bars while a query runs, and the active connection row. At least 1.2:1 on the chrome and canvas, so the tint is seen. | `#232842` | `#dde1f9` |
 | `hover` | Hover fill. | `#262a32` | `#dfe2e7` |
 | `active` | Pressed button, open menu, highlighted menu item, and badge fill. | `#30343e` | `#d6dae0` |
 | `selection` | Unfocused selection, and the headers of selected cells. | `#21273b` | `#e7ebfc` |
@@ -78,7 +78,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (205)
+## Color keys (206)
 
 ### Base
 
@@ -165,7 +165,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9dce3` | `#1c1f26` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8f9cff33` | `#4453d033` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
 | `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
-| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#1c2136` | `#eef0fd` | Row of the active query's server. |
+| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Row of the active query's server. |
 | `objectExplorer.headingForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Folder row labels. |
 | `objectExplorer.sublabelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text after a row's label, such as a column's type or a database's state. |
 | `objectExplorer.countForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | The (filtered) marker and loading progress next to folder labels. |
@@ -284,18 +284,19 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | --- | --- | --- | --- | --- | --- |
 | `statusBar.background` | VS Code | `$chrome` | `#111317` | `#f7f8fa` | Status bar when connected and idle. |
 | `statusBar.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Status bar text when connected and idle. |
+| `statusBar.border` | VS Code | `@titleBar.border` | `#262a31` | `#e3e6eb` | Line above the status bar; a connection color takes its place. |
 | `statusBar.separatorForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Dividers between status bar items. |
 | `statusBar.onlineIndicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot shown while connected. |
 | `statusBar.idleIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Dot shown while not connected. |
-| `statusBar.executingBackground` | Varia | `$accentSurface` | `#1c2136` | `#eef0fd` | Status bar while a query runs. |
+| `statusBar.executingBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Status bar while a query runs. |
 | `statusBar.executingForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Status bar text while a query runs. |
 | `statusBar.disconnectedBackground` | Varia | `@statusBar.background` | `#111317` | `#f7f8fa` | Status bar without a connection. |
-| `statusBar.disconnectedForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Status bar text without a connection. |
+| `statusBar.disconnectedForeground` | Varia | `@statusBar.foreground` | `#a3a9b5` | `#4d5461` | Status bar text without a connection. |
 | `statusBar.errorBackground` | Varia | `$errorSurface` | `#3a1d22` | `#fdecec` | Status bar when the backend is unavailable. |
 | `statusBar.errorForeground` | Varia | `$errorSurfaceText` | `#f6bcc1` | `#8f1d24` | Status bar text when the backend is unavailable. |
 | `queryStatusBar.background` | Varia | `$canvas` | `#16181d` | `#ffffff` | Status bar of the query window, below or above the query (as in SSMS), while its query is idle. |
 | `queryStatusBar.foreground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Query status bar text. |
-| `queryStatusBar.executingBackground` | Varia | `@statusBar.executingBackground` | `#1c2136` | `#eef0fd` | Query status bar while its query runs. |
+| `queryStatusBar.executingBackground` | Varia | `@statusBar.executingBackground` | `#232842` | `#dde1f9` | Query status bar while its query runs. |
 | `queryStatusBar.executingForeground` | Varia | `@statusBar.executingForeground` | `#bcc5ff` | `#3240b0` | Query status bar text while its query runs. |
 | `queryStatusBar.errorBackground` | Varia | `@statusBar.errorBackground` | `#3a1d22` | `#fdecec` | Query status bar after a run failed, was cancelled or timed out, or lost its connection. |
 | `queryStatusBar.errorForeground` | Varia | `@statusBar.errorForeground` | `#f6bcc1` | `#8f1d24` | Query status bar text after a run failed, was cancelled or timed out, or lost its connection. |

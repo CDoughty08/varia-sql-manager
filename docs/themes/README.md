@@ -1,9 +1,10 @@
 # Color themes
 
 Varia ships two themes, **Varia Dark** (the default) and **Varia Light**, and can follow the operating system. Both use
-graphite neutrals and one iris accent; red, amber, and green are kept for state. Custom themes
-are small JSON files that override a named palette, individual color keys, and SQL syntax colors on top of the built-in
-theme of their type. Key names follow VS Code wherever the concept matches, and palette references work like opencode's.
+graphite neutrals and one iris accent; in the workbench chrome, red, amber, and green are kept for state. SQL syntax
+colors, chart series, and the connection colors you choose are separate sets. Custom themes are small JSON files that
+override a named palette, individual color keys, and SQL syntax colors on top of the built-in theme of their type. Key
+names follow VS Code wherever the concept matches, and palette references work like opencode's.
 
 - [`tokens.md`](tokens.md) lists every palette slot, color key, and SQL scope with its default in both themes.
 - [`metrics.md`](metrics.md) lists the type scale, spacing, radii, shadows, motion and bar heights, which themes do not set.
@@ -100,6 +101,9 @@ A theme is applied on top of the built-in theme of its type: Varia Dark for `dar
 
 Because every key defaults to a slot, overriding one slot recolors everything that uses it. Overriding `accent` changes
 `button.background`, `tab.activeBorderTop`, `panelTitle.activeBorder`, and every other key that defaults to `$accent`.
+The accent's companions are slots of their own: `textAccent` (selected labels and the status bar text while a query
+runs), `accentSurface` (that status bar tint and the active connection row) and the `selection` slots stay iris until a
+theme sets them, as `harbor.json` does for its teal.
 
 ### Values
 
@@ -127,7 +131,7 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 205 keys are listed in [`tokens.md`](tokens.md#color-keys-205) by area: title bar and menus, buttons and inputs,
+The 206 keys are listed in [`tokens.md`](tokens.md#color-keys-206) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
 dialogs, and connection colors. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
 are reserved for upcoming features (notifications, the new Object Explorer and results grid): they resolve now and take

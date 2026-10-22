@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
 import { contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
+import { parseThemeSource } from '../src/shared/theme/format'
 import { colorKeys, cssVariable, sqlScopes, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
-import { resolveBuiltin } from '../src/shared/theme/resolve'
+import { resolveBuiltin, resolveTheme } from '../src/shared/theme/resolve'
 import type { ResolvedTheme, ThemeType } from '../src/shared/theme/types'
 
 const types: ThemeType[] = ['dark', 'light']
@@ -69,6 +71,20 @@ describe('built-in theme contrast', () => {
     expect(rules.length).toBeGreaterThan(30)
     const missing = rules.filter(({ color, background }) => !contrastExemptions[color!] && !contrastPairs.some(pair => pair.foreground === color && pair.background.at(-1) === background))
     expect(missing.map(rule => `${rule.selector}: ${rule.color} on ${rule.background}`)).toEqual([])
+  })
+  it('holds the documentation example themes to the same pairs', () => {
+    // A key default that stops following an override the examples make (the status bar's, say) shows up here.
+    const directory = join('docs', 'themes', 'examples')
+    const files = readdirSync(directory).filter(file => file.endsWith('.json')).sort()
+    expect(files.length).toBeGreaterThan(1)
+    const failures = files.flatMap(file => {
+      const theme = parseThemeSource(readFileSync(join(directory, file)), file).theme!
+      return (theme.type === 'dual' ? types : [theme.type]).flatMap(type => {
+        const resolved = resolveTheme([theme], type).theme
+        return contrastPairs.map(pair => [pair, ratio(resolved, pair)] as const).filter(([pair, value]) => value < pair.minimum).map(([pair, value]) => `${file} ${describePair(type, pair, value)}`)
+      })
+    })
+    expect(failures, failures.join('\n')).toEqual([])
   })
   it('composites translucent foregrounds and backgrounds before measuring', () => {
     const dark = resolveBuiltin('dark')

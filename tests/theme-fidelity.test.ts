@@ -85,4 +85,29 @@ describe('Calm Pro fidelity', () => {
       expect(colors['statusBar.errorBackground']).not.toBe(colors['statusBar.background'])
     }
   })
+  it('marks a value that could not be read with more than color, apart from NULL', () => {
+    // Both read "NULL"; hue alone would leave them alike for color-blind readers and in screenshots.
+    const css = readFileSync('src/renderer/src/styles.css', 'utf8')
+    const rule = (selector: string) => {
+      const body = css.split('\n').find(line => line.startsWith(selector + ' {')) ?? ''
+      return { fontStyle: body.match(/font-style: ([^;]+);/)?.[1] ?? 'normal', decoration: body.match(/text-decoration: ([^;]+);/)?.[1] ?? 'none' }
+    }
+    const nulls = rule('.rg-c.is-null'), errors = rule('.rg-c.is-err')
+    expect(nulls).toEqual({ fontStyle: 'italic', decoration: 'none' })
+    expect(errors.fontStyle).not.toBe(nulls.fontStyle)
+    expect(errors.decoration).not.toBe(nulls.decoration)
+  })
+  it('separates the neutral status bar from the panes above it, and makes its executing tint noticeable', () => {
+    expect(readFileSync('src/renderer/src/styles.css', 'utf8')).toMatch(/^\.status-bar \{[^}]*\bborder-top: 1px solid var\(--varia-statusBar-border\);[^}]*\}$/m)
+    for (const type of types) {
+      const { colors } = resolveBuiltin(type), color = (key: keyof typeof colors) => hexColor(colors[key])
+      // As noticeable as the other chrome borders, which pass 1.15:1 on the surfaces they divide.
+      for (const surface of ['statusBar.background', 'editor.background', 'sideBar.background', 'panel.background'] as const) {
+        expect(contrast(color('statusBar.border'), color(surface)), `${type} statusBar.border on ${surface}`).toBeGreaterThanOrEqual(1.15)
+      }
+      // The tint is the only change of fill that says a query runs, so it is held to the hover floor at least.
+      expect(contrast(color('statusBar.executingBackground'), color('statusBar.background')), `${type} status bar`).toBeGreaterThanOrEqual(1.2)
+      expect(contrast(color('queryStatusBar.executingBackground'), color('queryStatusBar.background')), `${type} query status bar`).toBeGreaterThanOrEqual(1.2)
+    }
+  })
 })

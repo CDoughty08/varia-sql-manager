@@ -419,12 +419,14 @@ try {
   await expect(cell(1, 3)).toHaveClass(/is-trunc/)
   await page.keyboard.press('ArrowLeft')
   await page.keyboard.press('ArrowLeft')
-  // A NULL and a value that could not be read look alike; their labels tell them apart.
+  // A NULL and a value that could not be read both show NULL; their labels tell them apart, and so does more than hue.
   await expect.poll(async () => (await active()).label).toBe('NULL, null value')
   await page.keyboard.press('ArrowDown')
   for (let column = 0; column < 3; column++) await page.keyboard.press('ArrowRight')
   await expect.poll(async () => (await active()).label).toBe('NULL, could not be read')
-  expect(await cell(2, 4).evaluate(element => getComputedStyle(element).fontStyle)).toBe('italic')
+  const cue = element => { const style = getComputedStyle(element); return `${style.fontStyle} ${style.textDecorationLine} ${style.textDecorationStyle}` }
+  expect(await cell(1, 1).evaluate(cue)).toBe('italic none solid')
+  expect(await cell(2, 4).evaluate(cue)).toBe('normal underline wavy')
   console.log('Results checks: the active descendant follows every grid key with its row, column, selection and label.')
 
   // 6. Selection and copy: clicks, Shift, a drag that scrolls, Ctrl+click on columns and rows, headers and the corner;

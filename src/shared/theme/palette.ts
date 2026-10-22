@@ -13,7 +13,7 @@ const slots = {
   raised: ['The quick-input title.', '#1c1f25', '#f1f3f6'],
   overlay: ['Dialogs, menus, editor widgets, toasts, and docking compass cells.', '#1d2026', '#ffffff'],
   input: ['Inputs and selects.', '#101216', '#ffffff'],
-  accentSurface: ['Tinted chrome: the status bars while a query runs, and the active connection row.', '#1c2136', '#eef0fd'],
+  accentSurface: ['Tinted chrome: the status bars while a query runs, and the active connection row. At least 1.2:1 on the chrome and canvas, so the tint is seen.', '#232842', '#dde1f9'],
   hover: ['Hover fill.', '#262a32', '#dfe2e7'],
   active: ['Pressed button, open menu, highlighted menu item, and badge fill.', '#30343e', '#d6dae0'],
   selection: ['Unfocused selection, and the headers of selected cells.', '#21273b', '#e7ebfc'],

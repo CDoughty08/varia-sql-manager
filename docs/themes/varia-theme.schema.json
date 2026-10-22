@@ -92,8 +92,8 @@
         },
         "accentSurface": {
           "$ref": "#/definitions/value",
-          "description": "Tinted chrome: the status bars while a query runs, and the active connection row. Varia Dark #1c2136 · Varia Light #eef0fd",
-          "markdownDescription": "Tinted chrome: the status bars while a query runs, and the active connection row. Varia Dark `#1c2136` · Varia Light `#eef0fd`"
+          "description": "Tinted chrome: the status bars while a query runs, and the active connection row. At least 1.2:1 on the chrome and canvas, so the tint is seen. Varia Dark #232842 · Varia Light #dde1f9",
+          "markdownDescription": "Tinted chrome: the status bars while a query runs, and the active connection row. At least 1.2:1 on the chrome and canvas, so the tint is seen. Varia Dark `#232842` · Varia Light `#dde1f9`"
         },
         "hover": {
           "$ref": "#/definitions/value",
@@ -728,8 +728,8 @@
         },
         "objectExplorer.activeConnectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Row of the active query's server. Default $accentSurface (Dark #1c2136, Light #eef0fd).",
-          "markdownDescription": "(Varia) Row of the active query's server. Default `$accentSurface` (Dark `#1c2136`, Light `#eef0fd`)."
+          "description": "(Varia) Row of the active query's server. Default $accentSurface (Dark #232842, Light #dde1f9).",
+          "markdownDescription": "(Varia) Row of the active query's server. Default `$accentSurface` (Dark `#232842`, Light `#dde1f9`)."
         },
         "objectExplorer.headingForeground": {
           "$ref": "#/definitions/value",
@@ -1196,6 +1196,11 @@
           "description": "(VS Code) Status bar text when connected and idle. Default $textTertiary (Dark #a3a9b5, Light #4d5461).",
           "markdownDescription": "(VS Code) Status bar text when connected and idle. Default `$textTertiary` (Dark `#a3a9b5`, Light `#4d5461`)."
         },
+        "statusBar.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Line above the status bar; a connection color takes its place. Default @titleBar.border (Dark #262a31, Light #e3e6eb).",
+          "markdownDescription": "(VS Code) Line above the status bar; a connection color takes its place. Default `@titleBar.border` (Dark `#262a31`, Light `#e3e6eb`)."
+        },
         "statusBar.separatorForeground": {
           "$ref": "#/definitions/value",
           "description": "(Varia) Dividers between status bar items. Default $textMuted (Dark #9298a4, Light #5c6370).",
@@ -1213,8 +1218,8 @@
         },
         "statusBar.executingBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Status bar while a query runs. Default $accentSurface (Dark #1c2136, Light #eef0fd).",
-          "markdownDescription": "(Varia) Status bar while a query runs. Default `$accentSurface` (Dark `#1c2136`, Light `#eef0fd`)."
+          "description": "(Varia) Status bar while a query runs. Default $accentSurface (Dark #232842, Light #dde1f9).",
+          "markdownDescription": "(Varia) Status bar while a query runs. Default `$accentSurface` (Dark `#232842`, Light `#dde1f9`)."
         },
         "statusBar.executingForeground": {
           "$ref": "#/definitions/value",
@@ -1228,8 +1233,8 @@
         },
         "statusBar.disconnectedForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Status bar text without a connection. Default $textMuted (Dark #9298a4, Light #5c6370).",
-          "markdownDescription": "(Varia) Status bar text without a connection. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+          "description": "(Varia) Status bar text without a connection. Default @statusBar.foreground (Dark #a3a9b5, Light #4d5461).",
+          "markdownDescription": "(Varia) Status bar text without a connection. Default `@statusBar.foreground` (Dark `#a3a9b5`, Light `#4d5461`)."
         },
         "statusBar.errorBackground": {
           "$ref": "#/definitions/value",
@@ -1253,8 +1258,8 @@
         },
         "queryStatusBar.executingBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Query status bar while its query runs. Default @statusBar.executingBackground (Dark #1c2136, Light #eef0fd).",
-          "markdownDescription": "(Varia) Query status bar while its query runs. Default `@statusBar.executingBackground` (Dark `#1c2136`, Light `#eef0fd`)."
+          "description": "(Varia) Query status bar while its query runs. Default @statusBar.executingBackground (Dark #232842, Light #dde1f9).",
+          "markdownDescription": "(Varia) Query status bar while its query runs. Default `@statusBar.executingBackground` (Dark `#232842`, Light `#dde1f9`)."
         },
         "queryStatusBar.executingForeground": {
           "$ref": "#/definitions/value",

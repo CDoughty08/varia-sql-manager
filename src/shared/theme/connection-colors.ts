@@ -14,8 +14,13 @@ const storedPresets: Readonly<Record<ConnectionColorName, string>> = { red: '#e6
 export const connectionPresets: readonly ConnectionPreset[] = connectionColorNames.map(name => ({
   name, label: name[0].toUpperCase() + name.slice(1), stored: storedPresets[name], key: `connection.${name}` as ColorKey
 }))
-/** The surfaces a connection accent is drawn on: Object Explorer, query tab strip, editor, and status bar. */
-export const connectionAccentSurfaces: readonly ColorKey[] = ['sideBar.background', 'documentTabs.background', 'editor.background', 'statusBar.background']
+/**
+ * The surfaces a connection accent is drawn on: Object Explorer, query tab strip, editor, and both status bars in every
+ * state, since their connection edge stays while a query runs or fails.
+ */
+export const connectionAccentSurfaces: readonly ColorKey[] = ['sideBar.background', 'documentTabs.background', 'editor.background', 'statusBar.background',
+  'statusBar.executingBackground', 'statusBar.disconnectedBackground', 'statusBar.errorBackground', 'queryStatusBar.background', 'queryStatusBar.executingBackground',
+  'queryStatusBar.errorBackground']
 
 /**
  * The CSS color for a stored connection color: a preset becomes its theme variable (so it switches live), a custom
