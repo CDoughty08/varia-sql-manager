@@ -30,16 +30,18 @@ templates, built from one catalog query. A verb a kind does not support is shown
 Each verb submenu holds the three destinations. Their commands are `explorer.script<Verb>To<Destination>`, from
 `explorer.scriptCreateToNewQuery` to `explorer.scriptExecuteToClipboard`; they stay out of the palette, where Script As… lists the enabled ones.
 
-| Destination | Menu title | Mnemonic | Icon | Waits for document tasks |
-| --- | --- | --- | --- | --- |
-| `newQuery` | New Query Editor Window | n | `file-code` | Yes |
-| `file` | File… | f | `save-as` | Yes |
-| `clipboard` | Clipboard | l | `clippy` | No |
+| Destination | Menu title | Mnemonic | Icon | Waits for document tasks | Script drawer button |
+| --- | --- | --- | --- | --- | --- |
+| `newQuery` | New Query Editor Window | n | `file-code` | Yes | Open in Query Window |
+| `file` | File… | f | `save-as` | Yes | Save Script As… |
+| `clipboard` | Clipboard | l | `clippy` | No | Copy |
 
 New Query Editor Window opens the script in a new query on the object's server and database (`master` for databases
 and server objects), not marked unsaved. File… suggests `<schema>.<name>.sql` (`<schema>.<table>.<name>.sql` for an
 index, key, constraint, statistic or trigger, `<name>.sql` without a schema), which main makes safe for every platform.
 Modify is ALTER To › New Query Editor Window for the kinds marked Mod below.
+A document's Script drawer (the document frame) offers the same destinations as buttons with the same icons, named in the
+last column; each takes the whole script, not the preview.
 
 A request that takes longer than 300 ms shows in the status bar with Cancel (also Object Explorer: Cancel
 Scripting in the palette). At most 4 run at once; a cancelled request, or one whose server disconnects, opens nothing.

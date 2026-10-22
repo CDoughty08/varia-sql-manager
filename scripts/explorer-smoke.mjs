@@ -152,6 +152,12 @@ try {
   await launch()
   await application.evaluate(installExplorerStub, explorerStubData())
   await expect(page.getByText('Connect to SQL Server to browse databases and objects.')).toBeVisible()
+  // The empty pane is the states kit's centred empty state, with Connect as its one filled action.
+  const emptyExplorer = page.locator('.explorer-empty.empty-state')
+  await expect(emptyExplorer.locator('.empty-state-icon.codicon-server')).toHaveCount(1)
+  await expect(emptyExplorer.locator('.empty-state-detail')).toHaveText('Connect to SQL Server to browse databases and objects.')
+  await expect(emptyExplorer.getByRole('button', { name: 'Connect to server', exact: true })).toHaveClass('primary')
+  await expect(emptyExplorer).toHaveCSS('justify-content', 'center')
 
   // 1. One focusable ARIA tree: a new server is expanded, its folders are collapsed, and nothing below them is loaded.
   // Connecting the first server by keyboard from the empty state moves focus to the tree, which replaced the button.
@@ -609,6 +615,14 @@ try {
   await expect(page.getByText('Object Explorer stopped because of a rendering error.')).toBeVisible()
   // Focus went with the tree to the Reload button, and after Reload to the new tree, which repeats no old announcement.
   await expect(page.getByRole('button', { name: 'Reload Object Explorer', exact: true })).toBeFocused()
+  // Copy details puts the fault and where it happened on the clipboard, through main, and says so.
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await page.locator('.explorer-fault').getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(page.locator('.explorer-fault .inline-error-status')).toHaveText('Details copied.')
+  await expect.poll(clipboard).toContain('Message: Object Explorer stopped because of a rendering error.')
+  expect(await clipboard()).toContain('Object Explorer test fault.')
+  expect(await clipboard()).toContain('Component stack:')
+  await page.getByRole('button', { name: 'Reload Object Explorer', exact: true }).focus()
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-b')).toHaveAttribute('aria-expanded', 'true')
   await expect(tree()).toBeFocused()
