@@ -126,7 +126,7 @@ async function scriptFrom(path, ...items) {
 const statusLayout = () => page.evaluate(part => {
   const bar = document.querySelector(part.statusBar), box = bar.getBoundingClientRect(), text = bar.querySelector(part.statusSegmentText)
   return {
-    fits: [...bar.children].every(child => { const part = child.getBoundingClientRect(); return part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 && part.left >= box.left - 0.5 && part.right <= box.right + 0.5 }),
+    fits: [...bar.children].every(child => { const rect = child.getBoundingClientRect(); return rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 }),
     overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: !!text && text.scrollWidth > text.clientWidth
   }
 }, part)

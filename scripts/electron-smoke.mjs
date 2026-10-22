@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, anyResultGrid, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindBadge, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -203,6 +203,7 @@ try {
   await undoToClean()
   await redoToText(typed)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
+  await expect(kindBadge(activeDocument(page), 'SQL')).toHaveText('SQL')
   await page.keyboard.press('F10')
   await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
   await page.keyboard.press('ArrowRight')

@@ -1,7 +1,7 @@
 // Where Varia's surfaces are, for the smoke suites and the Electron benches. Suites find a surface by its ARIA role and
 // accessible name, through the locators here, so a restyle or a reshuffled shell changes this file rather than every
 // suite. The parts with no role or name of their own (layout probes, decorative marks, a strip's text) are the class
-// names in `part` and `gridPart`, used only from here and from page code that receives them as arguments.
+// names in `part`, `gridPart` and `queryFacts`, used only from here and from page code that receives them as arguments.
 // tests/smoke-selectors.test.ts keeps Varia's class names out of the suites and checks that each one here still exists
 // in the renderer.
 
@@ -35,12 +35,12 @@ export const part = {
   statusSegment: '.status-scripting',
   statusSegmentText: '.status-scripting-text',
   statusSegmentMore: '.status-scripting-more',
+  /** The state sentence and its icon. */
+  queryState: '.query-status-state',
   queryStatusText: '.query-status-text',
   /** The login and SPID of the query's session. */
   querySession: '.status-session',
   querySegment: '.query-status-segment',
-  /** Followed by a fact's key: server, login, database, time or rows. */
-  queryFactPrefix: '.query-status-',
   // Document tabs
   tabName: '.tab-name',
   // Query output
@@ -96,7 +96,18 @@ export const part = {
   dockingGuides: '.docking-guides',
   dockingGuideCell: '.docking-guide-cell',
   activeDockingGuideCell: '.docking-guide-cell.active',
-  dockingPreview: '.docking-preview'
+  dockingPreview: '.docking-preview',
+  /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
+  dockShell: '.varia-dock'
+}
+
+/** The query status facts by key (QueryStatusSegment's keys), each in its own segment. */
+export const queryFacts = {
+  server: '.query-status-server',
+  login: '.query-status-login',
+  database: '.query-status-database',
+  time: '.query-status-time',
+  rows: '.query-status-rows'
 }
 
 /** GridView's parts inside a results grid (`[data-result-grid]`), by role where the grid has one. */
@@ -130,6 +141,8 @@ const named = (name, exact = true) => typeof name === 'string' ? { name, exact }
 // The shell
 
 export const titleBar = page => page.locator(part.titleBar)
+/** Dockview's theme classes on its shell, and whether Varia's own class sits beside them. */
+export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
 /** The Standard toolbar: Connect, New query, Open, Save, Execute, Cancel, Layouts, and the server and database pickers. */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
@@ -156,7 +169,10 @@ export const memoryIndicator = page => statusBar(page).locator(part.memory)
 /** The active document's status: its state sentence and connection facts, or a value document's kind. */
 export const queryStatus = page => page.getByRole('status', { name: 'Query status', exact: true })
 /** One query status fact by key: server, login, database, time or rows. */
-export const queryFact = (page, key) => queryStatus(page).locator(part.queryFactPrefix + key)
+export const queryFact = (page, key) => {
+  if (!Object.hasOwn(queryFacts, key)) throw new Error('No query status fact ' + key)
+  return queryStatus(page).locator(queryFacts[key])
+}
 export const querySession = page => queryStatus(page).locator(part.querySession)
 
 // Documents
@@ -172,8 +188,8 @@ export const closeDocumentButton = (page, name) => documentTabs(page).getByRole(
 export const unsavedMark = scope => scope.getByRole('img', { name: 'Unsaved changes', exact: true })
 export const readOnlyMark = scope => scope.getByRole('img', { name: 'Read-only', exact: true })
 export const executingMark = scope => scope.getByRole('img', { name: 'Executing', exact: true })
-/** A tab's kind badge (SQL, XML, JSON, PLAN or the designer's icon), drawn before its name. */
-export const kindBadge = tab => tab.getByRole('img').first()
+/** A tab's kind badge, drawn before its name: SQL, XML, JSON, PLAN, or the designer's icon named Table Designer. */
+export const kindBadge = (tab, kind) => tab.getByRole('img', { name: kind, exact: true })
 export const editorTextbox = page => page.locator('.monaco-editor [role="textbox"]')
 export const editorText = page => page.locator('.monaco-editor .view-lines').innerText()
 

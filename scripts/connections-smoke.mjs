@@ -245,8 +245,8 @@ try {
         return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
       }
       if (method === 'connections.connect') {
-        if (params.server === 'connect-error') return { ok: false, error: 'Server unavailable.', code: 'SQL_ERROR', details: { number: 53, state: 0, class: 20, server: 'connect-error' } }
-        if (params.server === 'connect-error-plain') return { ok: false, error: 'Server unavailable without details.' }
+        if (params.server === 'server-down') return { ok: false, error: 'Server unavailable.', code: 'SQL_ERROR', details: { number: 53, state: 0, class: 20, server: 'server-down' } }
+        if (params.server === 'server-down-plain') return { ok: false, error: 'Server unavailable without details.' }
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
       // alice@CONTOSO.COM, unless the suite holds the answer back (identityPending) to look at the dialog while it waits.
@@ -338,7 +338,7 @@ try {
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: Discovery failed without details/)).toBeVisible()
   await expect(databaseDetails).toHaveCount(0)
-  await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable')
   // The details expander starts closed, opens to SQL Server's facts, and goes with the error once the options change.
@@ -348,15 +348,15 @@ try {
   await details.getByText('Error details', { exact: true }).click()
   await expect(details).toHaveAttribute('open', '')
   expect(await details.locator('dt').allTextContents()).toEqual(['Error number', 'Severity', 'State', 'Server'])
-  expect(await details.locator('dd').allTextContents()).toEqual(['53', '20', '0', 'connect-error'])
+  expect(await details.locator('dd').allTextContents()).toEqual(['53', '20', '0', 'server-down'])
   await details.screenshot({ path: resolve('artifacts', 'connect-error-details.png') })
-  await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error-plain')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-down-plain')
   await expect(details).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable without details')
   await expect(details).toHaveCount(0)
   const history = await page.evaluate(() => window.varia.loadConnectionLibrary())
-  expect(history.value.library.profiles.some(item => item.options.server === 'connect-error')).toBe(false)
+  expect(history.value.library.profiles.some(item => item.options.server === 'server-down')).toBe(false)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connected-server')
   await dialog.getByLabel('Database Name', { exact: true }).fill('AppData')
   await dialog.getByLabel('Name', { exact: true }).fill('Development')

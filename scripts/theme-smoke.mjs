@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeMenuItem, documentTabs, movePane, editorText as editorTextOf, openMenus, statusBar, themeNotice, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, statusBar, themeNotice, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'theme-profile-'))
@@ -46,7 +46,6 @@ const variable = key => page.evaluate(name => getComputedStyle(document.document
 const variables = keys => Promise.all(keys.map(variable))
 const native = () => application.evaluate(({ BrowserWindow, nativeTheme }) => ({ source: nativeTheme.themeSource, dark: nativeTheme.shouldUseDarkColors, background: BrowserWindow.getAllWindows()[0].getBackgroundColor().toLowerCase() }))
 const backgroundOf = selector => page.locator(selector).first().evaluate(element => getComputedStyle(element).backgroundColor)
-const shellClasses = () => page.locator('.dv-shell').evaluate(element => [...element.classList].filter(name => /^(dockview-theme-|varia-dock$)/.test(name)).sort())
 const editorText = () => editorTextOf(page)
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
 // Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
@@ -90,7 +89,7 @@ try {
   expect(await variable('editor.background')).toBe('#11151c')
   expect(await backgroundOf('.monaco-editor')).toBe('rgb(17, 21, 28)')
   expect(await native()).toMatchObject({ source: 'dark', background: '#11151c' })
-  expect(await shellClasses()).toEqual(['dockview-theme-dark', 'varia-dock'])
+  expect(await dockShell(page)).toEqual({ themes: ['dockview-theme-dark'], varia: true })
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['dark', 'dark'])
   await expect(themeNotice(page)).toHaveCount(0)
   await expect(statusBar(page)).toHaveAttribute('data-state', 'disconnected')
@@ -142,7 +141,7 @@ try {
   await menu('theme.mode.light')
   await expect.poll(() => variables(lightKeys)).toEqual(['#ffffff', '#1f2733', '#005fb8', '#e9edf2', '#c42b3c'])
   await expect.poll(() => backgroundOf('.monaco-editor')).toBe('rgb(255, 255, 255)')
-  expect(await shellClasses()).toEqual(['dockview-theme-light', 'varia-dock'])
+  expect(await dockShell(page)).toEqual({ themes: ['dockview-theme-light'], varia: true })
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['light', 'light'])
   await expect.poll(native).toMatchObject({ source: 'light', background: '#ffffff' })
   if (process.platform !== 'darwin') expect(await application.evaluate(() => globalThis.themeOverlays.at(-1))).toEqual({ color: '#e9edf2', symbolColor: '#1f2733' })

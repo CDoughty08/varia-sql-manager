@@ -10,7 +10,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindBadge, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindBadge, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -679,7 +679,7 @@ try {
   await expect(textbox()).toBeFocused()
   expect(await editorLanguage()).toBe('xml')
   await expect(queryStatus(page)).toHaveText('XML document')
-  await expect(kindBadge(activeDocument(page))).toHaveText('XML')
+  await expect(kindBadge(activeDocument(page), 'XML')).toHaveText('XML')
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   await expect(server()).toBeDisabled()
   await expect(server()).toHaveValue('')
@@ -707,7 +707,7 @@ try {
   await expect(valueTab('ExecutionPlan1.sqlplan')).toHaveAttribute('aria-selected', 'true')
   expect(await editorLanguage()).toBe('xml')
   await expect(queryStatus(page)).toHaveText('Execution plan')
-  await expect(kindBadge(activeDocument(page))).toHaveText('PLAN')
+  await expect(kindBadge(activeDocument(page), 'PLAN')).toHaveText('PLAN')
   expect(await editorText()).toBe('<ShowPlanXML>\n  <BatchSequence>\n    <Batch />\n  </BatchSequence>\n</ShowPlanXML>')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
@@ -1149,16 +1149,16 @@ try {
   await run('-- varia-fake: sets=W1*10 memory=0.5')
   await expect(memoryIndicator(page)).toHaveText(/^Results 128 MB/)
   await expect(queryStatus(page)).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')}( \\(\\d+\\.\\d+\\))? \\| \\S`))
-  expect(await page.evaluate(part => {
-    const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, ' + part.querySegment)].every(child => { const part = child.getBoundingClientRect(); return part.left >= box.left - 0.5 && part.right <= box.right + 0.5 && part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 }) }
-    const server = document.querySelector(part.queryFactPrefix + 'server'), database = document.querySelector(part.queryFactPrefix + 'database')
+  expect(await page.evaluate(([part, facts]) => {
+    const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, ' + part.querySegment)].every(child => { const rect = child.getBoundingClientRect(); return rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 }) }
+    const server = document.querySelector(facts.server), database = document.querySelector(facts.database)
     return {
-      fits: fits(document.querySelector(part.statusBar)) && fits(document.querySelector(part.queryStatus)), rows: document.querySelector(part.queryFactPrefix + 'rows')?.textContent,
+      fits: fits(document.querySelector(part.statusBar)) && fits(document.querySelector(part.queryStatus)), rows: document.querySelector(facts.rows)?.textContent,
       overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: server.scrollWidth > server.clientWidth,
       // The server gives way before the database, which stays whole while the server can shrink.
       database: database.scrollWidth <= database.clientWidth
     }
-  }, part)).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true, database: true })
+  }, [part, queryFacts])).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true, database: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
   // Script As requests held in the backend keep Cancel and the start of their text: the editor's segments give way,
   // no segment covers another, and the text keeps a gap from the backend status even when it fills its segment (two
@@ -1180,7 +1180,7 @@ try {
     const overlaps = boxes.flatMap(([name, a], i) => boxes.slice(i + 1).filter(([, b]) => a.left < b.right - 0.5 && b.left < a.right - 0.5).map(([other]) => name + '/' + other))
     const text = bar.querySelector(part.statusSegmentText).getBoundingClientRect(), gap = text.left - parts.backend.getBoundingClientRect().right
     return {
-      overlaps, inside: boxes.every(([, part]) => part.left >= box.left - 0.5 && part.right <= box.right + 0.5),
+      overlaps, inside: boxes.every(([, rect]) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5),
       text: text.width >= 40, gap: gap >= 8 || gap, placeShown: parts.place.getBoundingClientRect().width >= 40
     }
   }, part)

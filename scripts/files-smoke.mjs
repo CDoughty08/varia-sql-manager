@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
-import { activeDocument, banner as bannerOf, caretStatus, documentTab, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, part, queryFact, queryStatus, readOnlyMark, readOnlyStatus, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, banner as bannerOf, caretStatus, documentTab, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, part, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'files-profile-'))
@@ -320,13 +320,14 @@ try {
     await expect(queryBar()).toHaveAttribute('title', new RegExp(`\\| ${database || 'master'}(\\n|$)`))
   }
   /** Which segments lie inside the bar, and which show their whole text. */
-  const layout = () => page.evaluate(({ queryStatus, queryFactPrefix }) => {
-    const bar = document.querySelector(queryStatus).getBoundingClientRect()
-    const part = name => document.querySelector(queryFactPrefix + name)
+  const layout = () => page.evaluate(([part, facts]) => {
+    const bar = document.querySelector(part.queryStatus).getBoundingClientRect()
+    const segments = { state: part.queryState, ...facts }
+    const segment = name => document.querySelector(segments[name])
     const inside = element => { const box = element.getBoundingClientRect(); return box.left >= bar.left - 0.5 && box.right <= bar.right + 0.5 }
     const whole = element => element.scrollWidth <= element.clientWidth
-    return { inside: ['state', 'server', 'login', 'database', 'time', 'rows'].every(name => inside(part(name))), whole: ['server', 'login', 'database', 'time', 'rows'].filter(name => whole(part(name))), page: document.documentElement.scrollWidth <= innerWidth }
-  }, part)
+    return { inside: ['state', 'server', 'login', 'database', 'time', 'rows'].every(name => inside(segment(name))), whole: ['server', 'login', 'database', 'time', 'rows'].filter(name => whole(segment(name))), page: document.documentElement.scrollWidth <= innerWidth }
+  }, [part, queryFacts])
   await connectAndRun('')
   expect(await layout()).toEqual({ inside: true, whole: ['login', 'database', 'time', 'rows'], page: true })
   await connectAndRun(longDatabase)
