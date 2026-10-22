@@ -1425,6 +1425,51 @@
           "$ref": "#/definitions/value",
           "description": "(Varia) Favorite star in the connection dialog. Default $yellow (Dark #d8bf5e, Light #8f6b00).",
           "markdownDescription": "(Varia) Favorite star in the connection dialog. Default `$yellow` (Dark `#d8bf5e`, Light `#8f6b00`)."
+        },
+        "charts.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Chart labels, legends, and the crosshair. Default $textTertiary (Dark #a3a9b5, Light #4d5461).",
+          "markdownDescription": "(VS Code) Chart labels, legends, and the crosshair. Default `$textTertiary` (Dark `#a3a9b5`, Light `#4d5461`)."
+        },
+        "charts.lines": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Chart grid lines and baseline. Default $border (Dark #262a31, Light #e3e6eb).",
+          "markdownDescription": "(VS Code) Chart grid lines and baseline. Default `$border` (Dark `#262a31`, Light `#e3e6eb`)."
+        },
+        "charts.blue": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) First series of a chart; series take blue, orange, green, yellow, then purple. Default $chart1 (Dark #3987e5, Light #2a78d6).",
+          "markdownDescription": "(VS Code) First series of a chart; series take blue, orange, green, yellow, then purple. Default `$chart1` (Dark `#3987e5`, Light `#2a78d6`)."
+        },
+        "charts.orange": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Second series of a chart. Default $chart2 (Dark #d95926, Light #d4581f).",
+          "markdownDescription": "(VS Code) Second series of a chart. Default `$chart2` (Dark `#d95926`, Light `#d4581f`)."
+        },
+        "charts.green": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Third series of a chart. Default $chart3 (Dark #199e70, Light #12936a).",
+          "markdownDescription": "(VS Code) Third series of a chart. Default `$chart3` (Dark `#199e70`, Light `#12936a`)."
+        },
+        "charts.yellow": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Fourth series of a chart. Default $chart4 (Dark #c98500, Light #a87200).",
+          "markdownDescription": "(VS Code) Fourth series of a chart. Default `$chart4` (Dark `#c98500`, Light `#a87200`)."
+        },
+        "charts.purple": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Fifth series of a chart. Default $chart5 (Dark #9085e9, Light #6250d6).",
+          "markdownDescription": "(VS Code) Fifth series of a chart. Default `$chart5` (Dark `#9085e9`, Light `#6250d6`)."
+        },
+        "charts.red": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) A series that counts failures, such as failed executions; never a categorical series. Default $error (Dark #f39a9a, Light #b42229).",
+          "markdownDescription": "(VS Code) A series that counts failures, such as failed executions; never a categorical series. Default `$error` (Dark `#f39a9a`, Light `#b42229`)."
+        },
+        "charts.gray": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) \"Other\" in a stacked chart: everything the named series leave out. Default $neutral (Dark #8d939f, Light #6b7280).",
+          "markdownDescription": "(Varia) \"Other\" in a stacked chart: everything the named series leave out. Default `$neutral` (Dark `#8d939f`, Light `#6b7280`)."
         }
       }
     },

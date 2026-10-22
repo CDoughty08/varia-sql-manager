@@ -1,0 +1,159 @@
+// Live charts in the real app (src/renderer/src/live/ChartView.ts) on the fake backend's debug.synthetic source, mounted
+// over the workbench through window.__variaLive: the canvas draws the series in the theme's chart colors and redraws as
+// ticks arrive, stops drawing while the window is hidden, names itself for screen readers, follows the keyboard and the
+// pointer with a crosshair, lists its samples as a table, shows a legend for several series, follows a theme switch, and
+// draws in system colors under forced colors.
+import { electron, expect } from './fixtures/smoke.mjs'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+await mkdir('artifacts', { recursive: true })
+const profile = await mkdtemp(resolve('artifacts', 'chart-profile-'))
+const control = await mkdtemp(resolve('artifacts', 'chart-control-'))
+const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
+delete env.ELECTRON_RUN_AS_NODE
+let step = 'launch'
+const app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+const watchdog = setTimeout(() => { console.error(`Chart suite timed out during: ${step}.`); app.process()?.kill(); process.exit(1) }, 240_000)
+const page = await app.firstWindow()
+page.setDefaultTimeout(15000)
+const failures = []
+page.on('pageerror', error => failures.push(error.message))
+
+const live = (method, ...args) => page.evaluate(([name, values]) => window.__variaLive[name](...values), [method, args])
+const chart = key => live('chart', key)
+const sleep = ms => new Promise(done => setTimeout(done, ms))
+async function menu(id) {
+  await app.evaluate(({ Menu }, itemId) => {
+    const item = Menu.getApplicationMenu().getMenuItemById(itemId)
+    if (!item) throw new Error('Menu item missing: ' + itemId)
+    item.click()
+  }, id)
+}
+async function connect() {
+  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  if (!await dialog.isVisible()) await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  await dialog.getByLabel('Server Name', { exact: true }).fill('chart-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await dialog.getByLabel('Password', { exact: true }).fill('chart-smoke-password')
+  await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+}
+
+try {
+  await expect(page.locator('.status-bar')).toContainText('fake · Ready', { timeout: 30000 })
+  await connect()
+  const id = await live('subscribeSynthetic', { tickMs: 100 })
+  await expect.poll(async () => (await live('ring', id, 'debug.synthetic.metrics'))?.length ?? 0).toBeGreaterThanOrEqual(5)
+
+  step = 'draw'
+  const key = await live('mountChart', id, { series: [1], style: 'area', max: 100, labels: 'axes', spanMs: 10_000 })
+  const box = page.locator(`[data-chart-test="${key}"]`)
+  const canvas = box.locator('canvas')
+  await expect(canvas).toHaveAttribute('role', 'img')
+  await expect.poll(async () => (await chart(key)).pixels.colors['charts.blue'], { timeout: 5000 }).toBeGreaterThan(20)
+  const drawn = await chart(key)
+  const ratio = await page.evaluate(() => devicePixelRatio)
+  expect(drawn.width).toBe(Math.round((await canvas.evaluate(element => element.clientWidth)) * ratio))
+  expect(drawn.label).toMatch(/^Synthetic metrics: \d+(\.\d)? %, \d+(\.\d+)? % to \d+(\.\d+)? % over the last 10 seconds$/)
+  await expect(canvas).toHaveAttribute('aria-label', drawn.label)
+  // Ticks redraw it: one draw a frame at most, and only when the ring moved.
+  await expect.poll(async () => (await chart(key)).draws).toBeGreaterThan(drawn.draws + 3)
+  const counted = await chart(key)
+  expect(counted.draws).toBeLessThanOrEqual(counted.frames)
+  await page.screenshot({ path: resolve('artifacts', 'chart-dark.png') })
+  console.log('Chart draw passed: the wave in charts.blue, redrawn as ticks arrive, named for screen readers.')
+
+  step = 'hidden window'
+  // The view pauses only after 2 s; the chart stops drawing at once, while ticks still arrive.
+  await live('setPageHidden', true)
+  const hiddenDraws = (await chart(key)).draws, hiddenTicks = (await live('frames', id)).ticks
+  await sleep(700)
+  expect((await live('frames', id)).ticks).toBeGreaterThan(hiddenTicks + 2)
+  expect((await chart(key)).draws).toBe(hiddenDraws)
+  await live('setPageHidden', false)
+  await expect.poll(async () => (await chart(key)).draws).toBeGreaterThan(hiddenDraws)
+  console.log('Hidden window passed: no draws while hidden, though ticks still arrived; drawing resumed when shown.')
+
+  step = 'keyboard crosshair'
+  const tip = box.locator('.live-chart-tip')
+  const status = box.locator('[role="status"]')
+  await canvas.focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect(status).toHaveText(/^now · \d+(\.\d+)? %$/)
+  await expect(tip).toBeVisible()
+  await expect(tip).toHaveText(await status.textContent())
+  // Home goes to the window's oldest sample: up to 10 s back, less while the view is younger than that.
+  await page.keyboard.press('Home')
+  await expect(status).toHaveText(/^0:(0[1-9]|10) ago · \d+(\.\d+)? %$/)
+  await page.keyboard.press('Escape')
+  await expect(tip).toBeHidden()
+  await expect(status).toHaveText('')
+  console.log('Keyboard crosshair passed: Left, Home and Escape move, announce and clear it.')
+
+  step = 'pointer crosshair'
+  const bounds = await canvas.boundingBox()
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+  await expect(tip).toBeVisible()
+  await expect(tip).toHaveText(/^0:0\d ago · \d+(\.\d+)? %$/)
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height + 60)
+  await expect(tip).toBeHidden()
+  console.log('Pointer crosshair passed: the tooltip follows the pointer and goes when it leaves.')
+
+  step = 'table'
+  await box.getByRole('button', { name: 'View as table', exact: true }).click()
+  await expect(box.getByRole('button', { name: 'View as table', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const table = box.getByRole('table')
+  await expect(table.locator('caption')).toHaveText(/^Synthetic metrics: \d+ samples, newest first$/)
+  await expect(table.getByRole('columnheader')).toHaveText(['Time', 'Wave'])
+  const rows = await table.locator('tbody tr').count()
+  expect(rows).toBeGreaterThan(5)
+  expect(rows).toBeLessThanOrEqual(120)
+  await expect(table.locator('tbody tr').first().locator('th')).toHaveText('now')
+  await box.getByRole('button', { name: 'View as table', exact: true }).click()
+  await expect(table).toHaveCount(0)
+  console.log('Table passed: the window\'s samples, newest first.')
+
+  step = 'legend'
+  const both = await live('mountChart', id, { series: [1, 2], unit: 'count', spanMs: 10_000, width: 360, height: 160 })
+  const legend = page.locator(`[data-chart-test="${both}"] .live-chart-legend`)
+  await expect(legend.getByRole('listitem')).toHaveText(['Wave', 'Rate'])
+  await expect.poll(async () => { const pixels = (await chart(both)).pixels.colors; return pixels['charts.blue'] > 10 && pixels['charts.orange'] > 10 }).toBe(true)
+  await live('unmountChart', both)
+  console.log('Legend passed: two series, two colors, each named.')
+
+  step = 'theme'
+  const darkBlue = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-charts-blue').trim())
+  await menu('theme.mode.light')
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-charts-blue').trim())).not.toBe(darkBlue)
+  // The pixel count reads the active theme's charts.blue, so a chart still in the dark one counts nothing.
+  await expect.poll(async () => (await chart(key)).pixels.colors['charts.blue']).toBeGreaterThan(20)
+  await page.screenshot({ path: resolve('artifacts', 'chart-light.png') })
+  console.log('Theme passed: the chart redrew in Light\'s chart colors.')
+
+  step = 'forced colors'
+  const before = (await chart(key)).draws
+  await page.emulateMedia({ forcedColors: 'active' })
+  await expect.poll(async () => (await chart(key)).draws).toBeGreaterThan(before)
+  await expect.poll(async () => (await chart(key)).pixels.colors['charts.blue']).toBe(0)
+  expect((await chart(key)).pixels.drawn).toBeGreaterThan(100)
+  await page.screenshot({ path: resolve('artifacts', 'chart-forced.png') })
+  await page.emulateMedia({ forcedColors: 'none' })
+  await expect.poll(async () => (await chart(key)).pixels.colors['charts.blue']).toBeGreaterThan(20)
+  console.log('Forced colors passed: the chart drew in system colors and went back to the theme after.')
+
+  await live('unmountChart', key)
+  await expect(box).toHaveCount(0)
+  await live('dispose', id)
+  expect(failures).toEqual([])
+  console.log('Live charts passed.')
+} finally {
+  clearTimeout(watchdog)
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
+  await Promise.race([app.close(), sleep(15000).then(() => app.process()?.kill())]).catch(() => {})
+  await rm(profile, { recursive: true, force: true }).catch(() => {})
+  await rm(control, { recursive: true, force: true }).catch(() => {})
+}

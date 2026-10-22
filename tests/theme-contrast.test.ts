@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { chartSeriesColors, chartSurfaces } from '../src/shared/theme/charts'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
 import { contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
 import { parseThemeSource } from '../src/shared/theme/format'
@@ -30,6 +31,14 @@ describe('built-in theme contrast', () => {
       .filter(([pair, value]) => value < pair.minimum).map(([pair, value]) => describePair(type, pair, value)))
     expect(hoverPairs.length).toBeGreaterThan(4)
     expect(failures, failures.join('\n')).toEqual([])
+  })
+  it('holds chart series to 3:1 and chart text to 4.5:1 on every surface a chart sits on', () => {
+    // Series are the chart's data (WCAG 1.4.11); grid lines are decorative and exempt.
+    for (const surface of chartSurfaces) {
+      for (const color of chartSeriesColors) expect(contrastPairs).toContainEqual({ foreground: color, background: [surface], minimum: 3 })
+      expect(contrastPairs).toContainEqual({ foreground: 'charts.foreground', background: [surface], minimum: 4.5 })
+    }
+    expect(contrastExemptions['charts.lines']).toBeDefined()
   })
   it('holds input and button outlines to 3:1 on every surface the controls sit on', () => {
     const outlines = contrastPairs.filter(pair => pair.foreground === 'input.border' || pair.foreground === 'button.border')

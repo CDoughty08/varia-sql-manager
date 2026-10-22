@@ -212,6 +212,12 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
   private readonly stopSettings: () => void
   private readonly stopPage: () => void
   private pageOverride: boolean | undefined
+  private readonly pageListeners = new Set<() => void>()
+  /** The window's visibility as live views see it, test mode's override included: charts stop drawing while it is hidden. */
+  readonly page: PageVisibility = {
+    hidden: () => this.pageHidden(),
+    subscribe: listener => { this.pageListeners.add(listener); return () => { this.pageListeners.delete(listener) } }
+  }
   private flushing = false
   private disposed = false
   statusOnly = 0
@@ -336,6 +342,9 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
 
   private pageChanged(): void {
     for (const handle of [...this.handles.values()]) handle.visibilityChanged()
+    for (const listener of [...this.pageListeners]) {
+      try { listener() } catch (error) { onUnexpectedError(error) }
+    }
   }
 
   dispose(): void {
@@ -345,6 +354,7 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
     this.stopSettings()
     this.stopPage()
     this.clearListeners()
+    this.pageListeners.clear()
   }
 }
 

@@ -131,11 +131,16 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 206 keys are listed in [`tokens.md`](tokens.md#color-keys-206) by area: title bar and menus, buttons and inputs,
+The 215 keys are listed in [`tokens.md`](tokens.md#color-keys-215) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
-dialogs, and connection colors. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
-are reserved for upcoming features (notifications, the new Object Explorer and results grid): they resolve now and take
-effect when those features ship.
+dialogs, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
+(`charts.foreground`), grid lines (`charts.lines`), and series, which take `charts.blue`, `charts.orange`, `charts.green`,
+`charts.yellow` and `charts.purple` in that order (the `chart1` to `chart5` slots), `charts.gray` for a stacked chart's
+"Other", and `charts.red` only for a series that counts failures. Series colors are checked at 3:1 and chart text at
+4.5:1 against the editor, panel and widget backgrounds. Under Windows High Contrast and other forced colors, charts
+use the system colors and tell series apart by their dashes. Keys marked (VS Code) mean the same as in VS Code; the
+rest are Varia's own. Some keys are reserved for upcoming features (notifications, the new Object Explorer and results
+grid): they resolve now and take effect when those features ship.
 
 A key that is not in the registry is ignored with a warning. Near misses get a "did you mean" suggestion, and a pasted
 block of VS Code keys gets one summary warning.

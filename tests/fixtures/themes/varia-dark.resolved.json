@@ -208,7 +208,16 @@
     "connection.blue": "#6ea4ea",
     "connection.purple": "#ab95ea",
     "connection.default": "#8d939f",
-    "connection.favoriteForeground": "#d8bf5e"
+    "connection.favoriteForeground": "#d8bf5e",
+    "charts.foreground": "#a3a9b5",
+    "charts.lines": "#262a31",
+    "charts.blue": "#3987e5",
+    "charts.orange": "#d95926",
+    "charts.green": "#199e70",
+    "charts.yellow": "#c98500",
+    "charts.purple": "#9085e9",
+    "charts.red": "#f39a9a",
+    "charts.gray": "#8d939f"
   },
   "syntax": {
     "keyword": {
