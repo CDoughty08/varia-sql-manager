@@ -195,17 +195,23 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 
 A node is an object ref, or a folder below its nearest object (the server, a database, or a parent object). Refs carry
 names, never paths or object ids, and each scope fixes which fields a ref has. Names are 1 to 128 UTF-16 code units,
-used verbatim (never trimmed), without U+0000.
+used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to 260, if it
+owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).
+SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.
 
 | Scope | Requires | Forbids | Kinds |
 | --- | --- | --- | --- |
-| `server` | — | `database`, `schema`, `name`, `parent` | `server` |
-| `serverObject` | `name` | `database`, `schema`, `parent` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger` |
-| `database` | `name` | `database`, `schema`, `parent` | `database` |
-| `databaseObject` | `database`, `name` | `schema`, `parent` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
-| `schemaObject` | `database`, `schema`, `name` | `parent` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
-| `child` | `database`, `parent`, `name` | `schema` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
-| `childUnnamed` | `database`, `parent` | `schema`, `name` | `returnValue` |
+| `server` | — | `database`, `schema`, `name`, `parent`, `ssisFolder`, `ssisProject` | `server` |
+| `serverObject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger` |
+| `database` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `database` |
+| `databaseObject` | `database`, `name` | `schema`, `parent`, `ssisFolder`, `ssisProject` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
+| `schemaObject` | `database`, `schema`, `name` | `parent`, `ssisFolder`, `ssisProject` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
+| `child` | `database`, `parent`, `name` | `schema`, `ssisFolder`, `ssisProject` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
+| `childUnnamed` | `database`, `parent` | `schema`, `name`, `ssisFolder`, `ssisProject` | `returnValue` |
+| `ssisCatalog` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | — |
+| `ssisFolder` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | — |
+| `ssisFolderObject` | `ssisFolder`, `name` | `database`, `schema`, `parent`, `ssisProject` | — |
+| `ssisProjectObject` | `ssisFolder`, `ssisProject`, `name` | `database`, `schema`, `parent` | — |
 
 | Child kind | Parent kinds |
 | --- | --- |
@@ -257,3 +263,4 @@ read-only databases are not, because their sublabel says it.
 | `sublabel` | 200 | Characters in a sublabel |
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
+| `maxName` | 260 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |
