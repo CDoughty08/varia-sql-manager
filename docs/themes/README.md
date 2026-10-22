@@ -5,11 +5,12 @@ are small JSON files that override a named palette, individual color keys, and S
 theme of their type. Key names follow VS Code wherever the concept matches, and palette references work like opencode's.
 
 - [`tokens.md`](tokens.md) lists every palette slot, color key, and SQL scope with its default in both themes.
+- [`metrics.md`](metrics.md) lists the type scale, spacing, radii, shadows, motion and bar heights, which themes do not set.
 - [`varia-theme.schema.json`](varia-theme.schema.json) is the JSON Schema; editors that understand `$schema` complete and check keys.
 - [`examples/`](examples) holds [`harbor.json`](examples/harbor.json), a dual theme using every feature, and
   [`amber-accent.json`](examples/amber-accent.json), the smallest useful theme.
 
-Both generated files come from `src/shared/theme/`; do not edit them by hand (see [For contributors](#for-contributors)).
+The generated files come from `src/shared/theme/`; do not edit them by hand (see [For contributors](#for-contributors)).
 
 ## Choosing a theme
 
@@ -204,5 +205,14 @@ bidirectional-text characters are removed from names, and the window chrome only
   surface each text color is drawn on, Monaco's widgets included, and fails when a `styles.css` rule sets a text color
   and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` keeps
   Varia Dark within a small distance of the colors it replaced.
+- Sizes are not theme keys. The type scale (nothing under 11 px), spacing, radii, shadows, motion and bar heights live in
+  `metrics.ts`, and `:root` in `styles.css` repeats them as `--varia-size-*`, `--varia-line-*`, `--varia-space-*`,
+  `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key), `--varia-motion-*`, `--varia-header`,
+  `--varia-bar`, `--varia-control`, `--varia-row` and `--varia-status`. `tests/theme-css.test.ts` keeps the two equal and
+  apart from the color keys' variables; `tests/theme-metrics.test.ts` rejects px font sizes, radii and shadows and literal
+  durations outside the tokens (icon glyphs and 1 px indicator edges excepted), requires every looping animation to stop
+  under `prefers-reduced-motion: reduce` (which sets the transitions to 0 ms), and regenerates [`metrics.md`](metrics.md)
+  with `npx vitest run tests/theme-metrics.test.ts -u`. Smoke runs emulate reduced motion in every window, so their
+  checks never read a color partway through a transition.
 - `scripts/theme-smoke.mjs`, part of `npm run test:smoke`, switches themes in the real app and saves
   `artifacts/theme-dark.png` and `artifacts/theme-light.png`.

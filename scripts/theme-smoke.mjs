@@ -16,8 +16,8 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Theme suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 180000)
 
-async function launch() {
-  application = await electron.launch(launchOptions)
+async function launch(options = {}) {
+  application = await electron.launch({ ...launchOptions, ...options })
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
@@ -94,6 +94,16 @@ try {
   await expect(page.locator('.theme-notice')).toHaveCount(0)
   await expect(page.locator('.status-bar')).toHaveAttribute('data-state', 'disconnected')
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
+
+  // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.
+  expect(await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement)
+    return { xs: style.getPropertyValue('--varia-size-xs').trim(), fast: style.getPropertyValue('--varia-motion-fast').trim(), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }
+  })).toEqual({ xs: '11px', fast: '0ms', reduced: true })
+  expect(await page.locator('.status-bar').evaluate(element => [getComputedStyle(element).fontSize, element.getBoundingClientRect().height])).toEqual(['11px', 24])
+  expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(element => !element.closest('.monaco-editor') && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
+    && parseFloat(getComputedStyle(element).fontSize) < 11).map(element => element.className || element.tagName))).toEqual([])
+  console.log('Theme checks: metric tokens apply, with no text under 11 px.')
 
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.
   await page.getByLabel('Move Query output', { exact: true }).selectOption('float')
@@ -208,7 +218,18 @@ try {
   const broken = '{ "kind": "varia-color-theme", "version": 1, "name": "Smoke", '
   await writeFile(smokeTheme, broken)
   await close()
-  await launch()
+  await launch({ motion: true })
+  // Without the smoke runs' reduced motion, buttons and menus take the 80 and 120 ms of the motion tokens (none if the
+  // system asks for reduced motion).
+  const motion = await page.evaluate(() => {
+    const probe = document.body.appendChild(document.createElement('div'))
+    probe.className = 'menu'
+    const menu = getComputedStyle(probe).animationDuration
+    probe.remove()
+    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector('button')).transitionDuration, menu }
+  })
+  expect(motion).toEqual(motion.reduced ? { reduced: true, button: '0s, 0s, 0s', menu: '0s' } : { reduced: false, button: '0.08s, 0.08s, 0.08s', menu: '0.12s' })
+  console.log(`Theme checks: without emulation, motion is ${motion.reduced ? 'off, as the system asks' : '80 ms for buttons and 120 ms for menus'}.`)
   const alert = page.locator('.theme-notice[role="alert"]')
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('smoke.json')
