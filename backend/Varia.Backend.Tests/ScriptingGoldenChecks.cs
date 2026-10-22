@@ -98,7 +98,7 @@ internal static partial class ScriptingLiveChecks
         var ran = 0;
         foreach (var item in file.Cases)
         {
-            if (item.MinMajor > major || item.MaxMajor < major || item.Requires == "sqlLogin" && scratch.Login is null || item.Requires == "snapshot" && !scratch.HasSnapshot) continue;
+            if (!Applies(item, scratch)) continue;
             var target = Resolve(item.Target, db);
             var options = With(client.Options, item.Options, json);
             var watch = Stopwatch.StartNew();
@@ -123,6 +123,7 @@ internal static partial class ScriptingLiveChecks
         golden.Save();
         foreach (var failure in failures) Console.Error.WriteLine("Script As case: " + failure);
         check(failures.Count == 0 && ran > 150, "every Script As case matches its golden on SQL Server " + major + " (" + ran + " cases): " + string.Join("; ", failures.Take(6)));
+        await FullTextCatalogAsync(check, scratch, sql, results);
 
         // Each module's stored text appears byte for byte in its CREATE and ALTER scripts, after SMO's own header.
         var mismatched = new List<string>();
@@ -143,6 +144,36 @@ internal static partial class ScriptingLiveChecks
         await RecreateAsync(check, client, scratch, sql);
         await LowPrivilegeAsync(check, service, scratch, sql, live, json);
         await PerformanceAsync(check, service, client, db, timings);
+    }
+
+    /// <summary>Whether a case runs on this server: its majors, and what it requires (a SQL login, a snapshot, or a
+    /// server with or without Full-Text Search).</summary>
+    private static bool Applies(ScriptCase item, ScratchDatabase scratch) =>
+        !(item.MinMajor > scratch.Major || item.MaxMajor < scratch.Major) && item.Requires switch
+        {
+            null => true,
+            "sqlLogin" => scratch.Login is not null,
+            "snapshot" => scratch.HasSnapshot,
+            "fullText" => scratch.FullText,
+            "noFullText" => !scratch.FullText,
+            _ => throw new InvalidOperationException(item.Id + " requires an unknown condition")
+        };
+
+    /// <summary>SMO writes a full-text catalog's WITH ACCENT_SENSITIVITY only when FULLTEXTCATALOGPROPERTY reports the
+    /// setting, which it does only where Full-Text Search is installed (NULL elsewhere), so the catalog's CREATE has a
+    /// golden for each kind of server; this proves the server fact the cases choose by matches what SMO read.</summary>
+    private static async Task FullTextCatalogAsync(Action<bool, string> check, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql,
+        Dictionary<string, (ScriptCase Case, ObjectRefDto Target, ScriptResult Result)> results)
+    {
+        var facts = await sql("SELECT CONVERT(int, FULLTEXTSERVICEPROPERTY('IsFulltextInstalled')), CONVERT(int, FULLTEXTCATALOGPROPERTY(name, 'AccentSensitivity')), "
+            + "CONVERT(int, is_accent_sensitivity_on) FROM sys.fulltext_catalogs WHERE name = N'ScratchCatalog';", scratch.Name);
+        var row = facts.Status == "completed" && facts.Sets.Count > 0 && facts.Sets[0].Count == 1 ? facts.Sets[0][0] : null;
+        var id = scratch.FullText ? "full-text-catalog-create-full-text" : "full-text-catalog-create";
+        var text = results.TryGetValue(id, out var entry) ? entry.Result.Text! : "";
+        var clause = text.Contains("WITH ACCENT_SENSITIVITY = ON", StringComparison.Ordinal) ? "1" : text.Contains("WITH ACCENT_SENSITIVITY = OFF", StringComparison.Ordinal) ? "0" : null;
+        check(row is not null && (row[0] == "1") == scratch.FullText && (scratch.FullText ? row[1] == row[2] && row[1] is not null : row[1] is null)
+            && text.Contains("CREATE FULLTEXT CATALOG [ScratchCatalog]", StringComparison.Ordinal) && clause == row[1],
+            "a full-text catalog's CREATE states its accent sensitivity exactly where Full-Text Search is installed (installed: " + scratch.FullText + ", case " + id + ")");
     }
 
     private static bool Parses(string text)
