@@ -8,6 +8,7 @@ import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
 import { expandExplorerPath, explorerRow } from './explorer-tree.mjs'
+import { anyResultGrid, editorTextbox, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
 
 const createScript = 'CREATE TABLE dbo.Orders (Id int);'
 const wait = ms => new Promise(done => setTimeout(done, ms))
@@ -87,7 +88,7 @@ async function launch(launchOptions, name) {
 }
 
 async function connect(page) {
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
@@ -98,13 +99,13 @@ async function connect(page) {
 /** Results on server-a with Save Grid Results open over them, and a Script As File… whose save dialog waits behind it
  *  (the page is busy with it). The typed script leaves the query unsaved. */
 async function holdSaveWithScriptWaiting(application, page) {
-  await page.getByLabel('Query server', { exact: true }).selectOption({ label: 'server-a' })
-  await page.locator('.monaco-editor [role="textbox"]').focus()
+  await queryServer(page).selectOption({ label: 'server-a' })
+  await editorTextbox(page).focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText('-- varia-fake: sets=W1*10')
   await page.keyboard.press('F5')
-  await expect(page.locator('.output-status')).toContainText(/^Query executed successfully/)
-  await page.locator('[data-result-grid] .rg-row[aria-rowindex="2"] .rg-c[aria-colindex="2"]').first().click()
+  await expect(outputStatus(page)).toContainText(/^Query executed successfully/)
+  await gridCell(anyResultGrid(page), 0, 0).first().click()
   await page.keyboard.press('Control+S')
   await expect.poll(() => shown(application)).toEqual(['Save Grid Results'])
   const ordersPath = ['server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders']
@@ -114,7 +115,7 @@ async function holdSaveWithScriptWaiting(application, page) {
   await menu('Object Explorer').getByRole('menuitem', { name: 'Script Table as', exact: true }).click({ force: true })
   await menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click({ force: true })
   await menu('CREATE To').getByRole('menuitem', { name: 'File…', exact: true }).click({ force: true })
-  await expect(page.locator('.toolbar').getByRole('button', { name: 'Open', exact: true })).toBeDisabled()
+  await expect(toolbarButton(page, 'Open')).toBeDisabled()
 }
 
 export async function dialogLifecycle(launchOptions) {
@@ -134,7 +135,7 @@ export async function dialogLifecycle(launchOptions) {
     await wait(500)
     expect({ prompts: await shown(application), spawned: await spawns() - before }).toEqual({ prompts: ['Restart SQL backend'], spawned: 1 })
     await mockDialogs(application, scriptFile)
-    await page.locator('.explorer-row.lost').getByRole('button', { name: /^Reconnect/ }).click()
+    await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     const reconnect = page.getByRole('dialog', { name: 'Connect', exact: true })
     await reconnect.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(reconnect).toHaveCount(0)
@@ -229,7 +230,7 @@ export async function dialogLifecycle(launchOptions) {
     const { application, child, page, profile, errors } = run
     const dialogs = join(profile, 'reload-quit')
     await mockDialogs(application, dialogs, ['Reload workbench', 'Unsaved query'])
-    await page.locator('.monaco-editor [role="textbox"]').focus()
+    await editorTextbox(page).focus()
     await page.keyboard.insertText('SELECT 1 -- unsaved')
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())
     await expect.poll(() => shown(application)).toEqual(['Reload workbench'])
