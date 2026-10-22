@@ -20,6 +20,7 @@ const expectedTree = [
   '  Documents (environment.documents)',
   '  Fonts and Colors (environment.fontsAndColors)',
   '  Keyboard (environment.keyboard)',
+  '  Live Data (environment.liveData)',
   'Text Editor',
   '  General (textEditor.general)',
   '  Editor Tab and Status Bar (textEditor.editorTabAndStatusBar)',
