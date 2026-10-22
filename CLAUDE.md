@@ -91,6 +91,12 @@ pages, limits, error codes, display formats, benchmarks).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
+- Periodic data (Activity Monitor, SSIS monitoring, later Object Explorer status) flows only through the results port's
+  `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
+  EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). Sources and
+  probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
+  `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
+  (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB

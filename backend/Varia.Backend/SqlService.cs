@@ -8,13 +8,14 @@ using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Actions;
 using Varia.Backend.Entra;
 using Varia.Backend.Explorer;
+using Varia.Backend.Live;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 using Varia.Backend.Scripting;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost
+internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ILiveHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
@@ -24,7 +25,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
-        "entra.cache.clear"
+        "entra.cache.clear", "live.subscribe", "live.update"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -49,6 +50,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
+    private readonly LiveService live;
     private readonly EntraService entra;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
@@ -123,6 +125,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
+        live = new LiveService(this);
         if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
     }
 
@@ -146,6 +149,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public ActionService Actions => actions;
     /// <summary>Microsoft Entra ID (the checks replace its token source).</summary>
     internal EntraService Entra => entra;
+    /// <summary>Live subscriptions (the checks count them).</summary>
+    internal LiveService Live => live;
+    bool ILiveHost.TestHooks => hooks;
+    bool ILiveHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
+    ResultStore ILiveHost.Store => store;
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
     /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads,
@@ -156,7 +164,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear" => RequestLane.Control,
+        "live.subscribe" => RequestLane.Live,
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear"
+            or "live.update" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
         _ => RequestLane.Metadata
@@ -200,6 +210,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
         "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
+        "live.subscribe" => await live.SubscribeAsync(Read<LiveSubscribeArgs>(parameters, json), context, json),
+        "live.update" => live.Update(Read<LiveUpdateArgs>(parameters, json), json),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -377,6 +389,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
+        live.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
@@ -1287,6 +1300,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         foreach (var query in queries.Values) query.Cancel();
         scripting.CancelAll();
         actions.CancelAll();
+        live.CancelAll();
     }
     public void Dispose()
     {

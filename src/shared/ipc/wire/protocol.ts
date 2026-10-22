@@ -34,7 +34,16 @@ export const limits = {
   registries: { lostConnections: 1024, abandonedRequests: 4096, ownedResults: 100_000, stderrLines: 32, stderrCharacters: 512 },
   /** Copy and Save Results As (one of each per window). Copy text is capped before any work; progress is pushed at most
    *  4 times a second. */
-  jobs: { copyBytes: 64 * MiB, chunkBytes: MiB, copyCredit: 16 * MiB, copyDeadlineMs: 120_000, progressPerSecond: 4, suggestedName: 128, path: 32_767 }
+  jobs: { copyBytes: 64 * MiB, chunkBytes: MiB, copyCredit: 16 * MiB, copyDeadlineMs: 120_000, progressPerSecond: 4, suggestedName: 128, path: 32_767 },
+  /** Live subscriptions (docs/ipc.md, Live subscriptions): each has at most one unacknowledged EVENT. Its initial credit
+   *  is 64 KiB, and the backend sends an EVENT only while all of it is back. An EVENT is at most `eventBody`; the
+   *  catalogue's worst case stays within `frameBudget`. Mirrored in backend/Varia.Backend/Live/LiveLimits.cs. */
+  live: {
+    portStreams: 16, backendSubscriptions: 32, perConnection: 8, probes: 8, tablesPerProbe: 4, appendPerProbe: 4, tablesPerTick: 8,
+    series: 64, statuses: 16, statusCharacters: 128, errors: 8, messageCharacters: 2000, noteCharacters: 400, columns: 64,
+    intervalMs: { min: 1000, max: 3_600_000 }, initialCredit: 64 * KiB, frameBudget: 192 * KiB,
+    sortColumns: 4, filterCharacters: 400, filterColumns: 8, trackedKeys: 64, keyCharacters: 512, resumeCharacters: 256, kept: 64
+  }
 } as const
 
 /** CANCEL frame reasons (the frame's arg). */

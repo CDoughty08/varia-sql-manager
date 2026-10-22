@@ -19,6 +19,7 @@ The code is the reference implementation; this document describes it.
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
 | Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
+| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts` | `Live/LiveService.cs`, `LiveCatalog.cs`, `SyntheticSampler.cs` |
 
 ## Contents
 
@@ -35,6 +36,7 @@ The code is the reference implementation; this document describes it.
 - [Result store and memory budget](#result-store-and-memory-budget)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
+- [Live subscriptions](#live-subscriptions)
 - [Results port and results worker](#results-port-and-results-worker)
 - [Malformed input](#malformed-input)
 - [Backend threads and exit codes](#backend-threads-and-exit-codes)
@@ -210,6 +212,8 @@ for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metada
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
+| `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
+| `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
@@ -367,7 +371,8 @@ still in the open page builder are not served; the worker reads again after a pr
   clamping to 16 MiB outstanding per stream and 64 MiB per port; what the clamp holds back is passed on as soon as
   pages arrive or other streams end, because the worker grants only when a page arrives and a stream left without
   credit would otherwise stall. A slow or hung renderer therefore stalls its reads, never the query or SQL Server.
-- Query events have no credit; they are bounded where they are produced.
+- Query events have no credit; they are bounded where they are produced. Live subscriptions are the one exception: their
+  EVENTs are credited, one at a time ([Live subscriptions](#live-subscriptions)).
 
 ## Query execution
 
@@ -711,6 +716,99 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   Windows and Linux would show it over the first. Paths come only from the dialog, never from the renderer, and
   reach only the backend.
 
+## Live subscriptions
+
+Periodic data (the Activity Monitor, SSIS monitoring, later Object Explorer status) flows through one stream method,
+`live.subscribe`, and one control method, `live.update`. The backend schedules every sample; the renderer never polls.
+A subscription names one **source** and 1 to 8 of its **probes**, each with its own interval; a probe emits metrics
+(series values), up to 4 snapshot tables (replaced by each sample) and 4 append tables (that grow), and status values.
+`src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
+backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
+`src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only, and none
+is shipped yet; the test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
+`testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
+`debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
+results port, and a backend whose HELLO lacks either is refused.
+
+**Request** (strict at every level; the backend checks the same rules against the same catalogue):
+
+```ts
+live.subscribe { subscriptionId: uuid, connectionId: uuid, source, probes: { probe, intervalMs: 1,000..3,600,000, paused?,
+                 sort?: { column, descending }[1..4], view?, filter?: { text: 1..400, columns?: id[1..8] } }[1..8],
+                 args?, resume?: base64url ≤ 256 }
+live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs optional)[1..8], refresh?: true,
+                 track?: { probe, table, seq: u31, keys: str ≤ 512 [≤ 64] }[1..8], args? }
+```
+
+Every probe belongs to the source and is named once; the interval is then clamped to the probe's own minimum and maximum.
+Sort names columns of the probe's snapshot tables (catalogue column ids, not ordinals; the row key breaks ties), a view must
+be one the probe declares, and a filter needs a probe with a filter mode. `args` is checked by the source's own schema
+(`liveArgsSchemas`): `debug.synthetic` takes `{ rows?: 0..10,000, tickMs?: 10..60,000, endAfterTicks?: 1..10,000,
+errorEvery?: 1..1,000 }`, a sampling period below the 1 s minimum so tests run fast (samples still report the requested
+interval), a sample count after which the source ends, and an error value every n-th table sample. Tracking names a keyed
+snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F. A source without append
+tables has nothing to resume from and refuses `resume`. An update must change something, and repeats the subscription's
+source; main and the backend check it matches.
+
+**Frames.** The first EVENT is `live.opened` (seq 0, before any sample): `{ source, band?, spid?, isolation?, probes: {
+probe, intervalMs, minIntervalMs, maxIntervalMs, state: ok | limited | unavailable, reason?, note? ≤ 400 }[] }`. Then one
+`live.tick` per scheduler wake that sampled something (seq 1, 2, …): `{ sampledAt: Unix ms (monotonic), spid?, resume?,
+samples: { probe, costMs, effectiveIntervalMs, elapsedMs? (absent for the first), gap?: baseline | reset | resumed | late,
+skipped?, metrics?: (number | null)[], tables?: { table, descriptor, revision, retired?: u32[≤ 2], diff?: { added,
+removed, changed }, tracked?: { seq, rows: (row | −1)[≤ 64] } }[≤ 4], append?: { table, descriptor, segment, rolledFrom?,
+retired?: u32[1] }[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16] }[≤ 8], errors?: probe error[1..8] }`. A probe
+error is a value, never an exception, so the other probes carry on: `{ probe, code, message ≤ 2,000 (a sentence, never SQL,
+names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
+probe's batch would have filled), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
+DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING or NOT_FOUND.
+Main checks every frame against `liveEventSchema`: each probe sampled once and its source's, metrics aligned with the
+catalogue's series, tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a
+tick, status ids the probe declares, error tables and series the probe has, and `seq` 0 and then one more each time. It
+stamps the generation on every descriptor. The catalogue's worst-case tick (every list at its maximum, every string in
+three-byte characters) encodes to at most 192 KiB (`tests/live-schema.test.ts`); a tick over 256 KiB is never sent: the
+backend ends the subscription `failed` with `BACKEND_ERROR`, a bug rather than a silent drop.
+
+**Credit: stop and wait.** This is the one place EVENTs are credited, flagged by `creditedEvents` in `methodPolicies`.
+- The REQUEST carries `credit: 65,536`.
+- **Producer rule** (`RequestContext.TrySendCreditedEvent`): the backend queues a live EVENT, on the control lane and never
+  droppable, only while its available credit is back to the initial credit (nothing unacknowledged); the body length is then
+  subtracted, overdrawing by at most that one frame. The source samples nothing while a frame is outstanding
+  (`WaitForAckAsync`), so a slow, hidden or hung renderer stops SQL Server work after one tick.
+- **Main's rule** (`BackendConnection.route`): an EVENT of such a request is accepted only when granted − received ≥ the
+  initial credit and the body is at most 256 KiB; it then counts as received. Anything else, and any DATA frame on such a
+  request, is a contained violation (`STREAM_PROTOCOL`, CANCEL reason 3), as an over-credit DATA frame is.
+- **Acknowledgement.** Main posts `{ t: 'live', rid, bytes, event }` to the worker; the page applies the event and the
+  worker sends the existing `{ t: 'credit', rid, bytes }`. `ResultsPortHost` and `BackendConnection.credit` both clamp an
+  acknowledgement to the bytes outstanding, so no acknowledgement, however large, lets two frames be in flight.
+- **Schedule.** Fixed rate per probe: a probe due while a frame is unacknowledged, or late for any reason, is sampled once
+  when it can be, with `gap: 'late'` and the slots it missed in `skipped`, never replayed in a burst. The first sample is
+  `baseline`, the first after a pause `resumed`; `refresh` makes every unpaused probe due now.
+
+**End** (the RESPONSE): `{ ended: cancelled | disconnected | sourceEnded | failed | shutdown, code?, message? (failed
+only), kept?: u32[≤ 64] (sourceEnded only), resume?, ticks, elapsedMs }`. CANCEL with reason 1 or 3 ends it
+`cancelled`, reason 4 or the backend's shutdown `shutdown`, and `connections.disconnect` of its connection id
+`disconnected`. Every end but `sourceEnded` releases the subscription's results first; `sourceEnded` keeps `kept`
+readable until the renderer closes them with `results.close`.
+
+**Update answer:** `{ applied: true, probes: { probe, intervalMs, effectiveIntervalMs, paused }[] }` for every probe of the
+subscription, applied at once to the settings its next wake uses. An unknown subscription is `NOT_FOUND`, one that is
+ending `CANCELLED`.
+
+**Ownership.** `ResultsPortHost` owns each table a tick carries (so the worker can read it with `results.read`), takes
+back on `retired` only the stream's own results (never a query's or another stream's), and when the stream ends takes back
+all of its results except a finished source's `kept`. Closing the port cancels its live streams with reason 3.
+
+**Backend** (`Live/LiveService.cs`): a registry by subscription id, at most 32 in the backend and 8 per connection id
+(`BUSY`: "Too many live views are open for this server. Close one and retry."), a duplicate id `DUPLICATE_REQUEST`. Each
+subscription is one task with its own schedule, so it never overlaps itself; a source runs its due probes through an
+`ILiveSampler`. `debug.synthetic` (`SyntheticSampler.cs`) runs no SQL: its metrics probe counts samples and draws a wave
+(the rate is null until a second sample), its table probe stores one snapshot result per sample whose rows move on by one id
+each time (two revisions alive, the one before them retired and released), sorted as asked, with diff counts and tracked
+rows, and its status probe reports the phase and the sample count. Its scope is `none`, so any connection id is accepted;
+other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
+
+Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets.
+
 ## Results port and results worker
 
 **Opening.** The renderer calls `window.varia.openResultsPort()` (`varia:results-port-open`, `trusted()`, at most 10 a
@@ -728,14 +826,22 @@ crash and window close; a backend loss ends its streams but keeps the port.
 { t: 'credit'; rid; bytes: 1..16_777_216 }
 { t: 'cancel'; rid }
 { t: 'close'; rid; generation; resultIds: u32[1..1024] }
+{ t: 'live'; rid; generation; params: live.subscribe params }
+{ t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
 
 A read or close must name the current generation and a result the renderer owns (from a query summary or event, at most
-100,000 per generation), or it ends `RESULT_UNAVAILABLE`; at most 64 requests may be outstanding.
+100,000 per generation), or it ends `RESULT_UNAVAILABLE`; at most 64 requests may be outstanding. A `live` request must name
+the current, ready generation (`RESULT_UNAVAILABLE`) and a subscription id not already running on the port
+(`DUPLICATE_REQUEST`); at most 16 live streams run per port (`TOO_MANY_REQUESTS`), counted apart from the 64. A
+`liveUpdate` counts among the 64 and must name a live stream of the port and its generation (`NOT_FOUND`) with the same
+source (`INVALID_REQUEST`). `credit` acknowledges a live event and `cancel` ends a live stream.
 
 **Main → worker:** `backend { generation, status }` on every change, `page { rid, seq, body: ArrayBuffer }`,
-`end { rid, ok, result | code, message }`, `query { queryId, event }`, and `memory { usedBytes, globalBytes, generation, seq }`
-(the generation of the backend that sent the event, which may be one being replaced).
+`end { rid, ok, result | code, message }`, `query { queryId, event }`, `memory { usedBytes, globalBytes, generation, seq }`
+(the generation of the backend that sent the event, which may be one being replaced), and `live { rid, bytes, event }` (a
+validated live event with its EVENT body's length, which the worker grants back once the page has applied it). A live
+stream and an update end with `end` (`result`: the live end or the update answer).
 
 **The worker** (`worker-core.ts`) keeps an LRU of decoded pages keyed by generation, result and first row (64 MiB or 512
 pages; pages a pending window needs are never evicted, so once those alone pass 64 MiB, windows that already have rows
@@ -768,7 +874,7 @@ workbench."
 | --- | --- | --- |
 | main ← backend | Bad magic, kind or flags; a kind for the wrong direction; a second HELLO; a stream truncated at EOF; an id at or above the next one to be issued | **Fatal:** the process is killed and the generation ends (`protocol`), counting toward the breaker |
 | main ← backend | First stdout byte `{` | Protocol 1 backend: `failed (incompatible)` |
-| main ← backend | An oversized body (skipped); an undecodable RESPONSE or EVENT body; a bad envelope; an event failing `queryEventSchema`; a credit overrun; a sequence gap; DATA for a request that is not a stream; a frame for a settled id | **Contained:** that request or stream fails with `STREAM_PROTOCOL` and gets CANCEL reason 3. The 8th contained violation in a generation is fatal. |
+| main ← backend | An oversized body (skipped); an undecodable RESPONSE or EVENT body; a bad envelope; an event failing `queryEventSchema` or `liveEventSchema`; a live EVENT out of sequence, over 256 KiB or before the previous one was acknowledged; DATA on a live stream; a credit overrun; a sequence gap; DATA for a request that is not a stream; a frame for a settled id | **Contained:** that request or stream fails with `STREAM_PROTOCOL` and gets CANCEL reason 3. The 8th contained violation in a generation is fatal. |
 | main ← backend | A frame for an abandoned id | Dropped and counted |
 | backend ← main | Bad magic, kind, flags or envelope | GOAWAY `PROTOCOL_ERROR`, exit 64 (main has a bug: fail fast) |
 | backend ← main | An oversized REQUEST | Body skipped; RESPONSE `TOO_LARGE` with its id |
@@ -879,6 +985,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
+| Live subscriptions | 16 per results port, 32 per backend, 8 per connection; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results | zod, main and backend |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
 | Results grid | tiles of 128 rows × 32 columns; 512 characters per displayed cell; one window cache of 256 windows / 16,777,216 UTF-16 units; at most 12 grids mounted, 2 a frame | renderer |
 | Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s; backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |
@@ -925,7 +1032,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | --- | --- |
 | Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |
@@ -939,7 +1046,9 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | `TIMEOUT` (main) | "The SQL backend did not answer within {n} seconds. The request was cancelled." |
 | `TIMEOUT` (backend) | "The operation exceeded its time limit of {n} seconds." ("…its time limit." for the backend's own limits) |
 | `TOO_LARGE` (main) | "The request is too large to send to the backend. Execute a smaller script or selection." |
-| `TOO_MANY_REQUESTS` | "Too many pending backend requests." |
+| `TOO_MANY_REQUESTS` | "Too many pending backend requests."; for a 17th live stream on the results port, "Too many live views are open in this window. Close one and retry." |
+| `DUPLICATE_REQUEST` (results port, live) | "This live view is already open." |
+| `NOT_FOUND` (results port, live update) | "This live view has ended." |
 | `STREAM_PROTOCOL` | "The SQL backend sent an invalid response. The request was cancelled." |
 | `RESPONSE_TOO_LARGE` | "The backend result is too large to return (limit 16 MB)." |
 | `TOO_LARGE` (copy, main's cap) | "The selection is too large to copy (more than 64 MB). Use Save Results As instead." |
@@ -1063,7 +1172,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Fake backend.** `tests/fixtures/backend.mjs <mode>` speaks v2 through the real wire code under Node's type
   stripping, with modes for each misbehaviour (`silent`, `exit`, `crash-after`, `bad-magic`, `oversize`, `truncated`,
   `no-hello`, `v1`, `wrong-version`, `missing-method`, `late`, `credit-overrun`, `seq-gap`, `unknown-id`, `contained`,
-  `unresponsive`, and others) and a `workbench` mode for the Electron smoke tests, controlled through
+  `unresponsive`, `live-overrun`, `live-data`, `live-big`, `live-seq-gap`, and others; echo mode runs `live.subscribe` as a few
+  status ticks under stop-and-wait) and a `workbench` mode, whose `live.subscribe` runs `debug.synthetic` as the backend does, for the Electron smoke tests, controlled through
   `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`, `fail-commit`, `silent-<generation>`). Each
   session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK and notes SET NOEXEC, PARSEONLY, FMTONLY and SHOWPLAN_*,
   so `query.session.state` answers as SQL Server would. A
@@ -1076,7 +1186,9 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   treat specially) with the exact Copy, CSV, TSV and JSON bytes; the C# writer and the JavaScript twin are both checked
   against them, through the real copy and export jobs on the C# side.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`, including
-  malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation and the budget.
+  malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation, the budget, and live
+  subscriptions whose every frame must pass main's schemas. `tests/live-protocol.test.ts` runs main's whole live path
+  (supervisor, results port, a worker stand-in) over the fake backend.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
   backend, and UI responsiveness while a million stored rows are read. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
