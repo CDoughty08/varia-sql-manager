@@ -20,8 +20,9 @@ internal static partial class SsisSql
     /// waiting), otherwise READ UNCOMMITTED, which the catalog's own writes and nightly cleanup cannot block for long.</summary>
     public static string ReadPrologue(bool rcsi) => "SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL " + (rcsi ? "READ COMMITTED" : "READ UNCOMMITTED") + "; SET LOCK_TIMEOUT 5000; SET DEADLOCK_PRIORITY LOW;\n";
 
-    /// <summary>Whether the catalog's database exists, read on a connection outside it when opening it fails (4060).</summary>
-    public const string CatalogExists = "SELECT CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @catalog) THEN 1 ELSE 0 END);";
+    /// <summary>The catalog's database state and user access, read on a connection outside it when opening it fails (4060): no
+    /// row when it does not exist.</summary>
+    public const string CatalogState = "SELECT d.state, d.user_access FROM sys.databases AS d WHERE d.name = @catalog;";
 
     private static string Has(string table) => "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
         + "WHERE s.name = N'catalog' AND o.name = N'" + table + "') THEN 1 ELSE 0 END)";
@@ -37,46 +38,66 @@ internal static partial class SsisSql
         + "SELECT CONVERT(bit, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0)), CONVERT(bit, CASE WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 0 ELSE ISNULL(IS_MEMBER(N'ssis_admin'), 0) END), "
         + "CONVERT(bit, CASE WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 0 ELSE ISNULL(IS_MEMBER(N'ssis_logreader'), 0) END);";
 
-    /// <summary>What one view reads; every statement of it is TOP (@take)-bounded where it lists rows.</summary>
-    public static string Describe(string view, SsisRender render) => view switch
+    /// <summary>What one view reads, as one batch of its statements.</summary>
+    public static string Describe(string view, SsisRender render) => string.Join("\n", Statements(view, render).Select(statement => statement.Text));
+
+    /// <summary>One view's statements in order, each marked when it lists rows: the lint holds every such statement to TOP
+    /// (@take) and ORDER BY on its own, so one bounded list cannot cover an unbounded one in the same batch. The others read
+    /// at most one row: a count, a lookup into a variable, or an object by its key.</summary>
+    public static (string Text, bool List)[] Statements(string view, SsisRender render) => view switch
     {
-        "catalog" => "SELECT COUNT_BIG(*) FROM [catalog].[folders] AS f;\n"
-            + "IF @admin = 1 SELECT TOP (@take) cp.property_name, LEFT(cp.property_value, @chars), CONVERT(bit, CASE WHEN LEN(cp.property_value) > @chars THEN 1 ELSE 0 END) "
-            + "FROM [catalog].[catalog_properties] AS cp ORDER BY cp.property_name;",
-        "folder" => "SELECT f.folder_id, f.name, f.description, f.created_by_name, f.created_time, "
-            + "(SELECT COUNT_BIG(*) FROM [catalog].[projects] AS p WHERE p.folder_id = f.folder_id), (SELECT COUNT_BIG(*) FROM [catalog].[environments] AS e WHERE e.folder_id = f.folder_id) "
-            + "FROM [catalog].[folders] AS f WHERE f.name = @folder;",
-        "project" => ProjectLookup
-            + "SELECT p.project_id, f.name, p.name, p.description, p.project_format_version, p.deployed_by_name, p.last_deployed_time, p.created_time, p.object_version_lsn, "
-            + "p.validation_status, p.last_validation_time FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id WHERE p.project_id = @project_id;\n"
-            + "SELECT TOP (@take) pk.name, pk.entry_point, pk.description, pk.version_major, pk.version_minor, pk.version_build FROM [catalog].[packages] AS pk "
-            + "WHERE pk.project_id = @project_id ORDER BY pk.name;\n"
-            + Parameters("20", "@project")
-            + "SELECT TOP (@take) r.reference_id, r.reference_type, r.environment_folder_name, r.environment_name, r.validation_status FROM [catalog].[environment_references] AS r "
-            + "WHERE r.project_id = @project_id ORDER BY r.reference_id;",
-        "package" => ProjectLookup
-            + "SELECT pk.package_id, pk.name, pk.description, pk.package_format_version, pk.version_major, pk.version_minor, pk.version_build, pk.version_comments, pk.entry_point, "
-            + "pk.validation_status, pk.last_validation_time FROM [catalog].[packages] AS pk WHERE pk.project_id = @project_id AND pk.name = @name;\n"
-            + Parameters("30", "@name"),
-        "environment" => "DECLARE @environment_id bigint;\n"
-            + "SELECT @environment_id = e.environment_id FROM [catalog].[environments] AS e JOIN [catalog].[folders] AS f ON f.folder_id = e.folder_id WHERE f.name = @folder AND e.name = @name;\n"
-            + "SELECT e.environment_id, f.name, e.name, e.description, e.created_by_name, e.created_time FROM [catalog].[environments] AS e "
-            + "JOIN [catalog].[folders] AS f ON f.folder_id = e.folder_id WHERE e.environment_id = @environment_id;\n"
+        "catalog" =>
+        [
+            ("SELECT COUNT_BIG(*) FROM [catalog].[folders] AS f;", false),
+            // One character past the bound, so the reader can tell a cut value from one exactly 4,000 characters long.
+            ("IF @admin = 1 SELECT TOP (@take) cp.property_name, LEFT(cp.property_value, @chars + 1) FROM [catalog].[catalog_properties] AS cp ORDER BY cp.property_name;", true)
+        ],
+        "folder" =>
+        [
+            ("SELECT f.folder_id, f.name, f.description, f.created_by_name, f.created_time, "
+                + "(SELECT COUNT_BIG(*) FROM [catalog].[projects] AS p WHERE p.folder_id = f.folder_id), (SELECT COUNT_BIG(*) FROM [catalog].[environments] AS e WHERE e.folder_id = f.folder_id) "
+                + "FROM [catalog].[folders] AS f WHERE f.name = @folder;", false)
+        ],
+        "project" =>
+        [
+            (ProjectLookup, false),
+            ("SELECT p.project_id, f.name, p.name, p.description, p.project_format_version, p.deployed_by_name, p.last_deployed_time, p.created_time, p.object_version_lsn, "
+                + "p.validation_status, p.last_validation_time FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id WHERE p.project_id = @project_id;", false),
+            ("SELECT TOP (@take) pk.name, pk.entry_point, pk.description, pk.version_major, pk.version_minor, pk.version_build FROM [catalog].[packages] AS pk "
+                + "WHERE pk.project_id = @project_id ORDER BY pk.name;", true),
+            (Parameters("20", "@project"), true),
+            ("SELECT TOP (@take) r.reference_id, r.reference_type, r.environment_folder_name, r.environment_name, r.validation_status FROM [catalog].[environment_references] AS r "
+                + "WHERE r.project_id = @project_id ORDER BY r.reference_id;", true)
+        ],
+        "package" =>
+        [
+            (ProjectLookup, false),
+            ("SELECT pk.package_id, pk.name, pk.description, pk.package_format_version, pk.version_major, pk.version_minor, pk.version_build, pk.version_comments, pk.entry_point, "
+                + "pk.validation_status, pk.last_validation_time FROM [catalog].[packages] AS pk WHERE pk.project_id = @project_id AND pk.name = @name;", false),
+            (Parameters("30", "@name"), true)
+        ],
+        "environment" =>
+        [
+            ("DECLARE @environment_id bigint;\n"
+                + "SELECT @environment_id = e.environment_id FROM [catalog].[environments] AS e JOIN [catalog].[folders] AS f ON f.folder_id = e.folder_id WHERE f.name = @folder AND e.name = @name;", false),
+            ("SELECT e.environment_id, f.name, e.name, e.description, e.created_by_name, e.created_time FROM [catalog].[environments] AS e "
+                + "JOIN [catalog].[folders] AS f ON f.folder_id = e.folder_id WHERE e.environment_id = @environment_id;", false),
             // The catalog returns no value for a sensitive variable either; the CASE keeps one from ever reaching the answer.
-            + "SELECT TOP (@take) v.name, v.type, v.description, v.sensitive, CASE WHEN v.sensitive = 1 THEN NULL ELSE v.value END FROM [catalog].[environment_variables] AS v "
-            + "WHERE v.environment_id = @environment_id ORDER BY v.name;",
+            ("SELECT TOP (@take) v.name, v.type, v.description, v.sensitive, CASE WHEN v.sensitive = 1 THEN NULL ELSE v.value END FROM [catalog].[environment_variables] AS v "
+                + "WHERE v.environment_id = @environment_id ORDER BY v.name;", true)
+        ],
         _ => throw new InvalidOperationException("Unknown SSIS view " + view + ".")
     };
 
     /// <summary>The project a project or package describe reads, by folder and project name.</summary>
     private const string ProjectLookup = "DECLARE @project_id bigint;\n"
-        + "SELECT @project_id = p.project_id FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id WHERE f.name = @folder AND p.name = @project;\n";
+        + "SELECT @project_id = p.project_id FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id WHERE f.name = @folder AND p.name = @project;";
 
     /// <summary>A project's (object type 20) or package's (30) parameters. A sensitive parameter's values are never read.</summary>
     private static string Parameters(string objectType, string objectName) =>
         "SELECT TOP (@take) op.parameter_name, op.data_type, op.required, op.sensitive, op.description, CASE WHEN op.sensitive = 1 THEN NULL ELSE op.design_default_value END, "
         + "CASE WHEN op.sensitive = 1 THEN NULL ELSE op.default_value END, op.value_type, op.value_set, op.referenced_variable_name FROM [catalog].[object_parameters] AS op "
-        + "WHERE op.project_id = @project_id AND op.object_type = " + objectType + " AND op.object_name = " + objectName + " ORDER BY op.parameter_name;\n";
+        + "WHERE op.project_id = @project_id AND op.object_type = " + objectType + " AND op.object_name = " + objectName + " ORDER BY op.parameter_name;";
 
     /// <summary>The names the profile looks up, the roles it checks, and a LIKE filter's wildcard and escape: the only string literals SSIS statements may hold.</summary>
     private static readonly HashSet<string> Literals = ["N'%'", "N'\\'","N'catalog'", "N'customized_logging_levels'", "N'worker_agents'", "N'event_messages'", "N'event_message_guid'", "N'executions'",
@@ -87,7 +108,7 @@ internal static partial class SsisSql
 
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
-    [GeneratedRegex(@"\b(?:CAST\s*\([^;]*?\bAS\s+(?:small)?datetime|CONVERT\s*\(\s*(?:small)?datetime)\b(?!2|offset)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(?:(?:TRY_)?CAST\s*\([^;]*?\bAS\s+(?:small)?datetime|(?:TRY_)?CONVERT\s*\(\s*(?:small)?datetime)\b(?!2|offset)", RegexOptions.IgnoreCase)]
     private static partial Regex DateTimeCast();
     [GeneratedRegex(@"\b[A-Z_]+\b", RegexOptions.IgnoreCase)]
     private static partial Regex Words();
@@ -111,16 +132,17 @@ internal static partial class SsisSql
         return problems;
     }
 
-    /// <summary>Every statement this file renders, for the lint: the profile, the existence check, and each view for each band
-    /// and feature set.</summary>
+    /// <summary>Every statement this file renders, for the lint: the profile, the state check, and each view's statements for
+    /// each band and feature set.</summary>
     public static IEnumerable<(string Id, string Text, bool List)> All(IEnumerable<string> views)
     {
         yield return ("profile", ProfilePrologue + Profile, false);
-        yield return ("catalogExists", CatalogExists, false);
+        yield return ("catalogState", CatalogState, false);
         foreach (var prologue in new[] { ReadPrologue(false), ReadPrologue(true) }) yield return ("readPrologue", prologue, false);
         foreach (var view in views)
             for (var band = 13; band <= ExplorerCatalog.MaxBand; band++)
                 foreach (var features in SsisFeatures.Every())
-                    yield return (view + " " + band + " " + features, Describe(view, new SsisRender(band, features)), view is not ("folder"));
+                    foreach (var (statement, index) in Statements(view, new SsisRender(band, features)).Select((statement, index) => (statement, index)))
+                        yield return (view + " " + band + " " + features + " #" + index, statement.Text, statement.List);
     }
 }

@@ -13,6 +13,8 @@ internal static class SsisErrors
         ["BLOCKED"] = [1222, 1205],
         ["PERMISSION_DENIED"] = [229, 230, 262, 297, 300],
         ["NO_DB_ACCESS"] = [4060, 916],
+        // The database is offline, restoring, recovering, in transition, or single-user in use (Object Explorer's own list).
+        ["DATABASE_UNAVAILABLE"] = [922, 924, 926, 927, 942, 945, 952, 976, 978],
         // A catalog view that is not there: the database is not an SSIS Catalog, or an incomplete one.
         ["CATALOG_MISSING"] = [208],
         ["TIMEOUT"] = [-2],
@@ -46,6 +48,7 @@ internal static class SsisErrors
             "BLOCKED" => "Another session holds a lock in " + catalogName + " (a deployment, an execution starting, or the catalog's cleanup). Retry when it finishes.",
             "PERMISSION_DENIED" => "You do not have permission to read " + subject + " (" + text + ").",
             "NO_DB_ACCESS" => NoAccess(catalogName),
+            "DATABASE_UNAVAILABLE" => NotAvailable(catalogName, text),
             "CATALOG_MISSING" => catalogName + " is not a complete SSIS Catalog (" + text + ").",
             "TIMEOUT" => Timeout(catalog),
             "CONNECTION_LOST" => "The connection to the server was lost. Try again.",
@@ -54,6 +57,7 @@ internal static class SsisErrors
         return Create(catalog, code, message);
     }
 
+    public static string NotAvailable(string catalogName, string reason) => "Database " + catalogName + " is not available (" + Clip(reason, 200) + "). Retry when it is back online.";
     public static string NoAccess(string catalogName) => "The current login cannot access database " + catalogName + ".";
     public static string Missing(string catalogName) => "The SSIS Catalog (" + catalogName + ") does not exist on this server.";
     public static string Timeout(SsisCatalog catalog) => "Reading the SSIS Catalog took longer than " + catalog.Limit("describeMs") / 1000 + " seconds. Try again.";

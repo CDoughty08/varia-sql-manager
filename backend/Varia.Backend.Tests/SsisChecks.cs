@@ -40,9 +40,10 @@ internal static class SsisChecks
         check(catalog.Features.SequenceEqual(SsisFeatures.Names) && catalog.Limit("packageName") == explorer.KindOf("ssisPackage").MaxName && catalog.Limit("name") == ExplorerRefs.MaxIdentifier,
             "the profile's feature names and the name bounds are the catalogue's");
         check(SsisErrors.Numbers.Keys.All(code => catalog.ErrorCodes.Contains(code)) && catalog.ErrorCodes.Contains("SQL_ERROR") && catalog.ErrorCodes.Contains("NOT_FOUND")
-            && catalog.ErrorCodes.Contains("NOT_SUPPORTED") && catalog.ErrorCodes.Contains("AUTH_ENTRA") && !catalog.Retryable("CATALOG_MISSING") && catalog.Retryable("BLOCKED"),
+            && catalog.ErrorCodes.Contains("NOT_SUPPORTED") && catalog.ErrorCodes.Contains("AUTH_ENTRA") && !catalog.Retryable("CATALOG_MISSING") && catalog.Retryable("BLOCKED")
+            && catalog.Retryable("DATABASE_UNAVAILABLE") && !catalog.Retryable("NO_DB_ACCESS"),
             "every code the error mapping and the service answer is in the catalogue, with its retryability");
-        check(catalog.OperationStatuses[7] == "Succeeded" && catalog.OperationTypes[200] == "Create and start execution" && catalog.LoggingLevels[100] == "Custom"
+        check(catalog.OperationStatuses[7] == "Succeeded" && catalog.OperationTypes[200] == "Create and start execution" && catalog.OperationTypes[102] == "Export project" && catalog.LoggingLevels[100] == "Custom"
             && catalog.ParameterObjectTypes[20] == "Project" && catalog.MessageTypes[120] == "Error", "the code tables label rows as SSMS does");
     }
 
@@ -57,6 +58,15 @@ internal static class SsisChecks
         }
         check(renders > 1500 && problems.Count == 0, "every SsisSql statement renders for bands 13-17 and every feature set and passes the SSIS lint (" + renders + " renders"
             + (problems.Count > 0 ? "; first problem: " + problems[0] : ")"));
+        // Every statement that lists rows is bounded on its own: a view's lists are marked, and a statement that orders rows is one.
+        var render = new SsisRender(ExplorerCatalog.MaxBand, SsisFeatures.From([true, true, true, true, true, true]));
+        var lists = SsisCatalog.Current.Views.ToDictionary(view => view, view => SsisSql.Statements(view, render).Count(statement => statement.List));
+        var unmarked = SsisCatalog.Current.Views.SelectMany(view => SsisSql.Statements(view, render).Where(statement => !statement.List && statement.Text.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase))
+            .Select(statement => view + ": " + statement.Text)).ToList();
+        check(lists is { Count: 5 } && lists["catalog"] == 1 && lists["folder"] == 0 && lists["project"] == 3 && lists["package"] == 1 && lists["environment"] == 1 && unmarked.Count == 0
+            && SsisSql.Describe("project", render) == string.Join("\n", SsisSql.Statements("project", render).Select(statement => statement.Text)),
+            "each describe view marks every statement that lists rows (the catalog's properties, a project's packages, parameters and references, a package's parameters, an environment's variables), so the lint bounds each one: "
+            + string.Join("; ", unmarked));
         // The tree's SSIS listings follow the same rules, in every filter shape they take.
         var tree = new List<string>();
         foreach (var id in new[] { "ssisFolders", "ssisProjects", "ssisEnvironments", "ssisPackages" })
@@ -74,6 +84,8 @@ internal static class SsisChecks
             ("SELECT COL_LENGTH(N'catalog.executions', N'executed_count');", false, "uses COL_LENGTH("),
             ("SELECT CAST(o.start_time AS datetime) FROM [catalog].[operations] AS o;", false, "converts a datetimeoffset to datetime, which drops its offset"),
             ("SELECT CONVERT(datetime, o.start_time) FROM [catalog].[operations] AS o;", false, "converts a datetimeoffset to datetime, which drops its offset"),
+            ("SELECT TRY_CONVERT(datetime, f.created_time) FROM [catalog].[folders] AS f;", false, "converts a datetimeoffset to datetime, which drops its offset"),
+            ("SELECT TRY_CAST(e.created_time AS smalldatetime) FROM [catalog].[environments] AS e;", false, "converts a datetimeoffset to datetime, which drops its offset"),
             ("EXEC sp_executesql @stmt;", false, "runs dynamic SQL"),
             ("EXEC (@stmt);", false, "runs dynamic SQL"),
             ("SELECT 1 WHERE @x = N'SYNCHRONIZED';", false, "names SYNCHRONIZED"),
@@ -84,7 +96,7 @@ internal static class SsisChecks
             ("SELECT f.name FROM [catalog].[folders] AS f ORDER BY f.name;", true, "is not a TOP (@take) listing")
         };
         var missed = caught.Where(item => !Problems(item.Text, item.List).Contains(item.Expected)).Select(item => item.Expected + " in " + item.Text).ToList();
-        check(missed.Count == 0 && Problems("SELECT CONVERT(datetime2(7), o.start_time), CAST(o.end_time AS datetimeoffset(7)) FROM [catalog].[operations] AS o;").Length == 0
+        check(missed.Count == 0 && Problems("SELECT CONVERT(datetime2(7), o.start_time), CAST(o.end_time AS datetimeoffset(7)), TRY_CONVERT(datetime2, o.created_time) FROM [catalog].[operations] AS o;").Length == 0
             && Problems("SELECT p.created_time, p.deployed_by_name FROM [catalog].[projects] AS p;").Length == 0,
             "the SSIS lint rejects metadata built-ins, datetime conversions, dynamic SQL, SYNCHRONIZED, writes, literals and unpaged lists, and passes datetime2, datetimeoffset and column names: "
             + string.Join("; ", missed));
@@ -102,11 +114,15 @@ internal static class SsisChecks
         var codes = new (int Number, byte Severity, string Code)[]
         {
             (1222, 16, "BLOCKED"), (1205, 13, "BLOCKED"), (229, 14, "PERMISSION_DENIED"), (230, 14, "PERMISSION_DENIED"), (4060, 11, "NO_DB_ACCESS"), (916, 14, "NO_DB_ACCESS"),
-            (208, 16, "CATALOG_MISSING"), (-2, 11, "TIMEOUT"), (10054, 20, "CONNECTION_LOST"), (233, 16, "CONNECTION_LOST"), (50000, 16, "SQL_ERROR"), (601, 12, "SQL_ERROR"), (27123, 16, "SQL_ERROR")
+            (208, 16, "CATALOG_MISSING"), (942, 14, "DATABASE_UNAVAILABLE"), (927, 14, "DATABASE_UNAVAILABLE"), (924, 14, "DATABASE_UNAVAILABLE"), (-2, 11, "TIMEOUT"), (10054, 20, "CONNECTION_LOST"), (233, 16, "CONNECTION_LOST"), (50000, 16, "SQL_ERROR"), (601, 12, "SQL_ERROR"), (27123, 16, "SQL_ERROR")
         };
         var wrong = codes.Where(item => SsisErrors.CodeOf(item.Number, item.Severity, false) != item.Code).Select(item => item.Number + " " + SsisErrors.CodeOf(item.Number, item.Severity, false)).ToList();
         check(wrong.Count == 0 && SsisErrors.CodeOf(50000, 16, broken: true) == "CONNECTION_LOST" && SsisErrors.CodeOf(1222, 20, false) == "CONNECTION_LOST",
             "SQL Server errors map to SSIS codes: 1222 and 1205 BLOCKED, 229 PERMISSION_DENIED, 4060 NO_DB_ACCESS, 208 CATALOG_MISSING; 601 is read again: " + string.Join(", ", wrong));
+        // A catalog database the login could not open: gone (no row), unavailable to everyone, or closed to this login.
+        check(ExplorerLabels.Unavailable(6, 0) == "Offline" && ExplorerLabels.Unavailable(1, 0) == "Restoring..." && ExplorerLabels.Unavailable(0, 1) == "Single User, in use by another session"
+            && ExplorerLabels.Unavailable(0, 0) is null && ExplorerLabels.Unavailable(0, 2) is null && SsisErrors.NotAvailable("SSISDB", "Restoring...") == "Database SSISDB is not available (Restoring...). Retry when it is back online.",
+            "a catalog that cannot be opened is unavailable while it is not online or single-user in use, and otherwise closed to the login");
         var long_ = SsisErrors.Create(SsisCatalog.Current, "SQL_ERROR", new string('x', 5000));
         check(long_.Message.Length == 2048 && long_.Message.EndsWith('…') && long_.Retryable && !SsisErrors.Create(SsisCatalog.Current, "NOT_FOUND", "x").Retryable, "SSIS error messages are bounded");
         var unsupported = ExplorerErrors.Create("NOT_SUPPORTED", "Integration Services Catalogs", null, 0, "The SSIS Catalog isn't supported on SQL Server on Linux.");
@@ -124,13 +140,36 @@ internal static class SsisChecks
         };
         var wrong = texts.Where(item => SsisService.Variant(item.Value) != item.Text).Select(item => item.Text + " != " + SsisService.Variant(item.Value)).ToList();
         var huge = SsisService.Variant(new string('v', 5000))!;
-        check(wrong.Count == 0 && huge.Length == 4000 && huge.EndsWith('…'), "sql_variant values become invariant text, datetimeoffsets keep their offset, and a value is at most 4,000 characters: "
+        check(wrong.Count == 0 && huge.Length == 4000 && huge.EndsWith('…') && SsisService.Bounded(new string('v', 4001)) is { Length: 4000 } cut && cut.EndsWith('…')
+            && SsisService.Bounded(new string('v', 4000)) == new string('v', 4000), "sql_variant values become invariant text, datetimeoffsets keep their offset, and a value is at most 4,000 characters, the cut ones ending in an ellipsis: "
             + string.Join("; ", wrong));
+        // A describe holds at most 2,048 rows per list and about 4,000,000 bytes in all; what it leaves out sets Truncated.
+        var rows = new SsisService.Budget(SsisCatalog.Current);
+        var taken = Enumerable.Range(0, 2049).Count(index => rows.Take(index, 2048, 10));
+        var bytes = new SsisService.Budget(SsisCatalog.Current);
+        var held = Enumerable.Range(0, 1000).TakeWhile(index => bytes.Take(index % 2048, 2048, 4000)).Count();
+        var fresh = new SsisService.Budget(SsisCatalog.Current);
+        check(taken == 2048 && rows.Truncated && held == 4_000_000 / (64 + 2 * 4000) && bytes.Truncated && fresh.Take(0, 2048, 4000) && !fresh.Truncated,
+            "a describe's lists hold at most 2,048 rows and its answer about 4,000,000 bytes, and either cut sets truncated (" + taken + " rows, " + held + " values of 4,000 characters)");
         check(SsisService.Iso(new DateTimeOffset(2026, 10, 21, 14, 5, 0, TimeSpan.Zero)) == "2026-10-21T14:05:00+00:00", "catalog times keep their offset in ISO 8601");
         var model = new SsisFolderModel("folder", 1, "Finance", null, "CONTOSO\\dba", "2026-10-21T14:05:00+00:00", 2, 1);
-        var revision = SsisService.Revision(model);
-        check(revision.Length == 64 && revision.All(Uri.IsHexDigit) && revision == SsisService.Revision(model with { }) && revision != SsisService.Revision(model with { Projects = 3 })
-            && revision.Length <= SsisCatalog.Current.Limit("revision"), "a revision is a SHA-256 of the model: stable, and different when the model is");
+        var revision = SsisService.Revision(model)!;
+        check(revision.Length == 64 && revision.All(Uri.IsHexDigit) && revision == SsisService.Revision(model with { }) && revision == SsisService.Revision(model with { Projects = 3, Environments = 9 })
+            && revision != SsisService.Revision(model with { Description = "Changed" }) && revision != SsisService.Revision(model with { Name = "Other" }) && revision.Length <= SsisCatalog.Current.Limit("revision"),
+            "a folder's revision is a SHA-256 of what a write would change: stable, the same when only its counts change, different when its name or description does");
+        var parameter = new SsisParameterDto("Server", "String", true, false, "The server", "design", "live", "V", true, null);
+        var project = new SsisProjectModel("project", 7, "Finance", "Loads", null, 1, "CONTOSO\\dba", "2026-10-21T14:05:00+00:00", "2026-10-01T09:00:00+00:00", 42, "N", null,
+            [new("Daily.dtsx", true, null, "1.0.1")], [parameter], [new(3, "R", null, "Env", "N")], false);
+        var projectRevision = SsisService.Revision(project);
+        check(projectRevision is { Length: 64 } && projectRevision == SsisService.Revision(project with { ValidationStatus = "S", Validated = "2026-10-22T08:00:00+00:00", References = [new(3, "R", null, "Env", "V")] })
+            && projectRevision != SsisService.Revision(project with { Parameters = [parameter with { Value = "other" }] }) && projectRevision != SsisService.Revision(project with { VersionLsn = 43 })
+            && projectRevision != SsisService.Revision(project with { References = [new(3, "A", "Other", "Env", "N")] }) && SsisService.Revision(project with { Truncated = true }) is null,
+            "a project's revision covers its deployment, parameter values and references but not validation, which changes without a write; a truncated answer has none, since it does not cover the rows it left out");
+        var profileView = new SsisProfile("SSISDB", false, default, new SsisRoles(true, false, false), "integrated", "Windows", 17, false).View();
+        var catalogModel = new SsisCatalogModel("catalog", "SSISDB", profileView, 3, [new("RETENTION_WINDOW", "365")], false);
+        check(SsisService.Revision(catalogModel) == SsisService.Revision(catalogModel with { Folders = 4, Profile = profileView with { Rcsi = true } })
+            && SsisService.Revision(catalogModel) != SsisService.Revision(catalogModel with { Properties = [new("RETENTION_WINDOW", "30")] }) && profileView.Roles is { Sysadmin: true, Admin: true, SsisAdmin: false },
+            "the catalog's revision covers its properties, not its folder count or the connection's profile; a sysadmin's profile reads as an admin, though ssis_admin is not evaluated for one");
         check(ExplorerLabels.Deployed(new DateTimeOffset(2026, 10, 21, 14, 5, 0, TimeSpan.FromHours(2))) == "(Deployed 2026-10-21 14:05)" && ExplorerLabels.Deployed(null) is null
             && ExplorerLabels.Variables(1) == "(1 variable)" && ExplorerLabels.Variables(1200) == "(1,200 variables)", "SSIS sublabels: a project's deployment in the catalog's offset, an environment's variable count");
         var json = JsonSerializer.Serialize(new SsisDescribeResult(model, revision, 3), Json);
@@ -271,6 +310,10 @@ internal static class SsisChecks
             var linux = await new SsisService(new FakeHost(17, linux: true)).DescribeAsync(Args("folder", folder), CancellationToken.None);
             check(answer.Error is { Code: "NOT_SUPPORTED", Retryable: false } && linux.Error?.Message == "The SSIS Catalog isn't supported on SQL Server on Linux." && old.Opens == 0 && answer.Model is null,
                 "a server older than 2016, or on Linux, has no SSIS Catalog to read");
+            // The fake catalog's checks describe on CI's Linux engine through the internal option, which reaches the connection.
+            var linuxHost = new FakeHost(17, linux: true);
+            var ignored = await new SsisService(linuxHost, new SsisOptions { IgnoreLinuxHost = true }).DescribeAsync(Args("folder", folder), CancellationToken.None);
+            check(ignored.Error is { Code: "AUTH_KERBEROS" } && linuxHost.Opens == 1, "the internal IgnoreLinuxHost option lets the fake catalog be described on SQL Server on Linux: " + ignored.Error?.Code);
         }
         // Sign-in failures are values; two reads per connection at once, the third waits and answers BUSY.
         var host = new FakeHost { Hold = new SemaphoreSlim(0) };

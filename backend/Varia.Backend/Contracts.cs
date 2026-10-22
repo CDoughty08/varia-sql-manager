@@ -192,9 +192,11 @@ internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<strin
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);
 internal sealed record SsisError(string Code, string Message, bool Retryable);
-/// <summary>Model is one of the Ssis*Model records below, whose View names it; Revision is a SHA-256 of the model.</summary>
+/// <summary>Model is one of the Ssis*Model records below, whose View names it; Revision is a SHA-256 of what a later write
+/// depends on (SsisService.Revision), absent when the model is truncated.</summary>
 internal sealed record SsisDescribeResult(object? Model, string? Revision, long ElapsedMs, SsisError? Error = null);
-internal sealed record SsisRolesDto(bool Sysadmin, bool SsisAdmin, bool SsisLogreader);
+/// <summary>Admin is sysadmin or ssis_admin; SsisAdmin and SsisLogreader are read only for logins that are not sysadmin.</summary>
+internal sealed record SsisRolesDto(bool Sysadmin, bool Admin, bool SsisAdmin, bool SsisLogreader);
 /// <summary>Auth: sql, integrated or entra. Features: src/shared/ssis/catalog.ts ssisFeatures, each found or not.</summary>
 internal sealed record SsisProfileDto(int Band, bool Cloud, string HostPlatform, string Auth, bool Rcsi, Dictionary<string, bool> Features, SsisRolesDto Roles);
 internal sealed record SsisPropertyDto(string Name, string Value);

@@ -519,8 +519,8 @@ internal static class ExplorerQueries
     private static string ProjectOwner(SqlRender _) => "DECLARE @owner_id bigint;\nSELECT @owner_id = p.project_id FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id "
         + "WHERE f.name = @ssis_folder AND p.name = @object_name;\n" + OwnerFound;
 
-    /// <summary>Whether the SSIS Catalog's database exists (server scope), after its pool could not open it.</summary>
-    public const string SsisCatalogExists = "SELECT CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @ssis_catalog) THEN 1 ELSE 0 END);";
+    /// <summary>The SSIS Catalog's database state and user access (server scope), after its pool could not open it: no row when it does not exist.</summary>
+    public const string SsisCatalogState = "SELECT d.state, d.user_access FROM sys.databases AS d WHERE d.name = @ssis_catalog;";
 
     private static ExplorerQuery Functions(string id, string types, string[] filters) => SchemaList(id, "sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id", "o",
         "o.type IN (" + types + ") AND o.is_ms_shipped = 0", "o.type, o.create_date, own.name",

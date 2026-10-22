@@ -317,18 +317,23 @@ read pool (the program name plus " - Integration Services", Initial Catalog the 
 Explorer pool, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`; packages page by `package_id` (`@kb`), since their names
 (≤ 260) can be longer than a sysname cursor key. On SQL Server on Linux, and on Azure SQL Database without a visible
 catalog, the folder answers a `NOT_SUPPORTED` value that says why; a catalog node whose database is gone answers
-`NOT_FOUND`. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
+`NOT_FOUND`, one whose database is offline, restoring or single-user in use `DATABASE_UNAVAILABLE` (retryable), and one the
+login may not open `NO_DB_ACCESS`. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
 target }` (the target an Object Explorer ref of the view's own SSIS kind; the catalog only by its database's name) answers
 `{ model?, revision?, elapsedMs, error? }`: one batch per view on the same pool, READ COMMITTED when the catalog's database
 runs RCSI and READ UNCOMMITTED otherwise, read once more after error 601. `model.view` names it: the catalog's profile
-(`band`, `cloud`, `hostPlatform`, `auth`: sql, integrated or entra, `rcsi`, `features`, `roles`), its folder count and,
+(`band`, `cloud`, `hostPlatform`, `auth`: sql, integrated or entra, `rcsi`, `features`, `roles`: `sysadmin`, `admin` for
+sysadmin or ssis_admin, and `ssisAdmin` and `ssisLogreader`, read only for logins that are not sysadmin), its folder count and,
 for ssis_admin and sysadmin, `properties`; a folder's row and counts; a project's row, packages, parameters and
 references; a package's row and parameters; an environment's row and variables. Lists hold at most 2,048 rows and the
 answer about 4,000,000 bytes, past which `truncated` is set; values are text of at most 4,000 characters, and a sensitive
-parameter or variable never has one. `revision` is a SHA-256 of the model (64 hex characters). The first request on a
+parameter or variable never has one. `revision` (64 hex characters) is a SHA-256 of what a later write depends on: names,
+descriptions, a project's `object_version_lsn` and last deployment, parameter values, references, variables and catalog
+properties, never validation results, counts or the profile, which change without a write; a truncated answer has none,
+because it does not cover the rows it left out. The first request on a
 connection reads its SSIS profile, cached until disconnect, with the role checks at `LOCK_TIMEOUT 1000` (`IS_MEMBER`
 waits on a pending change to a role's members; a sysadmin's are not evaluated). Failures are `result.error` values:
-`CATALOG_MISSING`, `NO_DB_ACCESS`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`, `NOT_SUPPORTED` (before 2016,
+`CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`, `NOT_SUPPORTED` (before 2016,
 and on Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA` and `SQL_ERROR`. **SSIS cancellation**
 works as the object actions' does (`SsisRequests`, `varia:ssis-cancel`, 1–64 ids, 64 tombstones for 60 s; 256 running): main
 routes every `ssis.*` method there, the backend sends an attention, and the request answers `CANCELLED`.

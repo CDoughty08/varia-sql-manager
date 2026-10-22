@@ -59,5 +59,5 @@ internal sealed record SsisProfile(string CatalogDatabase, bool Rcsi, SsisFeatur
 
     public SsisProfileDto View() => new(Band, Cloud, HostPlatform, Auth, Rcsi,
         SsisFeatures.Names.Select((name, index) => (name, Features.Flags[index])).ToDictionary(item => item.name, item => item.Item2, StringComparer.Ordinal),
-        new SsisRolesDto(Roles.Sysadmin, Roles.SsisAdmin, Roles.SsisLogreader));
+        new SsisRolesDto(Roles.Sysadmin, Roles.Admin, Roles.SsisAdmin, Roles.SsisLogreader));
 }

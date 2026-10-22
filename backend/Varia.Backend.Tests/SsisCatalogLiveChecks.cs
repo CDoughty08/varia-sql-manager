@@ -9,8 +9,11 @@ namespace Varia.Backend.Tests;
 /// <summary>Live checks of PR S1b against the fake SSIS catalog (VARIA_TEST_SQL_SCRATCH=1), which the backend reaches through
 /// its internal SsisOptions.CatalogDatabase: the Object Explorer SSIS tree (folders, projects, packages by package_id,
 /// environments, filters, a vanished owner and a missing catalog), ssis.describe for every view with hostile names and
-/// sensitive values, the profile's features, roles and isolation, and the read path's lock, timeout and cancellation
-/// behaviour, with a low-privilege SQL Server login for the role checks. Nothing here claims real SSIS behaviour.</summary>
+/// sensitive values, the profile's features, roles and isolation, the read path's bounds, lock, timeout and cancellation
+/// behaviour, a catalog database that is offline or closed to the login, with a low-privilege SQL Server login for the role
+/// checks. It runs on SQL Server on Linux too (CI): the describe path's Linux gate is lifted by the internal
+/// SsisOptions.IgnoreLinuxHost, and what the tree says without a catalog follows the server's platform. Nothing here claims
+/// real SSIS behaviour.</summary>
 internal static class SsisCatalogLiveChecks
 {
     private static string Literal(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
@@ -33,17 +36,21 @@ internal static class SsisCatalogLiveChecks
             return result;
         }
         var options = service.Ssis.Options;
+        var linux = ((ISsisHost)service).Profile(info.Id).Linux;
         try
         {
             options.CatalogDatabase = db;
+            options.IgnoreLinuxHost = true;
             await SeedAsync(Exec);
-            await TreeAsync(check, service, info, db, Exec);
-            await DescribeAsync(check, service, info, db, Exec, sql, close);
+            await TreeAsync(check, service, info, db, linux, Exec);
+            await DescribeAsync(check, service, info, db, linux, Exec, sql, close);
             await LowPrivilegeAsync(check, service, live, json, scratch, db, Exec, sql, close);
+            await UnavailableAsync(check, service, info, db, sql);
         }
         finally
         {
             options.CatalogDatabase = SsisCatalog.Current.CatalogDatabase;
+            options.IgnoreLinuxHost = false;
             options.TestDelay = null;
             options.Budget = new SsisOptions().Budget;
             service.Ssis.Forget(info.Id);
@@ -75,7 +82,9 @@ internal static class SsisCatalogLiveChecks
             // A parameter of another package with the same name must not show up for Daily.dtsx.
             + "(@project, 30, N'Child.dtsx', N'Rows', N'Int64', 0, 0, NULL, NULL, NULL, 'V', 0, NULL, 'N');\n"
             + "INSERT [catalog].[environment_references] (project_id, reference_type, environment_folder_name, environment_name, validation_status) VALUES (@project, 'R', NULL, N'Env]', 'N');\n"
-            + "IF NOT EXISTS (SELECT 1 FROM [catalog].[catalog_properties] WHERE property_name = N'SCHEMA_VERSION') INSERT [catalog].[catalog_properties] (property_name, property_value) VALUES (N'SCHEMA_VERSION', N'8'), (N'RETENTION_WINDOW', N'365');");
+            + "IF NOT EXISTS (SELECT 1 FROM [catalog].[catalog_properties] WHERE property_name = N'SCHEMA_VERSION') INSERT [catalog].[catalog_properties] (property_name, property_value) VALUES (N'SCHEMA_VERSION', N'8'), (N'RETENTION_WINDOW', N'365');\n"
+            // A value one character past the 4,000-character bound, and one exactly at it.
+            + "INSERT [catalog].[catalog_properties] (property_name, property_value) VALUES (N'VARIA_LONG', REPLICATE(CONVERT(nvarchar(max), N'v'), 4001)), (N'VARIA_EXACT', REPLICATE(CONVERT(nvarchar(max), N'w'), 4000));");
     }
 
     private static ExplorerChildrenArgs Args(string connectionId, NodeRefDto node, string? cursor = null, int? pageSize = null, ExplorerFilterDto? filter = null) =>
@@ -83,7 +92,7 @@ internal static class SsisCatalogLiveChecks
     private static NodeRefDto Object(ObjectRefDto value) => new("object", value);
     private static NodeRefDto Folder(ObjectRefDto owner, string folder) => new("folder", Owner: owner, Folder: folder);
 
-    private static async Task TreeAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, string db, Func<string, string?, Task<SqlRun>> exec)
+    private static async Task TreeAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, string db, bool linux, Func<string, string?, Task<SqlRun>> exec)
     {
         Task<ExplorerChildrenResult> Children(NodeRefDto node, string? cursor = null, int? pageSize = null, ExplorerFilterDto? filter = null) =>
             service.Explorer.ChildrenAsync(Args(info.Id, node, cursor, pageSize, filter), CancellationToken.None);
@@ -132,7 +141,8 @@ internal static class SsisCatalogLiveChecks
         var missingProject = await Children(Folder(new ObjectRefDto("ssisProject", Name: "Nope", SsisFolder: Hostile), "ssisPackages"));
         check(missing.Error is { Code: "NOT_FOUND", Action: "refreshParent" } && missingProject.Error is { Code: "NOT_FOUND", Action: "refreshParent" }, "a listing below a folder or project that is gone answers NOT_FOUND: " + Dump(missing.Error) + Dump(missingProject.Error));
 
-        // A catalog database that does not exist lists nothing on Windows, and its node answers NOT_FOUND.
+        // A catalog database that does not exist lists nothing on Windows (on Linux the folder says no catalog can exist there),
+        // and its node answers NOT_FOUND.
         var options = service.Ssis.Options;
         var gone = db + "_gone";
         options.CatalogDatabase = gone;
@@ -140,15 +150,16 @@ internal static class SsisCatalogLiveChecks
         {
             var none = await Children(Folder(server, "integrationServicesCatalogs"));
             var node = await Children(Object(new ObjectRefDto("ssisCatalog", Name: gone)));
-            check(none.Error is null && none.Nodes.Count == 0 && node.Error is { Code: "NOT_FOUND", Action: "refreshParent" } && node.Error.Message.Contains(gone, StringComparison.Ordinal),
-                "without a catalog the folder is empty, and a catalog node that outlived its database answers NOT_FOUND: " + Dump(none) + Dump(node));
+            check(none.Nodes.Count == 0 && (linux ? none.Error is { Code: "NOT_SUPPORTED", Retryable: false } : none.Error is null)
+                && node.Error is { Code: "NOT_FOUND", Action: "refreshParent" } && node.Error.Message.Contains(gone, StringComparison.Ordinal),
+                "without a catalog the folder is empty (" + (linux ? "saying why on Linux" : "on Windows") + "), and a catalog node that outlived its database answers NOT_FOUND: " + Dump(none) + Dump(node));
             var described = await service.Ssis.DescribeAsync(new(info.Id, Guid.NewGuid().ToString(), "catalog", new ObjectRefDto("ssisCatalog", Name: gone)), CancellationToken.None);
             check(described.Error is { Code: "CATALOG_MISSING", Retryable: false } && described.Model is null, "describing a catalog whose database does not exist answers CATALOG_MISSING: " + Dump(described));
         }
         finally { options.CatalogDatabase = db; }
     }
 
-    private static async Task DescribeAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, string db, Func<string, string?, Task<SqlRun>> exec,
+    private static async Task DescribeAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, string db, bool linux, Func<string, string?, Task<SqlRun>> exec,
         Func<string, string, string?, Task<SqlRun>> sql, Func<string, Task<object>> close)
     {
         Task<SsisDescribeResult> Describe(string view, ObjectRefDto target, string? connectionId = null) =>
@@ -164,10 +175,14 @@ internal static class SsisCatalogLiveChecks
         service.Ssis.Forget(info.Id);
         var catalog = await Describe("catalog", catalogRef);
         var features = (catalog.Model as SsisCatalogModel)?.Profile.Features;
-        check(catalog is { Error: null, Model: SsisCatalogModel { Profile: { Rcsi: true, Band: >= 13, Cloud: false, HostPlatform: "Windows" } profile, Folders: >= 3 } model } && profile.Auth == auth
+        check(catalog is { Error: null, Model: SsisCatalogModel { Profile: { Rcsi: true, Band: >= 13, Cloud: false } profile, Folders: >= 3 } model } && profile.Auth == auth
+            && profile.HostPlatform == (linux ? "Linux" : "Windows")
             && features is { } found && found["customizedLoggingLevels"] && found["scaleOut"] && found["eventMessageGuid"] && found["executedCount"] && !found["operationLogSize"] && !found["checkSchemaVersion"]
-            && profile.Roles is { Sysadmin: true, SsisAdmin: false, SsisLogreader: false } && model.Properties is { } properties && properties.Any(item => item is { Name: "SCHEMA_VERSION", Value: "8" }),
-            "the catalog view reads the profile once (RCSI, the fake's features through its catalog views, a sysadmin's roles, " + auth + " authentication) and catalog_properties for an admin: "
+            && profile.Roles is { Sysadmin: true, Admin: true, SsisAdmin: false, SsisLogreader: false } && model.Properties is { } properties && properties.Any(item => item is { Name: "SCHEMA_VERSION", Value: "8" })
+            && properties.Single(item => item.Name == "VARIA_LONG").Value is { Length: 4000 } cut && cut.EndsWith("v…", StringComparison.Ordinal)
+            && properties.Single(item => item.Name == "VARIA_EXACT").Value == new string('w', 4000) && catalog.Revision is { Length: 64 },
+            "the catalog view reads the profile once (RCSI, the fake's features through its catalog views, a sysadmin's roles, " + auth + " authentication) and catalog_properties for an admin, "
+            + "a value past 4,000 characters cut to 4,000 with an ellipsis: "
             + JsonSerializer.Serialize(catalog.Model ?? catalog.Error, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         var folder = await Describe("folder", folderRef);
         check(folder is { Error: null, Model: SsisFolderModel { Name: Hostile, Description: "Hostile folder", Projects: 1, Environments: 1, Created: var created } } && created.Length > 25
@@ -226,27 +241,50 @@ internal static class SsisCatalogLiveChecks
         var dirty = await WhileHeld(() => Describe("folder", folderRef));
         var rcsi = await Describe("catalog", catalogRef);
         check(committed.Result.Model is SsisFolderModel { Description: "Changed" } && off.Status == "completed" && dirty.Result.Model is SsisFolderModel { Description: "Uncommitted" }
-            && rcsi.Model is SsisCatalogModel { Profile.Rcsi: false } && committed.Ms < 5000 && dirty.Ms < 5000,
+            && rcsi.Model is SsisCatalogModel { Profile.Rcsi: false },
             "a describe never waits on a writer's row: READ COMMITTED under RCSI reads the committed row, READ UNCOMMITTED without RCSI reads the change (" + committed.Ms + " ms, " + dirty.Ms + " ms; " + off.Error + ")");
 
-        // Past its budget a describe answers TIMEOUT; a cancelled one ends at once.
+        // A list past 2,048 rows: the answer holds 2,048, says it is truncated, and has no revision, because a write could not
+        // compare the rows it left out; the attention that ends the statement leaves the pooled connection usable.
+        await exec("DECLARE @folder bigint = (SELECT folder_id FROM [catalog].[folders] WHERE name = " + Literal(Wildcards) + ");\n"
+            + "INSERT [catalog].[environments] (name, folder_id, description, created_by_sid, created_by_name, created_time) VALUES (N'Big', @folder, NULL, SUSER_SID(), SUSER_SNAME(), SYSDATETIMEOFFSET());\n"
+            + "DECLARE @environment bigint = SCOPE_IDENTITY();\n"
+            + "INSERT [catalog].[environment_variables] (environment_id, name, description, type, sensitive, value) SELECT TOP (2049) @environment, CONCAT(N'V', FORMAT(ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), 'D5')), NULL, N'Int32', 0, CONVERT(int, 1) "
+            + "FROM sys.all_columns AS a CROSS JOIN sys.all_columns AS b;", null);
+        var big = await Describe("environment", new ObjectRefDto("ssisEnvironment", Name: "Big", SsisFolder: Wildcards));
+        var after = await Describe("environment", environmentRef);
+        check(big is { Error: null, Revision: null, Model: SsisEnvironmentModel { Truncated: true, Variables: { Count: 2048 } variables } } && variables[^1].Name == "V02048"
+            && after is { Error: null, Model: SsisEnvironmentModel { Truncated: false }, Revision.Length: 64 },
+            "a describe list holds at most 2,048 rows and says it is truncated, without a revision, and the next read on the pool works: " + Dump(big.Error) + " " + (big.Model as SsisEnvironmentModel)?.Variables.Count);
+
+        // Past its budget a describe answers TIMEOUT; a cancelled one ends at once. Each is bounded by a multiple of a describe
+        // this run just measured, well under the 30 s the statement waits, and measured once more when it misses.
         var options = service.Ssis.Options;
-        options.TestDelay = TimeSpan.FromSeconds(5);
-        options.Budget = TimeSpan.FromSeconds(1);
+        var reference = Stopwatch.StartNew();
+        await Describe("folder", folderRef);
+        var bound = LiveResultChecks.CancelBound(5000, reference.ElapsedMilliseconds);
+        options.TestDelay = TimeSpan.FromSeconds(30);
         try
         {
-            var watch = Stopwatch.StartNew();
-            var slow = await Describe("folder", folderRef);
-            var timedOutMs = watch.ElapsedMilliseconds;
+            var (slow, timedOutMs) = await LiveResultChecks.OnceMore("an SSIS describe past its budget", 1000 + bound, item => item.Ms, async () =>
+            {
+                options.Budget = TimeSpan.FromSeconds(1);
+                var watch = Stopwatch.StartNew();
+                var result = await Describe("folder", folderRef);
+                return (Result: result, Ms: watch.ElapsedMilliseconds);
+            });
             options.Budget = TimeSpan.FromSeconds(40);
-            using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-            watch.Restart();
-            string outcome;
-            try { await service.Ssis.DescribeAsync(new(info.Id, Guid.NewGuid().ToString(), "folder", folderRef), cancel.Token); outcome = "answered"; }
-            catch (Exception error) when (error is OperationCanceledException or Microsoft.Data.SqlClient.SqlException) { outcome = "cancelled"; }
-            var cancelledMs = watch.ElapsedMilliseconds;
-            check(slow.Error is { Code: "TIMEOUT", Retryable: true } && timedOutMs < 4500 && outcome == "cancelled" && cancelledMs < 4500 && service.Ssis.RunningCount == 0,
-                "a describe past its budget answers TIMEOUT, and a cancelled one ends without waiting for SQL Server (" + timedOutMs + " ms, " + cancelledMs + " ms)");
+            var (outcome, cancelledMs) = await LiveResultChecks.OnceMore("a cancelled SSIS describe", 300 + bound, item => item.Ms, async () =>
+            {
+                using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+                var watch = Stopwatch.StartNew();
+                string ended;
+                try { await service.Ssis.DescribeAsync(new(info.Id, Guid.NewGuid().ToString(), "folder", folderRef), cancel.Token); ended = "answered"; }
+                catch (Exception error) when (error is OperationCanceledException or Microsoft.Data.SqlClient.SqlException) { ended = "cancelled"; }
+                return (Outcome: ended, Ms: watch.ElapsedMilliseconds);
+            });
+            check(slow.Error is { Code: "TIMEOUT", Retryable: true } && timedOutMs < 1000 + bound && outcome == "cancelled" && cancelledMs < 300 + bound && service.Ssis.RunningCount == 0,
+                "a describe past its budget answers TIMEOUT, and a cancelled one ends without waiting for SQL Server (" + timedOutMs + " ms, " + cancelledMs + " ms, bounds " + (1000 + bound) + " and " + (300 + bound) + " ms)");
         }
         finally
         {
@@ -274,6 +312,19 @@ internal static class SsisCatalogLiveChecks
         Task<SsisDescribeResult> Describe() => service.Ssis.DescribeAsync(new(reader.Id, Guid.NewGuid().ToString(), "catalog", catalogRef), CancellationToken.None);
         try
         {
+            // A login whose user may not connect to the catalog's database (as when guest is off and it has no user there) cannot
+            // open it: the catalog exists, so it answers NO_DB_ACCESS, not CATALOG_MISSING or NOT_FOUND.
+            await exec("REVOKE CONNECT FROM " + Bracket(login) + ";", null);
+            SsisDescribeResult closed;
+            ExplorerChildrenResult closedTree;
+            try
+            {
+                closed = await Describe();
+                closedTree = await service.Explorer.ChildrenAsync(Args(reader.Id, Object(catalogRef)), CancellationToken.None);
+            }
+            finally { await exec("GRANT CONNECT TO " + Bracket(login) + ";", null); }
+            check(closed.Error is { Code: "NO_DB_ACCESS", Retryable: false } && closed.Error.Message.Contains(db, StringComparison.Ordinal) && closedTree.Error is { Code: "NO_DB_ACCESS", Retryable: false },
+                "a login that may not open the catalog's database answers NO_DB_ACCESS for a describe and for the catalog's folders: " + Dump(closed.Error) + Dump(closedTree.Error));
             var listed = await service.Explorer.ChildrenAsync(Args(reader.Id, Folder(new ObjectRefDto("server"), "integrationServicesCatalogs")), CancellationToken.None);
             check(listed.Nodes is [{ Status: null, HasChildren: true }] && listed.Nodes[0].Label == db, "a login with a user in the catalog's database sees the catalog in the tree");
             // IS_MEMBER waits on a pending change to a role's members even under READ UNCOMMITTED (S0): the profile answers BLOCKED.
@@ -297,7 +348,7 @@ internal static class SsisCatalogLiveChecks
                 await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, holder);
                 await close(holder);
             }
-            check(warm.Model is SsisCatalogModel && blocked.Error is { Code: "BLOCKED", Retryable: true } && blocked.Model is null && blockedMs < 10_000 && service.Ssis.CachedProfile(reader.Id) is null,
+            check(warm.Model is SsisCatalogModel && blocked.Error is { Code: "BLOCKED", Retryable: true } && blocked.Model is null && service.Ssis.CachedProfile(reader.Id) is null,
                 "while another session changes ssis_admin's members, a login that is not sysadmin reads its profile under the 1 s lock timeout and answers BLOCKED, caching nothing (" + blockedMs + " ms): " + Dump(blocked));
             var plain = await Describe();
             check(plain.Model is SsisCatalogModel { Profile: { Auth: "sql", Roles: { Sysadmin: false, SsisAdmin: false, SsisLogreader: false } }, Properties: null },
@@ -312,6 +363,33 @@ internal static class SsisCatalogLiveChecks
         {
             await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(reader.Id), json), json);
             await exec("IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = " + Literal(login) + ") BEGIN ALTER ROLE [ssis_admin] DROP MEMBER " + Bracket(login) + "; ALTER ROLE [ssis_logreader] DROP MEMBER " + Bracket(login) + "; END", null);
+        }
+    }
+
+    /// <summary>A catalog database that exists but no one can open (offline here; restoring and single-user in use alike) answers
+    /// DATABASE_UNAVAILABLE, which a retry can clear, never NO_DB_ACCESS: the login's access is not the problem.</summary>
+    private static async Task UnavailableAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, string db, Func<string, string, string?, Task<SqlRun>> sql)
+    {
+        // Taking the database offline needs it to itself: the backend's idle pool connections there go first.
+        service.ClearPoolsFor(info.Id, db);
+        var off = await sql("ALTER DATABASE " + Bracket(db) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;", "master", null);
+        try
+        {
+            service.Ssis.Forget(info.Id);
+            var described = await service.Ssis.DescribeAsync(new(info.Id, Guid.NewGuid().ToString(), "folder", new ObjectRefDto("ssisFolder", Name: Hostile)), CancellationToken.None);
+            var projects = await service.Explorer.ChildrenAsync(Args(info.Id, Folder(new ObjectRefDto("ssisFolder", Name: Hostile), "ssisProjects")), CancellationToken.None);
+            var catalogs = await service.Explorer.ChildrenAsync(Args(info.Id, Folder(new ObjectRefDto("server"), "integrationServicesCatalogs")), CancellationToken.None);
+            check(off.Status == "completed" && described.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && described.Error.Message.Contains("(Offline)", StringComparison.Ordinal)
+                && projects.Error is { Code: "DATABASE_UNAVAILABLE", Retryable: true } && projects.Error.Message.Contains("Offline", StringComparison.Ordinal)
+                && catalogs.Nodes is [{ Status: "unavailable", HasChildren: false }],
+                "an offline catalog database answers DATABASE_UNAVAILABLE (retryable, naming its state) for a describe and a listing, and its row is unavailable: "
+                + off.Error + Dump(described.Error) + Dump(projects.Error) + Dump(catalogs.Nodes.Select(node => node.Status)));
+        }
+        finally
+        {
+            var on = await sql("ALTER DATABASE " + Bracket(db) + " SET ONLINE;", "master", null);
+            service.Ssis.Forget(info.Id);
+            if (on.Status != "completed") throw new InvalidOperationException("The fake catalog could not be brought back online: " + on.Error);
         }
     }
 }

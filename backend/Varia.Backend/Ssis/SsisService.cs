@@ -40,6 +40,9 @@ internal sealed class SsisOptions
     public TimeSpan GateWait { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("gateWaitMs"));
     /// <summary>Delays every describe statement (timeout and cancellation checks).</summary>
     public TimeSpan? TestDelay { get; set; }
+    /// <summary>Describes on SQL Server on Linux too, where no real catalog can exist, so the fake catalog's checks run on CI's
+    /// Linux engine. The tree needs no such option: it lists the catalog's database wherever it exists.</summary>
+    public bool IgnoreLinuxHost { get; set; }
 }
 
 /// <summary>ssis.describe (D-ssis 4.3): validate, register, take the SSIS read gates (2 per connection, 4 in all; BUSY after
@@ -100,7 +103,7 @@ internal sealed class SsisService : IDisposable
         var served = server.Explorer(explorer);
         SsisDescribeResult Failed(SsisError error) => new(null, null, watch.ElapsedMilliseconds, error);
         if (served.Band < 13) return Failed(SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog needs SQL Server 2016 or later."));
-        if (served.Linux) return Failed(SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux."));
+        if (served.Linux && !Options.IgnoreLinuxHost) return Failed(SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux."));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         try
@@ -137,8 +140,30 @@ internal sealed class SsisService : IDisposable
         profiles.Clear();
     }
 
-    /// <summary>A SHA-256 of the model's JSON: a later write's preflight compares it to what the document showed (D-ssis 4.3).</summary>
-    internal static string Revision(object model) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(model, model.GetType(), RevisionJson))));
+    /// <summary>A SHA-256 of what a later write depends on (D-ssis 4.3), which its preflight compares to what the document
+    /// showed: names, descriptions, a project's object_version_lsn and last deployment, parameter values, references,
+    /// variables and catalog properties. Validation results, counts, creation details and the profile are left out, because
+    /// they change without a write (a Validate run, another folder's deployment) and would report a false CONFLICT. A
+    /// truncated answer has none: rows it left out are not covered, so a write must read them first.</summary>
+    internal static string? Revision(object model)
+    {
+        object? basis = model switch
+        {
+            SsisCatalogModel { Truncated: true } or SsisProjectModel { Truncated: true } or SsisPackageModel { Truncated: true } or SsisEnvironmentModel { Truncated: true } => null,
+            SsisCatalogModel catalog => new object?[] { catalog.View, catalog.Name, catalog.Properties?.Select(item => new[] { item.Name, item.Value }).ToList() },
+            SsisFolderModel folder => new object?[] { folder.View, folder.Id, folder.Name, folder.Description },
+            SsisProjectModel project => new object?[] { project.View, project.Id, project.Folder, project.Name, project.Description, project.VersionLsn, project.Deployed, Parameters(project.Parameters),
+                project.References.Select(item => new object?[] { item.Id, item.Type, item.Folder, item.Environment }).ToList() },
+            SsisPackageModel package => new object?[] { package.View, package.Id, package.Folder, package.Project, package.Name, package.EntryPoint, Parameters(package.Parameters) },
+            SsisEnvironmentModel environment => new object?[] { environment.View, environment.Id, environment.Folder, environment.Name, environment.Description,
+                environment.Variables.Select(item => new object?[] { item.Name, item.Type, item.Description, item.Sensitive, item.Value }).ToList() },
+            _ => throw new InvalidOperationException("Unknown SSIS model " + model.GetType().Name + ".")
+        };
+        return basis is null ? null : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(basis, RevisionJson))));
+
+        static List<object?[]> Parameters(List<SsisParameterDto> parameters) =>
+            [.. parameters.Select(item => new object?[] { item.Name, item.DataType, item.Required, item.Sensitive, item.DesignDefault, item.Value, item.ValueType, item.ValueSet, item.Variable })];
+    }
 
     private static RequestException Busy() => new("BUSY", "Other Integration Services requests are running on this server. Retry after they finish.");
 
@@ -155,8 +180,12 @@ internal sealed class SsisService : IDisposable
                 await using var connection = host.SsisConnection(connectionId, name);
                 try { await host.OpenAsync(connection, token); }
                 catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return (null, SsisErrors.Create(catalog, error.Code, error.Message)); }
-                // 4060 says the login cannot open the database, whether or not it exists: a read outside it tells which.
-                catch (SqlException error) when (!token.IsCancellationRequested && error.Number is 4060 or 916) { return (null, await OpenFailureAsync(connectionId, name, token)); }
+                // 4060 says the login cannot open the database, whether it is gone, offline, restoring or closed to the login: a
+                // read outside it tells which.
+                catch (SqlException error) when (!token.IsCancellationRequested && SsisErrors.CodeOf(error, null) is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE")
+                {
+                    return (null, await OpenFailureAsync(connectionId, name, token));
+                }
                 catch (SqlException error) when (!token.IsCancellationRequested) { return (null, SsisErrors.Create(catalog, "CONNECTION_LOST", "Could not connect to the server: " + error.Message)); }
                 try
                 {
@@ -186,12 +215,18 @@ internal sealed class SsisService : IDisposable
             await using var connection = host.SsisServerConnection(connectionId);
             await host.OpenAsync(connection, token);
             await using var command = connection.CreateCommand();
-            command.CommandText = SsisSql.ReadPrologue(false) + SsisSql.CatalogExists;
+            command.CommandText = SsisSql.ReadPrologue(false) + SsisSql.CatalogState;
             command.CommandTimeout = 0;
             command.Parameters.Add(Parameter("@catalog", SqlDbType.NVarChar, 128, name));
-            var exists = await command.ExecuteScalarAsync(token) is true;
-            if (!exists) profiles.TryRemove(connectionId, out _);
-            return exists ? SsisErrors.Create(catalog, "NO_DB_ACCESS", SsisErrors.NoAccess(name)) : SsisErrors.Create(catalog, "CATALOG_MISSING", SsisErrors.Missing(name));
+            await using var reader = await command.ExecuteReaderAsync(token);
+            if (!await reader.ReadAsync(token))
+            {
+                profiles.TryRemove(connectionId, out _);
+                return SsisErrors.Create(catalog, "CATALOG_MISSING", SsisErrors.Missing(name));
+            }
+            return ExplorerLabels.Unavailable(Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture)) is { } reason
+                ? SsisErrors.Create(catalog, "DATABASE_UNAVAILABLE", SsisErrors.NotAvailable(name, reason))
+                : SsisErrors.Create(catalog, "NO_DB_ACCESS", SsisErrors.NoAccess(name));
         }
         catch (SqlException error) when (!token.IsCancellationRequested) { return SsisErrors.FromSql(catalog, error, null, name, "the SSIS Catalog"); }
     }
@@ -248,8 +283,13 @@ internal sealed class SsisService : IDisposable
                 if (profile.Roles.Admin && await reader.NextResultAsync(token))
                 {
                     properties = [];
-                    while (await reader.ReadAsync(token) && budget.Take(properties.Count, rows, reader.GetString(0).Length + Length(reader, 1)))
-                        properties.Add(new(reader.GetString(0), reader.IsDBNull(1) ? "" : reader.GetString(1) + (reader.GetBoolean(2) ? "…" : "")));
+                    while (await reader.ReadAsync(token))
+                    {
+                        // The statement reads one character past the bound, so a longer value is cut to it with an ellipsis.
+                        var value = reader.IsDBNull(1) ? "" : Bounded(reader.GetString(1));
+                        if (!budget.Take(properties.Count, rows, reader.GetString(0).Length + value.Length)) break;
+                        properties.Add(new(reader.GetString(0), value));
+                    }
                 }
                 model = new SsisCatalogModel("catalog", target.Name!, profile.View(), folders, properties, budget.Truncated);
                 break;
@@ -322,7 +362,7 @@ internal sealed class SsisService : IDisposable
     }
 
     /// <summary>Bounds one answer: at most the catalogue's rows per list and its byte estimate in all; what is left out sets Truncated.</summary>
-    private sealed class Budget(SsisCatalog catalog)
+    internal sealed class Budget(SsisCatalog catalog)
     {
         private readonly long limit = catalog.Limit("describeBytes");
         private long bytes;
@@ -362,8 +402,14 @@ internal sealed class SsisService : IDisposable
             IFormattable item => item.ToString(null, CultureInfo.InvariantCulture),
             _ => value.ToString()
         };
+        return text is null ? null : Bounded(text);
+    }
+
+    /// <summary>A value as the answer holds it: at most the catalogue's 4,000 characters, the last an ellipsis when it was cut.</summary>
+    internal static string Bounded(string text)
+    {
         var max = SsisCatalog.Current.Limit("value");
-        return text is null || text.Length <= max ? text : text[..(max - 1)] + "…";
+        return text.Length <= max ? text : text[..(max - 1)] + "…";
     }
 
     private static void TryCancel(SqlCommand command)

@@ -23,7 +23,7 @@ describe('SSIS catalogue', () => {
       expect(unique(rows.map(row => row.code)), name).toBe(true)
       for (const row of rows) expect(row.label, name).toMatch(/^\S(.*\S)?$/)
     }
-    expect(operationTypes.map(row => row.code)).toEqual([1, 2, 3, 101, 106, 200, 202, 300, 301, 1000])
+    expect(operationTypes.map(row => row.code)).toEqual([1, 2, 3, 101, 102, 106, 200, 202, 300, 301, 1000])
     expect(operationStatuses.map(row => row.code)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
     expect([...openStatuses, ...finalStatuses].sort((a, b) => a - b)).toEqual(operationStatuses.map(row => row.code))
     expect(messageTypes.map(row => row.code)).toEqual([-1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 200, 400])
@@ -53,7 +53,7 @@ describe('SSIS catalogue', () => {
     expect(catalogDatabase).toBe('SSISDB')
   })
   it('keeps error codes retryable only where a retry can help', () => {
-    expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'SQL_ERROR'])
+    expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'SQL_ERROR'])
     expect(ssisErrorCodes).toContain('CATALOG_MISSING')
   })
   it('keeps the read path\'s limits, and main uses them for varia:ssis-cancel', () => {

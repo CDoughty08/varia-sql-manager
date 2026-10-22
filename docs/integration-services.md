@@ -139,11 +139,15 @@ kinds, folders and their identity are in docs/object-explorer.md.
 
 The catalog's listings run on the SSIS read pool (the program name plus " - Integration Services"), whose connections are in the
 catalog's database, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`. The catalog row itself is read from `sys.databases` on the Object
-Explorer pool. A catalog that was dropped answers `NOT_FOUND` (refresh the parent); one the login cannot open, `NO_DB_ACCESS`.
+Explorer pool. A catalog that was dropped answers `NOT_FOUND` (refresh the parent); one that is offline, restoring or single-user in
+use, `DATABASE_UNAVAILABLE` (retry); one the login cannot open, `NO_DB_ACCESS`.
 
 ### Reads (`ssis.describe`)
 
-One request reads one view in one batch, under the SSIS gates, and answers its model with a `revision`, or an error value.
+One request reads one view in one batch, under the SSIS gates, and answers its model with a `revision`, or an error value. The
+revision is a SHA-256 of what a later write depends on (names, descriptions, a project's deployment, parameter values,
+references, variables, catalog properties), not of validation results or counts, which change without a write; a truncated answer
+has none.
 Reads run READ COMMITTED when the catalog's database has READ_COMMITTED_SNAPSHOT on, otherwise READ UNCOMMITTED, with
 `LOCK_TIMEOUT 5000`; a read that meets the catalog's cleanup moving rows (error 601) reads once more. The first read on a
 connection also reads its profile, with the role checks at the live reads' `LOCK_TIMEOUT 1000`, because `IS_MEMBER` waits on a pending
@@ -170,6 +174,7 @@ change to a role's members; a sysadmin's are not evaluated.
 | --- | --- |
 | `CATALOG_MISSING` | No |
 | `NO_DB_ACCESS` | No |
+| `DATABASE_UNAVAILABLE` | Yes |
 | `BLOCKED` | Yes |
 | `TIMEOUT` | Yes |
 | `PERMISSION_DENIED` | No |
@@ -191,6 +196,7 @@ Operation types (`catalog.operations.operation_type`):
 | `2` | Operation cleanup |
 | `3` | Project version cleanup |
 | `101` | Deploy project |
+| `102` | Export project |
 | `106` | Restore project |
 | `200` | Create and start execution |
 | `202` | Stop operation |

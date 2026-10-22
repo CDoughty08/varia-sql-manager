@@ -80,6 +80,11 @@ internal static class ExplorerLabels
         _ => "State " + state.ToString(CultureInfo.InvariantCulture)
     };
 
+    /// <summary>Why a database the login could not open (4060) is unavailable to everyone, from sys.databases: its state when it
+    /// is not online, or single-user mode, which another session holds; null when it is online and open to others, so the
+    /// login itself has no access.</summary>
+    public static string? Unavailable(int state, int userAccess) => state != 0 ? DatabaseState(state) : userAccess == 1 ? "Single User, in use by another session" : null;
+
     /// <summary>A database's sublabel, status and whether it expands: state, read-only (or standby) and user access, in
     /// one pair of parentheses. One the login cannot open still expands, as in SSMS, so expanding it explains why.</summary>
     public static (string? Sublabel, string? Status, bool HasChildren) Database(int state, int userAccess, bool readOnly, bool standby, bool access)

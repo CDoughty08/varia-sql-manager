@@ -16,6 +16,7 @@ export const operationTypes: readonly CodeLabel[] = [
   { code: 2, label: 'Operation cleanup' },
   { code: 3, label: 'Project version cleanup' },
   { code: 101, label: 'Deploy project' },
+  { code: 102, label: 'Export project' },
   { code: 106, label: 'Restore project' },
   { code: 200, label: 'Create and start execution' },
   { code: 202, label: 'Stop operation' },
@@ -148,6 +149,8 @@ export const describeTargets: { readonly [V in SsisDescribeView]: NodeKind } = {
 export const ssisErrorRetryable = {
   CATALOG_MISSING: false,
   NO_DB_ACCESS: false,
+  /** The catalog's database exists but is offline, restoring, recovering or single-user in use: it can come back. */
+  DATABASE_UNAVAILABLE: true,
   BLOCKED: true,
   TIMEOUT: true,
   PERMISSION_DENIED: false,

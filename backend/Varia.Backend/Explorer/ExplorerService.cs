@@ -269,8 +269,10 @@ internal sealed class ExplorerService : IDisposable
             {
                 await using var connection = scope == QueryScope.Ssis ? host.SsisConnection(request.ConnectionId) : host.Connection(request.ConnectionId, perDatabase ? request.Database : null);
                 try { await host.OpenAsync(connection, token); }
-                // 4060 says the login cannot open the catalog's database, whether or not it exists: the Explorer pool tells which.
-                catch (SqlException error) when (scope == QueryScope.Ssis && error.Number is 4060 or 916 && !token.IsCancellationRequested)
+                // 4060 says the login cannot open the catalog's database, whether it is gone, offline, restoring or closed to the
+                // login: the Explorer pool tells which.
+                catch (SqlException error) when (scope == QueryScope.Ssis && ExplorerErrors.Classify(error.Number, error.Class, ErrorPhase.Statement) is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE"
+                    && !token.IsCancellationRequested)
                 {
                     return new(partial, 0, Error: await SsisOpenFailureAsync(request, database!, token));
                 }
@@ -302,8 +304,8 @@ internal sealed class ExplorerService : IDisposable
         finally { gate.Release(); }
     }
 
-    /// <summary>Whether the SSIS Catalog's database exists, read on the Explorer pool after its own failed to open: it was
-    /// dropped (the node is gone), or the login may not open it.</summary>
+    /// <summary>The SSIS Catalog's database state, read on the Explorer pool after its own failed to open: it was dropped (the
+    /// node is gone), it is unavailable to everyone (offline, restoring, single-user in use), or the login may not open it.</summary>
     private async Task<ExplorerError> SsisOpenFailureAsync(ExplorerRequest request, string name, CancellationToken token)
     {
         try
@@ -312,10 +314,13 @@ internal sealed class ExplorerService : IDisposable
             await host.OpenAsync(connection, token);
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 30;
-            command.CommandText = CatalogSql.Prologue + ExplorerQueries.SsisCatalogExists;
+            command.CommandText = CatalogSql.Prologue + ExplorerQueries.SsisCatalogState;
             command.Parameters.Add(Parameter("@ssis_catalog", SqlDbType.NVarChar, 128, name));
-            return await command.ExecuteScalarAsync(token) is true ? ExplorerErrors.Create("NO_DB_ACCESS", name, name)
-                : ExplorerErrors.Create("NOT_FOUND", "The SSIS Catalog " + name, null);
+            await using var reader = await command.ExecuteReaderAsync(token);
+            if (!await reader.ReadAsync(token)) return ExplorerErrors.Create("NOT_FOUND", "The SSIS Catalog " + name, null);
+            return ExplorerLabels.Unavailable(Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture)) is { } reason
+                ? ExplorerErrors.Create("DATABASE_UNAVAILABLE", name, name, 0, reason)
+                : ExplorerErrors.Create("NO_DB_ACCESS", name, name);
         }
         catch (SqlException error) when (!token.IsCancellationRequested) { return ExplorerErrors.From(error, ErrorPhase.Statement, Subject(request), name); }
     }

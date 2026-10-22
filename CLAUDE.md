@@ -167,8 +167,9 @@ pages, limits, error codes, display formats, benchmarks).
   the SSIS read pool (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
   the explorer pool, from `SsisSql`'s constant text and the explorer's SSIS listings, both linted by `SsisSql.Lint`
   (values as parameters, no metadata built-ins, no `datetime` conversions, no dynamic SQL, no writes, never
-  `SYNCHRONIZED`); reads run `READ UNCOMMITTED` (`READ COMMITTED` when SSISDB has RCSI) with `LOCK_TIMEOUT 5000`, the
-  profile's role checks with 1000. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
+  `SYNCHRONIZED`); tree listings run `READ UNCOMMITTED`, describes `READ UNCOMMITTED` (`READ COMMITTED` when SSISDB has
+  RCSI), both with `LOCK_TIMEOUT 5000`, the profile's role checks with 1000. The SSIS pool keeps idle connections in SSISDB
+  until disconnect. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
   (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. Never log
   names, values, SQL or messages.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;

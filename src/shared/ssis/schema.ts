@@ -29,7 +29,9 @@ export interface SsisProfileView {
   /** SSISDB reads committed rows only when READ_COMMITTED_SNAPSHOT is on; otherwise reads run READ UNCOMMITTED. */
   readonly rcsi: boolean
   readonly features: { readonly [F in SsisFeature]: boolean }
-  readonly roles: { readonly sysadmin: boolean; readonly ssisAdmin: boolean; readonly ssisLogreader: boolean }
+  /** `ssisAdmin` and `ssisLogreader` are read only for logins that are not sysadmin (a sysadmin's IS_MEMBER is not evaluated, so
+   *  both are false for one): gate on `admin` (sysadmin or ssis_admin) for what ssis_admin may do. */
+  readonly roles: { readonly sysadmin: boolean; readonly admin: boolean; readonly ssisAdmin: boolean; readonly ssisLogreader: boolean }
 }
 /** Times are datetimeoffset in ISO 8601 with their offset, as the catalog stores them (never converted to datetime). */
 export interface SsisCatalogModel {
