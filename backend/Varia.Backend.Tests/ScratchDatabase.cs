@@ -54,6 +54,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
     public int Major { get; private set; }
+    /// <summary>Whether the server has Full-Text Search installed, which changes what SMO scripts for a full-text catalog.</summary>
+    public bool FullText { get; private set; }
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
@@ -145,10 +147,11 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     private async Task SetUpAsync(string fixtures)
     {
-        var facts = await Exec("SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion')), CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly'));");
+        var facts = await Exec("SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion')), CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly')), CONVERT(int, FULLTEXTSERVICEPROPERTY('IsFulltextInstalled'));");
         var fact = facts.Sets[0][0];
         Major = int.Parse(fact[0]!, CultureInfo.InvariantCulture);
         var sqlLogins = fact[1] == "0";
+        FullText = fact[2] == "1";
         const string marker = "EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;";
         foreach (var name in new[] { Name, ReadOnly, Offline, SingleUser })
         {
