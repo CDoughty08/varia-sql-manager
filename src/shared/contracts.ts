@@ -15,6 +15,7 @@ import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions
 import type { RecentFile } from './files/recent'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
+import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -259,6 +260,10 @@ export interface RpcMethods {
   'actions.script': { params: ActionRequest; result: ActionScriptResult }
   /** Runs an action's DDL after a preflight; never re-sent, and only Stop (varia:actions-cancel) ends a lock wait. */
   'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
+  /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
+  'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
+  /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
+  'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
@@ -388,6 +393,13 @@ export interface VariaApi {
   /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Reads an Activity Monitor session's details (the flyout). Failures the user can act on come back as `result.error`. */
+  activityDetails(params: ActivityDetailsRequest): Promise<ApiResult<ActivityDetailsResult>>
+  /** Kills sessions (1–64) after checking each one's identity; every session gets an outcome or is reported untried. */
+  activityKill(params: ActivityKillRequest): Promise<ApiResult<ActivityKillResult>>
+  /** Cancels Details reads by their `requestId`s (1–16); `cancelled` counts those still running. A read cancelled this
+   *  way answers `CANCELLED`. */
+  cancelActivity(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Tools › Options as main stored it, complete; `warning` reports a file that was reset or salvaged (once). */
   getSettings(): Promise<ApiResult<SettingsLoad>>
   /** Changes settings: known keys only, `null` resets one. Main validates strictly and resolves to the new state. */

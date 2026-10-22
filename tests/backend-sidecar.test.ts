@@ -207,6 +207,23 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'actions.describe', { ...ids, requestId: crypto.randomUUID(), dialog: 'tableDesigner', target: { kind: 'database', name: 'tempdb' } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('actions.execute', { action: 'rename', ...ids, target, newName: 'x' })).toEqual({ deadlineMs: 0, backstopMs: 0 })
   })
+  it('offers the Activity Monitor session actions in HELLO and checks them before the connection', async () => {
+    const hello = await raw().hello()
+    expect(hello.methods).toEqual(expect.arrayContaining(['activity.details', 'activity.kill']))
+    const connection = backend()
+    const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }, loginTime = '2026-10-22T06:50:12.347'
+    for (const params of [{ ...ids, sessionId: 0, loginTime }, { ...ids, sessionId: 32_768, loginTime }, { ...ids, sessionId: 69, loginTime: '2026-10-22 06:50:12' },
+      { ...ids, sessionId: 69, loginTime: '2026-10-22T06:50:12Z' }, { ...ids, sessionId: 69, loginTime, text: 'plan' }, { ...ids, sessionId: 69, loginTime, text: 'batch', locks: true },
+      { ...ids, requestId: 'x', sessionId: 69, loginTime }, { ...ids, sessionId: 69, loginTime, extra: 1 }]) {
+      await expect(call(connection, 'activity.details', params as never), JSON.stringify(params)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    }
+    const session = { sessionId: 69, loginTime, hostProcessId: null }
+    for (const sessions of [[], Array.from({ length: 65 }, (_, index) => ({ ...session, sessionId: index + 1 })), [session, session], [{ ...session, loginTime: 'now' }], [{ ...session, extra: 1 }]]) {
+      await expect(call(connection, 'activity.kill', { connectionId: ids.connectionId, sessions } as never), JSON.stringify(sessions).slice(0, 80)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    }
+    await expect(call(connection, 'activity.details', { ...ids, sessionId: 69, loginTime, locks: true })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    await expect(call(connection, 'activity.kill', { connectionId: ids.connectionId, sessions: [session] })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+  })
   it('handles cancellation of a completed or unknown query', async () => {
     await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
   })

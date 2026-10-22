@@ -23,8 +23,10 @@ internal sealed record ActivityStatement(string Probe, string Id, string Text, I
 
 /// <summary>The Activity Monitor's constant SQL: one text per probe, statement and render, written from Microsoft Learn's
 /// documented DMV columns (never SSMS's). Values are parameters; no metadata built-ins, temp tables, tempdb writes,
-/// sys.sysprocesses or locks DMV; every TOP is ordered. The offline lint renders and checks every variant; the kill and
-/// details statements (AM-K) and the capability probe (AM1) join with their own exemptions.</summary>
+/// sys.sysprocesses or locks DMV; every TOP is ordered. The offline lint renders and checks every variant. The session
+/// actions' statements have two exemptions, each held to one statement: Details' on-demand locks statement reads
+/// sys.dm_tran_locks, and Kill's batch runs one dynamic KILL built from its int parameter. The capability probe (AM1) will
+/// join with its own.</summary>
 internal static partial class ActivitySql
 {
     /// <summary>A probe never waits more than a second behind a lock and loses deadlocks (D-live's live prologue).</summary>
@@ -224,7 +226,128 @@ internal static partial class ActivitySql
         return [Clock("activity.queries"), stats, text];
     }
 
-    /// <summary>The probe's statements for a render, in the order they run. Azure SQL Database's variants arrive with AM6.</summary>
+    // --- Session actions (activity.details and activity.kill) -------------------------------------------------------------
+
+    /// <summary>What Kill runs before each session's batch: it never waits long on a lock (D-am §5.5).</summary>
+    public const string KillPrologue = "SET NOCOUNT ON; SET LOCK_TIMEOUT 10000;\n";
+    private static ActivityParameter Session() => Int("@session_id");
+    private static ActivityParameter LoginTime() => new("@login_time", SqlDbType.DateTime);
+
+    /// <summary>Details' statements by section, each run on its own (so a permission or a lock that stops one leaves the
+    /// rest) on the monitor's pool with <see cref="Prologue"/>. "session" runs first and decides whether the rest run; "locks"
+    /// only when asked. MARS requests rank as the sessions statement ranks them: a blocked one first, else the lowest.</summary>
+    private static IReadOnlyList<ActivityStatement> Details() =>
+    [
+        new("activity.details", "session",
+            "SELECT s.session_id, s.login_time, CONVERT(bit, CASE WHEN s.login_time = @login_time THEN 1 ELSE 0 END) AS same_session, s.host_process_id, s.is_user_process,\n"
+            + "       s.login_name, s.original_login_name, s.host_name, s.program_name, s.client_interface_name, s.status, s.transaction_isolation_level, s.cpu_time, s.reads,\n"
+            + "       s.writes, s.logical_reads, s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time,\n"
+            + "       c.client_net_address, c.net_transport, c.encrypt_option, c.auth_scheme,\n"
+            + "       r.request_count, r.request_id, r.status AS request_status, r.command, r.total_elapsed_time, r.request_cpu_ms, r.request_logical_reads, r.request_reads,\n"
+            + "       r.request_writes, r.blocking_session_id, r.wait_type, r.wait_time, r.wait_resource, r.percent_complete, r.granted_query_memory, r.dop,\n"
+            + "       d.name AS database_name, SYSDATETIMEOFFSET() AS server_time\n"
+            + "FROM sys.dm_exec_sessions AS s\n"
+            + "LEFT JOIN sys.dm_exec_connections AS c ON c.session_id = s.session_id AND c.parent_connection_id IS NULL\n"
+            + "LEFT JOIN (SELECT q.session_id, q.request_id, q.status, q.command, q.total_elapsed_time, q.blocking_session_id, q.wait_type, q.wait_time, q.wait_resource,\n"
+            + "                  q.percent_complete, q.granted_query_memory, q.dop, q.database_id,\n"
+            + "                  ROW_NUMBER() OVER (ORDER BY CASE WHEN q.blocking_session_id > 0 THEN 0 ELSE 1 END, q.request_id) AS request_rank, COUNT(*) OVER () AS request_count,\n"
+            + "                  SUM(q.cpu_time) OVER () AS request_cpu_ms, SUM(q.logical_reads) OVER () AS request_logical_reads, SUM(q.reads) OVER () AS request_reads,\n"
+            + "                  SUM(q.writes) OVER () AS request_writes\n"
+            + "           FROM sys.dm_exec_requests AS q WHERE q.session_id = @session_id) AS r ON r.session_id = s.session_id AND r.request_rank = 1\n"
+            + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n"
+            + "WHERE s.session_id = @session_id;",
+            ["session_id", "login_time", "same_session", "host_process_id", "is_user_process", "login_name", "original_login_name", "host_name", "program_name", "client_interface_name",
+                "status", "transaction_isolation_level", "cpu_time", "reads", "writes", "logical_reads", "memory_usage", "open_transaction_count", "last_request_start_time",
+                "last_request_end_time", "client_net_address", "net_transport", "encrypt_option", "auth_scheme", "request_count", "request_id", "request_status", "command",
+                "total_elapsed_time", "request_cpu_ms", "request_logical_reads", "request_reads", "request_writes", "blocking_session_id", "wait_type", "wait_time", "wait_resource",
+                "percent_complete", "granted_query_memory", "dop", "database_name", "server_time"],
+            [Session(), LoginTime()], ["session"], NoLiterals),
+        // Lengths in characters (DATALENGTH of nvarchar is bytes); a text asked for alone gets the other a length of 0.
+        new("activity.details", "texts",
+            "SELECT TOP (1) r.request_id,\n"
+            + "       LEFT(SUBSTRING(t.text, r.statement_start_offset / 2 + 1, CASE WHEN r.statement_end_offset = -1 THEN 2147483647 ELSE (r.statement_end_offset - r.statement_start_offset) / 2 + 1 END),\n"
+            + "            @statement_chars) AS statement_text,\n"
+            + "       CASE WHEN r.statement_end_offset = -1 THEN DATALENGTH(t.text) / 2 - r.statement_start_offset / 2 ELSE (r.statement_end_offset - r.statement_start_offset) / 2 + 1 END AS statement_length,\n"
+            + "       LEFT(t.text, @batch_chars) AS batch_text, DATALENGTH(t.text) / 2 AS batch_length\n"
+            + "FROM sys.dm_exec_requests AS r\n"
+            + "CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) AS t\n"
+            + "WHERE r.session_id = @session_id\n"
+            + "ORDER BY CASE WHEN r.blocking_session_id > 0 THEN 0 ELSE 1 END, r.request_id;",
+            ["request_id", "statement_text", "statement_length", "batch_text", "batch_length"], [Session(), Int("@statement_chars"), Int("@batch_chars")], ["statement", "batch"], NoLiterals),
+        new("activity.details", "inputBuffer",
+            "SELECT ib.event_type, ib.parameters, LEFT(ib.event_info, @chars) AS event_info, DATALENGTH(ib.event_info) / 2 AS event_length\n"
+            + "FROM sys.dm_exec_input_buffer(@session_id, NULL) AS ib;",
+            ["event_type", "parameters", "event_info", "event_length"], [Session(), Int("@chars")], ["inputBuffer"], NoLiterals),
+        new("activity.details", "waits",
+            $"SELECT TOP ({Limit("detailsWaits")}) w.wait_type, w.waiting_tasks_count, w.wait_time_ms, w.max_wait_time_ms, w.signal_wait_time_ms\n"
+            + "FROM sys.dm_exec_session_wait_stats AS w WHERE w.session_id = @session_id\n"
+            + "ORDER BY w.wait_time_ms DESC, w.wait_type;",
+            ["wait_type", "waiting_tasks_count", "wait_time_ms", "max_wait_time_ms", "signal_wait_time_ms"], [Session()], ["waits"], NoLiterals),
+        // One row per transaction and database it touched; @rowCap is the cap plus one, to see truncation.
+        new("activity.details", "transactions",
+            "SELECT TOP (@rowCap) st.transaction_id, a.name, a.transaction_begin_time, a.transaction_type, a.transaction_state, st.is_user_transaction,\n"
+            + "       dt.database_id, d.name AS database_name, dt.database_transaction_log_bytes_used, dt.database_transaction_log_bytes_reserved\n"
+            + "FROM sys.dm_tran_session_transactions AS st\n"
+            + "JOIN sys.dm_tran_active_transactions AS a ON a.transaction_id = st.transaction_id\n"
+            + "LEFT JOIN sys.dm_tran_database_transactions AS dt ON dt.transaction_id = st.transaction_id\n"
+            + "LEFT JOIN sys.databases AS d ON d.database_id = dt.database_id\n"
+            + "WHERE st.session_id = @session_id\n"
+            + "ORDER BY a.transaction_begin_time, st.transaction_id, dt.database_id;",
+            ["transaction_id", "name", "transaction_begin_time", "transaction_type", "transaction_state", "is_user_transaction", "database_id", "database_name",
+                "database_transaction_log_bytes_used", "database_transaction_log_bytes_reserved"], [Session(), Int("@rowCap")], ["transactions"], NoLiterals),
+        // The session's finished tasks and its running ones: pages allocated less pages freed, in each.
+        new("activity.details", "tempdb",
+            "SELECT ss.user_objects_alloc_page_count, ss.user_objects_dealloc_page_count, ss.internal_objects_alloc_page_count, ss.internal_objects_dealloc_page_count,\n"
+            + "       ts.task_user_alloc, ts.task_user_dealloc, ts.task_internal_alloc, ts.task_internal_dealloc\n"
+            + "FROM sys.dm_db_session_space_usage AS ss\n"
+            + "OUTER APPLY (SELECT SUM(t.user_objects_alloc_page_count) AS task_user_alloc, SUM(t.user_objects_dealloc_page_count) AS task_user_dealloc,\n"
+            + "                    SUM(t.internal_objects_alloc_page_count) AS task_internal_alloc, SUM(t.internal_objects_dealloc_page_count) AS task_internal_dealloc\n"
+            + "             FROM sys.dm_db_task_space_usage AS t WHERE t.session_id = @session_id) AS ts\n"
+            + "WHERE ss.session_id = @session_id;",
+            ["user_objects_alloc_page_count", "user_objects_dealloc_page_count", "internal_objects_alloc_page_count", "internal_objects_dealloc_page_count", "task_user_alloc",
+                "task_user_dealloc", "task_internal_alloc", "task_internal_dealloc"], [Session()], ["tempdb"], NoLiterals),
+        // On demand only (Load locks): sys.dm_tran_locks costs tens of ms even for a few locks.
+        new("activity.details", "locks",
+            "SELECT TOP (@rowCap) l.resource_type, l.resource_database_id, d.name AS database_name, l.request_mode, l.request_status, COUNT(*) AS lock_count\n"
+            + "FROM sys.dm_tran_locks AS l\n"
+            + "LEFT JOIN sys.databases AS d ON d.database_id = l.resource_database_id\n"
+            + "WHERE l.request_session_id = @session_id\n"
+            + "GROUP BY l.resource_type, l.resource_database_id, d.name, l.request_mode, l.request_status\n"
+            + "ORDER BY COUNT(*) DESC, l.resource_type, l.resource_database_id, l.request_mode, l.request_status;",
+            ["resource_type", "resource_database_id", "database_name", "request_mode", "request_status", "lock_count"], [Session(), Int("@rowCap")], ["locks"], NoLiterals)
+    ];
+
+    /// <summary>Kill's batch for one session (D-am §5.5, run after <see cref="KillPrologue"/>): the state of the session
+    /// (0 kill, 1 ended, 2 own, 3 changed, 4 system, 5 one of this backend's pool sessions), and KILL only for state 0. KILL
+    /// takes no variable, so its text is built on the server from the int parameter; nothing typed reaches it. The checks and
+    /// KILL are one batch on one connection, so only a reuse inside the batch itself could slip between them.</summary>
+    private static ActivityStatement Kill()
+    {
+        var pools = Enumerable.Range(0, PoolNames).Select(index => "@pool" + index).ToList();
+        return new("activity.kill", "kill",
+            "DECLARE @state int = CASE\n"
+            + "    WHEN @session_id = @@SPID THEN 2\n"
+            + "    WHEN NOT EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id) THEN 1\n"
+            + "    WHEN EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id AND s.is_user_process = 0) THEN 4\n"
+            + "    WHEN NOT EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id AND s.login_time = @login_time\n"
+            + "                     AND ISNULL(s.host_process_id, -1) = ISNULL(@host_process_id, -1)) THEN 3\n"
+            + "    WHEN EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id AND s.host_process_id = @backend_pid\n"
+            + "                 AND s.program_name IN (" + string.Join(", ", pools) + ")) THEN 5\n"
+            + "    ELSE 0 END;\n"
+            + "DECLARE @kill_text nvarchar(32) = N'KILL ' + CONVERT(nvarchar(11), @session_id) + N';';\n"
+            + "SELECT @state AS state;\n"
+            + "IF @state = 0 EXEC (@kill_text);",
+            ["state"], [Session(), LoginTime(), Int("@host_process_id"), Int("@backend_pid"), .. pools.Select(name => new ActivityParameter(name, SqlDbType.NVarChar, 128))],
+            ["kill"], new HashSet<string> { "N'KILL '", "N';'" });
+    }
+
+    /// <summary>The pool program names Kill refuses: one per pool kind of Varia's sessions in the catalogue.</summary>
+    public static int PoolNames => ActivityCatalog.Current.VariaSuffixes.Count(entry => entry.Kind == "pool");
+
+    /// <summary>Statements of the session actions, which are methods rather than probes: their lint knows them by name.</summary>
+    private static readonly HashSet<string> Methods = new(["activity.details", "activity.kill"], StringComparer.Ordinal);
+
+    /// <summary>The probe's (or session action's) statements for a render, in the order they run. Azure SQL Database's variants arrive with AM6.</summary>
     public static IReadOnlyList<ActivityStatement> Statements(string probe, ActivityRender render)
     {
         if (render.Band < ActivityCatalog.Current.MinBand || render.Band > ActivityCatalog.Current.MaxBand) throw new InvalidOperationException("No Activity Monitor SQL for this version band.");
@@ -235,7 +358,9 @@ internal static partial class ActivitySql
             "activity.sessions" => Sessions(),
             "activity.resources" => Resources(),
             "activity.queries" => Queries(render.TotalSpills),
-            _ => throw new InvalidOperationException("Unknown Activity Monitor probe.")
+            "activity.details" => Details(),
+            "activity.kill" => [Kill()],
+            _ => throw new InvalidOperationException("Unknown Activity Monitor probe or method.")
         };
     }
 
@@ -269,7 +394,7 @@ internal static partial class ActivitySql
         "fn_varbintohexstr", "dm_tran_locks", "sp_executesql", "tempdb"
     ];
     /// <summary>Columns and views that appear only from a version band, or with a capability, or on one kind of server.</summary>
-    private static readonly (string Token, int Since)[] Gates = [("total_cpu_usage_ms", 13), ("total_scheduler_delay_ms", 13), ("r.dop", 13), ("total_grant_kb", 13), ("dm_exec_input_buffer", 13)];
+    private static readonly (string Token, int Since)[] Gates = [("total_cpu_usage_ms", 13), ("total_scheduler_delay_ms", 13), ("r.dop", 13), ("total_grant_kb", 13), ("dm_exec_input_buffer", 13), ("dm_exec_session_wait_stats", 13)];
     private static readonly string[] SpillTokens = ["total_spills", "last_spills"];
     private static readonly string[] AzureOnly = ["dm_db_resource_stats", "sys.database_files", "dm_db_wait_stats"];
     private static readonly string[] NeverOnAzure = ["sys.master_files"];
@@ -289,6 +414,15 @@ internal static partial class ActivitySql
     private static partial Regex OverClause();
     [GeneratedRegex(@"(?<!@)@(?!@)\w+")]
     private static partial Regex Variable();
+    [GeneratedRegex(@"\bDECLARE\s+(@\w+)", RegexOptions.IgnoreCase)]
+    private static partial Regex Local();
+
+    /// <summary>The one dynamic statement any Activity Monitor SQL may run, and the text it is built from: KILL and the
+    /// session id, converted on the server from an int parameter.</summary>
+    private const string KillExec = "EXEC (@kill_text)";
+    private const string KillText = "DECLARE @kill_text nvarchar(32) = N'KILL ' + CONVERT(nvarchar(11), @session_id) + N';';";
+    private static bool IsKill(ActivityStatement statement) => statement is { Probe: "activity.kill", Id: "kill" };
+    private static bool IsLocks(ActivityStatement statement) => statement is { Probe: "activity.details", Id: "locks" };
 
     /// <summary>Problems with one rendered statement; empty when it passes.</summary>
     public static List<string> Lint(ActivityStatement statement, ActivityRender render)
@@ -296,8 +430,18 @@ internal static partial class ActivitySql
         var text = statement.Text;
         var problems = new List<string>();
         var code = Regex.Replace(LiteralPattern().Replace(text, "''"), @"--[^\n]*|/\*.*?\*/", " ", RegexOptions.Singleline);
-        foreach (var token in Forbidden) if (code.Contains(token, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + token);
+        // Only Details' on-demand locks statement reads sys.dm_tran_locks.
+        foreach (var token in Forbidden)
+            if (code.Contains(token, StringComparison.OrdinalIgnoreCase) && !(token == "dm_tran_locks" && IsLocks(statement))) problems.Add("uses " + token);
         if (code.Contains('#')) problems.Add("names a temporary object");
+        // Only Kill runs dynamic SQL: once, and only KILL with the session id an int parameter gives it.
+        if (IsKill(statement))
+        {
+            if (code.Split(KillExec).Length != 2 || !text.Contains(KillText, StringComparison.Ordinal)
+                || statement.Parameters.SingleOrDefault(parameter => parameter.Name == "@session_id")?.Type != SqlDbType.Int)
+                problems.Add("builds KILL from something other than the int @session_id");
+            code = code.Replace(KillExec, " ", StringComparison.Ordinal);
+        }
         foreach (Match keyword in Keyword().Matches(code)) problems.Add("uses " + keyword.Value.ToUpperInvariant());
         if (SelectStar().IsMatch(code)) problems.Add("selects *");
         var tops = Top().Matches(code);
@@ -312,12 +456,13 @@ internal static partial class ActivitySql
         {
             if (probe.Maxdop1 && statement.Id != "clock" && !text.EndsWith("OPTION (MAXDOP 1);", StringComparison.Ordinal)) problems.Add("does not end with OPTION (MAXDOP 1)");
         }
-        else problems.Add("belongs to no probe");
+        else if (!Methods.Contains(statement.Probe)) problems.Add("belongs to no probe");
         if (!text.TrimEnd().EndsWith(';')) problems.Add("does not end with a semicolon");
         foreach (Match literal in LiteralPattern().Matches(text))
             if (!statement.Literals.Contains(literal.Value)) problems.Add("has the literal " + literal.Value);
         var declared = statement.Parameters.Select(parameter => parameter.Name).ToHashSet(StringComparer.Ordinal);
-        var used = Variable().Matches(code).Select(match => match.Value).ToHashSet(StringComparer.Ordinal);
+        var locals = Local().Matches(code).Select(match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+        var used = Variable().Matches(code).Select(match => match.Value).Where(name => !locals.Contains(name)).ToHashSet(StringComparer.Ordinal);
         foreach (var name in used.Except(declared)) problems.Add("uses the undeclared " + name);
         foreach (var name in declared.Except(used)) problems.Add("declares the unused " + name);
         foreach (var (token, since) in Gates) if (render.Band < since && code.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
@@ -329,11 +474,11 @@ internal static partial class ActivitySql
         return problems;
     }
 
-    /// <summary>Every statement of every probe and render, with its problems.</summary>
+    /// <summary>Every statement of every probe, session action and render, with its problems.</summary>
     public static IEnumerable<(string Name, List<string> Problems)> Lint()
     {
         foreach (var render in Renders())
-            foreach (var probe in ActivityCatalog.Current.Probes.Keys)
+            foreach (var probe in ActivityCatalog.Current.Probes.Keys.Concat(Methods))
                 foreach (var statement in Statements(probe, render))
                     yield return ($"{probe} {statement.Id} ({render.Edition} band {render.Band}{(render.TotalSpills ? ", spills" : "")})", Lint(statement, render));
     }

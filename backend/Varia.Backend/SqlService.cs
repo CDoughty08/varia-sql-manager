@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Actions;
+using Varia.Backend.Activity;
 using Varia.Backend.Entra;
 using Varia.Backend.Explorer;
 using Varia.Backend.Live;
@@ -15,7 +16,7 @@ using Varia.Backend.Scripting;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ILiveHost
+internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ILiveHost, IActivityHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
@@ -25,7 +26,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
-        "entra.cache.clear", "live.subscribe", "live.update"
+        "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -51,6 +52,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
     private readonly LiveService live;
+    private readonly SessionActions sessionActions;
     private readonly EntraService entra;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
@@ -126,6 +128,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
         live = new LiveService(this);
+        sessionActions = new SessionActions(this, live);
         if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
     }
 
@@ -151,6 +154,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     internal EntraService Entra => entra;
     /// <summary>Live subscriptions (the checks count them).</summary>
     internal LiveService Live => live;
+    /// <summary>Activity Monitor's Details and Kill (the checks shorten their budgets).</summary>
+    internal SessionActions SessionActions => sessionActions;
     bool ILiveHost.TestHooks => hooks;
     bool ILiveHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
     string? ILiveHost.ServerOf(string connectionId) => ServerOf(connectionId);
@@ -160,6 +165,13 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// CONNECTION_LOST value and a new session id in the next tick, never a silent reconnect under the old one.</summary>
     SqlConnection ILiveHost.PoolConnection(string connectionId, string? database, string suffix) => PoolConnection(connectionId, database, suffix, reconnect: false);
     Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    bool IActivityHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
+    ServerProfile? IActivityHost.Profile(string connectionId) => ((ILiveHost)this).Profile(connectionId);
+    SqlConnection IActivityHost.MonitorConnection(string connectionId) => PoolConnection(connectionId, null, LiveConnections.ServerSuffix, reconnect: false);
+    SqlConnection IActivityHost.KillConnection(string connectionId) => ((IActionHost)this).Connection(connectionId);
+    Task IActivityHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    string IActivityHost.ApplicationName(string connectionId) => connections.TryGetValue(connectionId, out var connectionString)
+        ? new SqlConnectionStringBuilder(connectionString).ApplicationName : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
 
     /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
     /// connections to one server count as one whatever name, login or database they used; the connection's data source when
@@ -180,7 +192,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
-        "live.subscribe" => RequestLane.Live,
+        "live.subscribe" or "activity.details" => RequestLane.Live,
+        // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
+        "activity.kill" => RequestLane.Actions,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear"
             or "live.update" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
@@ -228,6 +242,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         "live.subscribe" => await live.SubscribeAsync(Read<LiveSubscribeArgs>(parameters, json), context, json),
         "live.update" => live.Update(Read<LiveUpdateArgs>(parameters, json), json),
+        "activity.details" => await sessionActions.DetailsAsync(Read<ActivityDetailsArgs>(parameters, json), Token(context)),
+        "activity.kill" => await sessionActions.KillAsync(Read<ActivityKillArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -406,6 +422,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
         live.Forget(args.ConnectionId);
+        sessionActions.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
