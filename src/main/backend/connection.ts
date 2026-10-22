@@ -2,7 +2,7 @@ import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'node
 import { z } from 'zod'
 import { FrameKind, FrameParser, ProtocolError, encodeFrame, type ParsedFrame } from '../../shared/ipc/wire/frames'
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../../shared/ipc/wire/msgpack'
-import { PROTOCOL_VERSION, cancelReasons, errorCodes, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
+import { PROTOCOL_VERSION, cancelReasons, errorCodes, errorReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import { backendMethods, methodPolicies } from '../../shared/ipc/methods'
 import type { BackendMethod } from '../../shared/contracts'
 import { BackendError, failureMessage, sentences } from './errors'
@@ -86,8 +86,12 @@ const helloSchema = z.object({
   methods: z.array(z.string().max(64)).max(256)
 })
 export type BackendHello = z.infer<typeof helloSchema>
-// A failed connection's details (docs/ipc.md): SQL Server's error number, state and class, and the server that answered.
-const errorDetailsSchema = z.object({ number: z.number().int().min(-2_147_483_648).max(2_147_483_647).optional(), state: z.number().int().min(0).max(255).optional(), class: z.number().int().min(0).max(255).optional(), server: z.string().max(256).optional() }).strict()
+// A failed connection's details (docs/ipc.md): SQL Server's error number, state and class, the server that answered, and
+// the reason "certificate"; or BACKEND_ERROR's exception types.
+export const errorDetailsSchema = z.object({
+  number: z.number().int().min(-2_147_483_648).max(2_147_483_647).optional(), state: z.number().int().min(0).max(255).optional(), class: z.number().int().min(0).max(255).optional(),
+  server: z.string().max(wire.errorDetails.server).optional(), reason: z.enum(errorReasons).optional(), exception: z.string().max(wire.errorDetails.exception).optional()
+}).strict()
 const errorSchema = z.object({ code: z.string().max(64), message: z.string().max(wire.messages.errorCharacters), details: errorDetailsSchema.optional() }).strict()
 const goAwaySchema = z.object({ code: z.string().max(64), message: z.string().max(wire.messages.errorCharacters), versions: z.tuple([z.number().int(), z.number().int()]).optional() }).strict()
 const knownCodes: ReadonlySet<string> = new Set(errorCodes)

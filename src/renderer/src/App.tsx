@@ -28,6 +28,7 @@ import ConnectDialog from './ConnectDialog'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import MenuLayer from './menus/MenuLayer'
+import Toasts from './kit/Toasts'
 import { useMenuTarget } from './menus/useMenuTarget'
 import { connectionDefaults } from '../../shared/connections'
 
@@ -67,6 +68,7 @@ export default function App() {
   const editorDialogs = useServiceSnapshot(workbench.editorDialogs)
   const { open: recoveryOpen } = useServiceSnapshot(workbench.recovery)
   const { values: settings } = useServiceSnapshot(workbench.settings)
+  const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
@@ -269,6 +271,7 @@ export default function App() {
     <ObjectDialog />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
+    <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
     <QuickInput />
     <MenuLayer />
   </div>

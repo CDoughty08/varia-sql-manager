@@ -12,13 +12,17 @@ internal static class ConnectionFailureChecks
 {
     /// <summary>A SqlException as SqlClient builds one. Its constructors are internal; a SqlClient upgrade that changes them
     /// fails these checks here rather than silently testing something else.</summary>
-    internal static SqlException Sql(int number, byte state, byte level, string server, string message, string procedure = "", Exception? inner = null)
+    /// <param name="cause">The SqlException's own InnerException, as SqlClient sets it for a network or TLS failure.</param>
+    internal static SqlException Sql(int number, byte state, byte level, string server, string message, string procedure = "", Exception? inner = null, Exception? cause = null)
     {
         var flags = BindingFlags.NonPublic | BindingFlags.Instance;
         var error = (SqlError)(typeof(SqlError).GetConstructor(flags, [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)])
             ?? throw new Exception("SqlClient's SqlError constructor changed; update ConnectionFailureChecks.Sql")).Invoke([number, state, level, server, message, procedure, 0, inner]);
         var errors = (SqlErrorCollection)(typeof(SqlErrorCollection).GetConstructor(flags, Type.EmptyTypes) ?? throw new Exception("SqlErrorCollection's constructor changed")).Invoke([]);
         (typeof(SqlErrorCollection).GetMethod("Add", flags) ?? throw new Exception("SqlErrorCollection.Add changed")).Invoke(errors, [error]);
+        if (cause is not null)
+            return (SqlException)(typeof(SqlException).GetMethod("CreateException", BindingFlags.NonPublic | BindingFlags.Static, [typeof(SqlErrorCollection), typeof(string), typeof(Guid), typeof(Exception)])
+                ?? throw new Exception("SqlException.CreateException changed")).Invoke(null, [errors, "17.00.1000", Guid.Empty, cause])!;
         var create = typeof(SqlException).GetMethod("CreateException", BindingFlags.NonPublic | BindingFlags.Static, [typeof(SqlErrorCollection), typeof(string)])
             ?? throw new Exception("SqlException.CreateException changed");
         return (SqlException)create.Invoke(null, [errors, "17.00.1000"])!;
@@ -76,6 +80,26 @@ internal static class ConnectionFailureChecks
             "other exceptions are left to the host's general mapping");
         check(!JsonSerializer.Serialize(ConnectionFailures.Describe(login, "localhost", kerberos: false, Probe(KerberosState.Valid))!.Details).Contains("assword", StringComparison.OrdinalIgnoreCase),
             "details hold only the number, state, class and server");
+
+        // The TLS certificate failures Trust server certificate fixes, as each SNI reports them, and look-alikes that it does not.
+        const string chain = "A connection was successfully established with the server, but then an error occurred during the login process. (provider: SSL Provider, error: 0 - The certificate chain was issued by an authority that is not trusted.)";
+        var untrusted = Sql(unchecked((int)0x80090325), 0, 20, "", chain, cause: new System.ComponentModel.Win32Exception(unchecked((int)0x80090325)));
+        failure = ConnectionFailures.Describe(untrusted, "localhost", kerberos: false, Probe(KerberosState.Valid));
+        check(failure?.Code == "SQL_ERROR" && failure.Message == chain && failure.Details == new ErrorDetails(unchecked((int)0x80090325), 0, 20, "localhost", ErrorDetailsLimits.Certificate),
+            "an untrusted certificate chain keeps SqlClient's message and details and adds the reason certificate");
+        var wrongName = Sql(unchecked((int)0x80090322), 0, 20, "sql01", "The target principal name is incorrect.");
+        check(ConnectionFailures.Describe(wrongName, "sql01", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason == ErrorDetailsLimits.Certificate,
+            "a certificate issued for another name is a certificate failure too");
+        var managed = Sql(0, 0, 20, "", "A connection was successfully established with the server, but then an error occurred during the pre-login handshake. (provider: TCP Provider, error: 35 - An internal exception was caught)",
+            cause: new System.Security.Authentication.AuthenticationException("The remote certificate was rejected by the provided RemoteCertificateValidationCallback."));
+        check(ConnectionFailures.Describe(managed, "linux-sql", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason == ErrorDetailsLimits.Certificate,
+            "the managed SNI's rejected certificate (an AuthenticationException) is a certificate failure");
+        var protocol = Sql(0, 0, 20, "", "An error occurred during the pre-login handshake.", cause: new System.Security.Authentication.AuthenticationException("Authentication failed because the remote party sent a TLS alert: 'ProtocolVersion'."));
+        check(ConnectionFailures.Describe(protocol, "old-sql", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason is null
+            && ConnectionFailures.Describe(login, "localhost", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason is null
+            && ConnectionFailures.Describe(Sql(233, 0, 20, "", "No process is on the other end of the pipe."), "x", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason is null,
+            "a TLS version mismatch, a failed login or a closed pipe is not a certificate failure");
+        check(!JsonSerializer.Serialize(failure!.Details).Contains("assword", StringComparison.OrdinalIgnoreCase), "a certificate failure's details hold nothing more than the reason");
 
         check(KerberosProbe.Classify(0, 36_000) == KerberosState.Valid && KerberosProbe.Classify(0, uint.MaxValue) == KerberosState.Valid, "a credential with time left is a valid ticket");
         check(KerberosProbe.Classify(0, 0) == KerberosState.Expired, "MIT: a credential with no time left is an expired ticket");

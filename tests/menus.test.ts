@@ -328,6 +328,8 @@ describe('menu state', () => {
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
+      // Toasts are reached from the palette, as in VS Code.
+      'notifications.focus', 'notifications.clearAll',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
       'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))

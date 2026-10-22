@@ -184,6 +184,24 @@ try
         }
     }
     await ConnectionFailureChecks.PoolBlockingAsync(Check, rejected);
+    // Development servers (the local one, CI's container) have self-signed certificates: without Trust server certificate,
+    // connect and Load databases fail with the reason the Connect dialog offers to fix. A server with a trusted certificate
+    // connects instead, and then there is nothing to check.
+    var validated = Live("master") with { TrustServerCertificate = false, Encrypt = "mandatory" };
+    foreach (var method in new[] { "connections.connect", "connections.databases" })
+    {
+        try
+        {
+            var opened = await Call<object>(method, validated);
+            if (opened is ConnectionInfo trusted) await Call<object>("connections.disconnect", new ConnectionArgs(trusted.Id));
+            Console.WriteLine(method + ": the server's certificate is trusted here, so the untrusted-certificate check is skipped.");
+        }
+        catch (RequestException error)
+        {
+            Check(error.Code == "SQL_ERROR" && error.Details is { Reason: ErrorDetailsLimits.Certificate, Class: 20, Server.Length: > 0 },
+                method + " answers an untrusted server certificate with the reason certificate and SqlClient's own message: " + error.Code + " " + error.Details?.Number + " " + error.Message);
+        }
+    }
 
     // A Kerberos ticket that expires while connected: every later open says to run kinit, and works again after it.
     var signIn = Guid.NewGuid().ToString();

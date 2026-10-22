@@ -104,6 +104,11 @@ describe('states kit words', () => {
       .toBe('Loading Tables on localhost\nCode: SQL_ERROR\nMessage: Invalid object name \'dbo.Nope\'.\nSQL Server: Msg 208, Level 16, State 1, Server localhost')
     expect(errorDetailsText({ message: 'The backend stopped.' })).toBe('Message: The backend stopped.')
     expect(errorDetailsText({ message: 'Failed.', code: 'BACKEND_ERROR', extra: '  System.IO.FileNotFoundException\n' })).toBe('Code: BACKEND_ERROR\nMessage: Failed.\n\nSystem.IO.FileNotFoundException')
+    // The backend's exception types for BACKEND_ERROR (the generic sentence hides them), and a connect failure's reason.
+    expect(errorDetailsText({ message: 'The backend operation failed.', code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' }, context: 'Connecting to localhost' }))
+      .toBe('Connecting to localhost\nCode: BACKEND_ERROR\nMessage: The backend operation failed.\nException: System.DllNotFoundException (0x80131524)')
+    expect(errorDetailsText({ message: 'Not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, class: 20, state: 0, server: 'sql01', reason: 'certificate' } }))
+      .toBe('Code: SQL_ERROR\nMessage: Not trusted.\nSQL Server: Msg -2146893019, Level 20, State 0, Server sql01\nReason: certificate')
     const long = errorDetailsText({ message: 'x'.repeat(40_000) })
     expect(long).toHaveLength(maxErrorDetails)
     expect(long.endsWith('…')).toBe(true)

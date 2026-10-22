@@ -297,7 +297,9 @@ internal sealed class ProtocolHost
             _ when Find<SqlException>(error) is { } sql => Error("SQL_ERROR", sql.Message),
             // SMO wraps server failures (permissions, missing objects) in its own exception types.
             _ when error.GetType().Namespace?.StartsWith("Microsoft.SqlServer.Management", StringComparison.Ordinal) == true => Error("SMO_ERROR", error.GetBaseException().Message),
-            _ => Error("BACKEND_ERROR", "The backend operation failed. Verify the connection and object permissions.")
+            // The sentence hides the cause (such as a native library that cannot load from a long install path), so the details
+            // name the exception's types for Copy details; never its message.
+            _ => Error("BACKEND_ERROR", "The backend operation failed. Verify the connection and object permissions.", new(null, null, null, null, Exception: ErrorDetailsLimits.Summary(error)))
         };
     }
 
@@ -326,7 +328,8 @@ internal sealed class ProtocolHost
         if (details is not null)
         {
             writer.WriteString("details");
-            writer.WriteMapHeader((details.Number is null ? 0 : 1) + (details.State is null ? 0 : 1) + (details.Class is null ? 0 : 1) + (details.Server is null ? 0 : 1));
+            writer.WriteMapHeader((details.Number is null ? 0 : 1) + (details.State is null ? 0 : 1) + (details.Class is null ? 0 : 1) + (details.Server is null ? 0 : 1)
+                + (details.Reason is null ? 0 : 1) + (details.Exception is null ? 0 : 1));
             if (details.Number is { } number) { writer.WriteString("number"); writer.WriteInt64(number); }
             if (details.State is { } state) { writer.WriteString("state"); writer.WriteInt64(state); }
             if (details.Class is { } level) { writer.WriteString("class"); writer.WriteInt64(level); }
@@ -334,6 +337,12 @@ internal sealed class ProtocolHost
             {
                 writer.WriteString("server");
                 writer.WriteString(server.Length > ConnectionFailures.MaxServerLength ? server[..ConnectionFailures.MaxServerLength] : server);
+            }
+            if (details.Reason is { } reason) { writer.WriteString("reason"); writer.WriteString(reason); }
+            if (details.Exception is { } exception)
+            {
+                writer.WriteString("exception");
+                writer.WriteString(exception.Length > ErrorDetailsLimits.MaxExceptionLength ? exception[..ErrorDetailsLimits.MaxExceptionLength] : exception);
             }
         }
         return buffer.WrittenSpan.ToArray();

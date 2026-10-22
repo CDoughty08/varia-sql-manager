@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import type { spawn } from 'node:child_process'
@@ -8,7 +9,7 @@ import { BackendError, sentences } from '../src/main/backend/errors'
 import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/ipc/wire/frames'
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../src/shared/ipc/wire/msgpack'
 import { backendMethods, deadlineFor } from '../src/shared/ipc/methods'
-import { cancelReasons } from '../src/shared/ipc/wire/protocol'
+import { cancelReasons, errorReasons, limits as wire } from '../src/shared/ipc/wire/protocol'
 import { connectionRequestLimits, RendererRequests } from '../src/main/backend/renderer-requests'
 import { fakeSpawn, manualClock, settle } from './fixtures/fake-process'
 
@@ -103,7 +104,17 @@ describe('BackendConnection malformed input', () => {
     const failed = await failure(connect('sql.contoso.com'))
     expect(failed).toMatchObject({ code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: { number: 0, state: 0, class: 11, server: 'sql.contoso.com' } })
     expect(await failure(connect('long'))).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
+    expect(await failure(connect('certificate'))).toMatchObject({ code: 'SQL_ERROR', details: { number: -2146893019, class: 20, server: 'certificate', reason: 'certificate' } })
+    expect(await failure(connect('crash'))).toMatchObject({ code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' } })
+    for (const server of ['reason', 'exception']) expect(await failure(connect(server)), server).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
     expect(connection.lost).toBeUndefined()
+  })
+  it('bounds error details as the backend does', () => {
+    // ErrorDetailsLimits and ConnectionFailures.MaxServerLength in C#, which cut what they send to these lengths.
+    const contracts = readFileSync(resolve('backend/Varia.Backend/Contracts.cs'), 'utf8'), failures = readFileSync(resolve('backend/Varia.Backend/ConnectionFailures.cs'), 'utf8')
+    expect(Number(/MaxExceptionLength = (\d+);/.exec(contracts)?.[1])).toBe(wire.errorDetails.exception)
+    expect(Number(/MaxServerLength = (\d+);/.exec(failures)?.[1])).toBe(wire.errorDetails.server)
+    expect(/Certificate = "(\w+)";/.exec(contracts)?.[1]).toBe(errorReasons[0])
   })
   it('passes query events to their request and contains an undecodable one', async () => {
     const global: unknown[] = []

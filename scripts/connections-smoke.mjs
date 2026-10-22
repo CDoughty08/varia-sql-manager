@@ -104,7 +104,7 @@ try {
   // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
   // OK stores only the fields changed or touched (Always Encrypted and secure enclaves went back to False), so the
   // defaults, and Tools › Options for the command timeout, keep applying to the rest.
-  await expect.poll(async () => ({ advanced: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced, errors: await dialog.locator('.connect-error').allTextContents() })).toEqual({
+  await expect.poll(async () => ({ advanced: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced, errors: await dialog.locator('.connect-failure').allTextContents() })).toEqual({
     advanced: {
       commandTimeout: 7, connectTimeout: 20, columnEncryption: false, secureEnclaves: false, attestationProtocol: 'HGS', enclaveAttestationUrl: 'https://attestation.example',
       multipleActiveResultSets: true, networkProtocol: 'tcp', applicationIntent: 'ReadOnly', packetSize: 8192
@@ -186,7 +186,7 @@ try {
     const [number, severity, , answered] = await dialog.locator('.connect-error-details dd').allTextContents()
     expect(['18456 14', '233 20']).toContain(number + ' ' + severity)
     expect(answered).toBe(process.env.VARIA_TEST_SQL_SERVER)
-    expect((await dialog.locator('.connect-error, .connect-error-details').allTextContents()).join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
+    expect((await dialog.locator('.connect-failure').allTextContents()).join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
     // Load databases with the same login fails the same way, and shows the same details under its note.
     const liveDatabaseDetails = dialog.locator('.property-row .connect-error-details')
     await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
@@ -204,7 +204,13 @@ try {
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Database Name', { exact: true }).focus()
     await expect(dialog.getByText(/databases available/)).toBeVisible({ timeout: 35000 })
+    // Development servers have self-signed certificates: without Trust server certificate the connect fails with the fix,
+    // and the fix connects. A server whose certificate this computer trusts connects at once.
+    await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    const liveTrust = dialog.getByRole('button', { name: 'Trust server certificate and connect', exact: true })
+    await expect.poll(async () => await dialog.count() === 0 || await liveTrust.isVisible(), { timeout: 30000 }).toBe(true)
+    if (await dialog.count()) await liveTrust.click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
     const liveLibrary = JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8'))
     expect(liveLibrary.profiles.some(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.lastConnected)).toBe(true)
@@ -246,6 +252,10 @@ try {
       if (method === 'connections.connect') {
         if (params.server === 'connect-error') return { ok: false, error: 'Server unavailable.', code: 'SQL_ERROR', details: { number: 53, state: 0, class: 20, server: 'connect-error' } }
         if (params.server === 'connect-error-plain') return { ok: false, error: 'Server unavailable without details.' }
+        // A self-signed certificate: refused until Trust server certificate is on, and always under Strict encryption.
+        if (params.server === 'cert-error' && (!params.trustServerCertificate || params.encrypt === 'strict')) return { ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'cert-error', reason: 'certificate' } }
+        if (params.server === 'cert-error') return { ok: false, error: 'Login failed after trusting the certificate.', code: 'SQL_ERROR', details: { number: 18456, state: 1, class: 14, server: 'cert-error' } }
+        if (params.server === 'backend-error') return { ok: false, error: 'The backend operation failed. Verify the connection and object permissions.', code: 'BACKEND_ERROR', details: { exception: 'System.InvalidOperationException (0x80131509) > System.DllNotFoundException (0x80131524)' } }
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
       // alice@CONTOSO.COM, unless the suite holds the answer back (identityPending) to look at the dialog while it waits.
@@ -354,6 +364,33 @@ try {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable without details')
   await expect(details).toHaveCount(0)
+  // An untrusted certificate offers to trust it and connect again, as checking Trust server certificate would.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('cert-error')
+  await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('not trusted')
+  const trust = dialog.getByRole('button', { name: 'Trust server certificate and connect', exact: true })
+  await expect(dialog.locator('.connect-failure')).toBeInViewport()
+  await dialog.locator('.connect-failure').screenshot({ path: resolve('artifacts', 'connect-certificate-fix.png') })
+  await trust.click()
+  await expect(dialog.getByRole('alert')).toContainText('Login failed after trusting the certificate.')
+  await expect(dialog.getByLabel('Trust server certificate', { exact: true })).toBeChecked()
+  await expect(trust).toHaveCount(0)
+  expect(await app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'cert-error').map(call => call.params.trustServerCertificate))).toEqual([false, true])
+  // Strict encryption validates the certificate whatever the box says: the dialog explains, with nothing to click.
+  await dialog.getByLabel('Encrypt', { exact: true }).selectOption('strict')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByText(/Strict encryption always validates/)).toBeVisible()
+  await expect(trust).toHaveCount(0)
+  await dialog.getByLabel('Encrypt', { exact: true }).selectOption('mandatory')
+  // BACKEND_ERROR's sentence is generic; Copy details carries the exception types the backend named.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('backend-error')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('The backend operation failed.')
+  await expect(details).toHaveCount(0)
+  await dialog.locator('.connect-failure').getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(dialog.locator('.connect-failure .inline-error-status')).toHaveText('Details copied.')
+  expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Connecting to backend-error\nCode: BACKEND_ERROR\nMessage: The backend operation failed. Verify the connection and object permissions.\nException: System.InvalidOperationException (0x80131509) > System.DllNotFoundException (0x80131524)')
   const history = await page.evaluate(() => window.varia.loadConnectionLibrary())
   expect(history.value.library.profiles.some(item => item.options.server === 'connect-error')).toBe(false)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connected-server')
@@ -555,6 +592,23 @@ async function rememberPassword() {
   await launch(options, 'fake · Ready')
   dialog = await remembered()
   await connected(dialog)
+  // (6b) An untrusted certificate: trusting it changes the certificate settings the remembered password was saved for, and
+  // main gives a password only to those, so the fix checks the box and asks for the password instead of connecting.
+  await writeFile(join(control, 'untrusted-certificate'), '')
+  dialog = await remembered()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('not trusted')
+  const connects = async () => (await calls()).filter(call => call.method === 'connections.connect').length
+  const attempted = await connects()
+  await dialog.getByRole('button', { name: 'Trust server certificate and connect', exact: true }).click()
+  await expect(dialog.getByText(/enter the password, then connect/)).toBeVisible()
+  await expect(form(dialog).password).toBeFocused()
+  await expect(dialog.getByLabel('Trust server certificate', { exact: true })).toBeChecked()
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
+  expect(await connects()).toBe(attempted)
+  await rm(join(control, 'untrusted-certificate'))
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
   // (7) Rejected after a password change: forgotten, and the dialog says so.
   await writeFile(join(control, 'reject-passwords'), '')
   dialog = await remembered()

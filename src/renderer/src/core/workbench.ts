@@ -46,12 +46,14 @@ import { ObjectActionService } from '../actions/ObjectActionService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
+import { notificationsContribution } from '../contributions/notifications'
 import { TableDesignerService } from '../designer/TableDesignerService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
 import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
+import { NotificationService } from './notifications'
 import { ContextKeyService } from './contextkeys'
 import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
@@ -119,6 +121,8 @@ export interface Workbench extends Disposable {
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
   readonly theme: ThemeService
+  /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
+  readonly notifications: NotificationService
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -146,6 +150,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
+  const notifications = new NotificationService()
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
@@ -192,6 +197,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recentFiles,
     recovery,
     designer: designers.context,
+    notifications,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -251,6 +257,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dialogs,
     designers,
     theme,
+    notifications,
     dispose: () => {
       if (disposed) return
       disposed = true
@@ -287,6 +294,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       panes.dispose()
       resultSelection.dispose()
       settings.dispose()
+      notifications.dispose()
       theme.dispose()
       events.dispose()
     }
@@ -308,7 +316,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
-    settingsContribution(workbench)
+    settingsContribution(workbench),
+    notificationsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
+import type { ErrorCode } from '../../shared/ipc/wire/protocol'
 import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, connectionKey, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
+import InlineError, { type ErrorAction } from './kit/InlineError'
+import { connectFix } from './connect-fix'
 import { trapFocus } from './trap-focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { IntegratedIdentityLookup } from './services/integrated-identity'
@@ -42,6 +45,10 @@ const userPlaceholders: Partial<Record<AuthenticationMode, string>> = {
 }
 const mfaWaiting = 'Complete the sign-in in your web browser. Waiting up to 3 minutes…'
 const cancelledNotice = 'Connection cancelled.'
+const trustLabel = 'Trust server certificate and connect'
+/** Strict encryption validates the certificate whatever Trust server certificate says, so the dialog can only explain. */
+const strictCertificate = "Strict encryption always validates the server's certificate. Install a certificate this computer trusts, set Host Name in Certificate to the name the certificate was issued for, or choose Mandatory encryption and Trust server certificate."
+const trustNeedsPassword = 'Trust server certificate is now checked. The saved password is kept for the old settings only, so enter the password, then connect.'
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
 /** Advanced Properties. A command timeout the profile does not set is left empty, showing Tools › Options' Execution time-out. */
@@ -94,8 +101,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const [busy, setBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  // The failed connection's details, shown only while its message is the dialog's error.
-  const [failure, setFailure] = useState<{ error: string; details: ErrorDetails }>()
+  // The failed connection's code and details, shown only while its message is the dialog's error.
+  const [failure, setFailure] = useState<{ error: string; code?: ErrorCode; details?: ErrorDetails; server: string; options: ConnectionOptions }>()
+  const failureBox = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState('')
   const [databases, setDatabases] = useState<DatabaseInfo[]>([])
   const [dbBusy, setDbBusy] = useState(false)
@@ -264,27 +272,46 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
-  async function connect(event: FormEvent) {
+  /** Connects with the form's options, or with `chosen` when a fix changed them in the same click. */
+  async function connect(chosen: ConnectionOptions = options) {
     // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
-    event.preventDefault(); setBusy(true); setError(''); setNotice(current => current === cancelledNotice ? '' : current)
+    setBusy(true); setError(''); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     connectRequest.current = requestId
+    const saved = chosen === options ? match : rememberedProfile(library.profiles, savedIds, chosen, selectedId)
     try {
-      const result = await window.varia.connect(options, { ...match ? { profileId: match.id } : {}, remember: remember && rememberable, requestId })
+      const result = await window.varia.connect(chosen, { ...saved ? { profileId: saved.id } : {}, remember: remember && rememberable, requestId })
       if (!alive.current) return
-      if (result.ok) onConnected(result.value, { ...options, password: '' })
+      if (result.ok) onConnected(result.value, { ...chosen, password: '' })
       // Stop: the form is the user's again, with nothing to report.
       else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {
-        setError(result.error); setFailure(result.details ? { error: result.error, details: result.details } : undefined)
+        setError(result.error); setFailure({ error: result.error, code: result.code, details: result.details, server: chosen.server, options: chosen })
         if (result.passwordForgotten) passwordRejected()
       }
-    } catch (reason) { if (alive.current) setError(message(reason)) }
+    } catch (reason) { if (alive.current) { setError(message(reason)); setFailure(undefined) } }
     finally {
       if (connectRequest.current === requestId) connectRequest.current = undefined
       if (alive.current) setBusy(false)
     }
   }
+  /** Trust server certificate and connect: checks the box, as the person would, and connects again with it. */
+  function trustAndConnect() {
+    const next = { ...options, trustServerCertificate: true }
+    setOptions(next)
+    // Main fills a remembered password in only for the certificate settings it was saved with.
+    if (usesPassword(next.authentication) && !next.password && match && rememberedProfile(library.profiles, savedIds, next, selectedId)?.id !== match.id) {
+      setError(''); setNotice(trustNeedsPassword)
+      dialog.current?.querySelector<HTMLInputElement>('#connect-password')?.focus()
+      return
+    }
+    void connect(next)
+  }
+  const shownFailure = error && failure?.error === error ? failure : undefined
+  const fix = shownFailure && connectFix(shownFailure.options, shownFailure.details)
+  const fixActions: ErrorAction[] = fix === 'trust' ? [{ label: trustLabel, run: trustAndConnect }] : []
+  // The error sits at the end of the scrolled form, next to Connect: bring it into view, as people look there first.
+  useEffect(() => { if (error) failureBox.current?.scrollIntoView({ block: 'nearest' }) }, [error])
   const matches = (text: string) => text.toLowerCase().includes(filter.toLowerCase())
   const filtered = library.profiles.filter(profile => matches([profile.options.displayName, profile.options.server, profile.options.database, profile.options.username].join(' ')))
   const recent = filtered.filter(profile => profile.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
@@ -304,7 +331,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     trapFocus(event)
   }
   return <>
-    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal="true" inert={advanced} onSubmit={event => void connect(event)} onKeyDown={trap}>
+    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal="true" inert={advanced} onSubmit={(event: FormEvent) => { event.preventDefault(); void connect() }} onKeyDown={trap}>
       <div className="connection-heading"><h2 id="connect-title">Connect</h2><button type="button" className="icon-button" aria-label="Close connection dialog" disabled={locked} onClick={onClose}><Icon name="close" /></button></div>
       <div className="connection-scroll">
         <div className="connection-tabs" role="tablist" aria-label="Connection sources">{(['history', 'browse'] as const).map(value => <button type="button" role="tab" key={value} aria-selected={tab === value} aria-controls="connection-sources" disabled={locked} onClick={() => setTab(value)}>{value === 'history' ? 'History' : 'Browse'}</button>)}</div>
@@ -345,7 +372,12 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
           <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
         </div><div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}>{selected?.favorite ? '★ Remove favorite' : '☆ Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div></fieldset>
         {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
-        {notice && <p className="field-note" role="status">{notice}</p>}{error && <p className="connect-error" role="alert">{error}</p>}{error && failure?.error === error && <FailureDetails details={failure.details} />}
+        {notice && <p className="field-note" role="status">{notice}</p>}
+        {error && <div ref={failureBox} className="connect-failure">
+          <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions} />
+          {fix === 'strict' && <p className="field-note">{strictCertificate}</p>}
+          {shownFailure?.details && (shownFailure.details.number !== undefined || shownFailure.details.server) && <FailureDetails details={shownFailure.details} />}
+        </div>}
       </div>
       <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
     </form></div>

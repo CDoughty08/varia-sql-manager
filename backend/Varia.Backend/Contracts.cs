@@ -188,8 +188,30 @@ internal sealed record ActionStepDto(string Status, string? Message = null);
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
 
 /// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
-/// the server that answered. Never the connection string or the password.</summary>
-internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server);
+/// the server that answered, plus <c>Reason</c> "certificate" when the server's TLS certificate was not trusted (the dialog
+/// offers to trust it). <c>Exception</c> comes only with BACKEND_ERROR: the unexpected exception's types and HRESULTs for
+/// Copy details (<see cref="ErrorDetailsLimits.Summary"/>), never its message. Never the connection string or the password.</summary>
+internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server, string? Reason = null, string? Exception = null);
+
+internal static class ErrorDetailsLimits
+{
+    /// <summary>The longest exception summary the details carry; main refuses a longer one.</summary>
+    internal const int MaxExceptionLength = 512;
+    /// <summary>The reason a certificate failure carries, the only reason there is.</summary>
+    internal const string Certificate = "certificate";
+
+    /// <summary>"System.InvalidOperationException (0x80131509) &gt; System.DllNotFoundException (0x80131524)": the types and
+    /// HRESULTs from the outer exception inwards, at most four, cut at 512 characters. Messages are left out because they can
+    /// hold paths, names or SQL text.</summary>
+    internal static string Summary(Exception error)
+    {
+        var parts = new List<string>();
+        for (Exception? current = error; current is not null && parts.Count < 4; current = current.InnerException)
+            parts.Add($"{current.GetType().FullName} (0x{current.HResult:X8})");
+        var text = string.Join(" > ", parts);
+        return text.Length > MaxExceptionLength ? text[..MaxExceptionLength] : text;
+    }
+}
 
 internal sealed class RequestException(string code, string message, ErrorDetails? details = null) : Exception(message)
 {

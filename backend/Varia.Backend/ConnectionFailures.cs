@@ -47,7 +47,26 @@ internal static class ConnectionFailures
     {
         if (kerberos && Kerberos(error, server, probe) is { } failure) return failure;
         var sql = Find<SqlException>(error);
-        return sql is null ? null : new RequestException("SQL_ERROR", sql.Message, Details(sql, server));
+        if (sql is null) return null;
+        var details = Details(sql, server);
+        return new RequestException("SQL_ERROR", sql.Message, Untrusted(error, sql) ? details with { Reason = ErrorDetailsLimits.Certificate } : details);
+    }
+
+    // SEC_E_UNTRUSTED_ROOT and SEC_E_WRONG_PRINCIPAL: Windows' SNI reports them as the error number, and the managed SNI
+    // (Linux and macOS) reports any certificate its validation rejects as SEC_E_UNTRUSTED_ROOT.
+    private static readonly HashSet<int> CertificateErrors = [unchecked((int)0x80090325), unchecked((int)0x80090322)];
+
+    /// <summary>The TLS handshake failed because the server's certificate is not trusted, by its chain or its name: what
+    /// Trust server certificate (or Host Name in Certificate) fixes. The managed SNI can also surface it only as the
+    /// AuthenticationException that SslStream's validation callback raised.</summary>
+    internal static bool Untrusted(Exception error, SqlException sql)
+    {
+        foreach (SqlError item in sql.Errors)
+            if (CertificateErrors.Contains(item.Number)) return true;
+        for (Exception? current = error; current is not null; current = current.InnerException)
+            if (current is System.Security.Authentication.AuthenticationException && current.Message.Contains("certificate", StringComparison.OrdinalIgnoreCase)
+                || current is System.ComponentModel.Win32Exception { NativeErrorCode: var code } && CertificateErrors.Contains(code)) return true;
+        return false;
     }
 
     /// <summary>What to fix when the Kerberos token could not be built, with the failure's details, or null for any other failure.</summary>
