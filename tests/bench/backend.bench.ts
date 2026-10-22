@@ -173,6 +173,8 @@ it('swaps 5,000-row × 23-column live snapshots through main', async () => {
   live.close()
   record(
     { id: 'node.liveData.snapshotSwapsPerSecond', value: swaps / (elapsedMs / 1000), unit: 'swaps/s', detail: `${swaps} revisions of 5,000 × 23 in ${Math.round(elapsedMs)} ms, ${collections} gen2 collections` },
-    { id: 'node.liveData.snapshotGen2PerMinute', value: collections * 60_000 / elapsedMs, unit: 'collections/min', detail: 'the backend\'s gen2 collections while revisions swap' }
+    // As a 1 s snapshot runs them: the collections follow the revisions written (each promotes what lives across a collection),
+    // not the clock, so the figure does not depend on how fast this machine swaps.
+    { id: 'node.liveData.snapshotGen2PerMinute', value: collections * 60 / Math.max(1, swaps), unit: 'collections/min', detail: `${collections} gen2 collections in ${swaps} revisions (${Math.round(collections * 60_000 / elapsedMs)} a minute at this rate)` }
   )
 }, 60_000)

@@ -1,3 +1,5 @@
+using System.Data.SqlTypes;
+using System.Globalization;
 using System.Text.Json;
 using Varia.Backend.Live;
 using Varia.Backend.Protocol;
@@ -62,9 +64,9 @@ internal static class LiveTableChecks
         // Live sets seal pages under the large object heap's threshold; a query's seal at 256 KiB.
         var store = Store();
         var text = new string('x', 100);
-        ResultSetBuffer Fill(QueryBudget budget)
+        ResultSetBuffer Fill(QueryBudget budget, ResultStore? into = null)
         {
-            var set = store.Open(budget, 0, 1, 1, "rows", [new ResultColumn("t", "nvarchar", "text")], [WireKind.Text])!;
+            var set = (into ?? store).Open(budget, 0, 1, 1, "rows", [new ResultColumn("t", "nvarchar", "text")], [WireKind.Text])!;
             for (var i = 0; i < 20_000; i++) LiveTableSet.Write(set, new([LiveCell.Of(text)]));
             set.Complete();
             return set;
@@ -101,6 +103,32 @@ internal static class LiveTableChecks
         shared.Return(hog, 500 * 1024);
         first.Release();
         check(shared.LiveUsedBytes == 0 && shared.UsedBytes == 0 && shared.Count == 0, "releasing a subscription's tables returns all of their live memory");
+
+        // A live reservation the global budget refuses (queries hold it, though the live share has room) takes back what it
+        // counted against the live share and the subscription, so refusals never leak live memory.
+        var crowded = new ResultStore(1L << 20, 1L << 20);
+        crowded.ShareWithLive(1);
+        var queries = crowded.BeginQuery("queries");
+        crowded.TryReserve(queries, 900 * 1024, false, out _);
+        var subscriptionBudget = new LiveBudget(64L << 20);
+        var refusedLive = !crowded.TryReserve(new QueryBudget("live:crowded", subscriptionBudget), 512 * 1024, false, out var refusal);
+        check(refusedLive && refusal == TruncationReason.GlobalBudget && crowded.LiveUsedBytes == 0 && subscriptionBudget.UsedBytes == 0 && crowded.UsedBytes == 900 * 1024,
+            "a live reservation the global budget refuses counts nothing against the live share or the subscription: " + crowded.LiveUsedBytes + " " + subscriptionBudget.UsedBytes);
+
+        // A live table a Copy or Save job leases, released mid-job, frees its memory when the job ends, still outside the
+        // forced collection's count; a query's leased release counts.
+        var leasing = Store();
+        var leasedLive = Fill(new QueryBudget("live:leased", new LiveBudget(64L << 20)), leasing);
+        var leasedQuery = Fill(leasing.BeginQuery("leased"), leasing);
+        var leased = leasedLive.TryLease() && leasedQuery.TryLease();
+        var beforeLease = leasing.FreedSinceCollect;
+        leasing.Release(leasedLive.ResultId);
+        leasedLive.ReleaseLease();
+        var afterLiveLease = leasing.FreedSinceCollect;
+        leasing.Release(leasedQuery.ResultId);
+        leasedQuery.ReleaseLease();
+        check(leased && afterLiveLease == beforeLease && leasing.LiveUsedBytes == 0 && leasing.FreedSinceCollect > afterLiveLease,
+            "a leased live table released mid-job frees its memory when the lease ends without counting toward the forced gen2 collection; a leased query's does");
     }
 
     private static void SnapshotChecks(Action<bool, string> check)
@@ -118,6 +146,12 @@ internal static class LiveTableChecks
             && three is { Revision: 3, Diff: { Added: 1, Removed: 1, Changed: 0 } } && three.Retired is [var retired] && retired == one.Descriptor.ResultId && store.Find(retired) is null
             && store.Find(two.Descriptor.ResultId) is { IsComplete: true } && three.Tracked is { Seq: 5, Rows: [1, -1, 0] },
             "a snapshot keeps two revisions (the third retires the first), diffs keys against the previous one (added, removed, changed cells), and finds each tracked key's new row");
+
+        // NULL and empty text are different cells: a value going from one to the other is a change.
+        var nulls = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits).Snapshot(probe, 0);
+        nulls.Write([Item(1, null, 1), Item(2, "", 2)], new());
+        var swapped = nulls.Write([Item(1, "", 1), Item(2, null, 2)], new()).Sample!;
+        check(swapped.Diff is { Added: 0, Removed: 0, Changed: 2 }, "the diff tells NULL from empty text: a cell going from one to the other changes its row");
 
         // Sort: the user's keys, then the key, so equal values never trade places; NULL sorts first ascending.
         var tied = new List<LiveRow> { Item(5, "a", 7), Item(3, "b", 7), Item(4, "c", 9), Item(6, "d", null) };
@@ -209,6 +243,16 @@ internal static class LiveTableChecks
         var longText = LiveCell.Of(new string('y', ColumnPlan.TextCap + 10));
         check(longText is { Truncated: true } && longText.Text!.Length == ColumnPlan.TextCap && LiveCell.Compare(LiveCell.Null, LiveCell.Of(1L)) < 0 && LiveCell.Compare(LiveCell.Of(2L), LiveCell.Of(10L)) < 0,
             "a text cell past the stored cell cap is cut and marked truncated, as a query's is; NULL sorts before values and numbers sort as numbers");
+        // decimal and numeric past precision 28 hold values a .NET decimal cannot: SQL Server's own text, as a query shows it.
+        var huge = LiveCell.Of(SqlDecimal.ConvertToPrecScale(SqlDecimal.Parse("1000000000000000000000000000000"), 38, 0));
+        var scaled = LiveCell.Of(SqlDecimal.ConvertToPrecScale(new SqlDecimal(1.5m), 38, 2));
+        var narrow = LiveCell.Of(SqlDecimal.ConvertToPrecScale(new SqlDecimal(1.5m), 10, 2));
+        check(huge.Text == "1000000000000000000000000000000" && scaled.Text == "1.50" && narrow is { Text: "1.50", Value: decimal } && LiveCell.Compare(huge, LiveCell.Of(5L)) > 0
+            && LiveCell.Compare(scaled, narrow) == 0,
+            "a decimal past precision 28 keeps its exact text (a .NET decimal would overflow) and sorts as a number; up to 28 it is a decimal: " + huge.Text + " " + scaled.Text);
+        check(LiveCatalog.Current.DataTypes.Order(StringComparer.Ordinal).SequenceEqual(LiveCells.Types.Order(StringComparer.Ordinal)) && LiveCatalog.Current.DataTypes.All(LiveCells.Supports)
+            && LiveCells.Matches("numeric", "decimal") && LiveCells.Matches("decimal", "decimal") && !LiveCells.Matches("decimal", "numeric") && !LiveCells.Matches("numeric", "int"),
+            "live tables store exactly the types the catalogue lets a table declare (liveDataTypes), and a numeric column matches the decimal SqlClient reports for it");
     }
 
     private static void FacetChecks(Action<bool, string> check)
@@ -238,14 +282,19 @@ internal static class LiveTableChecks
             && cut.Facets is [{ Values: [{ Text.Length: 128 }] }],
             "a facet holds at most 100 values (more: true past them) of at most 128 characters, so values that differ only past them count together");
 
+        // Both tables are written every tick, as a source writes them: the first's steady facets take nothing from later ticks'
+        // allowance, so the second's cut values arrive on the next tick.
         var tight = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits with { FacetBytes = 4 });
-        tight.BeginTick();
-        var budgeted = tight.Snapshot(Probe(ItemsTable(facets: ["grp"])), 0).Write(rows, new()).Sample!;
-        var next = tight.Snapshot(Probe(ItemsTable(facets: ["grp"]), ItemsTable(facets: ["grp"])), 1).Write(rows, new()).Sample!;
-        tight.BeginTick();
-        var later = tight.Snapshot(Probe(ItemsTable(facets: ["grp"]), ItemsTable(facets: ["grp"])), 1).Write(rows, new()).Sample!;
-        check(budgeted.Facets is [{ More: null, Values.Count: 3 }] && next.Facets is [{ More: true, Values.Count: 1 }] && later.Facets is [{ Values.Count: 3, More: null }],
-            "a tick's facet text is bounded across its tables (limits.live.facetBytes): what does not fit is left out (more), and a later tick sends it");
+        var twoTables = Probe(ItemsTable(facets: ["grp"]), ItemsTable(facets: ["grp"]));
+        var ticks = new List<(LiveSnapshotSample First, LiveSnapshotSample Second)>();
+        for (var tick = 0; tick < 3; tick++)
+        {
+            tight.BeginTick();
+            ticks.Add((tight.Snapshot(twoTables, 0).Write(rows, new()).Sample!, tight.Snapshot(twoTables, 1).Write(rows, new()).Sample!));
+        }
+        check(ticks[0].First.Facets is [{ More: null, Values.Count: 3 }] && ticks[0].Second.Facets is [{ More: true, Values.Count: 1 }]
+            && ticks[1].First.Facets is null && ticks[1].Second.Facets is [{ Values.Count: 3, More: null }] && ticks[2].First.Facets is null && ticks[2].Second.Facets is null,
+            "a tick's facet text is bounded across its tables (limits.live.facetBytes): what does not fit is left out (more), and the next tick sends it, since unchanged facets cost nothing");
     }
 
     private static void AppendChecks(Action<bool, string> check)
@@ -315,10 +364,94 @@ internal static class LiveTableChecks
         check(refused.Budget && unseen <= 1 && retried is { Budget: false, Sample: not null } && segmentIds.Count == segmentIds.Distinct().Count() && segmentIds.Contains("2"),
             "an append that runs out of budget reports BUDGET and leaves the rows unseen, so the next read stores them once: " + unseen + " " + segmentIds.Count);
 
+        AppendBudgetChecks(check);
+        AppendRollChecks(check);
+
         var cursors = set.Cursors();
         var kept = set.Keep(1);
         check(cursors is [{ Probe: "test.tables", Table: 0, SettledId: 0 }] && kept.Length == 1 && store.Find(kept[0]) is { IsComplete: true } && store.Find(bounded.Descriptor.ResultId) is not null,
             "a table set reports each started append table's cursor, and keeping completes and keeps the newest segment within the limit");
+    }
+
+    /// <summary>A message of about 2 KB.</summary>
+    private static LiveRow Long(long id) => new([LiveCell.Of(id), LiveCell.Of(new string('m', 2000))]);
+
+    /// <summary>Memory held by others for many ticks never costs an append table the rows it stored, and a late id it could not
+    /// store is never settled past.</summary>
+    private static void AppendBudgetChecks(Action<bool, string> check)
+    {
+        // A query streaming into the store takes back whatever frees after each tick, leaving 1 KiB: enough to open a segment,
+        // never enough for a row. It holds most of the store from the start, so the table reserves exactly what each row needs
+        // (less than one reservation step is free) and holds no spare bytes a squeezed row could use.
+        var store = new ResultStore(1L << 20, 1L << 20);
+        store.ShareWithLive(1);
+        var hog = store.BeginQuery("hog");
+        void Squeeze(long free) => store.TryReserve(hog, Math.Max(0, store.GlobalBytes - store.UsedBytes - free), false, out _);
+        Squeeze(200 * 1024);
+        var table = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits).Append(Probe(Log()), 0);
+        table.Start(0, null, null, "");
+        var first = table.Append([.. Enumerable.Range(1, 50).Select(id => Long(id))], 0).Sample!;
+        var squeezed = new List<LiveTableWrite<LiveAppendSample>>();
+        for (var tick = 0; tick < 6; tick++)
+        {
+            Squeeze(1024);
+            squeezed.Add(table.Append([.. Enumerable.Range(51, 5 * (tick + 1)).Select(id => Long(id))], 0));
+        }
+        var held = store.Find(first.Descriptor.ResultId);
+        var settledUnder = table.SettledId;
+        store.Return(hog, hog.UsedBytes);
+        var freed = table.Append([.. Enumerable.Range(51, 30).Select(id => Long(id))], 0).Sample;
+        check(squeezed.All(write => write.Budget && write.Sample?.Retired is null && write.Sample?.Segment is null or 0) && held is { RowsAvailable: 50 } && settledUnder == 50
+            && freed is { Segment: 1, Retired: null, RolledFrom: { } from } && from == first.Descriptor.ResultId && store.Find(from) is { RowsAvailable: 50 }
+            && Ids(store, freed.Descriptor).SequenceEqual(Enumerable.Range(51, 30).Select(id => id.ToString(CultureInfo.InvariantCulture))),
+            "an append table out of budget for many ticks keeps the segment it stored (never retired, no empty segment opened each tick) and settles nothing it could "
+            + "not store; once memory frees, one new segment takes every row: " + string.Join(",", squeezed.Select(write => write.Sample?.Segment)) + " settled " + settledUnder);
+
+        // A late id (below ids already seen) that does not fit is never settled past, so a later read stores it.
+        var lateStore = new ResultStore(1L << 20, 1L << 20);
+        lateStore.ShareWithLive(1);
+        var lateHog = lateStore.BeginQuery("hog");
+        lateStore.TryReserve(lateHog, lateStore.GlobalBytes - 200 * 1024, false, out _);
+        var late = new LiveTableSet(lateStore, Guid.NewGuid().ToString(), Limits).Append(Probe(Log(settleTicks: 2)), 0);
+        late.Start(0, null, null, "");
+        late.Append([.. new long[] { 1, 2, 3, 4, 6, 7 }.Select(Long)], 0);
+        late.Append([Long(6), Long(7)], 0);
+        lateStore.TryReserve(lateHog, Math.Max(0, lateStore.GlobalBytes - lateStore.UsedBytes), false, out _);
+        var lateRefused = late.Append([Long(5), Long(6), Long(7)], 0);
+        var settledLate = late.SettledId;
+        lateStore.Return(lateHog, lateHog.UsedBytes);
+        var lateStored = late.Append([Long(5), Long(6), Long(7)], 0).Sample;
+        check(lateRefused.Budget && settledLate == 4 && lateStored is not null && Ids(lateStore, lateStored.Descriptor).SequenceEqual(["5"]),
+            "a late id that did not fit the budget holds the settled id below it (" + settledLate + "), so the next read stores it, once");
+
+        // A restart whose first read fails keeps the segments it supersedes readable; the read that arrives retires them.
+        var restartStore = Store();
+        var restarting = new LiveTableSet(restartStore, Guid.NewGuid().ToString(), Limits).Append(Probe(Log()), 0);
+        restarting.Start(0, null, null, "a");
+        var shown = restarting.Append([Long(1), Long(2)], 0).Sample!;
+        restarting.Start(0, null, null, "b");
+        var stillReadable = restartStore.Find(shown.Descriptor.ResultId) is { IsReleased: false, RowsAvailable: 2 } && Ids(restartStore, shown.Descriptor).Count == 2;
+        var arrived = restarting.Append([Long(2)], 0).Sample!;
+        check(stillReadable && arrived is { Restarted: true, Retired: [var gone] } && gone == shown.Descriptor.ResultId && restartStore.Find(gone) is null,
+            "a restart keeps the segments it supersedes readable until its first read arrives (a failed read leaves the renderer's view whole), and that read retires them");
+    }
+
+    /// <summary>One read that crosses a segment's cap twice opens one segment, so every stored row is in a segment a sample named.</summary>
+    private static void AppendRollChecks(Action<bool, string> check)
+    {
+        var store = Store();
+        var table = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits with { SegmentRows = 2 }).Append(Probe(Log()), 0);
+        table.Start(0, null, null, "");
+        var first = table.Append([Message(1)], 0).Sample!;
+        var crossing = table.Append([.. Enumerable.Range(2, 5).Select(id => Message(id))], 0);
+        var settled = table.SettledId;
+        var firstIds = store.Find(first.Descriptor.ResultId) is null ? [] : Ids(store, first.Descriptor);
+        var nextIds = crossing.Sample is { } crossed && store.Find(crossed.Descriptor.ResultId) is not null ? Ids(store, crossed.Descriptor) : [];
+        var rest = table.Append([.. Enumerable.Range(2, 5).Select(id => Message(id))], 0).Sample!;
+        check(crossing is { Budget: false, Sample: { Segment: 1, Retired: null, RolledFrom: { } from } next } && from == first.Descriptor.ResultId
+            && firstIds.SequenceEqual(["1", "2"]) && nextIds.SequenceEqual(["3", "4"]) && settled < 5
+            && rest is { Segment: 2, Retired: [var retired] } && retired == first.Descriptor.ResultId && rest.RolledFrom == next.Descriptor.ResultId && Ids(store, rest.Descriptor).SequenceEqual(["5", "6"]),
+            "a read that would fill two segments opens one (a sample names only the newest) and leaves the rest for the next read, which rolls again: every stored row is in a segment main was told of");
     }
 
     private static (Task<LiveEnd> Task, LiveRecorder Recorder, string Id) Subscribe(SqlService service, string[] probes, object args, string? resume = null, uint id = 1)

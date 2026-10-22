@@ -1,3 +1,4 @@
+using System.Data.SqlTypes;
 using System.Globalization;
 using System.Text;
 using Microsoft.Data.SqlClient;
@@ -42,6 +43,16 @@ internal readonly record struct LiveCell(object? Value, string? Text, bool Trunc
     {
         Span<byte> buffer = stackalloc byte[CellFormat.MaxFixedBytes];
         return new(value, Ascii(buffer[..CellFormat.WriteDecimal(buffer, value)]));
+    }
+
+    /// <summary>decimal and numeric as a query shows them: up to precision 28 as a .NET decimal, above it as SQL Server's own
+    /// text (a .NET decimal cannot hold every such value), sorted then as a double.</summary>
+    public static LiveCell Of(SqlDecimal value)
+    {
+        if (value.IsNull) return Null;
+        if (value.Precision <= 28) return Of(value.Value);
+        Span<byte> buffer = stackalloc byte[CellFormat.MaxFixedBytes];
+        return new(value.ToDouble(), Ascii(buffer[..CellFormat.WriteSqlDecimal(buffer, value)]));
     }
 
     /// <summary>datetime2(<paramref name="scale"/>).</summary>
@@ -108,9 +119,14 @@ internal static class LiveCells
     /// <summary>The SQL types a live table stores (the catalogue's dataType names).</summary>
     public static bool Supports(string dataType) => Integers.Contains(dataType) || Texts.Contains(dataType) || Others.Contains(dataType);
 
-    /// <summary>Whether the type a reader reports is the declared one (sysname reports as nvarchar).</summary>
+    /// <summary>The SQL types a live table stores, as the catalogue names them (src/shared/live/catalog.ts, liveDataTypes, which
+    /// the embedded catalogue carries so a check can compare the two).</summary>
+    public static IEnumerable<string> Types => Integers.Concat(Texts).Concat(Others);
+
+    /// <summary>Whether the type a reader reports is the declared one (sysname reports as nvarchar, numeric as decimal).</summary>
     public static bool Matches(string declared, string reported) =>
-        string.Equals(declared, reported, StringComparison.OrdinalIgnoreCase) || declared == "sysname" && string.Equals(reported, "nvarchar", StringComparison.OrdinalIgnoreCase);
+        string.Equals(declared, reported, StringComparison.OrdinalIgnoreCase) || declared == "sysname" && string.Equals(reported, "nvarchar", StringComparison.OrdinalIgnoreCase)
+        || declared == "numeric" && string.Equals(reported, "decimal", StringComparison.OrdinalIgnoreCase);
 
     /// <param name="scale">The column's fractional seconds (datetime2, datetimeoffset), from its schema.</param>
     public static LiveCell Read(SqlDataReader reader, int ordinal, string dataType, int scale)
@@ -123,7 +139,7 @@ internal static class LiveCells
             "bit" => LiveCell.Bit(reader.GetBoolean(ordinal)),
             "float" => LiveCell.Of(reader.GetDouble(ordinal)),
             "real" => LiveCell.Real(reader.GetFloat(ordinal)),
-            "decimal" or "numeric" => LiveCell.Of(reader.GetDecimal(ordinal)),
+            "decimal" or "numeric" => LiveCell.Of(reader.GetSqlDecimal(ordinal)),
             "datetime" => LiveCell.DateTime(reader.GetDateTime(ordinal)),
             "datetime2" => LiveCell.DateTime2(reader.GetDateTime(ordinal), scale),
             "datetimeoffset" => LiveCell.Offset(reader.GetDateTimeOffset(ordinal), scale),
@@ -387,9 +403,19 @@ internal sealed class LiveSnapshotTable
         List<LiveFacet>? changedFacets = null;
         if (facets is not null)
         {
-            changedFacets = [.. facets.Where(facet => sentFacets?.Find(sent => sent.Column == facet.Column) is not { } sent || !SameFacet(sent, facet))];
-            if (changedFacets.Count == 0) changedFacets = null;
-            sentFacets = facets;
+            // Only facets that will be sent take from the tick's allowance: a steady table's facets cost nothing, and one cut
+            // before is sent whole once a tick has room for it.
+            sentFacets ??= [];
+            foreach (var facet in facets)
+            {
+                var sent = sentFacets.FindIndex(item => item.Column == facet.Column);
+                if (sent >= 0 && SameFacet(sentFacets[sent], facet)) continue;
+                var cut = Cut(facet);
+                if (sent >= 0 && SameFacet(sentFacets[sent], cut)) continue;
+                if (sent >= 0) sentFacets[sent] = cut;
+                else sentFacets.Add(cut);
+                (changedFacets ??= []).Add(cut);
+            }
         }
         currentList.Clear();
         if (spec.Departed) for (var at = 0; at < stored; at++) currentList.Add(rows[at].Row);
@@ -417,7 +443,7 @@ internal sealed class LiveSnapshotTable
     }
 
     /// <summary>Each facet column's distinct values over every row the source gave (NULL left out), most frequent first,
-    /// each cut at the facet text cap, at most the facet value count, within what is left of the tick's facet text.</summary>
+    /// each cut at the facet text cap, at most the facet value count.</summary>
     private List<LiveFacet> Facets(IReadOnlyList<LiveRow> source, List<string> named)
     {
         var limits = owner.Limits;
@@ -437,7 +463,7 @@ internal sealed class LiveSnapshotTable
             var more = false;
             foreach (var (text, count) in counts.OrderByDescending(item => item.Value).ThenBy(item => item.Key, StringComparer.Ordinal))
             {
-                if (values.Count >= limits.FacetValues || !owner.TakeFacetBytes(Encoding.UTF8.GetByteCount(text)))
+                if (values.Count >= limits.FacetValues)
                 {
                     more = true;
                     break;
@@ -447,6 +473,14 @@ internal sealed class LiveSnapshotTable
             facets.Add(new(id, values, more ? true : null));
         }
         return facets;
+    }
+
+    /// <summary>A facet within what is left of the tick's facet text: the values that fit, most frequent first (more past them).</summary>
+    private LiveFacet Cut(LiveFacet facet)
+    {
+        var fits = 0;
+        while (fits < facet.Values.Count && owner.TakeFacetBytes(Encoding.UTF8.GetByteCount(facet.Values[fits].Text))) fits++;
+        return fits == facet.Values.Count ? facet : new(facet.Column, [.. facet.Values.Take(fits)], true);
     }
 
     private static bool SameFacet(LiveFacet a, LiveFacet b) => a.More == b.More && a.Values.SequenceEqual(b.Values);
@@ -487,7 +521,9 @@ internal sealed class LiveSnapshotTable
 /// appended are skipped by id. An id settles once first seen the catalogue's ticks and milliseconds ago; the remembered ids
 /// stay within twice the rows a tick reads (the lowest settle early past that). A late row is appended in arrival order.
 /// Each write seals what it appended, so the rows are readable at once. A segment rolls to a new one at its row or byte cap,
-/// keeping the newest two; a new start (another filter or args) retires every segment and starts again.</summary>
+/// keeping the newest two; a new start (another filter or args) retires every segment and starts again. A row that was not
+/// stored (out of budget, or past a second segment in one read) is never seen and nothing above it settles before it, so a
+/// later read stores it once.</summary>
 internal sealed class LiveAppendTable
 {
     private readonly LiveTableSet owner;
@@ -496,7 +532,12 @@ internal sealed class LiveAppendTable
     private readonly int key;
     private readonly int batchRows;
     private readonly LiveSettleJson settle;
-    private readonly List<(ResultSetBuffer Set, QueryBudget Budget)> segments = [];
+    /// <summary>The completed segments still readable, oldest first (the current one is not among them).</summary>
+    private readonly List<ResultSetBuffer> segments = [];
+    /// <summary>The segments of the start before this one: readable (the renderer still shows them) until this start's first read
+    /// arrives, which releases them and names them retired, so a read that fails after a restart never leaves the renderer
+    /// showing released results with nothing naming them.</summary>
+    private readonly List<ResultSetBuffer> superseded = [];
     private readonly Dictionary<long, (long Tick, long Ms)> seen = [];
     private readonly List<uint> retiring = [];
     private ResultSetBuffer? current;
@@ -536,20 +577,20 @@ internal sealed class LiveAppendTable
     /// <summary>The settled ids remembered at most: twice the rows a tick reads.</summary>
     public int DedupeBound => 2 * batchRows;
 
-    /// <summary>Starts the table, or starts it again: every segment it had is retired (named in the next sample), and a new
-    /// one begins with the note row, if any (it says what the start left out). The next read covers the ids after
+    /// <summary>Starts the table, or starts it again: every segment it had is retired by the next read (named in its sample),
+    /// and a new one begins with the note row, if any (it says what the start left out). The next read covers the ids after
     /// <paramref name="after"/>, and only those below <paramref name="below"/> when given.</summary>
     public void Start(long after, long? below, LiveRow? note, string? predicate)
     {
         if (Started)
         {
             restarted = true;
-            if (current is not null) segments.Add((current, currentBudget!));
-            foreach (var (set, _) in segments)
+            if (current is not null)
             {
-                retiring.Add(set.ResultId);
-                owner.Store.Release(set.ResultId);
+                current.Complete();
+                segments.Add(current);
             }
+            superseded.AddRange(segments);
             segments.Clear();
             current = null;
             currentBudget = null;
@@ -566,36 +607,69 @@ internal sealed class LiveAppendTable
 
     /// <summary>Appends the rows a read returned (ordered by id) that are new: above the settled id, below the end if any, and
     /// not appended already. Returns the sample when anything changed (rows, a roll, a start), and whether the budget stopped
-    /// it (rows that did not fit are read again next time, since they were never seen).</summary>
+    /// it. One read opens at most one segment, so every segment that holds rows is named by a sample; the rows it left out
+    /// are read again next time, since they were never seen.</summary>
     public LiveTableWrite<LiveAppendSample> Append(IReadOnlyList<LiveRow> rows, long nowMs)
     {
         if (!Started) throw new InvalidOperationException("Start the table first.");
         ticks++;
-        var budget = false;
-        if (current is null && !Open()) budget = true;
-        if (!budget)
+        // A start's first read has arrived: the segments it supersedes go now, named by this sample (or the next one stored).
+        foreach (var set in superseded)
         {
-            foreach (var row in rows)
-            {
-                if (row.Cells[key].Value is not long id || id <= settled || before is { } end && id >= end || seen.ContainsKey(id)) continue;
-                if ((segmentRows >= owner.Limits.SegmentRows || currentBudget!.UsedBytes >= owner.Limits.SegmentBytes) && !Roll())
-                {
-                    budget = true;
-                    break;
-                }
-                if (!LiveTableSet.Write(current!, row))
-                {
-                    // Out of budget: this segment stores nothing more, so the next write starts another; the row is read again.
-                    budget = true;
-                    Roll();
-                    break;
-                }
-                segmentRows++;
-                seen[id] = (ticks, nowMs);
-                changed = true;
-            }
+            retiring.Add(set.ResultId);
+            owner.Store.Release(set.ResultId);
         }
-        Settle(nowMs);
+        superseded.Clear();
+        var budget = false;
+        var opened = false;
+        // The lowest new id left unstored: nothing at or above it settles this time.
+        long? unstored = null;
+        if (current is null)
+        {
+            // A start's segment opens even for an empty read, so its sample says the table restarted.
+            opened = true;
+            if (!Open()) budget = true;
+        }
+        foreach (var row in rows)
+        {
+            if (row.Cells[key].Value is not long id || id <= settled || before is { } end && id >= end || seen.ContainsKey(id)) continue;
+            if (unstored is { } low)
+            {
+                unstored = Math.Min(low, id);
+                continue;
+            }
+            if (current is null || !current.IsOpen || segmentRows >= owner.Limits.SegmentRows || currentBudget!.UsedBytes >= owner.Limits.SegmentBytes)
+            {
+                // A second new segment in one read would never be described (a sample names only the newest): the rest waits.
+                if (opened || !Roll(row, out var refused))
+                {
+                    unstored = id;
+                    budget |= !opened;
+                    continue;
+                }
+                opened = true;
+                if (refused)
+                {
+                    unstored = id;
+                    budget = true;
+                    continue;
+                }
+            }
+            else if (!LiveTableSet.Write(current, row))
+            {
+                // Out of budget: this segment stores nothing more (its budget stopped), so it completes; a later read opens the
+                // next one only once a row fits, and never retires a segment to make room.
+                current.Complete();
+                changed = true;
+                unstored = id;
+                budget = true;
+                continue;
+            }
+            segmentRows++;
+            seen[id] = (ticks, nowMs);
+            changed = true;
+        }
+        Settle(nowMs, unstored);
         current?.Seal();
         if (current is null || !changed && !restarted && rolledFrom is null && retiring.Count == 0) return new(null, budget);
         var sample = new LiveAppendSample(index, current.Describe(), segment, rolledFrom, retiring.Count > 0 ? [.. retiring] : null, restarted ? true : null);
@@ -605,46 +679,62 @@ internal sealed class LiveAppendTable
         return new(sample, budget);
     }
 
-    /// <summary>Opens the first segment of a start, or a new one after a budget stop.</summary>
+    /// <summary>Opens the first segment of a start, with its note row.</summary>
     private bool Open()
     {
-        var budget = owner.NewBudget();
-        var (columns, wires) = LiveTableSet.Shape(spec);
-        if (owner.Store.Open(budget, 0, 1, 1, "rows", columns, wires) is not { } set) return false;
-        current = set;
-        currentBudget = budget;
+        if (OpenSet() is not { } opened) return false;
+        (current, currentBudget) = opened;
         segment++;
         segmentRows = 0;
         changed = true;
         // A note that does not fit is left out: the rows after it hit the same budget, which the sample reports.
-        if (pendingNote is { } note) LiveTableSet.Write(set, note);
+        if (pendingNote is { } note) LiveTableSet.Write(current, note);
         pendingNote = null;
         return true;
     }
 
-    /// <summary>Completes the current segment and opens the next, keeping the newest segments (limits.live.segments): the oldest
-    /// beyond them is released and named retired.</summary>
-    private bool Roll()
+    private (ResultSetBuffer Set, QueryBudget Budget)? OpenSet()
     {
+        var budget = owner.NewBudget();
+        var (columns, wires) = LiveTableSet.Shape(spec);
+        return owner.Store.Open(budget, 0, 1, 1, "rows", columns, wires) is { } set ? (set, budget) : null;
+    }
+
+    /// <summary>Moves on to a new segment whose first row is <paramref name="first"/>: only once that row is stored does the
+    /// current segment complete (rolledFrom) and the oldest beyond the kept segments (limits.live.segments) go, named retired.
+    /// When the row does not fit, the new segment is dropped unseen and nothing is retired (<paramref name="refused"/>); false
+    /// when not even a segment opens.</summary>
+    private bool Roll(LiveRow first, out bool refused)
+    {
+        refused = false;
+        if (OpenSet() is not { } next) return false;
+        if (!LiveTableSet.Write(next.Set, first))
+        {
+            owner.Store.Release(next.Set.ResultId);
+            refused = true;
+            return true;
+        }
         if (current is not null)
         {
             current.Complete();
             rolledFrom = current.ResultId;
-            segments.Add((current, currentBudget!));
-            current = null;
-            currentBudget = null;
+            segments.Add(current);
         }
         while (segments.Count >= owner.Limits.Segments)
         {
-            retiring.Add(segments[0].Set.ResultId);
-            owner.Store.Release(segments[0].Set.ResultId);
+            retiring.Add(segments[0].ResultId);
+            owner.Store.Release(segments[0].ResultId);
             segments.RemoveAt(0);
         }
-        return Open();
+        (current, currentBudget) = next;
+        segment++;
+        segmentRows = 0;
+        return true;
     }
 
-    /// <summary>Settles the highest id first seen at least the settle window ago, then the lowest ids past the dedupe bound.</summary>
-    private void Settle(long nowMs)
+    /// <summary>Settles the highest id first seen at least the settle window ago, then the lowest ids past the dedupe bound,
+    /// never at or above an id this read left unstored (a late id below ids already seen would otherwise never be read again).</summary>
+    private void Settle(long nowMs, long? unstored)
     {
         var next = settled;
         foreach (var (id, (tick, ms)) in seen)
@@ -654,6 +744,7 @@ internal sealed class LiveAppendTable
             var open = seen.Keys.Where(id => id > next).Order().ToList();
             if (open.Count > DedupeBound) next = open[open.Count - DedupeBound - 1];
         }
+        if (unstored is { } low) next = Math.Max(settled, Math.Min(next, low - 1));
         if (next == settled) return;
         settled = next;
         foreach (var id in seen.Keys.Where(id => id <= next).ToList()) seen.Remove(id);
@@ -663,15 +754,19 @@ internal sealed class LiveAppendTable
     {
         current?.Complete();
         if (current is not null) first.Add(current.ResultId);
-        foreach (var (set, _) in Enumerable.Reverse(segments)) rest.Add(set.ResultId);
+        foreach (var set in Enumerable.Reverse(segments)) rest.Add(set.ResultId);
+        // Superseded by a start whose read never arrived: no longer the table's.
+        owner.Store.Release(superseded.Select(set => set.ResultId));
+        superseded.Clear();
         segments.Clear();
         current = null;
     }
 
     internal uint[] Drain()
     {
-        var ids = segments.Select(item => item.Set.ResultId).ToList();
+        var ids = superseded.Concat(segments).Select(set => set.ResultId).ToList();
         if (current is not null) ids.Add(current.ResultId);
+        superseded.Clear();
         segments.Clear();
         current = null;
         return [.. ids];

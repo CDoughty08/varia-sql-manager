@@ -4,6 +4,7 @@ import { BackendSupervisor } from '../src/main/backend/supervisor'
 import { ResultsPortHost, supervisorResults, type PortMainLike } from '../src/main/backend/results-port'
 import type { PortMessage } from '../src/shared/ipc/port-messages'
 import type { LiveTick } from '../src/shared/live/schema'
+import { liveSources } from '../src/shared/live/catalog'
 
 // Main's whole live path over the fake backend's debug.synthetic source: the supervisor, the results port, and a worker
 // stand-in that acknowledges each event as the page will once it has applied it.
@@ -102,5 +103,27 @@ describe('live subscriptions through main', () => {
     port.send({ t: 'close', rid: 2, generation: 1, resultIds: kept })
     await expect.poll(() => port.end(2)).toMatchObject({ ok: true, result: { closed: 1 } })
     expect(host.ownedCount).toBe(0)
+  })
+
+  it('samples each synthetic probe the fake implements and refuses the rest, never sending frames main refuses', async () => {
+    const { host, port } = await workbench()
+    const outcomes: Record<string, string> = {}
+    let rid = 0
+    for (const probe of liveSources['debug.synthetic'].probes) {
+      const subscription = ++rid
+      port.send({ t: 'live', rid: subscription, generation: 1, params: params({ tickMs: 20 }, [probe]) })
+      await expect.poll(() => port.ticks(subscription).length > 0 || port.end(subscription) !== undefined).toBe(true)
+      const end = port.end(subscription)
+      if (end === undefined) {
+        port.send({ t: 'cancel', rid: subscription })
+        await expect.poll(() => port.end(subscription)).toMatchObject({ ok: true, result: { ended: 'cancelled' } })
+        outcomes[probe] = 'sampled'
+      } else outcomes[probe] = end.ok ? 'ended' : end.code
+    }
+    expect(outcomes).toEqual({
+      'debug.synthetic.metrics': 'sampled', 'debug.synthetic.table': 'sampled', 'debug.synthetic.status': 'sampled',
+      'debug.synthetic.grid': 'INVALID_PARAMS', 'debug.synthetic.log': 'INVALID_PARAMS', 'debug.synthetic.wide': 'INVALID_PARAMS'
+    })
+    expect(host.liveCount).toBe(0)
   })
 })

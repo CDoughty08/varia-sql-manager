@@ -19,6 +19,8 @@ internal static class LiveTableDataChecks
     private const string ItemsProbe = "test.scratch.items";
     private const string LogProbe = "test.scratch.log";
     private const string Escape = " ESCAPE N'\\'";
+    /// <summary>10^30 as decimal(38, 0): past what a .NET decimal holds.</summary>
+    private const string Big = "1000000000000000000000000000000";
 
     private static LiveCatalog Catalog()
     {
@@ -28,7 +30,7 @@ internal static class LiveTableDataChecks
         [
             new(ItemsProbe, Source, "Items", "Items", interval, [],
                 [new("items", "snapshot", [Column("id", "int"), Column("label", "nvarchar"), Column("amount", "int"), Column("seen", "datetime2")], ["id"], 100, true, ["label"]),
-                 new("ratios", "snapshot", [Column("cid", "int"), Column("ratio", "int")], ["cid"], 100)], [], [], "memory"),
+                 new("ratios", "snapshot", [Column("cid", "int"), Column("ratio", "int"), Column("share", "numeric"), Column("big", "decimal")], ["cid"], 100)], [], [], "memory"),
             new(LogProbe, Source, "Log", "Log", interval, [],
                 [new("log", "append", [Column("id", "bigint"), Column("level", "int"), Column("message", "nvarchar")], ["id"], Settle: new(2, 5000), BatchRows: 100)], [], [], "restart")
         ];
@@ -37,7 +39,8 @@ internal static class LiveTableDataChecks
 
     private const string ItemsSql =
         "SELECT TOP (100) i.id, i.label, i.amount, CONVERT(datetime2(3), '2026-10-08T12:34:56.123') AS seen FROM dbo.VariaLiveItems AS i ORDER BY i.id;\n"
-        + "SELECT TOP (100) c.id AS cid, CONVERT(int, 100 / c.amount) AS ratio FROM dbo.VariaLiveItems AS c ORDER BY c.id;";
+        + "SELECT TOP (100) c.id AS cid, CONVERT(int, 100 / c.amount) AS ratio, CONVERT(numeric(10, 2), c.amount / 4.0) AS share,\n"
+        + "CONVERT(decimal(38, 0), 1000000000000000000000000000000) AS big FROM dbo.VariaLiveItems AS c ORDER BY c.id;";
     private const string Predicate = "(@before0 IS NULL OR l.id < @before0) AND (@filter IS NULL OR l.message LIKE @filter" + Escape + ")";
     private const string LogSql = "SELECT TOP (@top0) l.id, l.level, l.message FROM dbo.VariaLiveLog AS l WHERE l.id > @after0 AND " + Predicate + " ORDER BY l.id;";
     private const string TailSql =
@@ -151,9 +154,11 @@ internal static class LiveTableDataChecks
             check(view.Recorder.Opened is { Isolation: "readUncommitted", Spid: > 0, Probes: [{ State: "ok" }] } && items?.Tables is [{ Table: 0 } table0, { Table: 1 } table1]
                 && table0.Facets is [{ Column: "label", Values: [{ Text: "red", Count: 2 }, { Text: "blue", Count: 1 }] }]
                 && LiveResultChecks.RowsOf(live.Store, table0.Descriptor) is [["1", "red", "10", "2026-10-08 12:34:56.123"], ["2", "blue", "20", _], ["3", "red", "30", _]]
-                && LiveResultChecks.RowsOf(live.Store, table1.Descriptor) is [["1", "10"], ["2", "5"], ["3", "3"]],
-                "a SQL snapshot probe stores two tables from one batch, each cell as a query shows it (datetime2(3) with its scale), with the facets of the whole table: "
-                + string.Join(" | ", first?.Errors?.Select(error => error.Code + " " + error.Message) ?? []));
+                && LiveResultChecks.RowsOf(live.Store, table1.Descriptor) is [["1", "10", "2.50", Big], ["2", "5", "5.00", Big], ["3", "3", "7.50", Big]],
+                "a SQL snapshot probe stores two tables from one batch, each cell as a query shows it (datetime2(3) with its scale, a numeric column, which SqlClient "
+                + "reports as decimal, and a decimal(38, 0) past a .NET decimal's range), with the facets of the whole table: "
+                + string.Join(" | ", first?.Errors?.Select(error => error.Code + " " + error.Message) ?? []) + (view.Task.IsCompleted ? " ended: " + (view.Task.IsFaulted ? view.Task.Exception!.InnerException!.Message : view.Task.Result.Ended + " " + view.Task.Result.Message) : "")
+                + (items?.Tables is { Count: 2 } read ? " ratios: " + string.Join(" | ", LiveResultChecks.RowsOf(live.Store, read[1].Descriptor).Select(row => string.Join(",", row))) : ""));
 
             // Paused while the server changes, so the next revision sees all of the change and nothing samples half of it.
             live.Update(new LiveUpdateArgs(view.Id, Source, Paused: true, Track: [new LiveTrackArgs(ItemsProbe, 0, 4, ["2", "9"])]), json);

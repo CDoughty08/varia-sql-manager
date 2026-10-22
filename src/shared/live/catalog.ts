@@ -186,7 +186,8 @@ const sortKeys = (value: unknown): unknown => Array.isArray(value) ? value.map(s
 const line = (value: unknown) => JSON.stringify(sortKeys(value))
 const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + line(item)).join(',\n') + '\n  ]'
 
-/** The catalogue as the backend embeds it, keys sorted: sources and probes in catalogue order, and the live limits. */
+/** The catalogue as the backend embeds it, keys sorted: sources and probes in catalogue order, the live limits, and the
+ *  data types a live table may declare (the backend checks that it stores each of them). */
 export function liveCatalogJson(): string {
   const probes = liveProbeIds.map(id => {
     const spec = liveProbes[id]
@@ -200,6 +201,7 @@ export function liveCatalogJson(): string {
   })
   return [
     '{',
+    `  "dataTypes": ${line(liveDataTypes)},`,
     `  "limits": ${line({ ...limits.live, eventBody: limits.eventBody })},`,
     `  "probes": ${block(probes)},`,
     `  "sources": ${block(liveSourceIds.map(id => ({ ...liveSources[id], hidden: liveSources[id].hidden ?? 'pause' })))},`,

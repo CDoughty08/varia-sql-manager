@@ -264,6 +264,25 @@ internal static class LiveSchedulerChecks
                 "BUDGET retries at the interval without backing off; a terminal error stops its probe (all stopped ends the view with the first's code); a refresh restarts it, but never one the source opened unavailable");
         }
 
+        // One probe that fails in two ways beside its sample (a table cut by the budget, a statement that failed) reports both,
+        // and an error beside a sample never says terminal: the probe goes on sampling.
+        using (var subscription = Subscription(sql, () => 0, ("fx.b", 1000)))
+        {
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            LiveProbeError Failure(string code, int table, bool terminal = false) => new("fx.b", code, "Failed.", null, 0, terminal, [table]);
+            var both = subscription.Complete(subscription.TakeDue(0), new([new LiveSample("fx.b", 0, 0)], [Failure("BUDGET", 0), Failure("SQL_ERROR", 1)]), 0);
+            var denied = subscription.Complete(subscription.TakeDue(probe.DueAt), new([new LiveSample("fx.b", 0, 0)], [Failure("PERMISSION_DENIED", 1, terminal: true)]), probe.DueAt);
+            var sampling = probe.Stopped is null;
+            var flood = subscription.Complete(subscription.TakeDue(probe.DueAt), new([new LiveSample("fx.b", 0, 0)], [.. Enumerable.Range(0, 12).Select(table => Failure("SQL_ERROR", table))]), probe.DueAt);
+            var unsampled = subscription.Complete(subscription.TakeDue(probe.DueAt), new([], [Failure("BUDGET", 0), Failure("NOT_SUPPORTED", 1, terminal: true)]), probe.DueAt);
+            check(both.Errors is [{ Code: "BUDGET", Tables: [0], Terminal: false }, { Code: "SQL_ERROR", Tables: [1], Terminal: false }]
+                && denied.Errors is [{ Code: "PERMISSION_DENIED", Terminal: false }] && sampling && flood.Errors.Count == LiveCatalog.Current.Limits.Errors
+                && unsampled.Errors is [{ Code: "NOT_SUPPORTED", Terminal: true }, { Code: "BUDGET", Terminal: false }] && probe.Stopped is { Code: "NOT_SUPPORTED" },
+                "a probe's every error in a tick is reported (within limits.live.errors), and terminal only when the probe stopped, never beside a sample: "
+                + string.Join(", ", both.Errors.Concat(denied.Errors).Select(error => error.Code + (error.Terminal ? " terminal" : ""))));
+        }
+
         // The load guard: 3 costly samples double the interval in force; 10 cheap ones halve it back, never below the asked one.
         using (var subscription = Subscription(sql, () => 0, ("fx.a", 1000)))
         {

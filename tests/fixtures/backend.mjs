@@ -25,7 +25,9 @@
 // live.subscribe for debug.synthetic (docs/ipc.md, Live subscriptions) runs as the real backend's test source does, with
 // stop-and-wait credit: live.opened, then a live.tick per wake only once the previous one is acknowledged, a snapshot
 // table stored per sample (two revisions alive), live.update for pause, intervals, refresh, sort, tracking and args, and
-// an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded).
+// an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). It implements
+// the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
+// count as protocol violations.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -515,10 +517,11 @@ const fixtures = {
   XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
 }
 
-/** Workbench live.subscribe for debug.synthetic, as Live/SyntheticSampler.cs behaves. */
+/** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves. */
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
   if (params.source !== 'debug.synthetic' || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   const now = Date.now()
   const live = {

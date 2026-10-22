@@ -769,7 +769,8 @@ count }[≤ 100], more?: true }[1..7] }[≤ 4], append?: { table, descriptor, se
 }[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16] }[≤ 8], errors?: probe error[1..8] }`. A probe
 error is a value, never an exception, so the other probes carry on: `{ probe, code, message ≤ 2,000 (a sentence, never SQL,
 names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
-probe's batch would have filled), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
+probe's batch would have filled; a probe can report more than one error in a tick, such as `BUDGET` for one table and
+the failed statement of another, and `terminal` is true only when the probe stopped, never beside its sample), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
 DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING, NOT_FOUND or
 LOGIN_FAILED.
 Main checks every frame against `liveEventSchema` (each probe sampled once, metrics aligned with the catalogue's series,
@@ -800,8 +801,8 @@ from its own state; the writers do the rest.
   revision, at the row it had, and lists it in `departed`; the next revision drops it. Facet columns carry their distinct
   values over every row the source gave (before the view and filter; NULL left out), most frequent first, at most 100 of at
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
-  facets; a tick's facet text is shared by its tables up to 32 KiB, and what does not fit is left out (`more`) for a later
-  tick to send.
+  facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
+  not fit is left out (`more`) for a later tick to send.
 - **Append tables.** One result (a segment) grows by the rows a source reads above the table's settled id, ordered by its one
   key, an integer id. Ids are assigned at insert, not commit, so a lower id can become visible after a higher one (under READ
   COMMITTED, or for an instant under READ UNCOMMITTED): each read covers every unsettled id again (the source reads `@top` =
@@ -810,19 +811,23 @@ from its own state; the writers do the rest.
   milliseconds ago (2 and 5 s by default); unsettled ids stay within twice the rows a tick reads, the lowest settling early past
   that. Each write seals what it appended, so the rows are readable at once, and a sample carries the table only when it
   changed. At 200,000 rows or 32 MiB a segment completes and a new one starts (`rolledFrom`), two kept: the oldest is
-  released and named retired. A probe whose filter mode is `restart` passes its filter to SQL Server as a LIKE pattern
+  released and named retired. A read opens at most one segment, since a sample describes only the newest: rows past a
+  second one wait for the next read. A probe whose filter mode is `restart` passes its filter to SQL Server as a LIKE pattern
   (`@filter`, wildcards escaped, `ESCAPE N'\'`); a new filter, or args that change what a source reads, start the table
-  again: every segment is retired (`retired` up to 2) and the next sample says `restarted`. A start at the last rows, or
+  again: every segment is retired (`retired` up to 2) and the next sample says `restarted`. The old segments stay
+  readable until the restarted table's first read arrives, so a read that fails after a restart leaves the view whole. A start at the last rows, or
   before an id, begins with a note row ("n earlier rows are not shown.", in the table's first text column, the other cells
-  NULL); a start before an id also ends the table there (`@before`). Rows that did not fit the budget are never counted as
-  seen, so a later read stores them, once.
+  NULL); a start before an id also ends the table there (`@before`). Rows that were not stored (out of budget, or past a
+  second segment) are never counted as seen, and no id at or above the lowest of them settles, so a later read stores them,
+  once.
 - **Memory.** Each revision and segment has its own budget, so one that does not fit never stops later ones, and a
   subscription's tables share 64 MiB; all live tables together stay within a quarter of the result budget (a revision past
   the subscription's limit says `queryBudget`, past the live share `globalBudget`), so queries keep the rest. A table that
   ran out stores what fits and the probe reports `BUDGET` naming it; one that stored nothing reports `BUDGET` alone; either
-  stores again once memory is free. Live results seal 64 KiB pages, under the large object heap's threshold, and their
+  stores again once memory is free, without giving up what it holds: an append table whose segment ran out keeps it
+  (complete) and opens the next only once a row fits, never retiring a segment to make room. Live results seal 64 KiB pages, under the large object heap's threshold, and their
   releases do not count toward the store's forced gen2 collection (after every 64 MiB released), which a 1 s snapshot of a
-  large table would otherwise run every few seconds; the snapshot churn benchmark reports the collections that remain.
+  large table would otherwise run every few seconds; the snapshot churn benchmark measures the collections that remain.
 - **Ends.** A source that ends keeps each snapshot table's newest revision and each append table's segments (the newest
   first), complete and readable, within the 64 kept results; every other end releases them all.
 
@@ -1379,9 +1384,13 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 - **The live snapshot churn** runs main's live path (`ResultsPortHost` with the test sources, the supervisor, the Release
   backend's table writer) with a worker stand-in that acknowledges each frame at once: `debug.synthetic.wide` stores 5,000
   rows of 23 typed columns every 10 ms if it can, each revision owned, retired, forgotten and released one at a time, for 5 s.
-  It reports revisions a second and the backend's gen2 collections a minute (background collections from pages that live
-  two revisions; the forced one never runs for live tables). On a 24-CPU Windows machine: 53 revisions/s, about 1,000
-  collections a minute.
+  It reports revisions a second and the backend's gen2 collections per revision, times 60: what a 1 s snapshot of that
+  size runs a minute. The collections follow the revisions, not the clock (0.32 a revision at 10 ms and at 1 s alike), and
+  none is induced or set off by the large object heap: a GC event listener counted every collection as an allocation
+  budget one (reason AllocSmall), about 60 % of the gen2 ones blocking, and only the reused key dictionary allocating
+  large objects. Each revision's source rows and pages live across a collection or two and are promoted (about 6 MB a
+  revision out of gen0), so gen2 fills with revisions already released. The forced collection never runs for live tables.
+  On a 24-CPU Windows machine: 52 – 54 revisions/s, 18 – 20 collections a minute (about 1,000 a minute at 10 ms).
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
   1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
   planning, and the shared window cache (full, so every insert evicts).
@@ -1406,7 +1415,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | main ↔ backend `system.health`, p50 / p99 | ≤ 0.3 / 2 ms | p50 ≤ 2 ms | 0.12 – 0.14 / 0.4 – 0.5 ms | 0.09 / 0.8 ms |
 | 256 concurrent `system.health` | ≤ 150 ms | ≤ 1 s | 4 – 7 ms | 7 ms |
 | Live snapshot revisions, 5,000 × 23, stored, sent, acknowledged and released | ≥ 50 swaps/s | ≥ 10 swaps/s | – | – |
-| Backend gen2 collections while they swap | ≤ 60 a minute | reported only | – | – |
+| Backend gen2 collections a minute of a 1 s snapshot of them (per revision × 60) | ≤ 60 | ≤ 120 | – | – |
 | W1, 500,000 rows, store → main → port → worker | ≥ 1,000,000 rows/s, ≥ 200 MB/s | ≥ 250,000 rows/s, ≥ 50 MB/s | 710,000 – 935,000 rows/s, 150 – 203 MB/s | 514,000 – 612,000 rows/s, 112 – 133 MB/s |
 | B1 through the same path | ≥ 400 MB/s | ≥ 100 MB/s | 250 – 410 MB/s | 249 MB/s |
 | Main event-loop delay during W1, p99 | ≤ 20 ms | ≤ 100 ms | 12 – 14 ms | 17 ms |

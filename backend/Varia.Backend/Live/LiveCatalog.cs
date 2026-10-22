@@ -52,11 +52,13 @@ internal sealed class LiveCatalog
         return Parse(stream);
     });
 
-    private sealed record CatalogJson(LiveLimitsJson Limits, List<LiveProbeJson> Probes, List<LiveSourceJson> Sources, int Version);
+    /// <summary>DataTypes: the SQL types a live table may declare (liveDataTypes), which LiveCells must store, each of them.</summary>
+    private sealed record CatalogJson(List<string> DataTypes, LiveLimitsJson Limits, List<LiveProbeJson> Probes, List<LiveSourceJson> Sources, int Version);
 
     private LiveCatalog(CatalogJson json)
     {
         if (json.Version != Version) throw new InvalidOperationException("Unsupported live catalogue version.");
+        DataTypes = json.DataTypes;
         Limits = json.Limits;
         Probes = json.Probes.ToDictionary(probe => probe.Id, StringComparer.Ordinal);
         Sources = json.Sources.ToDictionary(source => source.Id, StringComparer.Ordinal);
@@ -66,12 +68,13 @@ internal sealed class LiveCatalog
 
     /// <summary>A catalogue the checks build, with shapes the shipped one does not have yet (views, filter modes, a second
     /// source), so the backend's rules can be checked against them as main's are (tests/live-schema.test.ts).</summary>
-    internal static LiveCatalog Create(LiveLimitsJson limits, IEnumerable<LiveProbeJson> probes, IEnumerable<LiveSourceJson> sources) => new(new CatalogJson(limits, [.. probes], [.. sources], Version));
+    internal static LiveCatalog Create(LiveLimitsJson limits, IEnumerable<LiveProbeJson> probes, IEnumerable<LiveSourceJson> sources) => new(new CatalogJson([.. Current.DataTypes], limits, [.. probes], [.. sources], Version));
 
     public static LiveCatalog Parse(Stream stream) => new(JsonSerializer.Deserialize<CatalogJson>(stream,
         new JsonSerializerOptions(JsonSerializerDefaults.Web) { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow })
         ?? throw new InvalidOperationException("The live catalogue is empty."));
 
+    public IReadOnlyList<string> DataTypes { get; }
     public LiveLimitsJson Limits { get; }
     public IReadOnlyDictionary<string, LiveProbeJson> Probes { get; }
     public IReadOnlyDictionary<string, LiveSourceJson> Sources { get; }

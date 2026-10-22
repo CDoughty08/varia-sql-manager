@@ -313,11 +313,16 @@ internal sealed class LiveSubscription : IDisposable
         {
             var samples = new List<LiveSample>(batch.Samples.Count);
             var errors = new List<LiveProbeError>(batch.Errors.Count);
+            // A probe may fail in more than one way at once (a table cut by the budget and a statement that failed): one error
+            // schedules it (a terminal one when nothing was sampled), and the others go with it while the tick has room
+            // (limits.live.errors), every probe's first error first.
+            var extra = new List<LiveProbeError>();
             foreach (var item in due)
             {
                 var probe = item.Probe;
                 var sample = batch.Samples.Find(entry => entry.Probe == probe.Spec.Id);
-                var error = batch.Errors.Find(entry => entry.Probe == probe.Spec.Id);
+                var all = batch.Errors.FindAll(entry => entry.Probe == probe.Spec.Id);
+                var error = (sample is null ? all.Find(entry => entry.Terminal) : null) ?? (all.Count > 0 ? all[0] : null);
                 if (sample is not null)
                 {
                     probe.Failures = 0;
@@ -342,8 +347,13 @@ internal sealed class LiveSubscription : IDisposable
                     retry = Retry(probe);
                     probe.DueAt = item.TakenAt + retry;
                 }
-                errors.Add(error with { RetryInMs = Math.Clamp(retry, 0, limits.IntervalMs.Max) });
+                // Terminal says the probe stopped: an error beside a sample (one table a statement could not read) never does.
+                var retryInMs = Math.Clamp(retry, 0, limits.IntervalMs.Max);
+                var stopped = probe.Stopped is not null;
+                errors.Add(error with { RetryInMs = retryInMs, Terminal = error.Terminal && stopped });
+                extra.AddRange(all.Where(other => !ReferenceEquals(other, error)).Select(other => other with { RetryInMs = retryInMs, Terminal = other.Terminal && stopped }));
             }
+            errors.AddRange(extra.Take(Math.Max(0, limits.Errors - errors.Count)));
             // A sampler reports only probes it was given; anything else it sent is dropped rather than sent.
             return new(samples, errors, batch.Spid, batch.Cursors);
         }
