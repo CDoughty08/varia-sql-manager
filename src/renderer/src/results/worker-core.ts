@@ -1,8 +1,8 @@
 // The results worker's logic, free of `self` so it runs in Node tests (tests/results-worker.test.ts). It reads pages
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for.
-import type { BackendStatus, ResultsCloseResult, ResultsReadResult, WireKind } from '../../../shared/contracts'
-import type { PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
+import type { BackendStatus, ResultsCloseResult, WireKind } from '../../../shared/contracts'
+import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
@@ -338,7 +338,8 @@ export class ResultsWorkerCore {
     }
   }
 
-  private ended(rid: number, result: ResultsReadResult | ResultsCloseResult): void {
+  /** Live subscriptions' ends are not this worker's yet: it never starts one (the live relay comes later). */
+  private ended(rid: number, result: PortEndResult): void {
     const close = this.closes.get(rid)
     if (close !== undefined) {
       this.closes.delete(rid)

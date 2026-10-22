@@ -10,8 +10,10 @@ export type MethodKind = 'unary' | 'stream'
  *  2 in all), so a DROP waiting on a lock never holds a metadata slot, and ssis runs SSIS Catalog reads at once under the
  *  SSIS service's own gates (2 per connection, 4 in all), so a read waiting on SSISDB never holds one either. Main reserves 32 extra pending requests for the
  *  control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user signs in in the web
- *  browser, for up to 3 minutes; those sign-ins run one at a time. */
-export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions' | 'ssis'
+ *  browser, for up to 3 minutes; those sign-ins run one at a time. A live subscription (lane live) takes no slot: its own
+ *  task samples on its own schedule, one tick at a time. Its statements, and those of a unary method on lane live, run
+ *  under the live gates (2 per connection, 8 in all, each waited for at most the statement's budget, then BUSY). */
+export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions' | 'ssis' | 'live'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly kind: MethodKind
@@ -22,6 +24,9 @@ export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly backstopMs?: (params: BackendMethods[M]['params']) => number
   /** The request carries a password: its frame is zeroed once written. */
   readonly sensitive?: boolean
+  /** Its EVENT frames are charged against its credit, and only one may be unacknowledged (docs/ipc.md, Live
+   *  subscriptions). Only live.subscribe sets it; such a request has no DATA frames. */
+  readonly creditedEvents?: boolean
 }
 
 const metadata = { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 } as const
@@ -71,6 +76,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
+  // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
+  'live.subscribe': { kind: 'stream', lane: 'live', deadlineMs: 0, creditedEvents: true },
+  // Applied at once to the subscription's settings; its next scheduler wake uses them.
+  'live.update': control,
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
 

@@ -15,6 +15,7 @@ import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/sche
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
+import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -268,6 +269,10 @@ export type RpcMethod = keyof RpcMethods
 export interface PortMethods {
   'results.read': { params: ResultsReadParams; result: ResultsReadResult }
   'results.close': { params: { resultIds: number[] }; result: ResultsCloseResult }
+  /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
+   *  a disconnect, a backend shutdown, a failure or its source ending. */
+  'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }
+  'live.update': { params: LiveUpdateParams; result: LiveUpdateResult }
 }
 /** Methods only main sends (results jobs): no renderer or port schema accepts them. */
 export interface JobMethods {
