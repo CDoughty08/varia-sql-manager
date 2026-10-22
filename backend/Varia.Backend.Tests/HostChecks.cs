@@ -69,6 +69,12 @@ internal static class HostChecks
             check(ssisSettled?.Header.Id == 60 && ErrorCode(ssisSettled.Value) is null && Body(ssisSettled.Value).GetProperty("result").GetProperty("settled").GetBoolean(),
                 "CANCEL reason 1 on a method whose handler answers Stop (an SSIS write) waits for its result, whatever its lane");
 
+            // Which frames hold a secret is the dispatcher's answer (SqlService: methodPolicies' sensitive set, ssis.execute included).
+            host.Request(61, "test.secret", new { value = "s3cret" });
+            var secret = host.Next(FrameKind.Response);
+            check(secret?.Header.Id == 61 && Body(secret.Value).GetProperty("result").GetProperty("value").GetString() == "s3cret" && host.Dispatcher.AskedSensitive.Contains("test.secret"),
+                "the host asks the dispatcher whether a request is sensitive before it parses the frame, and still answers it");
+
             var watch = Stopwatch.StartNew();
             host.Request(3, "test.slow", new { ms = 1500 }, deadline: 100);
             var timedOut = host.Next(FrameKind.Response);
@@ -418,16 +424,22 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int Unsent;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.settle", "test.settleSsis"];
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.settle", "test.settleSsis", "test.secret"];
     public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, _ => RequestLane.Control };
     public bool AnswersStop(string method) => method is "test.settle" or "test.settleSsis";
+    public readonly ConcurrentQueue<string> AskedSensitive = new();
+    public bool Sensitive(string method)
+    {
+        AskedSensitive.Enqueue(method);
+        return method == "test.secret";
+    }
     public (long GlobalBytes, long QueryBytes) ResultBudget => (256L << 20, 128L << 20);
 
     public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context)
     {
         switch (method)
         {
-            case "test.echo": return parameters;
+            case "test.echo" or "test.secret": return parameters;
             case "test.slow":
                 await Task.Delay(parameters.GetProperty("ms").GetInt32());
                 Interlocked.Increment(ref Completed);
@@ -476,6 +488,7 @@ internal sealed class HeldSummary(SqlService service, ManualResetEventSlim taken
     public IReadOnlyList<string> Methods { get; } = [.. service.Methods, "test.summary"];
     public RequestLane LaneOf(string method) => method == "test.summary" ? RequestLane.Query : service.LaneOf(method);
     public bool AnswersStop(string method) => service.AnswersStop(method);
+    public bool Sensitive(string method) => service.Sensitive(method);
     public (long GlobalBytes, long QueryBytes) ResultBudget => service.ResultBudget;
 
     public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context)

@@ -82,8 +82,23 @@ internal static class SsisActionLiveChecks
     private static async Task<string?> StatusAsync(Func<string, string?, Task<SqlRun>> exec, long id) =>
         (await exec("SELECT CONCAT(o.status, ' ', e.status) FROM [catalog].[operations] AS o JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id WHERE o.operation_id = " + id + ";", null)).Scalar;
 
-    private static async Task<long> StopOperationsAsync(Func<string, string?, Task<SqlRun>> exec, string status) =>
-        long.Parse((await exec("SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202 AND status = " + status + ";", null)).Scalar!, CultureInfo.InvariantCulture);
+    /// <summary>The catalog's own stop operations (202), with one status or in all.</summary>
+    private static async Task<long> StopOperationsAsync(Func<string, string?, Task<SqlRun>> exec, string? status) =>
+        long.Parse((await exec("SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202" + (status is null ? "" : " AND status = " + status) + ";", null)).Scalar!, CultureInfo.InvariantCulture);
+
+    /// <summary>The write's server session once it waits on another session's lock, or null if it is never seen blocked (30 s).</summary>
+    private static async Task<string?> BlockedSessionAsync(SqlService service, string requestId, Task request, Func<string, string?, Task<SqlRun>> exec)
+    {
+        var watch = Stopwatch.StartNew();
+        while (watch.ElapsedMilliseconds < 30_000 && !request.IsCompleted)
+        {
+            if (service.SsisActions.SessionOf(requestId) is { } session
+                && (await exec("SELECT COUNT(*) FROM sys.dm_exec_requests WHERE session_id = " + session + " AND blocking_session_id <> 0;", null)).Scalar == "1")
+                return session.ToString(CultureInfo.InvariantCulture);
+            await Task.Delay(50);
+        }
+        return null;
+    }
 
     private static async Task StopsAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, string db, Func<string, string?, Task<SqlRun>> exec,
         Func<string, string, string?, Task<SqlRun>> sql, Func<string, Task<object>> close)
@@ -111,12 +126,14 @@ internal static class SsisActionLiveChecks
         check(missing is { Steps: [], Error: { Code: "NOT_FOUND", Retryable: false } } && other is { Steps: [], Error: { Code: "NOT_SUPPORTED" } } && other.Error.Message.Contains("Stop operation (202)", StringComparison.Ordinal),
             "Stop Operation on an operation that does not exist answers NOT_FOUND, and on one that is not an execution or validation NOT_SUPPORTED: " + Dump(missing) + Dump(other));
 
-        // A created execution is left to the catalog, which refuses it (27124, recording a failed stop): read again, it is not running yet.
+        // A created execution nobody started never runs: the preflight answers NOT_STARTED, which no retry helps, without asking the
+        // catalog, which would record a failed stop for every attempt.
         var created = await ExecutionAsync(exec, start: false);
         var early = await StopAsync(service, info.Id, created);
-        check(early is { Steps: [{ Status: "failed" }], Error: { Code: "NOT_RUNNING", Retryable: true } } && early.Error.Message == "Operation " + created + " has not started running yet (Created); stop it once it runs."
-            && early.Steps[0].Message == early.Error.Message && await StopOperationsAsync(exec, "4") == failed + 1 && await StatusAsync(exec, created) == "1 1",
-            "Stop Operation on a created execution asks the catalog, which refuses it, and answers NOT_RUNNING (retryable) with the step failed: " + Dump(early));
+        var twice = await StopAsync(service, info.Id, created);
+        check(early is { Steps: [], Error: { Code: "NOT_STARTED", Retryable: false } } && early.Error.Message == "Operation " + created + " was created but has not been started, so there is nothing to stop."
+            && twice is { Steps: [], Error.Code: "NOT_STARTED" } && await StopOperationsAsync(exec, "4") == failed && await StatusAsync(exec, created) == "1 1",
+            "Stop Operation on a created execution nobody started answers NOT_STARTED (not retryable) from the preflight, and the catalog records no failed stop: " + Dump(early));
 
         // An execution that ends between the preflight and the stop: the catalog refuses (27124), and a second look says it ended.
         var racing = await ExecutionAsync(exec, start: true);
@@ -127,6 +144,23 @@ internal static class SsisActionLiveChecks
         finally { options.BeforeWrite = null; }
         check(raced is { Steps: [{ Status: "failed" }], Error: { Code: "ALREADY_FINAL" } } && raced.Error.Message == "Operation " + racing + " has already ended (Succeeded)." && await StatusAsync(exec, racing) == "7 7",
             "an execution that ends between the preflight and the stop answers ALREADY_FINAL after the catalog refuses: " + Dump(raced));
+
+        // The same refusal, when the second look fails (here its connection is lost): the catalog's refusal stands, and the step
+        // stays failed rather than the outcome being called unknown.
+        var unread = await ExecutionAsync(exec, start: true);
+        var requestId = Guid.NewGuid().ToString();
+        options.BeforeWrite = async _ => await exec("EXEC [catalog].[varia_fake_finish] " + unread + ", 7;", null);
+        options.BeforeReread = async _ => await exec("KILL " + service.SsisActions.SessionOf(requestId) + ";", null);
+        SsisExecuteResult refusedUnread;
+        try { refusedUnread = await StopAsync(service, info.Id, unread, requestId: requestId); }
+        finally
+        {
+            options.BeforeWrite = null;
+            options.BeforeReread = null;
+        }
+        check(refusedUnread is { Steps: [{ Status: "failed" }], Error: { Code: "SQL_ERROR" } } && refusedUnread.Error.Message.StartsWith("Msg 27124: ", StringComparison.Ordinal)
+            && refusedUnread.Steps[0].Message == refusedUnread.Error.Message && await StatusAsync(exec, unread) == "7 7",
+            "when the second look after the catalog's refusal fails, the reply keeps the refusal and the step failed: " + Dump(refusedUnread));
     }
 
     /// <summary>The write's own session, waiting on another session's lock: unpooled, named " - Integration Services Actions", in
@@ -149,7 +183,10 @@ internal static class SsisActionLiveChecks
             }
         }
 
-        // The stop's UPDATE of the execution waits on the held row, without a lock timeout, until Stop.
+        // The stop's UPDATE of the execution waits on the held row, without a lock timeout, until Stop. The catalog has already
+        // committed its own Stop operation (202, Running) by then, and a cancelled statement never reaches the procedure's error
+        // path: that row stays Running, and the reply says so.
+        var running = await StopOperationsAsync(exec, "2");
         var watch = Stopwatch.StartNew();
         var (stopped, facts, stoppedMs) = await Holding("executions", "execution_id", async () =>
         {
@@ -180,32 +217,45 @@ internal static class SsisActionLiveChecks
             "a write runs on its own session in the catalog's database, named \" - Integration Services Actions\", at READ COMMITTED, and waits for a lock without a lock timeout, as SSMS does: "
             + (facts is null ? "never seen blocked" : string.Join(", ", facts)));
         // An answer at all proves Stop ended it within the grace: past it, the request throws instead of answering.
-        check(stopped is { Steps: [{ Status: "cancelled", Message: "Stop the operation" }], Error: { Code: "CANCELLED", Retryable: true } } && stopped.Error.Message.Contains("stopped at \"Stop the operation\"", StringComparison.Ordinal)
-            && status == "2 2" && service.SsisActions.RunningCount == 0,
-            "Stop ends a write waiting on a lock within its grace, with its step cancelled, and the operation is left as it was (" + stoppedMs + " ms, status " + status + "): " + Dump(stopped));
+        var orphans = await StopOperationsAsync(exec, "2") - running;
+        check(stopped is { Steps: [{ Status: "cancelled", Message: "Stop the operation" }], Error: { Code: "CANCELLED", Retryable: true } }
+            && stopped.Error.Message == "The action was stopped at \"Stop the operation\"; SQL Server cancelled that statement." + SsisActionService.StoppedStopNote
+            && status == "2 2" && service.SsisActions.RunningCount == 0 && orphans == 1,
+            "Stop ends a write waiting on a lock within its grace, with its step cancelled, the operation left as it was, and the catalog's own Stop operation left Running, "
+            + "which the reply says (" + stoppedMs + " ms, status " + status + ", " + orphans + " left Running): " + Dump(stopped));
 
         // The preflight reads the operation's row behind a writer: within a 1 s budget it answers TIMEOUT; with its own 25 s, the
-        // 10 s lock timeout answers BLOCKED. Neither reaches the catalog.
-        var stops = await StopOperationsAsync(exec, "2") + await StopOperationsAsync(exec, "4") + await StopOperationsAsync(exec, "7");
+        // 10 s lock timeout answers BLOCKED; and a connection lost while it waits says nothing changed. None reaches the catalog.
+        var stops = await StopOperationsAsync(exec, null);
         options.PreflightBudget = TimeSpan.FromSeconds(1);
-        SsisExecuteResult timedOut, blocked;
+        SsisExecuteResult timedOut, blocked, lost;
         long blockedMs;
+        string? killed;
         try
         {
-            (timedOut, blocked, blockedMs) = await Holding("operations", "operation_id", async () =>
+            (timedOut, blocked, blockedMs, lost, killed) = await Holding("operations", "operation_id", async () =>
             {
                 var first = await StopAsync(service, info.Id, target);
                 options.PreflightBudget = new SsisOptions().PreflightBudget;
                 var waited = Stopwatch.StartNew();
                 var second = await StopAsync(service, info.Id, target);
-                return (first, second, waited.ElapsedMilliseconds);
+                var secondMs = waited.ElapsedMilliseconds;
+                // This run's own write session, ended while its preflight waits.
+                var requestId = Guid.NewGuid().ToString();
+                var request = StopAsync(service, info.Id, target, requestId: requestId);
+                var session = await BlockedSessionAsync(service, requestId, request, exec);
+                if (session is not null) await exec("KILL " + session + ";", null);
+                return (first, second, secondMs, await request, session);
             });
         }
         finally { options.PreflightBudget = new SsisOptions().PreflightBudget; }
         check(timedOut is { Steps: [], Error: { Code: "TIMEOUT", Retryable: true } } && timedOut.Error.Message == "Checking operation " + target + " took longer than 1 seconds. Try again."
             && blocked is { Steps: [], Error: { Code: "BLOCKED", Retryable: true } } && blockedMs >= 9_000
-            && await StopOperationsAsync(exec, "2") + await StopOperationsAsync(exec, "4") + await StopOperationsAsync(exec, "7") == stops,
-            "a preflight behind a writer's lock answers TIMEOUT past its budget, and BLOCKED after its 10 s lock timeout, before the catalog is asked (" + blockedMs + " ms): " + Dump(timedOut) + Dump(blocked));
+            && killed is not null && lost is { Steps: [], Error: { Code: "CONNECTION_LOST", Retryable: true } }
+            && lost.Error.Message == "The connection to the server was lost before Varia could stop operation " + target + ", so nothing changed. Try again."
+            && await StopOperationsAsync(exec, null) == stops,
+            "a preflight behind a writer's lock answers TIMEOUT past its budget, BLOCKED after its 10 s lock timeout, and CONNECTION_LOST saying nothing changed when its connection is lost, "
+            + "before the catalog is asked (" + blockedMs + " ms, session " + (killed ?? "never seen blocked") + "): " + Dump(timedOut) + Dump(blocked) + Dump(lost));
         await exec("EXEC [catalog].[varia_fake_finish] " + target + ", 3;", null);
     }
 

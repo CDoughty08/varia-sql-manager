@@ -142,9 +142,10 @@ internal sealed class SsisActionService : IDisposable
                             _ => throw new InvalidOperationException("Unknown SSIS verb.")
                         };
                     }
+                    // RunStepsAsync answers for its steps, so what reaches here ran before the first one: nothing was sent.
                     catch (SqlException error) when (!token.IsCancellationRequested)
                     {
-                        return Failed(SsisErrors.FromSql(catalog, error, connection, name, "the SSIS Catalog", Doing(args.Action)));
+                        return Failed(SsisErrors.FromSql(catalog, error, connection, name, "the SSIS Catalog", Doing(args.Action), sent: false));
                     }
                     finally { sessions.TryRemove(args.RequestId, out _); }
                 }
@@ -193,8 +194,9 @@ internal sealed class SsisActionService : IDisposable
         return (Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture));
     }
 
-    /// <summary>Why an operation cannot be stopped as it stands, or null when the catalog should be asked. Created and pending
-    /// executions are left to the catalog, which says whether it can stop them (it refuses with 27124 today).</summary>
+    /// <summary>Why an operation cannot be stopped as it stands, or null when the catalog should be asked. A created execution
+    /// that nobody started (a failed start, a script, another tool) never runs, so there is nothing to stop and no retry helps;
+    /// pending ones are left to the catalog, which says whether it can stop them (it refuses with 27124 today).</summary>
     internal SsisError? Unstoppable(long operationId, (int Type, int Status)? row)
     {
         var subject = Subject(operationId);
@@ -203,8 +205,14 @@ internal sealed class SsisActionService : IDisposable
             return Error("NOT_SUPPORTED", subject + " cannot be stopped: its type is " + catalog.OperationTypes.GetValueOrDefault(found.Type, "unknown") + " (" + found.Type + "), and only executions and validations can be stopped.");
         if (catalog.FinalStatuses.Contains(found.Status)) return Error("ALREADY_FINAL", subject + " has already ended (" + Label(found.Status) + ").");
         if (found.Status == 8) return Error("ALREADY_FINAL", subject + " is already stopping.");
+        if (found.Status == 1) return Error("NOT_STARTED", subject + " was created but has not been started, so there is nothing to stop.");
         return null;
     }
+
+    /// <summary>What Stop leaves behind at Stop Operation's step: catalog.stop_operation records its own Stop operation (202,
+    /// Running) before its transaction, and a cancelled statement never reaches the procedure's error path, so SQL Server rolls
+    /// back the stop but that row stays Running until the catalog's startup procedure ends it (SSMS never cancels it).</summary>
+    internal const string StoppedStopNote = " SQL Server rolled back the stop, but the SSIS Catalog may list the Stop operation it had recorded as Running until SQL Server restarts.";
 
     private string Label(int status) => catalog.OperationStatuses.GetValueOrDefault(status, "status " + status);
 
@@ -234,18 +242,25 @@ internal sealed class SsisActionService : IDisposable
         {
             if (!SsisErrors.NotStoppable.Contains(error.Number)) return null;
             // The catalog says the operation is not running, or already stopping: read it again to say which, now.
-            var now = await OperationAsync(connection, operationId, token);
-            return Unstoppable(operationId, now) ?? (now is { Status: 1 or 5 } waiting
-                ? Error("NOT_RUNNING", Subject(operationId) + " has not started running yet (" + Label(waiting.Status) + "); stop it once it runs.")
+            (int Type, int Status)? now;
+            try
+            {
+                if (Options.BeforeReread is { } hook) await hook(token);
+                now = await OperationAsync(connection, operationId, token);
+            }
+            // The catalog's refusal stands when the second look fails (a lock, a lost connection, Stop): the step still failed.
+            catch (Exception failure) when (failure is SqlException or OperationCanceledException) { return null; }
+            return Unstoppable(operationId, now) ?? (now is { Status: 5 }
+                ? Error("NOT_RUNNING", Subject(operationId) + " has not started running yet (" + Label(5) + "); stop it once it runs.")
                 : null);
-        }, "stop " + Subject(operationId).ToLowerInvariant(), token);
+        }, "stop " + Subject(operationId).ToLowerInvariant(), StoppedStopNote, token);
     }
 
     /// <summary>Runs the steps in order, one statement each: the first failure stops the rest, which are 'skipped'; Stop cancels
     /// the running statement, and earlier steps stay 'done'. <paramref name="explain"/> may turn a catalog error into a clearer
-    /// value (null keeps the mapped one).</summary>
+    /// value (null keeps the one mapped when the step failed). <paramref name="stopped"/> says what a cancelled step may leave.</summary>
     private async Task<SsisExecuteResult> RunStepsAsync(SqlConnection connection, List<(string Title, Func<Task> Run)> plan, Func<SqlException, Task<SsisError?>> explain,
-        string doing, CancellationToken token)
+        string doing, string stopped, CancellationToken token)
     {
         var steps = new List<ActionStepDto>();
         SsisError? failure = null;
@@ -261,11 +276,13 @@ internal sealed class SsisActionService : IDisposable
             catch (Exception exception) when (token.IsCancellationRequested && exception is SqlException or OperationCanceledException)
             {
                 steps.Add(new("cancelled", title));
-                failure = Error("CANCELLED", "The action was stopped at \"" + title + "\"; SQL Server cancelled that statement." + Completed(steps, "Stop"));
+                failure = Error("CANCELLED", "The action was stopped at \"" + title + "\"; SQL Server cancelled that statement." + stopped + Completed(steps, "Stop"));
             }
             catch (SqlException sql)
             {
-                var value = await explain(sql) ?? SsisErrors.FromSql(catalog, sql, connection, Options.CatalogDatabase, "the SSIS Catalog", doing);
+                // Mapped before explain reads again, while the connection's state is still the step's own.
+                var mapped = SsisErrors.FromSql(catalog, sql, connection, Options.CatalogDatabase, "the SSIS Catalog", doing);
+                var value = await explain(sql) ?? mapped;
                 steps.Add(new("failed", value.Message));
                 var done = Completed(steps, "the failure");
                 failure = done.Length == 0 ? value : Error(value.Code, value.Message + done);

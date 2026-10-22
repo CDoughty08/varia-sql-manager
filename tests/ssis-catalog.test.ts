@@ -56,8 +56,9 @@ describe('SSIS catalogue', () => {
   it('keeps error codes retryable only where a retry can help', () => {
     expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'NOT_RUNNING', 'CANCELLED', 'SQL_ERROR'])
     expect(ssisErrorCodes).toContain('CATALOG_MISSING')
-    // Stop Operation on an ended operation is information, and a SQL Server login cannot fix itself by retrying.
-    expect(ssisErrorRetryable).toMatchObject({ WINDOWS_AUTH_REQUIRED: false, ALREADY_FINAL: false })
+    // Stop Operation on an ended operation, or on a created one nobody started (it never runs), is information, and a SQL Server
+    // login cannot fix itself by retrying.
+    expect(ssisErrorRetryable).toMatchObject({ WINDOWS_AUTH_REQUIRED: false, ALREADY_FINAL: false, NOT_STARTED: false })
   })
   it('declares each ssis.execute verb with its steps, procedures and gates, Stop Operation first', () => {
     expect(ssisActionVerbs).toEqual(['stopOperation'])

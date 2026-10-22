@@ -18,6 +18,7 @@
     {"code":"AUTH_ENTRA","retryable":false},
     {"code":"WINDOWS_AUTH_REQUIRED","retryable":false},
     {"code":"ALREADY_FINAL","retryable":false},
+    {"code":"NOT_STARTED","retryable":false},
     {"code":"NOT_RUNNING","retryable":true},
     {"code":"CANCELLED","retryable":true},
     {"code":"SQL_ERROR","retryable":true}

@@ -67,13 +67,16 @@ What the checks prove:
 - **Stop Operation against the fake** (`SsisActionLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`): a running execution stops
   (Stopping, with the catalog's own stop operation Succeeded); a second stop and an ended execution answer `ALREADY_FINAL`
   from the preflight, so the catalog records no failed stop; a missing operation answers `NOT_FOUND`, a stop operation
-  `NOT_SUPPORTED`; a created execution is refused by the catalog (27124) and answers `NOT_RUNNING`; one that ends between
-  the preflight and the stop answers `ALREADY_FINAL`; the write's own session is named " - Integration Services Actions",
+  `NOT_SUPPORTED`; a created execution nobody started answers `NOT_STARTED` from the preflight, twice, with no failed stop
+  recorded; one that ends between the preflight and the stop answers `ALREADY_FINAL`, and, when the second look loses its
+  connection, the catalog's refusal with the step failed; the write's own session is named " - Integration Services Actions",
   in the catalog's database, at READ COMMITTED with no lock timeout, and Stop ends it waiting on a lock with its step
-  cancelled and the execution unchanged; the preflight behind a lock answers `TIMEOUT` within its budget and `BLOCKED`
-  after 10 s; the scratch SQL Server login is refused before connecting, gets `PERMISSION_DENIED` without EXECUTE, and the
-  catalog's own 27123 answers `WINDOWS_AUTH_REQUIRED`; a missing catalog answers `CATALOG_MISSING`; and no actions session is
-  left behind. On CI's SQL Server authentication the internal `SsisOptions.IgnoreSqlAuthentication` lets them run.
+  cancelled, the execution unchanged, and the catalog's own Stop operation left Running, which the reply says; the
+  preflight behind a lock answers `TIMEOUT` within its budget, `BLOCKED` after 10 s, and `CONNECTION_LOST` saying nothing
+  changed when its session is ended; the scratch SQL Server login is refused before connecting, gets
+  `PERMISSION_DENIED` without EXECUTE, and the catalog's own 27123 answers `WINDOWS_AUTH_REQUIRED`; a missing catalog
+  answers `CATALOG_MISSING`; and no actions session is left behind. On CI's SQL Server authentication the internal
+  `SsisOptions.IgnoreSqlAuthentication` lets them run.
 - **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
@@ -197,6 +200,7 @@ change to a role's members; a sysadmin's are not evaluated.
 | `AUTH_ENTRA` | No |
 | `WINDOWS_AUTH_REQUIRED` | No |
 | `ALREADY_FINAL` | No |
+| `NOT_STARTED` | No |
 | `NOT_RUNNING` | Yes |
 | `CANCELLED` | Yes |
 | `SQL_ERROR` | Yes |
@@ -218,10 +222,14 @@ Windows authentication answers `WINDOWS_AUTH_REQUIRED` before it connects. Nothi
 
 Stop Operation's preflight reads the operation from `catalog.operations`: one this login cannot see, or that no longer exists,
 answers `NOT_FOUND`; one that is not an execution or validation (types `200`, `300`, `301`), `NOT_SUPPORTED`; one that has
-ended or is already stopping, `ALREADY_FINAL`. Otherwise it calls `catalog.stop_operation`, which records a stop operation (type 202)
-of its own and makes the operation Stopping (8) until the package ends (Canceled, 3). When the catalog refuses because the operation
-is not running (27124) or already stopping (27126), the operation is read again: `ALREADY_FINAL` if it ended or is stopping, and
-`NOT_RUNNING` (retry once it runs) if it is created or pending.
+ended or is already stopping, `ALREADY_FINAL`; an execution that was created and never started (it never runs), `NOT_STARTED`. Otherwise
+it calls `catalog.stop_operation`, which records a stop operation (type 202) of its own and makes the operation Stopping (8) until
+the package ends (Canceled, 3). When the catalog refuses because the operation is not running (27124) or already stopping (27126),
+the operation is read again: `ALREADY_FINAL` if it ended or is stopping, `NOT_RUNNING` (retry once it runs) if it is pending, and
+the catalog's own refusal if that second look fails. A lost connection before the stop is sent says nothing changed; after, that
+its outcome is unknown. The catalog records its stop operation as Running before its own transaction, and a cancelled statement
+never reaches its error path, so Stop during `catalog.stop_operation` (waiting on a lock) rolls the stop back but may leave that
+Stop operation Running until SQL Server restarts and the catalog's startup procedure ends it; the `CANCELLED` reply says so.
 
 ### Code tables
 

@@ -39,7 +39,7 @@ internal static class SsisActionChecks
             && stop.Steps.SequenceEqual(["Stop the operation"]) && stop.Procedures.SequenceEqual(["stop_operation"]) && catalog.Action("startExecution") is null,
             "the embedded catalogue's ssis.execute verbs: Stop Operation, one step calling catalog.stop_operation, no revision, Windows authentication on a box server");
         check(catalog.StoppableOperationTypes.Order().SequenceEqual([200, 300, 301]) && catalog.FinalStatuses.Order().SequenceEqual([3, 4, 6, 7, 9]) && catalog.OpenStatuses.Order().SequenceEqual([1, 2, 5, 8])
-            && !catalog.Retryable("WINDOWS_AUTH_REQUIRED") && !catalog.Retryable("ALREADY_FINAL") && catalog.Retryable("NOT_RUNNING") && catalog.Retryable("CANCELLED"),
+            && !catalog.Retryable("WINDOWS_AUTH_REQUIRED") && !catalog.Retryable("ALREADY_FINAL") && !catalog.Retryable("NOT_STARTED") && catalog.Retryable("NOT_RUNNING") && catalog.Retryable("CANCELLED"),
             "Stop Operation applies to executions and validations; the catalogue's open and final statuses and the write error codes come from the catalogue");
         check(catalog.Limit("writePerConnection") == 1 && catalog.Limit("writeTotal") == 2 && catalog.Limit("registeredWrites") == 64 && catalog.Limit("preflightLockTimeoutMs") == 10_000
             && catalog.Limit("preflightMs") == 25_000 && catalog.Limit("stopGraceMs") == 10_000 && new SsisOptions() is { WritePerConnection: 1, WriteTotal: 2, MaxRegisteredWrites: 64 } options
@@ -117,8 +117,9 @@ internal static class SsisActionChecks
         };
         check(sql.LaneOf("ssis.execute") == RequestLane.Ssis && sql.Methods.Contains("ssis.execute") && SqlService.MethodNames.Contains("ssis.execute") && sql.AnswersStop("ssis.execute")
             && sql.AnswersStop("actions.execute") && !sql.AnswersStop("ssis.describe") && !sql.AnswersStop("explorer.children")
+            && sql.Sensitive("ssis.execute") && sql.Sensitive("connections.connect") && !sql.Sensitive("ssis.describe") && !sql.Sensitive("query.execute")
             && codes.SequenceEqual(["NOT_CONNECTED", "INVALID_PARAMS", "JSON", "JSON"]),
-            "ssis.execute runs on the ssis lane, answers Stop itself, rejects unknown members, and checks its action before the connection: " + string.Join(", ", codes));
+            "ssis.execute runs on the ssis lane, answers Stop itself, is zeroed as sensitive, rejects unknown members, and checks its action before the connection: " + string.Join(", ", codes));
     }
 
     private static void Refusals(Action<bool, string> check)
@@ -131,12 +132,21 @@ internal static class SsisActionChecks
             ((101, 2), "NOT_SUPPORTED", "its type is Deploy project (101)"), ((1000, 2), "NOT_SUPPORTED", "Configure catalog (1000)"), ((999, 2), "NOT_SUPPORTED", "unknown (999)"),
             ((200, 7), "ALREADY_FINAL", "has already ended (Succeeded)"), ((300, 4), "ALREADY_FINAL", "(Failed)"), ((200, 3), "ALREADY_FINAL", "(Canceled)"), ((301, 6), "ALREADY_FINAL", "(Ended unexpectedly)"),
             ((200, 9), "ALREADY_FINAL", "(Completed)"), ((200, 8), "ALREADY_FINAL", "is already stopping"),
-            ((200, 2), null, ""), ((300, 2), null, ""), ((301, 2), null, ""), ((200, 1), null, ""), ((200, 5), null, "")
+            ((200, 1), "NOT_STARTED", "Operation 42 was created but has not been started, so there is nothing to stop."),
+            ((200, 2), null, ""), ((300, 2), null, ""), ((301, 2), null, ""), ((200, 5), null, "")
         };
         var wrong = cases.Where(item => service.Unstoppable(42, item.Row) is var error && (error?.Code != item.Code || error is not null && !error.Message.Contains(item.Text, StringComparison.Ordinal)))
             .Select(item => item.Row + " " + JsonSerializer.Serialize(service.Unstoppable(42, item.Row), Json)).ToList();
         check(wrong.Count == 0, "Stop Operation's preflight refuses an operation it cannot see, one that is not an execution or validation, one that has ended or is stopping, "
-            + "and leaves running, created and pending ones to the catalog: " + string.Join("; ", wrong));
+            + "and a created one nobody started (NOT_STARTED, which no retry helps), and leaves running and pending ones to the catalog: " + string.Join("; ", wrong));
+
+        // A connection lost before the step is sent changed nothing; once the step runs, its outcome is unknown.
+        var lost = ConnectionFailureChecks.Sql(10054, 0, 20, "sql.contoso.com", "A transport-level error has occurred.");
+        var before = SsisErrors.FromSql(SsisCatalog.Current, lost, null, "SSISDB", "the SSIS Catalog", "stop operation 42", sent: false);
+        var during = SsisErrors.FromSql(SsisCatalog.Current, lost, null, "SSISDB", "the SSIS Catalog", "stop operation 42");
+        check(before is { Code: "CONNECTION_LOST", Retryable: true } && before.Message == "The connection to the server was lost before Varia could stop operation 42, so nothing changed. Try again."
+            && during is { Code: "CONNECTION_LOST" } && during.Message.Contains("whether it did stop operation 42 is not known", StringComparison.Ordinal),
+            "a write's lost connection says nothing changed before its step was sent, and that the outcome is unknown after: " + before.Message + " | " + during.Message);
     }
 
     /// <summary>What the server cannot do is answered at once, with no connection: no catalog before 2016 or on Linux, and SQL

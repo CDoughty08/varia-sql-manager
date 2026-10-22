@@ -45,8 +45,10 @@ internal static class SsisErrors
 
     /// <param name="subject">What the request read, as the tree labels it ("Folder Finance").</param>
     /// <param name="action">For a write, what it does ("stop operation 42"): permission errors name it, and a lost connection
-    /// leaves its outcome unknown.</param>
-    public static SsisError FromSql(SsisCatalog catalog, SqlException error, SqlConnection? connection, string catalogName, string subject, string? action = null)
+    /// leaves its outcome unknown once its step was <paramref name="sent"/>.</param>
+    /// <param name="sent">False for what a write runs before its first step (prologue, preflight): a lost connection there
+    /// changed nothing.</param>
+    public static SsisError FromSql(SsisCatalog catalog, SqlException error, SqlConnection? connection, string catalogName, string subject, string? action = null, bool sent = true)
     {
         var code = CodeOf(error, connection);
         var text = string.Join(" ", error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(item => item.Message).Distinct());
@@ -61,6 +63,7 @@ internal static class SsisErrors
             "CATALOG_MISSING" => catalogName + " is not a complete SSIS Catalog (" + text + ").",
             "TIMEOUT" => Timeout(catalog),
             "CONNECTION_LOST" => action is null ? "The connection to the server was lost. Try again."
+                : !sent ? "The connection to the server was lost before Varia could " + action + ", so nothing changed. Try again."
                 : "The connection to the server was lost before SQL Server answered, so whether it did " + action + " is not known. Check before you retry.",
             _ => "Msg " + error.Number + ": " + text
         };

@@ -59,6 +59,8 @@ internal sealed class SsisOptions
     public bool IgnoreSqlAuthentication { get; set; }
     /// <summary>Runs between a write's preflight and its first step, on the write's connection (the checks change the catalog there).</summary>
     public Func<CancellationToken, Task>? BeforeWrite { get; set; }
+    /// <summary>Runs before Stop Operation reads the operation again after the catalog refuses (the checks end the write's session there).</summary>
+    public Func<CancellationToken, Task>? BeforeReread { get; set; }
 }
 
 /// <summary>ssis.describe (D-ssis 4.3): validate, register, take the SSIS read gates (2 per connection, 4 in all; BUSY after

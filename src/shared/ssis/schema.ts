@@ -142,7 +142,7 @@ export interface SsisDescribeResult {
   readonly error?: SsisError
 }
 /** One ssis.execute: the steps it ran in order (done, failed, cancelled or skipped; a refusal before any step has none), or
- *  `error`. ALREADY_FINAL is information (Stop Operation found nothing running), not a failure. */
+ *  `error`. ALREADY_FINAL and NOT_STARTED are information (Stop Operation found nothing running), not failures. */
 export interface SsisExecuteResult {
   readonly steps: readonly ActionStep[]
   readonly elapsedMs: number

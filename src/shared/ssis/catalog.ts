@@ -185,9 +185,12 @@ export const ssisErrorRetryable = {
   WINDOWS_AUTH_REQUIRED: false,
   /** Stop Operation on an operation that has ended or is already stopping: nothing to do, shown as information. */
   ALREADY_FINAL: false,
-  /** Stop Operation on an execution that is created or pending but not running yet: it can be stopped once it runs. */
+  /** Stop Operation on an execution that was created and never started: it never runs, so there is nothing to stop. */
+  NOT_STARTED: false,
+  /** Stop Operation on an execution that is pending, not running yet: it can be stopped once it runs. */
   NOT_RUNNING: true,
-  /** Varia's Stop ended a write's request before it changed anything, or at the step the reply names. */
+  /** Varia's Stop ended a write's request before it changed anything, or at the step the reply names (for Stop Operation, the
+   *  catalog may then list its own Stop operation as Running until SQL Server restarts). */
   CANCELLED: true,
   SQL_ERROR: true
 } as const

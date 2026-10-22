@@ -15,6 +15,8 @@ internal interface IRequestDispatcher : IDisposable
     RequestLane LaneOf(string method);
     /// <summary>Whether Stop (CANCEL reason 1) is answered by the handler, with what it completed, rather than by the host at once.</summary>
     bool AnswersStop(string method);
+    /// <summary>Whether a request's frame may carry a secret (methodPolicies' sensitive): its body and JSON buffer are zeroed after parsing.</summary>
+    bool Sensitive(string method);
     (long GlobalBytes, long QueryBytes) ResultBudget { get; }
     Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context);
     void CancelAll();
@@ -236,10 +238,10 @@ internal sealed class ProtocolHost
         try
         {
             JsonElement parameters;
-            var sensitive = context.Method is "connections.connect" or "connections.databases" or "connections.preview";
+            var sensitive = dispatcher!.Sensitive(context.Method);
             try { parameters = JsonBridge.ParseControl(body.AsSpan(start, length), sensitive); }
             catch (ProtocolException) { throw new RequestException("INVALID_PARAMS", "Invalid request parameters."); }
-            // The frame body holds the password in clear text; managed strings made from it cannot be zeroed.
+            // The frame body holds the secret in clear text; managed strings made from it cannot be zeroed.
             finally { if (sensitive) Array.Clear(body); }
             var lane = context.Lane switch { RequestLane.Metadata => metadataSlots, RequestLane.Results => resultSlots, _ => null };
             if (lane is not null)

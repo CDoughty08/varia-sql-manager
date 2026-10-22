@@ -141,9 +141,11 @@ properties are omitted, as in JSON; `undefined` in an array is an error. The C# 
 
 The backend transcodes REQUEST params to a `JsonElement` and results from System.Text.Json output (`JsonBridge`), so the
 STJ records with `UnmappedMemberHandling.Disallow` keep rejecting unknown members. JSON integers beyond ±(2⁵³ − 1)
-become float64, which TypeScript accepts. Requests that carry a password (`connections.connect`, `.databases`,
-`.preview`) are encoded into buffers that are zeroed after use on both sides; the JavaScript and .NET strings they came
-from cannot be zeroed.
+become float64, which TypeScript accepts. Requests that carry a password or a sensitive value (`connections.connect`,
+`.databases`, `.preview`, and `ssis.execute`) are encoded into buffers that are zeroed after use on both sides; the
+JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the methods whose `methodPolicies` entry is
+`sensitive`, the backend those in `SqlService.SensitiveMethods` (`IRequestDispatcher.Sensitive`), and
+`tests/validation.test.ts` keeps the two lists equal.
 
 ## Handshake
 
@@ -353,13 +355,18 @@ verb's preflight at READ COMMITTED with `LOCK_TIMEOUT 10000` (`BLOCKED`) within 
 order, each one constant template from `SsisSql` with values as parameters, waiting for locks as SSMS does
 (`LOCK_TIMEOUT -1`), with no outer transaction. Stop Operation's preflight reads `catalog.operations`: no row answers
 `NOT_FOUND`, a type other than an execution or validation (200, 300, 301) `NOT_SUPPORTED`, an ended or stopping one
-`ALREADY_FINAL` (information, not a failure); otherwise `catalog.stop_operation` runs, and when it refuses with 27124 or
-27126 the operation is read again: `ALREADY_FINAL` if it has ended or is stopping meanwhile, `NOT_RUNNING` (retryable) if it
-is created or pending. The catalog's 27123 is `WINDOWS_AUTH_REQUIRED`, and a permission error `PERMISSION_DENIED` naming the
-action. Stop (CANCEL reason 1 through `varia:ssis-cancel`) ends a write at any time: the backend's protocol host leaves the
+`ALREADY_FINAL` (information, not a failure), and a created execution nobody started (it never runs) `NOT_STARTED` (not
+retryable); otherwise `catalog.stop_operation` runs, and when it refuses with 27124 or 27126 the operation is read again:
+`ALREADY_FINAL` if it has ended or is stopping meanwhile, `NOT_RUNNING` (retryable) if it is pending, and the catalog's own
+refusal, with the step failed, if that second look fails. The catalog's 27123 is `WINDOWS_AUTH_REQUIRED`, and a permission
+error `PERMISSION_DENIED` naming the action. A connection lost before the step is sent answers `CONNECTION_LOST` saying
+nothing changed; lost during the step, that the outcome is unknown. Stop (CANCEL reason 1 through `varia:ssis-cancel`) ends a write at any time: the backend's protocol host leaves the
 answer to the handler (`IRequestDispatcher.AnswersStop`, as for `actions.execute`), which waits up to 10 s for SQL Server to
 end the statement and answers `CANCELLED` with the step `cancelled`, or, before any step, "stopped before it changed
-anything"; past the grace the outcome is unknown. A disconnect cancels a connection's writes. Nothing is logged.
+anything"; past the grace the outcome is unknown. `catalog.stop_operation` commits its own Stop operation (type 202,
+Running) before its transaction, and a cancelled statement never reaches its error path, so Stop during Stop Operation's
+step rolls the stop back but may leave that row Running until SQL Server restarts; the `CANCELLED` message says so (SSMS
+never cancels the call, so only Varia's Stop leaves it). A disconnect cancels a connection's writes. Nothing is logged.
 
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers

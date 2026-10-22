@@ -176,6 +176,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>Stop on DDL and on SSIS Catalog writes answers with the steps that completed, once SQL Server ends the statement.</summary>
     public bool AnswersStop(string method) => method is "actions.execute" or "ssis.execute";
 
+    /// <summary>The methods whose frames may carry a password or a sensitive value: methodPolicies' sensitive entries
+    /// (tests/validation.test.ts compares the two lists), zeroed here as main zeroes its copy.</summary>
+    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute"];
+    public bool Sensitive(string method) => Array.IndexOf(SensitiveMethods, method) >= 0;
+
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
     public (long GlobalBytes, long QueryBytes) ResultBudget => (store.GlobalBytes, store.QueryBytes);
 
