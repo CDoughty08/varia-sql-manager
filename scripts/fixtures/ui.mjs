@@ -22,6 +22,7 @@ export const part = {
   titleBar: '.title-bar',
   titleBarContent: '.title-bar-content',
   titleBarCaption: '.title-bar-caption',
+  titleBarMenus: '.title-bar-menus',
   /** The banners above the workspace: command, file and theme notices and the backend's. */
   banner: '.global-error',
   backendBanner: '.backend-banner',
@@ -64,11 +65,15 @@ export const part = {
   explorerIcon: '.oe-icon',
   explorerBadge: '.oe-badge',
   explorerAccent: '.oe-accent',
+  /** The tree's own box and rows, for page code that builds a probe tree to read the row styles. */
+  explorerTreeView: '.explorer-tree',
+  explorerRow: '.explorer-row',
   explorerProgressRow: '.explorer-row.progress',
   explorerErrorRow: '.explorer-row.error',
   explorerSyntheticRow: '.explorer-row.synthetic',
   explorerError: '.explorer-error',
   // Menus and the quick input
+  menu: '.menu',
   menuLayer: '.menu-layer',
   menuMnemonic: '.menu-mnemonic',
   menuKeybinding: '.menu-keybinding',
@@ -80,6 +85,8 @@ export const part = {
   quickInputEmpty: '.quick-input-empty',
   // Dialogs
   connectionChoice: '.connection-choice',
+  /** An object dialog's page list (Database Properties). */
+  dialogPages: '.object-dialog-pages',
   optionsNote: '.options-note',
   optionsDescription: '.options-description',
   optionsForm: '.options-form',

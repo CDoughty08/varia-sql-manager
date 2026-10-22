@@ -18,6 +18,8 @@ const quickInputHover: ColorKey[] = ['quickInput.background', 'list.hoverBackgro
 const treeActive: ColorKey[] = ['sideBar.background', 'list.activeSelectionBackground'], treeInactive: ColorKey[] = ['sideBar.background', 'list.inactiveSelectionBackground']
 const treeHover: ColorKey[] = ['sideBar.background', 'list.hoverBackground'], treeServer: ColorKey[] = ['sideBar.background', 'objectExplorer.activeConnectionBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
+const statusBarStates: ColorKey[][] = [['statusBar.executingBackground'], ['statusBar.disconnectedBackground'], ['statusBar.errorBackground']]
+const statusBars: ColorKey[][] = [statusBar, ...statusBarStates, ['queryStatusBar.background'], ['queryStatusBar.executingBackground'], ['queryStatusBar.errorBackground']]
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
 /** A secondary button's hover fill over the surface it sits on. */
 const hovered = (...surface: ColorKey[]): ColorKey[] => [...surface, 'button.secondaryHoverBackground']
@@ -145,14 +147,15 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], treeHover, treeServer),
   ...graphic(['list.focusOutline'], sideBar, treeActive),
   ...graphic(['titleBar.iconForeground'], titleBar),
-  ...graphic(['connection.red', 'connection.orange', 'connection.yellow', 'connection.green', 'connection.blue', 'connection.purple'], sideBar, strip, editor, statusBar, widget),
+  // A connection's edge stays on both status bars, and the backend's dot on the main one, in every state.
+  ...graphic(['connection.red', 'connection.orange', 'connection.yellow', 'connection.green', 'connection.blue', 'connection.purple'], sideBar, strip, editor, widget, ...statusBars),
   ...graphic(['connection.default'], widget, activeSelection),
   ...graphic(['connection.favoriteForeground'], widget),
   ...graphic(['tab.activeBorderTop', 'documentTabs.modifiedIndicator', 'documentTabs.closeForeground'], strip),
   ...graphic(['panelTitle.activeBorder'], panelTitle, widget),
   ...graphic(['resultsGrid.activeCellBorder'], panel, ['resultsGrid.background', 'resultsGrid.selectionBackground']),
   ...graphic(['resultsGrid.truncationForeground', 'resultsGrid.splitterBackground'], panel),
-  ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
+  ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar, ...statusBarStates),
   // A bookmark is the only sign of itself in the indicator margin.
   ...graphic(['editorBookmark.foreground'], editor),
   ...graphic(['button.background'], widget),
