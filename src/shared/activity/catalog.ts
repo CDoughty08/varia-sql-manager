@@ -63,27 +63,36 @@ export interface ProbeSpec {
   readonly maxDutyCycle: number
   /** Statements run with OPTION (MAXDOP 1): the plan cache can be large. */
   readonly maxdop1?: boolean
+  /** How filters apply (D-live's per-probe field): in backend memory over the sample. A probe without tables takes none. */
+  readonly filterMode?: 'memory'
+  /** While no pane shows it, the probe is paused (no SQL); the monitor has no status-only probes. */
+  readonly hidden: 'pause'
 }
+// activity.overview supersedes D-live §15's reference probe of the same id: the live layer runs ActivitySql's statements
+// for it and sends these series ids (D-live's runnableTasks is runnablePerScheduler here), so there is one text and one lint.
 export const probeSpecs: { readonly [P in ActivityProbe]: ProbeSpec } = {
   'activity.overview': {
     title: 'Overview', kind: 'metrics', tables: [], series: [
       'cpuPercent', 'schedulerDelay', 'waitingTasks', 'ioMegabytes', 'readLatency', 'writeLatency', 'batchRequests', 'compilations', 'recompilations', 'blockedSessions',
       'longestBlock', 'activeRequests', 'userSessions', 'logins', 'runnablePerScheduler', 'workQueue', 'grantsPending', 'grantsOutstanding', 'pageLifeExpectancy', 'deadlocks', 'lockWaits'
-    ], defaultIntervalMs: 2_000, minIntervalMs: 1_000, maxIntervalMs: 60_000, floorMs: 1_000, budgetMs: 5_000, maxDutyCycle: 0.2
+    ], defaultIntervalMs: 2_000, minIntervalMs: 1_000, maxIntervalMs: 60_000, floorMs: 1_000, budgetMs: 5_000, maxDutyCycle: 0.2, hidden: 'pause'
   },
   'activity.sessions': {
     title: 'Sessions', kind: 'snapshot', tables: ['sessions', 'blocking', 'activeQueries'], series: ['focus.cpuRate', 'focus.logicalReadsRate'],
-    defaultIntervalMs: 2_000, minIntervalMs: 1_000, maxIntervalMs: 60_000, floorMs: 1_000, budgetMs: 5_000, maxDutyCycle: 0.2
+    defaultIntervalMs: 2_000, minIntervalMs: 1_000, maxIntervalMs: 60_000, floorMs: 1_000, budgetMs: 5_000, maxDutyCycle: 0.2, filterMode: 'memory', hidden: 'pause'
   },
   'activity.resources': {
     title: 'Resources', kind: 'snapshot', tables: ['waitCategories', 'waitTypes', 'files'], series: ['wait.*', 'wait.signal'],
-    defaultIntervalMs: 5_000, minIntervalMs: 2_000, maxIntervalMs: 60_000, floorMs: 5_000, budgetMs: 5_000, maxDutyCycle: 0.2
+    defaultIntervalMs: 5_000, minIntervalMs: 2_000, maxIntervalMs: 60_000, floorMs: 5_000, budgetMs: 5_000, maxDutyCycle: 0.2, filterMode: 'memory', hidden: 'pause'
   },
   'activity.queries': {
     title: 'Query statistics', kind: 'snapshot', tables: ['recentQueries'], series: [],
-    defaultIntervalMs: 30_000, minIntervalMs: 15_000, maxIntervalMs: 60_000, floorMs: 30_000, budgetMs: 10_000, minGapMs: 15_000, maxDutyCycle: 0.2, maxdop1: true
+    defaultIntervalMs: 30_000, minIntervalMs: 15_000, maxIntervalMs: 60_000, floorMs: 30_000, budgetMs: 10_000, minGapMs: 15_000, maxDutyCycle: 0.2, maxdop1: true, filterMode: 'memory', hidden: 'pause'
   }
 }
+/** The load guard's counts (D-live's back-off): a probe's interval doubles, up to its maxIntervalMs, after this many
+ *  samples in a row cost more than its maxDutyCycle, and halves back after this many cheap ones. */
+export const activityLoadGuard = { slowSamples: 3, cheapSamples: 10 } as const
 /** The monitor's default interval (seconds) and the bounds of the query statistics' own interval, which settings take from here. */
 export const activityIntervalDefaults = {
   refreshIntervalSeconds: probeSpecs['activity.overview'].defaultIntervalMs / 1_000,
@@ -96,6 +105,19 @@ export function probeIntervalMs(probe: ActivityProbe, intervalSeconds: number, q
   const spec = probeSpecs[probe], floor = probe === 'activity.queries' ? queriesIntervalSeconds * 1_000 : spec.floorMs
   return Math.min(spec.maxIntervalMs, Math.max(intervalSeconds * 1_000, floor, spec.minIntervalMs))
 }
+
+/** Bounds of the monitor's data and requests (D-live's limits apply on top). */
+export const activityLimits = {
+  monitorsPerConnection: 1, probesPerMonitor: 4,
+  /** Rows a table keeps: more set `truncated`. The SQL reads one more to know. */
+  sessions: 10_000, blockingEdges: 20_000, blockingRows: 2_000, blockingDepth: 32, activeQueries: 100, waitTypes: 2_000, files: 10_000, queryStatsRows: 20_000,
+  queryDeltaKeys: 20_000, shownHashes: 200, textCache: 2_000, textBatch: 50, textBatchesPerTick: 4, leadBlockerBatches: 20,
+  statementChars: 4_000, inputBufferChars: 4_000, resourceChars: 512, lastBatchChars: 200,
+  facetColumns: 7, facetValues: 100, facetChars: 128,
+  filterText: 400, columnFilters: 8, columnFilterValues: 50, columnFilterChars: 256, columnsPerProjection: 64,
+  detailsChars: 1_000_000, detailsWaits: 20, detailsTransactions: 50, detailsLocks: 1_000, killSessions: 64,
+  sessionId: 32_767
+} as const
 
 export type ColumnType = 'int' | 'bigint' | 'decimal' | 'text' | 'datetime' | 'bool'
 /** A column's unit; '' only for text, times and flags. `id` is an identifier, `count` a number of things. */
@@ -134,6 +156,7 @@ export interface TableSpec {
   /** A selected row that left the snapshot stays one more revision, toned `departed`. */
   readonly departedLinger?: boolean
 }
+const number = (value: number) => value.toLocaleString('en-US')
 const c = (id: string, caption: string, type: ColumnType, unit: ColumnUnit, visible: boolean, parity: Parity, note: string, capability?: Capability): ColumnSpec =>
   capability ? { id, caption, type, unit, visible, parity, note, capability } : { id, caption, type, unit, visible, parity, note }
 
@@ -162,7 +185,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
     textColumns: ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status'],
     facetColumns: ['login', 'database', 'application', 'hostName', 'waitType', 'command', 'status'],
     columns: [
-      c('sessionId', 'Session ID', 'int', 'id', true, 'ssms', 'session_id; one row per session, MARS requests folded in.'),
+      c('sessionId', 'Session ID', 'int', 'id', true, 'ssms', 'session_id; one row per session. Of its MARS requests a blocked one, else the lowest, fills the request columns, and CPU and reads add them all.'),
       c('status', 'Status', 'text', '', true, 'fix', 'The request\'s status, else the session\'s; "rolling back 42 %" during KILLED/ROLLBACK and "sleeping · 1 open tran" for an idle session with an open transaction. SSMS\'s Task State shows neither.'),
       c('login', 'Login', 'text', '', true, 'ssms', 'login_name.'),
       c('database', 'Database', 'text', '', true, 'ssms', 'The request\'s database, else the session\'s.'),
@@ -170,11 +193,11 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('application', 'Application', 'text', '', true, 'ssms', 'program_name.'),
       c('waitType', 'Wait Type', 'text', '', true, 'ssms', 'The request\'s wait type; for a parallel request, the longest blocking wait of its tasks.'),
       c('waitTimeMs', 'Wait Time (ms)', 'bigint', 'ms', true, 'ssms', 'The request\'s current wait.'),
-      c('waitResource', 'Wait Resource', 'text', '', true, 'ssms', 'wait_resource, else the blocking task\'s resource description (512 characters).'),
+      c('waitResource', 'Wait Resource', 'text', '', true, 'ssms', `wait_resource, else the blocking task's resource description (${number(activityLimits.resourceChars)} characters).`),
       c('blockedBy', 'Blocked By', 'int', 'id', true, 'fix', 'The session it waits on (its longest blocking wait); negative ids show their meaning. SSMS lists a session once per session it blocks.'),
       c('headBlocker', 'Head Blocker', 'bool', '', true, 'fix', 'Blocks another session and waits on none. SSMS marks it on each duplicate row.'),
       c('blocking', 'Blocking', 'int', 'count', true, 'new', 'Sessions downstream of it in its blocking chain.'),
-      c('cpuRate', 'CPU (ms/s)', 'decimal', 'ms/s', true, 'new', 'CPU used per second over the interval: the session\'s CPU plus its running request\'s.'),
+      c('cpuRate', 'CPU (ms/s)', 'decimal', 'ms/s', true, 'new', 'CPU used per second over the interval: the session\'s CPU plus its running requests\'.'),
       c('totalCpuMs', 'Total CPU (ms)', 'bigint', 'ms', true, 'ssms', 'The session\'s CPU since login.'),
       c('physicalIoMb', 'Physical I/O (MB)', 'decimal', 'MB', true, 'ssms', 'Pages read and written since login, in MB (cumulative).'),
       c('logicalReadsRate', 'Logical Reads/s', 'decimal', '/s', true, 'new', 'Logical reads per second over the interval.'),
@@ -226,7 +249,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
     defaultSort: [{ column: 'cpuMs', descending: true }],
     textColumns: ['query', 'database', 'waitType', 'status'],
     columns: [
-      c('query', 'Query', 'text', '', true, 'ssms', 'The running statement, one line, 4,000 characters.'),
+      c('query', 'Query', 'text', '', true, 'ssms', `The running statement, one line, ${number(activityLimits.statementChars)} characters.`),
       c('sessionId', 'Session ID', 'int', 'id', true, 'ssms', 'session_id.'),
       c('requestId', 'Request ID', 'int', 'id', false, 'new', 'request_id.'),
       c('startTime', 'Start Time', 'datetime', '', false, 'new', 'When the request started; with the ids it identifies the request.'),
@@ -282,7 +305,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('maxWaitMs', 'Max Wait (ms)', 'bigint', 'ms', true, 'new', 'The longest wait since SQL Server started.'),
       c('currentWaiters', 'Current Waiters', 'int', 'count', true, 'new', 'Tasks waiting on it now.'),
       c('cumulativeSeconds', 'Cumulative (sec)', 'decimal', 's', true, 'new', 'Since SQL Server started or the statistics were cleared.'),
-      c('benign', 'Benign', 'bool', '', true, 'new', 'An idle or background wait (Varia\'s benign list); hidden by Hide benign waits.')
+      c('benign', 'Benign', 'bool', '', true, 'new', 'A wait for work: on Varia\'s benign list or in Query Store\'s Idle category. It never counts in Waiting Tasks, and Hide benign waits hides it.')
     ]
   },
   files: {
@@ -313,7 +336,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
     defaultSort: [{ column: 'cpuRate', descending: true }],
     textColumns: ['query', 'database'],
     columns: [
-      c('query', 'Query', 'text', '', true, 'ssms', 'A statement of the group (its most recent execution), 4,000 characters.'),
+      c('query', 'Query', 'text', '', true, 'ssms', `A statement of the group (its most recent execution), ${number(activityLimits.statementChars)} characters.`),
       c('executionsPerMinute', 'Executions/min', 'decimal', '/min', true, 'ssms', 'Executions per minute over the sample window.'),
       c('cpuRate', 'CPU (ms/sec)', 'decimal', 'ms/s', true, 'ssms', 'Worker time per second over the sample window.'),
       c('avgCpuMs', 'Avg CPU (ms)', 'decimal', 'ms', true, 'new', 'Worker time per execution.'),
@@ -355,32 +378,44 @@ export const defaultPanes = { primary: 'processes', secondary: 'waits' } as cons
 
 /** How a series turns samples into values (D-live's counter kinds); `scale` multiplies the result. */
 export type SeriesKind = 'gauge' | 'rate' | 'msPerSecond' | 'ratio' | 'cpuPercent'
-export interface SeriesSpec { readonly label: string; readonly unit: ColumnUnit | 'tasks' | 'per scheduler'; readonly kind: SeriesKind; readonly scale?: number; readonly note: string }
+/** The live catalogue's series units (liveUnits in src/shared/live/catalog.ts) plus `seconds`, which the monitor's probes
+ *  add to it for page life expectancy. A series sends its kind's value in its live unit; the monitor shows it times `scale`
+ *  in `unit` (bytes per second as MB/s, wait ms per second as tasks). */
+export const activityLiveUnits = ['perSecond', 'percent', 'ms', 'msPerSecond', 'bytesPerSecond', 'count', 'seconds'] as const
+export type ActivityLiveUnit = typeof activityLiveUnits[number]
+export interface SeriesSpec {
+  readonly label: string
+  readonly unit: ColumnUnit | 'tasks' | 'per scheduler'
+  readonly liveUnit: ActivityLiveUnit
+  readonly kind: SeriesKind
+  readonly scale?: number
+  readonly note: string
+}
 export const seriesSpecs: { readonly [id: string]: SeriesSpec } = {
-  cpuPercent: { label: 'SQL Server CPU', unit: '%', kind: 'cpuPercent', note: 'CPU used by SQL Server\'s schedulers (non-preemptive work), from sys.dm_os_schedulers; no WMI.' },
-  schedulerDelay: { label: 'Scheduler delay', unit: 'ms/s', kind: 'msPerSecond', note: 'Time tasks waited to be scheduled, per second.' },
-  waitingTasks: { label: 'Waiting tasks', unit: 'tasks', kind: 'msPerSecond', scale: 0.001, note: 'Average tasks waiting: wait time less signal wait of every non-benign type, per second, divided by 1,000.' },
-  ioMegabytes: { label: 'Database I/O', unit: 'MB/s', kind: 'rate', scale: 1 / 1_048_576, note: 'Bytes read and written by every database file, per second.' },
-  readLatency: { label: 'Read latency', unit: 'ms', kind: 'ratio', note: 'Read stall per read in the interval.' },
-  writeLatency: { label: 'Write latency', unit: 'ms', kind: 'ratio', note: 'Write stall per write in the interval.' },
-  batchRequests: { label: 'Batch requests', unit: '/s', kind: 'rate', note: 'Batch Requests/sec, a cumulative counter.' },
-  compilations: { label: 'Compilations', unit: '/s', kind: 'rate', note: 'SQL Compilations/sec.' },
-  recompilations: { label: 'Recompilations', unit: '/s', kind: 'rate', note: 'SQL Re-Compilations/sec.' },
-  blockedSessions: { label: 'Blocked sessions', unit: 'count', kind: 'gauge', note: 'Sessions waiting on another session now.' },
-  longestBlock: { label: 'Longest block', unit: 'ms', kind: 'gauge', note: 'The longest of those waits.' },
-  activeRequests: { label: 'Active requests', unit: 'count', kind: 'gauge', note: 'User sessions with a request now (the monitor\'s own left out).' },
-  userSessions: { label: 'User sessions', unit: 'count', kind: 'gauge', note: 'User sessions now (the monitor\'s own left out).' },
-  logins: { label: 'Logins', unit: '/s', kind: 'rate', note: 'Logins/sec.' },
-  runnablePerScheduler: { label: 'Runnable tasks', unit: 'per scheduler', kind: 'gauge', note: 'Tasks waiting for a CPU, per visible online scheduler.' },
-  workQueue: { label: 'Work queue', unit: 'count', kind: 'gauge', note: 'Tasks waiting for a worker thread (THREADPOOL risk).' },
-  grantsPending: { label: 'Memory grants pending', unit: 'count', kind: 'gauge', note: 'Queries waiting for a memory grant.' },
-  grantsOutstanding: { label: 'Memory grants outstanding', unit: 'count', kind: 'gauge', note: 'Queries holding a memory grant.' },
-  pageLifeExpectancy: { label: 'Page life expectancy', unit: 's', kind: 'gauge', note: 'Buffer Manager\'s page life expectancy.' },
-  deadlocks: { label: 'Deadlocks', unit: '/s', kind: 'rate', note: 'Number of Deadlocks/sec.' },
-  lockWaits: { label: 'Lock waits', unit: '/s', kind: 'rate', note: 'Lock Waits/sec.' },
-  'focus.cpuRate': { label: 'Session CPU', unit: 'ms/s', kind: 'msPerSecond', note: 'The Details flyout\'s session: its CPU per second.' },
-  'focus.logicalReadsRate': { label: 'Session logical reads', unit: '/s', kind: 'rate', note: 'The Details flyout\'s session: its logical reads per second.' },
-  'wait.signal': { label: 'Signal wait', unit: 'ms/s', kind: 'msPerSecond', note: 'Signal wait of every type, per second (CPU pressure).' }
+  cpuPercent: { label: 'SQL Server CPU', unit: '%', liveUnit: 'percent', kind: 'cpuPercent', note: 'CPU used by SQL Server\'s schedulers (non-preemptive work), from sys.dm_os_schedulers; no WMI.' },
+  schedulerDelay: { label: 'Scheduler delay', unit: 'ms/s', liveUnit: 'msPerSecond', kind: 'msPerSecond', note: 'Time tasks waited to be scheduled, per second.' },
+  waitingTasks: { label: 'Waiting tasks', unit: 'tasks', liveUnit: 'msPerSecond', kind: 'msPerSecond', scale: 0.001, note: 'Average tasks waiting: wait time less signal wait of every type that counts as waiting (not benign: neither Varia\'s benign list nor Query Store\'s Idle category), per second, divided by 1,000.' },
+  ioMegabytes: { label: 'Database I/O', unit: 'MB/s', liveUnit: 'bytesPerSecond', kind: 'rate', scale: 1 / 1_048_576, note: 'Bytes read and written by every database file, per second.' },
+  readLatency: { label: 'Read latency', unit: 'ms', liveUnit: 'ms', kind: 'ratio', note: 'Read stall per read in the interval.' },
+  writeLatency: { label: 'Write latency', unit: 'ms', liveUnit: 'ms', kind: 'ratio', note: 'Write stall per write in the interval.' },
+  batchRequests: { label: 'Batch requests', unit: '/s', liveUnit: 'perSecond', kind: 'rate', note: 'Batch Requests/sec, a cumulative counter.' },
+  compilations: { label: 'Compilations', unit: '/s', liveUnit: 'perSecond', kind: 'rate', note: 'SQL Compilations/sec.' },
+  recompilations: { label: 'Recompilations', unit: '/s', liveUnit: 'perSecond', kind: 'rate', note: 'SQL Re-Compilations/sec.' },
+  blockedSessions: { label: 'Blocked sessions', unit: 'count', liveUnit: 'count', kind: 'gauge', note: 'Sessions waiting on another session now.' },
+  longestBlock: { label: 'Longest block', unit: 'ms', liveUnit: 'ms', kind: 'gauge', note: 'The longest of those waits.' },
+  activeRequests: { label: 'Active requests', unit: 'count', liveUnit: 'count', kind: 'gauge', note: 'User sessions with a request now (the monitor\'s own left out).' },
+  userSessions: { label: 'User sessions', unit: 'count', liveUnit: 'count', kind: 'gauge', note: 'User sessions now (the monitor\'s own left out).' },
+  logins: { label: 'Logins', unit: '/s', liveUnit: 'perSecond', kind: 'rate', note: 'Logins/sec.' },
+  runnablePerScheduler: { label: 'Runnable tasks', unit: 'per scheduler', liveUnit: 'count', kind: 'gauge', note: 'Tasks waiting for a CPU, per visible online scheduler.' },
+  workQueue: { label: 'Work queue', unit: 'count', liveUnit: 'count', kind: 'gauge', note: 'Tasks waiting for a worker thread (THREADPOOL risk).' },
+  grantsPending: { label: 'Memory grants pending', unit: 'count', liveUnit: 'count', kind: 'gauge', note: 'Queries waiting for a memory grant.' },
+  grantsOutstanding: { label: 'Memory grants outstanding', unit: 'count', liveUnit: 'count', kind: 'gauge', note: 'Queries holding a memory grant.' },
+  pageLifeExpectancy: { label: 'Page life expectancy', unit: 's', liveUnit: 'seconds', kind: 'gauge', note: 'Buffer Manager\'s page life expectancy.' },
+  deadlocks: { label: 'Deadlocks', unit: '/s', liveUnit: 'perSecond', kind: 'rate', note: 'Number of Deadlocks/sec.' },
+  lockWaits: { label: 'Lock waits', unit: '/s', liveUnit: 'perSecond', kind: 'rate', note: 'Lock Waits/sec.' },
+  'focus.cpuRate': { label: 'Session CPU', unit: 'ms/s', liveUnit: 'msPerSecond', kind: 'msPerSecond', note: 'The Details flyout\'s session: its CPU per second.' },
+  'focus.logicalReadsRate': { label: 'Session logical reads', unit: '/s', liveUnit: 'perSecond', kind: 'rate', note: 'The Details flyout\'s session: its logical reads per second.' },
+  'wait.signal': { label: 'Signal wait', unit: 'ms/s', liveUnit: 'msPerSecond', kind: 'msPerSecond', note: 'Signal wait of every type, per second (CPU pressure).' }
 }
 /** The series a probe sends, with `wait.*` expanded to one per wait category. */
 export const probeSeries = (probe: ActivityProbe): string[] => probeSpecs[probe].series.flatMap(id => id === 'wait.*' ? waitCategoryIds.map(category => `wait.${category}`) : [id])
@@ -424,7 +459,8 @@ export const tileSpecs: readonly TileSpec[] = [
 ]
 /** At most this many tiles have their chart expanded at once. */
 export const maxExpandedTiles = 2
-/** The Resource Waits chart: the five largest categories, each a categorical hue, and the rest as Other (gray). */
+/** The Resource Waits chart: the five largest categories, each a categorical hue, and the rest as Other (gray). Benign
+ *  categories (Idle) are never charted: their time is threads waiting for work. */
 export const waitsChartSeries = 5
 
 /** Processes' view chips (one at a time) and toggles. */
@@ -436,7 +472,7 @@ export const viewChipTitles: { readonly [V in ViewChip]: string } = {
 export const viewChipNotes: { readonly [V in ViewChip]: string } = {
   all: 'Every session the toggles allow.',
   active: 'Sessions with a request.',
-  blocked: 'Sessions waiting on another session (or on an orphaned DTC transaction, deferred recovery or a latch owner).',
+  blocked: 'Sessions waiting on another session (a wait on a negative id, such as a latch owner, is not one).',
   blocking: 'Sessions another session waits on.',
   idleOpenTransaction: 'Sessions with no request and an open transaction: the classic forgotten transaction.',
   rollingBack: 'Sessions rolling back after KILL.'
@@ -445,6 +481,10 @@ export const sessionToggles = {
   showSystem: { title: 'System sessions', setting: 'activityMonitor.showSystemSessions', default: false },
   showVaria: { title: 'Varia\'s own', setting: 'activityMonitor.showVariaSessions', default: false }
 } as const
+/** Resource Waits' toggle (both of its tables): leaves out benign rows, the Idle category and its wait types. */
+export const waitToggles = {
+  hideBenign: { title: 'Hide benign waits', tables: ['waitCategories', 'waitTypes'], default: true }
+} as const satisfies { readonly [toggle: string]: { readonly title: string; readonly tables: readonly ActivityTable[]; readonly default: boolean } }
 
 /** Recent Expensive Queries' rank chips and the column each sorts by. */
 export const rankChips = {
@@ -555,9 +595,15 @@ export const waitExceptions: readonly { readonly name: string; readonly category
   { name: 'HADR_THROTTLE_LOG_RATE_GOVERNOR', category: 'logRateGovernor', note: 'Not Replication: log rate governance.' }
 ]
 /**
- * Varia's benign list: background and idle waits that only say a thread is waiting for work. They count in Idle, never
- * in Waiting Tasks, and Hide benign waits hides them. Matched before everything else; AM3 completes the list with the
- * live coverage check.
+ * Categories every wait type of which is benign: Query Store's Idle (LAZYWRITER_SLEEP, LOGMGR_QUEUE, SLEEP_%, ...), which
+ * accrue about 11 s of wait per second on an idle SQL Server 2025. A benign wait never counts in Waiting Tasks, is never
+ * charted, and Hide benign waits hides it.
+ */
+export const benignCategories: readonly string[] = ['idle']
+/**
+ * Varia's benign list: background and idle waits outside Query Store's Idle names that only say a thread is waiting for
+ * work. They count in Idle, and are benign like the rest of it. Matched before everything else; AM3 completes the list with
+ * the live coverage check.
  */
 export const benignWaits: readonly { readonly name: string; readonly reason: string }[] = [
   { name: 'AZURE_IMDS_VERSIONS', reason: 'SQL Server 2022 and later asking the Azure instance metadata service at startup.' },
@@ -618,27 +664,16 @@ for (const exception of waitExceptions) byName.set(exception.name, exception.cat
 const benignNames = new Set(benignWaits.map(wait => wait.name))
 const prefixes = waitCategories.flatMap(category => category.patterns.map(pattern => ({ prefix: pattern.slice(0, -1), category: category.id })))
 /** A wait type's category: benign names (Idle), then the exceptions and exact names, then prefixes in Query Store's order;
- *  anything else is Unknown, which the monitor shows rather than drops. The backend applies the same rules to the
- *  embedded copy. */
+ *  anything else is Unknown, which the monitor shows rather than drops. It is benign on Varia's list or in a benign
+ *  category. The backend applies the same rules to the embedded copy. */
 export function waitCategoryOf(waitType: string): WaitClass {
   if (benignNames.has(waitType)) return { category: 'idle', benign: true }
-  const exact = byName.get(waitType)
-  if (exact) return { category: exact, benign: false }
-  return { category: prefixes.find(entry => waitType.startsWith(entry.prefix))?.category ?? 'unknown', benign: false }
+  const category = byName.get(waitType) ?? prefixes.find(entry => waitType.startsWith(entry.prefix))?.category ?? 'unknown'
+  return { category, benign: benignCategories.includes(category) }
 }
-
-/** Bounds of the monitor's data and requests (D-live's limits apply on top). */
-export const activityLimits = {
-  monitorsPerConnection: 1, probesPerMonitor: 4,
-  /** Rows a table keeps: more set `truncated`. The SQL reads one more to know. */
-  sessions: 10_000, blockingEdges: 20_000, blockingRows: 2_000, blockingDepth: 32, activeQueries: 100, waitTypes: 2_000, files: 10_000, queryStatsRows: 20_000,
-  queryDeltaKeys: 20_000, shownHashes: 200, textCache: 2_000, textBatch: 50, textBatchesPerTick: 4, leadBlockerBatches: 20,
-  statementChars: 4_000, inputBufferChars: 4_000, resourceChars: 512, lastBatchChars: 200,
-  facetColumns: 7, facetValues: 100, facetChars: 128,
-  filterText: 400, columnFilters: 8, columnFilterValues: 50, columnFilterChars: 256, columnsPerProjection: 64,
-  detailsChars: 1_000_000, detailsWaits: 20, detailsTransactions: 50, detailsLocks: 1_000, killSessions: 64,
-  sessionId: 32_767
-} as const
+/** Whether a wait type's time counts in Waiting Tasks (and the Resource Waits chart): every type that is not benign,
+ *  Unknown ones too. */
+export const countsAsWaiting = (waitType: string): boolean => !waitCategoryOf(waitType).benign
 
 // Compact sorted-key JSON, as in actionsCatalogJson(), so each entry diffs as one line.
 const sortKeys = (value: unknown): unknown => Array.isArray(value) ? value.map(sortKeys)
@@ -653,12 +688,15 @@ export function activityCatalogJson(): string {
     '{',
     `  "bands": ${line(activityBands)},`,
     `  "benign": ${line(benignWaits.map(wait => wait.name))},`,
+    `  "benignCategories": ${line(benignCategories)},`,
     `  "blockerLabels": ${line(blockerLabels)},`,
     `  "editions": ${line(Object.fromEntries(Object.entries(activityEditions).map(([id, spec]) => [id, { available: spec.available, editions: spec.editions }])))},`,
     `  "exceptions": ${line(waitExceptions.map(({ name, category }) => ({ name, category })))},`,
+    `  "hideBenign": ${line({ default: waitToggles.hideBenign.default, tables: waitToggles.hideBenign.tables })},`,
     `  "limits": ${line(activityLimits)},`,
+    `  "loadGuard": ${line(activityLoadGuard)},`,
     `  "poolSuffix": ${line(activityPoolSuffix)},`,
-    `  "probes": ${block(activityProbes.map(probe => { const spec = probeSpecs[probe]; return { probe, kind: spec.kind, tables: spec.tables, series: probeSeries(probe), defaultIntervalMs: spec.defaultIntervalMs, minIntervalMs: spec.minIntervalMs, maxIntervalMs: spec.maxIntervalMs, floorMs: spec.floorMs, budgetMs: spec.budgetMs, minGapMs: spec.minGapMs, maxDutyCycle: spec.maxDutyCycle, maxdop1: spec.maxdop1 } }))},`,
+    `  "probes": ${block(activityProbes.map(probe => { const spec = probeSpecs[probe]; return { probe, kind: spec.kind, tables: spec.tables, series: probeSeries(probe), defaultIntervalMs: spec.defaultIntervalMs, minIntervalMs: spec.minIntervalMs, maxIntervalMs: spec.maxIntervalMs, floorMs: spec.floorMs, budgetMs: spec.budgetMs, minGapMs: spec.minGapMs, maxDutyCycle: spec.maxDutyCycle, maxdop1: spec.maxdop1, filterMode: spec.filterMode, hidden: spec.hidden } }))},`,
     `  "source": ${line(activitySource)},`,
     `  "tables": ${block(activityTables.map(table => {
       const spec = tableSpecs[table]

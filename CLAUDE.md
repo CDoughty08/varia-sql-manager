@@ -157,9 +157,10 @@ pages, limits, error codes, display formats, benchmarks).
 - Activity Monitor structure (probes, panes, tables and columns, tiles, view chips, wait categories, limits) lives only in
   `src/shared/activity/catalog.ts`; after changing it, regenerate `docs/activity-monitor.md` and the backend's embedded
   `Activity/activity-catalog.json` with `npx vitest run tests/activity-catalog.test.ts -u`. Its SQL is constant text per probe,
-  statement, band and capability in `Activity/ActivitySql.cs`: DMVs only, values as parameters, no metadata built-ins, temp
-  tables, `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered; the offline lint renders and checks every variant.
-  Filters run in backend memory over a sample (`ActivityFilter`), never in SQL.
+  statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
+  names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
+  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered; the offline lint renders and checks every variant. Filters run
+  in backend memory over a sample (`ActivityFilter`), never in SQL.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

@@ -35,6 +35,8 @@ internal static partial class ActivitySql
     private static ActivityParameter Int(string name) => new(name, SqlDbType.Int);
     private static ActivityParameter Handle(string name) => new(name, SqlDbType.VarBinary, 64);
     private static readonly HashSet<string> NoLiterals = [];
+    // Text sizes and the lead blockers' TOP come from the catalogue's limits, so docs/activity-monitor.md states what runs.
+    private static long Limit(string key) => ActivityCatalog.Current.Limit(key);
 
     // --- Statements -----------------------------------------------------------------------------------------------------
 
@@ -95,40 +97,51 @@ internal static partial class ActivitySql
     private static IReadOnlyList<ActivityStatement> Sessions() =>
     [
         Clock("activity.sessions"),
-        // One row per session and request (MARS requests fold into their session in C#); @rowCap is the cap plus one, to see truncation.
+        // One row per session, so @rowCap (the cap plus one, to see truncation) counts sessions. MARS requests fold here: a
+        // blocked request (else the lowest) gives the request columns, and the request count, CPU and reads cover them all.
+        // Sessions in a blocking wait, as waiter or blocker, come first and then sessions with a request, so truncation drops
+        // idle sessions and never a session the edges name.
         new("activity.sessions", "sessions",
             "SELECT TOP (@rowCap) s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
             + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
             + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
             + "       g.name AS workload_group, c.client_net_address, c.net_transport, c.encrypt_option, c.auth_scheme,\n"
-            + "       r.request_id, r.status AS request_status, r.command, r.start_time, r.total_elapsed_time, r.cpu_time AS request_cpu_ms,\n"
-            + "       r.logical_reads AS request_logical_reads, r.reads AS request_reads, r.writes AS request_writes, r.blocking_session_id, r.wait_type, r.wait_time,\n"
+            + "       r.request_id, r.request_count, r.lowest_request_id, r.status AS request_status, r.command, r.start_time, r.total_elapsed_time, r.request_cpu_ms,\n"
+            + "       r.request_logical_reads, r.request_reads, r.request_writes, r.blocking_session_id, r.wait_type, r.wait_time,\n"
             + "       r.wait_resource, r.last_wait_type, r.open_transaction_count AS request_open_transactions, r.percent_complete, r.granted_query_memory,\n"
             + "       r.dop, r.query_hash, r.database_id AS request_database_id\n"
             + "FROM sys.dm_exec_sessions AS s\n"
             + "LEFT JOIN sys.dm_exec_connections AS c ON c.session_id = s.session_id AND c.parent_connection_id IS NULL\n"
-            + "LEFT JOIN sys.dm_exec_requests AS r ON r.session_id = s.session_id\n"
+            + "LEFT JOIN (SELECT q.session_id, q.request_id, q.status, q.command, q.start_time, q.total_elapsed_time, q.blocking_session_id, q.wait_type, q.wait_time,\n"
+            + "                  q.wait_resource, q.last_wait_type, q.open_transaction_count, q.percent_complete, q.granted_query_memory, q.dop, q.query_hash, q.database_id,\n"
+            + "                  ROW_NUMBER() OVER (PARTITION BY q.session_id ORDER BY CASE WHEN q.blocking_session_id > 0 THEN 0 ELSE 1 END, q.request_id) AS request_rank,\n"
+            + "                  COUNT(*) OVER (PARTITION BY q.session_id) AS request_count, MIN(q.request_id) OVER (PARTITION BY q.session_id) AS lowest_request_id,\n"
+            + "                  SUM(q.cpu_time) OVER (PARTITION BY q.session_id) AS request_cpu_ms, SUM(q.logical_reads) OVER (PARTITION BY q.session_id) AS request_logical_reads,\n"
+            + "                  SUM(q.reads) OVER (PARTITION BY q.session_id) AS request_reads, SUM(q.writes) OVER (PARTITION BY q.session_id) AS request_writes\n"
+            + "           FROM sys.dm_exec_requests AS q) AS r ON r.session_id = s.session_id AND r.request_rank = 1\n"
+            + "LEFT JOIN (SELECT DISTINCT v.session_id FROM sys.dm_os_waiting_tasks AS w CROSS APPLY (VALUES (w.session_id), (w.blocking_session_id)) AS v(session_id)\n"
+            + "           WHERE w.session_id IS NOT NULL AND w.blocking_session_id IS NOT NULL AND w.blocking_session_id <> w.session_id) AS e ON e.session_id = s.session_id\n"
             + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n"
             + "LEFT JOIN sys.dm_resource_governor_workload_groups AS g ON g.group_id = s.group_id\n"
-            + "ORDER BY s.session_id, r.request_id;",
+            + "ORDER BY CASE WHEN e.session_id IS NOT NULL OR r.blocking_session_id <> 0 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END, s.session_id;",
             ["session_id", "login_time", "host_process_id", "is_user_process", "login_name", "original_login_name", "host_name", "program_name", "client_interface_name", "status",
                 "database_id", "database_name", "cpu_time", "reads", "writes", "logical_reads", "memory_usage", "open_transaction_count", "last_request_start_time", "last_request_end_time",
-                "transaction_isolation_level", "workload_group", "client_net_address", "net_transport", "encrypt_option", "auth_scheme", "request_id", "request_status", "command", "start_time",
-                "total_elapsed_time", "request_cpu_ms", "request_logical_reads", "request_reads", "request_writes", "blocking_session_id", "wait_type", "wait_time", "wait_resource",
-                "last_wait_type", "request_open_transactions", "percent_complete", "granted_query_memory", "dop", "query_hash", "request_database_id"],
+                "transaction_isolation_level", "workload_group", "client_net_address", "net_transport", "encrypt_option", "auth_scheme", "request_id", "request_count", "lowest_request_id",
+                "request_status", "command", "start_time", "total_elapsed_time", "request_cpu_ms", "request_logical_reads", "request_reads", "request_writes", "blocking_session_id", "wait_type",
+                "wait_time", "wait_resource", "last_wait_type", "request_open_transactions", "percent_complete", "granted_query_memory", "dop", "query_hash", "request_database_id"],
             [Int("@rowCap")], ["sessions", "blocking", "activeQueries", "focus.cpuRate", "focus.logicalReadsRate"], NoLiterals),
         // Task-level blocking waits; a parallel query's waits on itself are left out.
         new("activity.sessions", "edges",
             "SELECT TOP (@edgeCap) w.session_id, w.exec_context_id, w.blocking_session_id, w.blocking_exec_context_id, w.wait_type, w.wait_duration_ms,\n"
-            + "       LEFT(w.resource_description, 512) AS resource_description\n"
+            + $"       LEFT(w.resource_description, {Limit("resourceChars")}) AS resource_description\n"
             + "FROM sys.dm_os_waiting_tasks AS w\n"
             + "WHERE w.session_id IS NOT NULL AND w.blocking_session_id IS NOT NULL AND w.blocking_session_id <> w.session_id\n"
             + "ORDER BY w.wait_duration_ms DESC, w.session_id, w.exec_context_id;",
             ["session_id", "exec_context_id", "blocking_session_id", "blocking_exec_context_id", "wait_type", "wait_duration_ms", "resource_description"],
             [Int("@edgeCap")], ["sessions", "blocking"], NoLiterals),
-        // The last batch of lead blockers (blockers no session blocks), at most 20.
+        // The last batch of lead blockers (blockers no session blocks), at most leadBlockerBatches.
         new("activity.sessions", "leadBatches",
-            "SELECT TOP (20) b.blocking_session_id AS session_id, ib.event_type, LEFT(ib.event_info, 4000) AS event_info\n"
+            $"SELECT TOP ({Limit("leadBlockerBatches")}) b.blocking_session_id AS session_id, ib.event_type, LEFT(ib.event_info, {Limit("inputBufferChars")}) AS event_info\n"
             + "FROM (SELECT DISTINCT w.blocking_session_id FROM sys.dm_os_waiting_tasks AS w WHERE w.blocking_session_id > 0 AND w.blocking_session_id <> w.session_id) AS b\n"
             + "CROSS APPLY sys.dm_exec_input_buffer(b.blocking_session_id, NULL) AS ib\n"
             + "WHERE NOT EXISTS (SELECT 1 FROM sys.dm_os_waiting_tasks AS x\n"
@@ -142,7 +155,7 @@ internal static partial class ActivitySql
             + "       mg.requested_memory_kb, mg.granted_memory_kb, mg.required_memory_kb, mg.used_memory_kb, mg.max_used_memory_kb, mg.wait_time_ms AS grant_wait_ms,\n"
             + "       r.query_hash, r.plan_handle, r.statement_start_offset, r.statement_end_offset,\n"
             + "       LEFT(SUBSTRING(t.text, r.statement_start_offset / 2 + 1,\n"
-            + "            CASE WHEN r.statement_end_offset = -1 THEN 2147483647 ELSE (r.statement_end_offset - r.statement_start_offset) / 2 + 1 END), 4000) AS statement_text\n"
+            + $"            CASE WHEN r.statement_end_offset = -1 THEN 2147483647 ELSE (r.statement_end_offset - r.statement_start_offset) / 2 + 1 END), {Limit("statementChars")}) AS statement_text\n"
             + "FROM sys.dm_exec_requests AS r\n"
             + "JOIN sys.dm_exec_sessions AS s ON s.session_id = r.session_id AND s.is_user_process = 1\n"
             + "LEFT JOIN sys.databases AS d ON d.database_id = r.database_id\n"
@@ -200,7 +213,7 @@ internal static partial class ActivitySql
         var slots = string.Join(",\n       ", Enumerable.Range(0, TextSlots).Select(slot => $"({slot}, @h{slot}, @p{slot}, @s{slot}, @e{slot})"));
         var parameters = Enumerable.Range(0, TextSlots).SelectMany(slot => new[] { Handle($"@h{slot}"), Handle($"@p{slot}"), Int($"@s{slot}"), Int($"@e{slot}") }).ToList();
         var text = new ActivityStatement("activity.queries", "text",
-            "SELECT h.slot, LEFT(SUBSTRING(t.text, h.s / 2 + 1, CASE WHEN h.e = -1 THEN 2147483647 ELSE (h.e - h.s) / 2 + 1 END), 4000) AS statement_text,\n"
+            $"SELECT h.slot, LEFT(SUBSTRING(t.text, h.s / 2 + 1, CASE WHEN h.e = -1 THEN 2147483647 ELSE (h.e - h.s) / 2 + 1 END), {Limit("statementChars")}) AS statement_text,\n"
             + "       pa.dbid, d.name AS database_name\n"
             + "FROM (VALUES " + slots + ") AS h(slot, handle, plan_handle, s, e)\n"
             + "OUTER APPLY sys.dm_exec_sql_text(h.handle) AS t\n"
@@ -249,6 +262,7 @@ internal static partial class ActivitySql
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     /// <summary>Metadata built-ins ignore the isolation level and LOCK_TIMEOUT; the others read or change state no sample may.</summary>
+    internal static IReadOnlyList<string> ForbiddenTokens => Forbidden;
     private static readonly string[] Forbidden =
     [
         .. CatalogSql.Builtins, "DB_NAME(", "FILE_NAME(", "OBJECT_ID(", "INDEXPROPERTY(", "SERVERPROPERTY(", "HAS_PERMS_BY_NAME(", "COL_LENGTH(", "sys.sysprocesses", "sys.sysperfinfo",
@@ -270,6 +284,9 @@ internal static partial class ActivitySql
     private static partial Regex Top();
     [GeneratedRegex(@"\bORDER\s+BY\b", RegexOptions.IgnoreCase)]
     private static partial Regex OrderBy();
+    // A window's ORDER BY orders no TOP; parentheses nest two deep inside one at most.
+    [GeneratedRegex(@"\bOVER\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)", RegexOptions.IgnoreCase)]
+    private static partial Regex OverClause();
     [GeneratedRegex(@"(?<!@)@(?!@)\w+")]
     private static partial Regex Variable();
 
@@ -290,7 +307,7 @@ internal static partial class ActivitySql
             if (!arg.Success) problems.Add("has a TOP without a parenthesised parameter or literal");
             else if (!arg.Value.StartsWith('@') && int.Parse(arg.Value, System.Globalization.CultureInfo.InvariantCulture) > 20) problems.Add("has a TOP literal above 20");
         }
-        if (OrderBy().Matches(code).Count < tops.Count) problems.Add("has a TOP without an ORDER BY");
+        if (OrderBy().Matches(OverClause().Replace(code, " ")).Count < tops.Count) problems.Add("has a TOP without an ORDER BY");
         if (ActivityCatalog.Current.Probes.TryGetValue(statement.Probe, out var probe))
         {
             if (probe.Maxdop1 && statement.Id != "clock" && !text.EndsWith("OPTION (MAXDOP 1);", StringComparison.Ordinal)) problems.Add("does not end with OPTION (MAXDOP 1)");

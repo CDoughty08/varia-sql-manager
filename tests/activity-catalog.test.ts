@@ -5,13 +5,13 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  activityBands, activityCapabilities, activityCatalogJson, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityPanes, activityPoolSuffix, activityProbes,
+  activityBands, activityCapabilities, activityCatalogJson, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityLiveUnits, activityLoadGuard, activityPanes, activityPoolSuffix, activityProbes,
   activitySource, activityTables, benignWaits, blockerLabels, defaultPanes, maxExpandedTiles, paneSpecs, probeIntervalMs, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, tableSpecs,
-  tileSpecs, variaSessionKinds, viewChips, viewChipTitles, waitCategories, waitCategoryIds, waitExceptions, waitsChartSeries
+  tileSpecs, variaSessionKinds, viewChips, viewChipTitles, waitCategories, waitCategoryIds, waitExceptions, waitsChartSeries, waitToggles
 } from '../src/shared/activity/catalog'
-import { renderActivityMonitorDocs } from '../src/shared/activity/docs'
+import { copyKeys, renderActivityMonitorDocs } from '../src/shared/activity/docs'
 import { activityFilterSchema } from '../src/shared/activity/schema'
-import { defaultRules, platforms, reservedReason } from '../src/shared/commands/keybindings'
+import { defaultRules, keybindingLabel, platforms, reservedReason } from '../src/shared/commands/keybindings'
 
 describe('activity monitor catalogue', () => {
   it('declares one live source with SSMS\'s panes in SSMS\'s order and four probes, each pane fed by its probe', () => {
@@ -47,6 +47,24 @@ describe('activity monitor catalogue', () => {
     expect([probeIntervalMs('activity.sessions', 1), probeIntervalMs('activity.resources', 2), probeIntervalMs('activity.resources', 10)]).toEqual([1_000, 5_000, 10_000])
     expect([probeIntervalMs('activity.queries', 2), probeIntervalMs('activity.queries', 2, 15), probeIntervalMs('activity.queries', 60, 15), probeIntervalMs('activity.queries', 2, 5)]).toEqual([30_000, 15_000, 60_000, 15_000])
     expect(probeSpecs['activity.queries']).toMatchObject({ minGapMs: 15_000, maxdop1: true, budgetMs: 10_000 })
+    expect(activityLoadGuard).toEqual({ slowSamples: 3, cheapSamples: 10 })
+  })
+  it('declares the live catalogue\'s per-probe fields, so contributing the probes to it is mechanical', () => {
+    // A probe without filterMode refuses filters in the live layer; the metrics probe has no tables to filter.
+    for (const probe of activityProbes) expect([probe, probeSpecs[probe].filterMode, probeSpecs[probe].hidden]).toEqual([probe, probeSpecs[probe].tables.length ? 'memory' : undefined, 'pause'])
+    // L1a's liveUnits plus seconds, which the activity probes add for page life expectancy.
+    expect(activityLiveUnits).toEqual(['perSecond', 'percent', 'ms', 'msPerSecond', 'bytesPerSecond', 'count', 'seconds'])
+    for (const [id, spec] of Object.entries(seriesSpecs)) expect(activityLiveUnits, id).toContain(spec.liveUnit)
+    expect(Object.entries(seriesSpecs).filter(([, spec]) => spec.liveUnit === 'seconds').map(([id]) => id)).toEqual(['pageLifeExpectancy'])
+    expect([seriesSpecs.ioMegabytes!.liveUnit, seriesSpecs.waitingTasks!.liveUnit, seriesSpecs.cpuPercent!.liveUnit]).toEqual(['bytesPerSecond', 'msPerSecond', 'percent'])
+  })
+  it('cites the results grid\'s copy keys as the commands catalogue binds them on each platform', () => {
+    for (const [id, labels] of Object.entries(copyKeys)) {
+      for (const platform of platforms) {
+        const rule = defaultRules(platform).find(entry => entry.command === id)
+        expect(rule && keybindingLabel(rule.chords, platform).text, `${id} ${platform}`).toBe(platform === 'darwin' ? labels.darwin : labels.other)
+      }
+    }
   })
   it('gives every column a unique id and caption, a unit unless it is text, a time or a flag, and keys, sorts, filters and facets that exist', () => {
     for (const table of activityTables) {
@@ -133,6 +151,10 @@ describe('activity monitor catalogue', () => {
     expect(ok({ table: 'sessions', view: 'blocked', showSystem: true, showVaria: false, text: 'app', columnFilters: [{ column: 'login', values: ['sa'] }, { column: 'database', blanks: true }] })).toBe(true)
     expect(viewChips.every(view => ok({ table: 'sessions', view }) && viewChipTitles[view].length > 0)).toBe(true)
     expect(ok({ table: 'files', text: 'tempdb' })).toBe(true)
+    // Hide benign waits: Resource Waits' two tables only, on by default.
+    expect([ok({ table: 'waitTypes', hideBenign: false }), ok({ table: 'waitCategories', hideBenign: true }), ok({ table: 'sessions', hideBenign: true }), ok({ table: 'files', hideBenign: false })])
+      .toEqual([true, true, false, false])
+    expect(waitToggles.hideBenign).toMatchObject({ tables: ['waitCategories', 'waitTypes'], default: true })
     for (const bad of [
       { table: 'files', view: 'all' }, { table: 'waitTypes', showSystem: true }, { table: 'sessions', view: 'sleeping' }, { table: 'nope' }, { table: 'sessions', extra: 1 },
       { table: 'sessions', text: 'x'.repeat(activityLimits.filterText + 1) }, { table: 'sessions', columnFilters: [{ column: 'sessionId', values: ['1'] }] },

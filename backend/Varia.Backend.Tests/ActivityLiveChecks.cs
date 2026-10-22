@@ -110,6 +110,53 @@ internal static class ActivityLiveChecks
         Console.WriteLine($"Activity Monitor: {unknown} wait types with time are Unknown on this server (shown, not dropped; AM3 completes the benign list).");
 
         await BlockingAsync(check, host, info, monitor, render);
+        await MarsAsync(check, host, info, monitor, render);
+    }
+
+    /// <summary>A MARS session with two requests at once is one Processes row, its requests folded.</summary>
+    private static async Task MarsAsync(Action<bool, string> check, IActionHost host, ConnectionInfo info, SqlConnection monitor, ActivityRender render)
+    {
+        var connection = host.Connection(info.Id);
+        connection.ConnectionString = new SqlConnectionStringBuilder(connection.ConnectionString) { MultipleActiveResultSets = true }.ConnectionString;
+        SqlCommand? streaming = null, delay = null;
+        SqlDataReader? reader = null;
+        Task? delayed = null;
+        try
+        {
+            await host.OpenAsync(connection, CancellationToken.None);
+            var spid = Convert.ToInt32(await Scalar(connection, "SELECT @@SPID;"));
+            // A result too large for the network buffers keeps its request open while one row is read.
+            streaming = new SqlCommand("SELECT a.object_id, b.name FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;", connection) { CommandTimeout = 60 };
+            reader = await streaming.ExecuteReaderAsync();
+            await reader.ReadAsync();
+            delay = new SqlCommand("WAITFOR DELAY '00:00:30';", connection) { CommandTimeout = 60 };
+            delayed = delay.ExecuteNonQueryAsync();
+            var statement = ActivitySql.Statements("activity.sessions", render).Single(item => item.Id == "sessions");
+            List<object?[]> Mine(Rows rows) => [.. rows.Values.Where(row => Convert.ToInt32(rows.Get(row, "session_id")) == spid)];
+            Rows sessions = new([], []);
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                sessions = await Read(monitor, statement, parameter => 10_001);
+                if (Mine(sessions) is [var only] && Convert.ToInt32(sessions.Get(only, "request_count") ?? 0) == 2 || Mine(sessions).Count > 1) break;
+                await Task.Delay(100);
+            }
+            var mine = Mine(sessions);
+            check(mine.Count == 1 && Convert.ToInt32(sessions.Get(mine[0], "request_count")) == 2 && sessions.Get(mine[0], "lowest_request_id") is not null,
+                $"a MARS session running two requests is one sessions row with both counted ({mine.Count} rows)");
+        }
+        finally
+        {
+            delay?.Cancel();
+            streaming?.Cancel();
+            if (delayed is not null)
+            {
+                try { await delayed.WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception error) when (error is SqlException or TimeoutException or InvalidOperationException) { }
+            }
+            try { if (reader is not null) await reader.DisposeAsync(); } catch (SqlException) { }
+            if (delay is not null) await delay.DisposeAsync();
+            if (streaming is not null) await streaming.DisposeAsync();
+            await connection.DisposeAsync();
+        }
     }
 
     private static async Task BlockingAsync(Action<bool, string> check, IActionHost host, ConnectionInfo info, SqlConnection monitor, ActivityRender render)
@@ -136,6 +183,7 @@ internal static class ActivityLiveChecks
             for (var attempt = 0; attempt < 150 && !await condition(); attempt++) await Task.Delay(100);
         }
         var holder = default((SqlConnection Connection, int Spid));
+        long cleanupMs = 0;
         try
         {
             holder = await Open();
@@ -173,17 +221,30 @@ internal static class ActivityLiveChecks
             check(Convert.ToInt32(sessions.Get(holderRow, "open_transaction_count")) == 1 && sessions.Get(holderRow, "request_id") is null
                 && batches.Values.Any(row => Convert.ToInt32(batches.Get(row, "session_id")) == holder.Spid && ((string?)batches.Get(row, "event_info"))?.Contains(marker, StringComparison.Ordinal) == true),
                 "the idle lead blocker shows its open transaction (SSMS shows 0) and its last batch");
+            // Truncation drops idle sessions first: with room for little more than the sessions in blocking waits, the chain
+            // is still there (ordered by session id alone, the cap would keep SQL Server's own low ids instead).
+            var fresh = await Read(monitor, statements.Single(statement => statement.Id == "edges"), Cap);
+            var named = fresh.Values.SelectMany(row => new[] { Convert.ToInt32(fresh.Get(row, "session_id")), Convert.ToInt32(fresh.Get(row, "blocking_session_id")) }).Where(id => id > 0).ToHashSet();
+            var capped = await Read(monitor, statements.Single(statement => statement.Id == "sessions"), parameter => parameter.Name == "@rowCap" ? named.Count + 5 : Cap(parameter));
+            var kept = capped.Values.Select(row => Convert.ToInt32(capped.Get(row, "session_id"))).ToHashSet();
+            check(kept.Count == capped.Values.Count && waiters.Append(holder.Spid).All(kept.Contains), $"a sessions read capped at {named.Count + 5} sessions keeps this run's blocking chain");
         }
         finally
         {
+            // Cancel the waiters before the holder lets go: a waiter granted the session-owned lock would keep it, and each
+            // one behind it would wait out its lock timeout.
+            var cleanup = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var (command, task) in waiting) if (!task.IsCompleted) command.Cancel();
             if (holder.Connection is { State: ConnectionState.Open }) await Scalar(holder.Connection, "IF @@TRANCOUNT > 0 ROLLBACK;");
             foreach (var (command, task) in waiting)
             {
-                if (await Task.WhenAny(task, Task.Delay(10_000)) != task) command.Cancel();
-                try { await task; } catch (SqlException) { }
+                try { await task.WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception error) when (error is SqlException or TimeoutException or InvalidOperationException) { }
                 await command.DisposeAsync();
             }
             foreach (var connection in connections) await connection.DisposeAsync();
+            cleanupMs = cleanup.ElapsedMilliseconds;
         }
+        // Waiting out the waiters' lock timeouts took 20 s of every live run, under the lock other runs queue for.
+        check(cleanupMs < 10_000, $"the blocking chain's cleanup cancels its waiters at once ({cleanupMs} ms)");
     }
 }

@@ -5,9 +5,10 @@ namespace Varia.Backend.Activity;
 /// request's blocking_session_id, used only for a session no task wait names.</summary>
 internal readonly record struct BlockingWait(int Waiter, int Blocker, string? WaitType, long WaitMs, string? Resource, bool FromTask = true);
 
-/// <summary>A session in the blocking graph. <see cref="BlockedBy"/> is what it waits on longest (null for a lead
-/// blocker); <see cref="Downstream"/> counts the sessions below it in its chain; <see cref="Cycle"/> marks a cycle, which is
-/// cut at its lowest session id.</summary>
+/// <summary>A session in the blocking graph. <see cref="BlockedBy"/> is what it waits on longest, a session before a
+/// negative id (null for a session that waits on nothing); a lead blocker (<see cref="HeadBlocker"/>) blocks someone and
+/// waits on no session, though it may wait on a latch; <see cref="Downstream"/> counts the sessions below it in its chain;
+/// <see cref="Cycle"/> marks a cycle, which is cut at its lowest session id.</summary>
 internal sealed record BlockingNode(int SessionId, int? BlockedBy, string? WaitType, long WaitMs, string? WaitResource, bool HeadBlocker, int Downstream, bool Cycle);
 
 /// <summary>A Blocking pane row: a session at its depth in its chain (lead blockers at 0).</summary>
@@ -15,8 +16,9 @@ internal readonly record struct BlockingRow(BlockingNode Node, int Depth);
 
 /// <summary>The blocking chains of one sample, built in memory (no SQL, no state between samples). Each session appears once,
 /// under the session it has waited on longest, unlike SSMS, which lists a blocker once per session it blocks. A lead blocker
-/// blocks someone and waits on no one, whether or not it has a request (an idle session holding a transaction is the classic
-/// one).</summary>
+/// blocks someone and waits on no session, whether or not it has a request (an idle session holding a transaction is the
+/// classic one). A wait on a negative id is not blocking by a session: such a waiter keeps the id for Processes, but it is not
+/// counted as blocked and is a row only when it blocks someone.</summary>
 internal sealed class BlockingGraph
 {
     private BlockingGraph(Dictionary<int, BlockingNode> nodes, List<BlockingRow> rows, bool truncated)
@@ -26,14 +28,15 @@ internal sealed class BlockingGraph
         Truncated = truncated;
     }
 
-    /// <summary>Every session that blocks or waits, by session id.</summary>
+    /// <summary>Every session that blocks or waits (on a session or a negative id), by session id.</summary>
     public IReadOnlyDictionary<int, BlockingNode> Nodes { get; }
     /// <summary>The chains as rows: lead blockers by sessions downstream, then their longest wait, each followed by the
     /// sessions it blocks in the same order.</summary>
     public IReadOnlyList<BlockingRow> Rows { get; }
     /// <summary>A chain was deeper than the depth cap, or the rows passed the row cap.</summary>
     public bool Truncated { get; }
-    public int BlockedSessions => Nodes.Values.Count(node => node.BlockedBy is not null);
+    /// <summary>Sessions waiting on another session, as the overview's blocked statement counts them (blocking_session_id &gt; 0).</summary>
+    public int BlockedSessions => Nodes.Values.Count(node => node.BlockedBy > 0);
 
     public BlockingNode? Of(int sessionId) => Nodes.GetValueOrDefault(sessionId);
 
@@ -88,6 +91,8 @@ internal sealed class BlockingGraph
         var downstream = new Dictionary<int, int>();
         var longest = new Dictionary<int, long>();
         var roots = ids.Where(id => parent[id] is null).ToList();
+        // Only chains are rows: a root that blocks no one waits on a negative id alone (a latch, an orphaned DTC transaction).
+        var chains = roots.Where(id => children[id].Count > 0).ToList();
         // Post-order without recursion: a chain can be thousands deep.
         foreach (var root in roots)
         {
@@ -111,13 +116,13 @@ internal sealed class BlockingGraph
         {
             var has = chosen.TryGetValue(id, out var wait);
             return new BlockingNode(id, has ? wait.Blocker : null, has ? wait.WaitType : null, has ? wait.WaitMs : 0, has ? wait.Resource : null,
-                HeadBlocker: !has && children[id].Count > 0, downstream[id], cycle.Contains(id));
+                HeadBlocker: children[id].Count > 0 && !(has && wait.Blocker > 0), downstream[id], cycle.Contains(id));
         });
         List<int> Ordered(IEnumerable<int> list) => [.. list.OrderByDescending(id => downstream[id]).ThenByDescending(id => longest[id]).ThenBy(id => id)];
         var rows = new List<BlockingRow>();
         var truncated = false;
         var pending = new Stack<(int Id, int Depth)>();
-        foreach (var root in Enumerable.Reverse(Ordered(roots))) pending.Push((root, 0));
+        foreach (var root in Enumerable.Reverse(Ordered(chains))) pending.Push((root, 0));
         while (pending.Count > 0)
         {
             var (id, depth) = pending.Pop();

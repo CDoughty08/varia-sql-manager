@@ -16,18 +16,18 @@ so a probe waiting on a lock answers BLOCKED within a second and tries again. Ra
 clock (`ms_ticks`) in backend memory; no temp table, tempdb write or metadata function is used, and a probe whose panes
 are not shown is paused (no SQL).
 
-| Probe | Kind | Tables | Default | Lowest | At least | Budget | Refresh Now gap |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `activity.overview` | metrics | — | 2 s | 1 s | 1 s | 5 s | — |
-| `activity.sessions` | snapshot | `sessions`, `blocking`, `activeQueries` | 2 s | 1 s | 1 s | 5 s | — |
-| `activity.resources` | snapshot | `waitCategories`, `waitTypes`, `files` | 5 s | 2 s | 5 s | 5 s | — |
-| `activity.queries` | snapshot | `recentQueries` | 30 s | 15 s | 30 s | 10 s, MAXDOP 1 | 15 s |
+| Probe | Kind | Tables | Default | Lowest | At least | Budget | Refresh Now gap | Filters |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `activity.overview` | metrics | — | 2 s | 1 s | 1 s | 5 s | — | — |
+| `activity.sessions` | snapshot | `sessions`, `blocking`, `activeQueries` | 2 s | 1 s | 1 s | 5 s | — | In memory |
+| `activity.resources` | snapshot | `waitCategories`, `waitTypes`, `files` | 5 s | 2 s | 5 s | 5 s | — | In memory |
+| `activity.queries` | snapshot | `recentQueries` | 30 s | 15 s | 30 s | 10 s, MAXDOP 1 | 15 s | In memory |
 
 The monitor has one interval: 1 s, 2 s, 3 s, 5 s, 10 s, 15 s, 30 s, 60 s (default 2 s). Each probe uses it raised
 to its "At least" value; query statistics use their own setting (15 to 60 s, default 30 s), because reading the plan cache
 costs more. SSMS's 5, 30 and 60 minute intervals are left out: the charts keep history. When a probe's sample costs more
-than 20 % of its interval three times in a row, its interval doubles (up to 60 s) and the header says so; it steps back
-after ten cheap samples. Pause stops collecting (no SQL); the charts show a gap and Resume starts a new baseline.
+than 20 % of its interval 3 times in a row, its interval doubles (up to 60 s) and the header says so; it steps back
+after 10 cheap samples. Pause stops collecting (no SQL); the charts show a gap and Resume starts a new baseline.
 
 ## Panes
 
@@ -61,35 +61,35 @@ expanded, and the first two are expanded on first open.
 
 ### Series
 
-| Series | Label | Unit | Kind | Notes |
-| --- | --- | --- | --- | --- |
-| `cpuPercent` | SQL Server CPU | % | cpuPercent | CPU used by SQL Server's schedulers (non-preemptive work), from sys.dm_os_schedulers; no WMI. |
-| `schedulerDelay` | Scheduler delay | ms/s | msPerSecond | Time tasks waited to be scheduled, per second. |
-| `waitingTasks` | Waiting tasks | tasks | msPerSecond | Average tasks waiting: wait time less signal wait of every non-benign type, per second, divided by 1,000. |
-| `ioMegabytes` | Database I/O | MB/s | rate | Bytes read and written by every database file, per second. |
-| `readLatency` | Read latency | ms | ratio | Read stall per read in the interval. |
-| `writeLatency` | Write latency | ms | ratio | Write stall per write in the interval. |
-| `batchRequests` | Batch requests | /s | rate | Batch Requests/sec, a cumulative counter. |
-| `compilations` | Compilations | /s | rate | SQL Compilations/sec. |
-| `recompilations` | Recompilations | /s | rate | SQL Re-Compilations/sec. |
-| `blockedSessions` | Blocked sessions | count | gauge | Sessions waiting on another session now. |
-| `longestBlock` | Longest block | ms | gauge | The longest of those waits. |
-| `activeRequests` | Active requests | count | gauge | User sessions with a request now (the monitor's own left out). |
-| `userSessions` | User sessions | count | gauge | User sessions now (the monitor's own left out). |
-| `logins` | Logins | /s | rate | Logins/sec. |
-| `runnablePerScheduler` | Runnable tasks | per scheduler | gauge | Tasks waiting for a CPU, per visible online scheduler. |
-| `workQueue` | Work queue | count | gauge | Tasks waiting for a worker thread (THREADPOOL risk). |
-| `grantsPending` | Memory grants pending | count | gauge | Queries waiting for a memory grant. |
-| `grantsOutstanding` | Memory grants outstanding | count | gauge | Queries holding a memory grant. |
-| `pageLifeExpectancy` | Page life expectancy | s | gauge | Buffer Manager's page life expectancy. |
-| `deadlocks` | Deadlocks | /s | rate | Number of Deadlocks/sec. |
-| `lockWaits` | Lock waits | /s | rate | Lock Waits/sec. |
-| `focus.cpuRate` | Session CPU | ms/s | msPerSecond | The Details flyout's session: its CPU per second. |
-| `focus.logicalReadsRate` | Session logical reads | /s | rate | The Details flyout's session: its logical reads per second. |
-| `wait.signal` | Signal wait | ms/s | msPerSecond | Signal wait of every type, per second (CPU pressure). |
-| `wait.<category>` | Wait category | ms/s | msPerSecond | One per wait category (24): wait time less signal wait, per second. |
+| Series | Label | Unit | Sent as | Kind | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `cpuPercent` | SQL Server CPU | % | `percent` | cpuPercent | CPU used by SQL Server's schedulers (non-preemptive work), from sys.dm_os_schedulers; no WMI. |
+| `schedulerDelay` | Scheduler delay | ms/s | `msPerSecond` | msPerSecond | Time tasks waited to be scheduled, per second. |
+| `waitingTasks` | Waiting tasks | tasks | `msPerSecond` | msPerSecond | Average tasks waiting: wait time less signal wait of every type that counts as waiting (not benign: neither Varia's benign list nor Query Store's Idle category), per second, divided by 1,000. |
+| `ioMegabytes` | Database I/O | MB/s | `bytesPerSecond` | rate | Bytes read and written by every database file, per second. |
+| `readLatency` | Read latency | ms | `ms` | ratio | Read stall per read in the interval. |
+| `writeLatency` | Write latency | ms | `ms` | ratio | Write stall per write in the interval. |
+| `batchRequests` | Batch requests | /s | `perSecond` | rate | Batch Requests/sec, a cumulative counter. |
+| `compilations` | Compilations | /s | `perSecond` | rate | SQL Compilations/sec. |
+| `recompilations` | Recompilations | /s | `perSecond` | rate | SQL Re-Compilations/sec. |
+| `blockedSessions` | Blocked sessions | count | `count` | gauge | Sessions waiting on another session now. |
+| `longestBlock` | Longest block | ms | `ms` | gauge | The longest of those waits. |
+| `activeRequests` | Active requests | count | `count` | gauge | User sessions with a request now (the monitor's own left out). |
+| `userSessions` | User sessions | count | `count` | gauge | User sessions now (the monitor's own left out). |
+| `logins` | Logins | /s | `perSecond` | rate | Logins/sec. |
+| `runnablePerScheduler` | Runnable tasks | per scheduler | `count` | gauge | Tasks waiting for a CPU, per visible online scheduler. |
+| `workQueue` | Work queue | count | `count` | gauge | Tasks waiting for a worker thread (THREADPOOL risk). |
+| `grantsPending` | Memory grants pending | count | `count` | gauge | Queries waiting for a memory grant. |
+| `grantsOutstanding` | Memory grants outstanding | count | `count` | gauge | Queries holding a memory grant. |
+| `pageLifeExpectancy` | Page life expectancy | s | `seconds` | gauge | Buffer Manager's page life expectancy. |
+| `deadlocks` | Deadlocks | /s | `perSecond` | rate | Number of Deadlocks/sec. |
+| `lockWaits` | Lock waits | /s | `perSecond` | rate | Lock Waits/sec. |
+| `focus.cpuRate` | Session CPU | ms/s | `msPerSecond` | msPerSecond | The Details flyout's session: its CPU per second. |
+| `focus.logicalReadsRate` | Session logical reads | /s | `perSecond` | rate | The Details flyout's session: its logical reads per second. |
+| `wait.signal` | Signal wait | ms/s | `msPerSecond` | msPerSecond | Signal wait of every type, per second (CPU pressure). |
+| `wait.<category>` | Wait category | ms/s | `msPerSecond` | msPerSecond | One per wait category (24): wait time less signal wait, per second. |
 
-Resource Waits charts the 5 largest categories, each in its own colour, and the rest as Other.
+Resource Waits charts the 5 largest categories, each in its own colour, and the rest as Other; benign waits (Idle) are never charted.
 A rate has no value on the first sample, after Resume, after a reconnect, or when SQL Server restarted or its statistics
 were cleared; charts draw a gap there.
 
@@ -101,7 +101,7 @@ Probe `activity.sessions`; key `sessionId` (with `loginTime` for rates); at most
 
 | Column | Id | Type | Unit | Shown | Parity | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Session ID | `sessionId` | int | id | Yes | SSMS | session_id; one row per session, MARS requests folded in. |
+| Session ID | `sessionId` | int | id | Yes | SSMS | session_id; one row per session. Of its MARS requests a blocked one, else the lowest, fills the request columns, and CPU and reads add them all. |
 | Status | `status` | text | — | Yes | Fixed | The request's status, else the session's; "rolling back 42 %" during KILLED/ROLLBACK and "sleeping · 1 open tran" for an idle session with an open transaction. SSMS's Task State shows neither. |
 | Login | `login` | text | — | Yes | SSMS | login_name. |
 | Database | `database` | text | — | Yes | SSMS | The request's database, else the session's. |
@@ -113,7 +113,7 @@ Probe `activity.sessions`; key `sessionId` (with `loginTime` for rates); at most
 | Blocked By | `blockedBy` | int | id | Yes | Fixed | The session it waits on (its longest blocking wait); negative ids show their meaning. SSMS lists a session once per session it blocks. |
 | Head Blocker | `headBlocker` | bool | — | Yes | Fixed | Blocks another session and waits on none. SSMS marks it on each duplicate row. |
 | Blocking | `blocking` | int | count | Yes | New | Sessions downstream of it in its blocking chain. |
-| CPU (ms/s) | `cpuRate` | decimal | ms/s | Yes | New | CPU used per second over the interval: the session's CPU plus its running request's. |
+| CPU (ms/s) | `cpuRate` | decimal | ms/s | Yes | New | CPU used per second over the interval: the session's CPU plus its running requests'. |
 | Total CPU (ms) | `totalCpuMs` | bigint | ms | Yes | SSMS | The session's CPU since login. |
 | Physical I/O (MB) | `physicalIoMb` | decimal | MB | Yes | SSMS | Pages read and written since login, in MB (cumulative). |
 | Logical Reads/s | `logicalReadsRate` | decimal | /s | Yes | New | Logical reads per second over the interval. |
@@ -220,7 +220,7 @@ Probe `activity.resources`; key `waitType`; at most 2,000 rows. Default order: W
 | Max Wait (ms) | `maxWaitMs` | bigint | ms | Yes | New | The longest wait since SQL Server started. |
 | Current Waiters | `currentWaiters` | int | count | Yes | New | Tasks waiting on it now. |
 | Cumulative (sec) | `cumulativeSeconds` | decimal | s | Yes | New | Since SQL Server started or the statistics were cleared. |
-| Benign | `benign` | bool | — | Yes | New | An idle or background wait (Varia's benign list); hidden by Hide benign waits. |
+| Benign | `benign` | bool | — | Yes | New | A wait for work: on Varia's benign list or in Query Store's Idle category. It never counts in Waiting Tasks, and Hide benign waits hides it. |
 
 ### Data File I/O (`files`)
 
@@ -277,7 +277,7 @@ Filters run in the backend over the sample; the SQL never changes.
 | --- | --- | --- |
 | All | `all` | Every session the toggles allow. |
 | Active | `active` | Sessions with a request. |
-| Blocked | `blocked` | Sessions waiting on another session (or on an orphaned DTC transaction, deferred recovery or a latch owner). |
+| Blocked | `blocked` | Sessions waiting on another session (a wait on a negative id, such as a latch owner, is not one). |
 | Blocking | `blocking` | Sessions another session waits on. |
 | Idle with open transaction | `idleOpenTransaction` | Sessions with no request and an open transaction: the classic forgotten transaction. |
 | Rolling back | `rollingBack` | Sessions rolling back after KILL. |
@@ -286,6 +286,7 @@ Toggles: System sessions (`activityMonitor.showSystemSessions`, off by default),
 case-insensitively against Login, Database, Application, Host Name, Command, Wait Type, Status.
 Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for Login, Database, Application, Host Name, Wait Type, Command, Status.
 Several values in one column match any of them; filters on several columns must all match.
+Resource Waits has Hide benign waits (on by default), which leaves out benign wait types and the Idle category.
 
 Recent Expensive Queries ranks by CPU, Duration, Logical Reads, Physical Reads, Writes, Executions, re-sorted from the last sample without new SQL.
 
@@ -298,6 +299,10 @@ blocks someone and waits on no one; an idle session holding a transaction is a l
 transactions from `sys.dm_exec_sessions` (SSMS shows 0). A cycle (a deadlock SQL Server has not resolved yet) is cut at its
 lowest session id, and its sessions are marked. Chains deeper than 32 or longer than 2,000 rows are cut and marked truncated.
 
+A wait on a negative id (below) is not a wait on a session: Processes shows its meaning in Blocked By, but the session
+is not counted as blocked (the Blocked Sessions tile and the Blocking badge count waits on sessions only), is a Blocking
+row only when it blocks someone, and a lead blocker waiting on a latch stays the head of its chain.
+
 | Blocking session id | Shown as |
 | --- | --- |
 | -2 | Orphaned DTC |
@@ -308,10 +313,14 @@ lowest session id, and its sessions are marked. Chains deeper than 32 or longer 
 ## Wait categories
 
 Query Store's documented categories ([sys.query_store_wait_stats](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-query-store-wait-stats-transact-sql)),
-matched in this order: Varia's benign list (counted in Idle and never in Waiting Tasks), Query Store's exceptions and exact
-names, then prefixes in the table's order. Anything else is Unknown, which is shown, never dropped: SSMS's 2008 table
-knows 241 of SQL Server 2025's 1,546 wait types and drops the rest. THREADPOOL (Worker Thread), CXPACKET and CXCONSUMER
-(Parallelism) and SOS_SCHEDULER_YIELD (CPU) are shown. The numbers therefore differ from SSMS's Resource Waits.
+matched in this order: Varia's benign list (counted in Idle), Query Store's exceptions and exact names, then prefixes in
+the table's order. Anything else is Unknown, which is shown, never dropped: SSMS's 2008 table knows 241 of SQL Server
+2025's 1,546 wait types and drops the rest. THREADPOOL (Worker Thread), CXPACKET and CXCONSUMER (Parallelism) and
+SOS_SCHEDULER_YIELD (CPU) are shown. The numbers therefore differ from SSMS's Resource Waits.
+
+A wait type is benign when it is on Varia's benign list or in the Idle category: a thread waiting for work. Benign
+waits never count in Waiting Tasks and are never charted, and Hide benign waits hides them; every other type counts,
+Unknown ones too.
 
 | Value | Category | Id | Wait types |
 | --- | --- | --- | --- |
@@ -347,7 +356,7 @@ Exceptions:
 | `BROKER_RECEIVE_WAITFOR` | User Wait | Not Service Broker: a RECEIVE waiting for messages. |
 | `HADR_THROTTLE_LOG_RATE_GOVERNOR` | Log Rate Governor | Not Replication: log rate governance. |
 
-Benign waits:
+Varia's benign list:
 
 | Wait type | Why it is benign |
 | --- | --- |
@@ -440,7 +449,7 @@ first, so a session id SQL Server has reused is never killed.
 - CPU comes from SQL Server's schedulers, on every platform, never from WMI or performance counters of the host.
 - Wait categories are Query Store's, so CPU, worker thread, parallelism and modern wait types are counted (above).
 - Pause means stop collecting; the monitor never polls while its window is hidden.
-- Copy keys are the results grid's (Ctrl+C the selection, Ctrl+Shift+C with headers), not SSMS's copy-a-cell.
+- Copy keys are the results grid's (Ctrl+C the selection, Ctrl+Shift+C with headers; ⌘C and ⇧⌘C on macOS), not SSMS's copy-a-cell.
 
 | Pane | Column | Varia |
 | --- | --- | --- |
@@ -456,7 +465,7 @@ first, so a session id SQL Server has reused is never killed.
 | Wait categories | 1-Minute Average (ms/sec) | The mean of the last 60 s. SSMS's Recent Wait Time is a weighted average over an unstated window. |
 | Data File I/O | Response Time (ms) | Stall per I/O, reads and writes together, in the interval (SSMS parity); the latency columns keep them apart. |
 | Tiles | % Processor Time | CPU used by SQL Server's schedulers (non-preemptive work), from sys.dm_os_schedulers; no WMI. |
-| Tiles | Waiting Tasks | Average tasks waiting: wait time less signal wait of every non-benign type, per second, divided by 1,000. |
+| Tiles | Waiting Tasks | Average tasks waiting: wait time less signal wait of every type that counts as waiting (not benign: neither Varia's benign list nor Query Store's Idle category), per second, divided by 1,000. |
 
 ## Limits
 
@@ -464,7 +473,7 @@ first, so a session id SQL Server has reused is never killed.
 | --- | --- | --- |
 | `monitorsPerConnection` | 1 | Activity Monitors per connection; opening another activates it |
 | `probesPerMonitor` | 4 | Probes of the monitor's one subscription |
-| `sessions` | 10,000 | Processes rows; more set `truncated` |
+| `sessions` | 10,000 | Processes rows; more set `truncated` and drop idle sessions first (sessions in a blocking wait come first, then those with a request) |
 | `blockingEdges` | 20,000 | Blocking waits read per sample |
 | `blockingRows` | 2,000 | Blocking rows |
 | `blockingDepth` | 32 | Depth of a blocking chain the Blocking pane shows |

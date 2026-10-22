@@ -16,10 +16,14 @@ internal sealed record ActivityTableSpec(string Table, string Probe, IReadOnlyLi
 
 /// <summary>A probe's kind, tables, series and intervals.</summary>
 internal sealed record ActivityProbeSpec(string Probe, string Kind, IReadOnlyList<string> Tables, IReadOnlyList<string> Series, int DefaultIntervalMs, int MinIntervalMs, int MaxIntervalMs,
-    int FloorMs, int BudgetMs, int? MinGapMs, double MaxDutyCycle, bool Maxdop1);
+    int FloorMs, int BudgetMs, int? MinGapMs, double MaxDutyCycle, bool Maxdop1, string? FilterMode, string Hidden);
 
-/// <summary>A wait type's category id, and whether it is on Varia's benign list (counted in Idle, never in Waiting Tasks).</summary>
-internal readonly record struct WaitClass(string Category, bool Benign);
+/// <summary>A wait type's category id, and whether it is benign: on Varia's benign list or in a benign category (Idle).</summary>
+internal readonly record struct WaitClass(string Category, bool Benign)
+{
+    /// <summary>Its time counts in Waiting Tasks and the Resource Waits chart: every type that is not benign, Unknown too.</summary>
+    public bool CountsAsWaiting => !Benign;
+}
 
 /// <summary>The Activity Monitor as src/shared/activity/catalog.ts declares it, embedded as activity-catalog.json (a vitest
 /// file snapshot keeps the copy in sync): probes, tables and columns, view chips, Query Store's wait categories with the
@@ -40,17 +44,20 @@ internal sealed class ActivityCatalog
     private sealed record EditionJson(bool Available, List<int> Editions);
     private sealed record ExceptionJson(string Name, string Category);
     private sealed record ProbeJson(string Probe, string Kind, List<string> Tables, List<string> Series, int DefaultIntervalMs, int MinIntervalMs, int MaxIntervalMs, int FloorMs, int BudgetMs,
-        double MaxDutyCycle, int? MinGapMs = null, bool? Maxdop1 = null);
+        double MaxDutyCycle, string Hidden, int? MinGapMs = null, bool? Maxdop1 = null, string? FilterMode = null);
+    private sealed record HideBenignJson(bool Default, List<string> Tables);
+    private sealed record LoadGuardJson(int SlowSamples, int CheapSamples);
     private sealed record TableJson(string Table, string Probe, List<string> Key, int RowCap, List<string> Columns, List<string>? Identity = null, List<string>? TextColumns = null,
         List<string>? FacetColumns = null, List<string>? Tones = null, bool? DepartedLinger = null);
     private sealed record VariaJson(string Suffix, string Kind);
     private sealed record WaitJson(string Id, int Value, List<string> Names, List<string> Patterns);
-    private sealed record CatalogJson(int Version, BandsJson Bands, List<string> Benign, Dictionary<string, string> BlockerLabels, Dictionary<string, EditionJson> Editions,
-        List<ExceptionJson> Exceptions, Dictionary<string, long> Limits, string PoolSuffix, List<ProbeJson> Probes, string Source, List<TableJson> Tables, Dictionary<string, string> Tones,
+    private sealed record CatalogJson(int Version, BandsJson Bands, List<string> Benign, List<string> BenignCategories, Dictionary<string, string> BlockerLabels, Dictionary<string, EditionJson> Editions,
+        List<ExceptionJson> Exceptions, HideBenignJson HideBenign, Dictionary<string, long> Limits, LoadGuardJson LoadGuard, string PoolSuffix, List<ProbeJson> Probes, string Source, List<TableJson> Tables, Dictionary<string, string> Tones,
         List<VariaJson> VariaSessions, List<string> Views, List<WaitJson> Waits);
 
     private readonly FrozenDictionary<string, string> exact;
     private readonly FrozenSet<string> benign;
+    private readonly FrozenSet<string> benignCategories;
     private readonly (string Prefix, string Category)[] prefixes;
     private readonly FrozenDictionary<int, string> editions;
     private readonly HashSet<string> available;
@@ -67,7 +74,7 @@ internal sealed class ActivityCatalog
         Tones = json.Tones;
         BlockerLabels = json.BlockerLabels.ToFrozenDictionary(entry => int.Parse(entry.Key, System.Globalization.CultureInfo.InvariantCulture), entry => entry.Value);
         Probes = json.Probes.ToFrozenDictionary(probe => probe.Probe, probe => new ActivityProbeSpec(probe.Probe, probe.Kind, probe.Tables, probe.Series, probe.DefaultIntervalMs,
-            probe.MinIntervalMs, probe.MaxIntervalMs, probe.FloorMs, probe.BudgetMs, probe.MinGapMs, probe.MaxDutyCycle, probe.Maxdop1 == true), StringComparer.Ordinal);
+            probe.MinIntervalMs, probe.MaxIntervalMs, probe.FloorMs, probe.BudgetMs, probe.MinGapMs, probe.MaxDutyCycle, probe.Maxdop1 == true, probe.FilterMode, probe.Hidden), StringComparer.Ordinal);
         Tables = json.Tables.ToFrozenDictionary(table => table.Table, table => new ActivityTableSpec(table.Table, table.Probe, table.Key, table.Identity ?? [], table.RowCap,
             [.. table.Columns.Select(Column)], (table.TextColumns ?? []).ToFrozenSet(StringComparer.Ordinal), (table.FacetColumns ?? []).ToFrozenSet(StringComparer.Ordinal), table.Tones ?? [],
             table.DepartedLinger == true), StringComparer.Ordinal);
@@ -78,6 +85,10 @@ internal sealed class ActivityCatalog
         foreach (var exception in json.Exceptions) names[exception.Name] = exception.Category;
         exact = names.ToFrozenDictionary(StringComparer.Ordinal);
         benign = json.Benign.ToFrozenSet(StringComparer.Ordinal);
+        benignCategories = json.BenignCategories.ToFrozenSet(StringComparer.Ordinal);
+        HideBenignDefault = json.HideBenign.Default;
+        HideBenignTables = json.HideBenign.Tables.ToFrozenSet(StringComparer.Ordinal);
+        LoadGuard = (json.LoadGuard.SlowSamples, json.LoadGuard.CheapSamples);
         prefixes = [.. json.Waits.SelectMany(wait => wait.Patterns.Select(pattern => pattern.EndsWith('%') && pattern.IndexOf('%') == pattern.Length - 1
             ? (pattern[..^1], wait.Id) : throw new InvalidOperationException("A wait pattern must be a prefix with one trailing %.")))];
         editions = json.Editions.SelectMany(entry => entry.Value.Editions.Select(edition => (edition, entry.Key))).ToFrozenDictionary(pair => pair.edition, pair => pair.Key);
@@ -109,19 +120,24 @@ internal sealed class ActivityCatalog
     public IReadOnlyList<(string Suffix, string Kind)> VariaSuffixes { get; }
     public IReadOnlyList<string> WaitCategories { get; }
     public IEnumerable<string> BenignWaits => benign;
+    public IEnumerable<string> BenignCategories => benignCategories;
+    /// <summary>Hide benign waits: on unless a filter turns it off, and only for these tables.</summary>
+    public bool HideBenignDefault { get; }
+    public IReadOnlySet<string> HideBenignTables { get; }
+    /// <summary>The load guard's counts: slow samples in a row before an interval doubles, cheap ones before it halves back.</summary>
+    public (int SlowSamples, int CheapSamples) LoadGuard { get; }
 
     public long Limit(string key) => Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown Activity Monitor limit " + key);
 
     public ActivityTableSpec Table(string table) => Tables.TryGetValue(table, out var spec) ? spec : throw new InvalidOperationException("Unknown Activity Monitor table " + table);
 
     /// <summary>Benign names, then Query Store's exceptions and exact names, then its prefixes in order; anything else is
-    /// Unknown, which the monitor shows rather than drops.</summary>
+    /// Unknown, which the monitor shows rather than drops. A type in a benign category is benign too.</summary>
     public WaitClass Classify(string waitType)
     {
         if (benign.Contains(waitType)) return new("idle", true);
-        if (exact.TryGetValue(waitType, out var category)) return new(category, false);
-        foreach (var (prefix, id) in prefixes) if (waitType.StartsWith(prefix, StringComparison.Ordinal)) return new(id, false);
-        return new("unknown", false);
+        var category = exact.GetValueOrDefault(waitType) ?? prefixes.FirstOrDefault(entry => waitType.StartsWith(entry.Prefix, StringComparison.Ordinal)).Category ?? "unknown";
+        return new(category, benignCategories.Contains(category));
     }
 
     /// <summary>The catalogue's kind of server for an EngineEdition ('box', 'managedInstance', 'azureSqlDatabase'), or null

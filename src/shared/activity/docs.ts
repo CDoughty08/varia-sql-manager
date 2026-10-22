@@ -1,9 +1,15 @@
 // Renders docs/activity-monitor.md from the Activity Monitor catalogue; tests/activity-catalog.test.ts keeps the file in sync.
 import {
-  activityBands, activityEditions, activityIntervalsSeconds, activityLimits, activityPanes, activityPoolSuffix, activityProbes, activitySource, activityTables, benignWaits, blockerLabels,
+  activityBands, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityLoadGuard, activityPanes, activityPoolSuffix, activityProbes, activitySource, activityTables, benignCategories, benignWaits, blockerLabels,
   defaultPanes, maxExpandedTiles, paneSpecs, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, sessionToggles, tableSpecs, tileSpecs, unavailableMessage, variaSessionKinds,
-  viewChipNotes, viewChips, viewChipTitles, waitCategories, waitExceptions, waitsChartSeries, type ColumnSpec, type ThresholdSpec
+  viewChipNotes, viewChips, viewChipTitles, waitCategories, waitExceptions, waitsChartSeries, waitToggles, type ColumnSpec, type ThresholdSpec
 } from './catalog.ts'
+
+/** The results grid's copy keys the Differences section cites; tests/activity-catalog.test.ts checks them against the commands catalogue. */
+export const copyKeys = {
+  'output.copy': { other: 'Ctrl+C', darwin: '⌘C' },
+  'output.copyWithHeaders': { other: 'Ctrl+Shift+C', darwin: '⇧⌘C' }
+} as const
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -22,7 +28,7 @@ const threshold = (spec: ThresholdSpec) => {
 const limitNotes: Readonly<Record<keyof typeof activityLimits, string>> = {
   monitorsPerConnection: 'Activity Monitors per connection; opening another activates it',
   probesPerMonitor: 'Probes of the monitor\'s one subscription',
-  sessions: 'Processes rows; more set `truncated`',
+  sessions: 'Processes rows; more set `truncated` and drop idle sessions first (sessions in a blocking wait come first, then those with a request)',
   blockingEdges: 'Blocking waits read per sample',
   blockingRows: 'Blocking rows',
   blockingDepth: 'Depth of a blocking chain the Blocking pane shows',
@@ -62,7 +68,8 @@ function columnsTable(columns: readonly ColumnSpec[]): string {
 }
 
 export function renderActivityMonitorDocs(): string {
-  const overview = probeSpecs['activity.overview']
+  const overview = probeSpecs['activity.overview'], queries = activityIntervalDefaults.queriesIntervalSeconds
+  const benignLabels = benignCategories.map(id => waitCategories.find(category => category.id === id)!.label).join(', ')
   return [
     '# Activity Monitor',
     '',
@@ -82,16 +89,16 @@ export function renderActivityMonitorDocs(): string {
     'clock (`ms_ticks`) in backend memory; no temp table, tempdb write or metadata function is used, and a probe whose panes',
     'are not shown is paused (no SQL).',
     '',
-    table(['Probe', 'Kind', 'Tables', 'Default', 'Lowest', 'At least', 'Budget', 'Refresh Now gap'], activityProbes.map(probe => {
+    table(['Probe', 'Kind', 'Tables', 'Default', 'Lowest', 'At least', 'Budget', 'Refresh Now gap', 'Filters'], activityProbes.map(probe => {
       const spec = probeSpecs[probe]
-      return [code(probe), spec.kind, spec.tables.map(code).join(', ') || '—', seconds(spec.defaultIntervalMs), seconds(spec.minIntervalMs), seconds(spec.floorMs), seconds(spec.budgetMs) + (spec.maxdop1 ? ', MAXDOP 1' : ''), spec.minGapMs ? seconds(spec.minGapMs) : '—']
+      return [code(probe), spec.kind, spec.tables.map(code).join(', ') || '—', seconds(spec.defaultIntervalMs), seconds(spec.minIntervalMs), seconds(spec.floorMs), seconds(spec.budgetMs) + (spec.maxdop1 ? ', MAXDOP 1' : ''), spec.minGapMs ? seconds(spec.minGapMs) : '—', spec.filterMode === 'memory' ? 'In memory' : '—']
     })),
     '',
     `The monitor has one interval: ${activityIntervalsSeconds.map(value => `${value} s`).join(', ')} (default ${seconds(overview.defaultIntervalMs)}). Each probe uses it raised`,
-    'to its "At least" value; query statistics use their own setting (15 to 60 s, default 30 s), because reading the plan cache',
+    `to its "At least" value; query statistics use their own setting (${queries.min} to ${queries.max} s, default ${queries.default} s), because reading the plan cache`,
     'costs more. SSMS\'s 5, 30 and 60 minute intervals are left out: the charts keep history. When a probe\'s sample costs more',
-    `than ${number(overview.maxDutyCycle * 100)} % of its interval three times in a row, its interval doubles (up to 60 s) and the header says so; it steps back`,
-    'after ten cheap samples. Pause stops collecting (no SQL); the charts show a gap and Resume starts a new baseline.',
+    `than ${number(overview.maxDutyCycle * 100)} % of its interval ${activityLoadGuard.slowSamples} times in a row, its interval doubles (up to ${seconds(overview.maxIntervalMs)}) and the header says so; it steps back`,
+    `after ${activityLoadGuard.cheapSamples} cheap samples. Pause stops collecting (no SQL); the charts show a gap and Resume starts a new baseline.`,
     '',
     '## Panes',
     '',
@@ -115,12 +122,12 @@ export function renderActivityMonitorDocs(): string {
     '',
     '### Series',
     '',
-    table(['Series', 'Label', 'Unit', 'Kind', 'Notes'], [...activityProbes.flatMap(probe => probeSpecs[probe].series.filter(id => id !== 'wait.*'))].map(id => {
+    table(['Series', 'Label', 'Unit', 'Sent as', 'Kind', 'Notes'], [...activityProbes.flatMap(probe => probeSpecs[probe].series.filter(id => id !== 'wait.*'))].map(id => {
       const spec = seriesSpecs[id]!
-      return [code(id), spec.label, spec.unit, spec.kind, spec.note]
-    }).concat([[code('wait.<category>'), 'Wait category', 'ms/s', 'msPerSecond', `One per wait category (${probeSeries('activity.resources').length - 1}): wait time less signal wait, per second.`]])),
+      return [code(id), spec.label, spec.unit, code(spec.liveUnit), spec.kind, spec.note]
+    }).concat([[code('wait.<category>'), 'Wait category', 'ms/s', code('msPerSecond'), 'msPerSecond', `One per wait category (${probeSeries('activity.resources').length - 1}): wait time less signal wait, per second.`]])),
     '',
-    `Resource Waits charts the ${waitsChartSeries} largest categories, each in its own colour, and the rest as Other.`,
+    `Resource Waits charts the ${waitsChartSeries} largest categories, each in its own colour, and the rest as Other; benign waits (${benignLabels}) are never charted.`,
     'A rate has no value on the first sample, after Resume, after a reconnect, or when SQL Server restarted or its statistics',
     'were cleared; charts draw a gap there.',
     '',
@@ -146,6 +153,7 @@ export function renderActivityMonitorDocs(): string {
     `case-insensitively against ${tableSpecs.sessions.textColumns!.map(column => tableSpecs.sessions.columns.find(spec => spec.id === column)!.caption).join(', ')}.`,
     `Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for ${tableSpecs.sessions.facetColumns!.map(column => tableSpecs.sessions.columns.find(spec => spec.id === column)!.caption).join(', ')}.`,
     'Several values in one column match any of them; filters on several columns must all match.',
+    `Resource Waits has ${waitToggles.hideBenign.title} (${waitToggles.hideBenign.default ? 'on' : 'off'} by default), which leaves out benign wait types and the ${benignLabels} category.`,
     '',
     `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, re-sorted from the last sample without new SQL.`,
     '',
@@ -158,15 +166,23 @@ export function renderActivityMonitorDocs(): string {
     'transactions from `sys.dm_exec_sessions` (SSMS shows 0). A cycle (a deadlock SQL Server has not resolved yet) is cut at its',
     `lowest session id, and its sessions are marked. Chains deeper than ${activityLimits.blockingDepth} or longer than ${number(activityLimits.blockingRows)} rows are cut and marked truncated.`,
     '',
+    'A wait on a negative id (below) is not a wait on a session: Processes shows its meaning in Blocked By, but the session',
+    'is not counted as blocked (the Blocked Sessions tile and the Blocking badge count waits on sessions only), is a Blocking',
+    'row only when it blocks someone, and a lead blocker waiting on a latch stays the head of its chain.',
+    '',
     table(['Blocking session id', 'Shown as'], Object.entries(blockerLabels).map(([id, label]) => [id, label])),
     '',
     '## Wait categories',
     '',
     'Query Store\'s documented categories ([sys.query_store_wait_stats](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-query-store-wait-stats-transact-sql)),',
-    'matched in this order: Varia\'s benign list (counted in Idle and never in Waiting Tasks), Query Store\'s exceptions and exact',
-    'names, then prefixes in the table\'s order. Anything else is Unknown, which is shown, never dropped: SSMS\'s 2008 table',
-    'knows 241 of SQL Server 2025\'s 1,546 wait types and drops the rest. THREADPOOL (Worker Thread), CXPACKET and CXCONSUMER',
-    '(Parallelism) and SOS_SCHEDULER_YIELD (CPU) are shown. The numbers therefore differ from SSMS\'s Resource Waits.',
+    'matched in this order: Varia\'s benign list (counted in Idle), Query Store\'s exceptions and exact names, then prefixes in',
+    'the table\'s order. Anything else is Unknown, which is shown, never dropped: SSMS\'s 2008 table knows 241 of SQL Server',
+    '2025\'s 1,546 wait types and drops the rest. THREADPOOL (Worker Thread), CXPACKET and CXCONSUMER (Parallelism) and',
+    'SOS_SCHEDULER_YIELD (CPU) are shown. The numbers therefore differ from SSMS\'s Resource Waits.',
+    '',
+    `A wait type is benign when it is on Varia's benign list or in the ${benignLabels} category: a thread waiting for work. Benign`,
+    'waits never count in Waiting Tasks and are never charted, and Hide benign waits hides them; every other type counts,',
+    'Unknown ones too.',
     '',
     table(['Value', 'Category', 'Id', 'Wait types'], waitCategories.map(category => [String(category.value), category.label, code(category.id),
       [...category.names, ...category.patterns].map(code).join(', ') || '(anything not matched)'])),
@@ -175,7 +191,7 @@ export function renderActivityMonitorDocs(): string {
     '',
     table(['Wait type', 'Category', 'Why'], waitExceptions.map(exception => [code(exception.name), waitCategories.find(category => category.id === exception.category)!.label, exception.note])),
     '',
-    'Benign waits:',
+    'Varia\'s benign list:',
     '',
     table(['Wait type', 'Why it is benign'], benignWaits.map(wait => [code(wait.name), wait.reason])),
     '',
@@ -208,7 +224,7 @@ export function renderActivityMonitorDocs(): string {
     '- CPU comes from SQL Server\'s schedulers, on every platform, never from WMI or performance counters of the host.',
     '- Wait categories are Query Store\'s, so CPU, worker thread, parallelism and modern wait types are counted (above).',
     '- Pause means stop collecting; the monitor never polls while its window is hidden.',
-    '- Copy keys are the results grid\'s (Ctrl+C the selection, Ctrl+Shift+C with headers), not SSMS\'s copy-a-cell.',
+    `- Copy keys are the results grid's (${copyKeys['output.copy'].other} the selection, ${copyKeys['output.copyWithHeaders'].other} with headers; ${copyKeys['output.copy'].darwin} and ${copyKeys['output.copyWithHeaders'].darwin} on macOS), not SSMS's copy-a-cell.`,
     '',
     table(['Pane', 'Column', 'Varia'], activityTables.flatMap(id => tableSpecs[id].columns.filter(column => column.parity === 'fix').map(column => [tableSpecs[id].title, column.caption, column.note]))
       .concat(tileSpecs.filter(tile => tile.parity === 'fix').map(tile => ['Tiles', tile.caption, seriesSpecs[tile.series]!.note]))),

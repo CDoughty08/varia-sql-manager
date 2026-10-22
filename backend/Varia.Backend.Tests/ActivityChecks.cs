@@ -15,6 +15,7 @@ internal static class ActivityChecks
         Waits(check);
         Statements(check);
         Lint(check);
+        Sizes(check);
         Bands(check);
         Blocking(check);
         Filters(check);
@@ -32,6 +33,9 @@ internal static class ActivityChecks
             && Catalog.Table("recentQueries").Columns.Single(column => column.Capability is not null) == new ActivityColumn("spills", "bigint", "totalSpills")
             && Catalog.Probes["activity.queries"] is { Maxdop1: true, MinGapMs: 15_000, DefaultIntervalMs: 30_000, MinIntervalMs: 15_000 } && Catalog.Probes["activity.resources"].FloorMs == 5_000,
             "the tables keep their keys, caps and facets, and the query statistics run every 30 s at MAXDOP 1, never twice within 15 s");
+        check(Catalog.Probes.Values.All(probe => probe.Hidden == "pause" && probe.FilterMode == (probe.Tables.Count > 0 ? "memory" : null)) && Catalog.LoadGuard == (3, 10)
+            && Catalog.HideBenignDefault && Catalog.HideBenignTables.SetEquals(["waitCategories", "waitTypes"]),
+            "probes pause while hidden and filter in memory where they have tables; the load guard counts and Hide benign waits come from the catalogue");
         check(Catalog.Limit("sessions") == 10_000 && Catalog.Limit("blockingEdges") == 20_000 && Catalog.Limit("blockingRows") == 2_000 && Catalog.Limit("blockingDepth") == 32
             && Catalog.Limit("filterText") == 400 && Catalog.Limit("columnFilters") == 8 && Catalog.Limit("columnFilterValues") == 50 && Catalog.Limit("columnFilterChars") == 256
             && Catalog.Limit("textBatch") == ActivitySql.TextSlots && Catalog.Limit("killSessions") == 64 && Catalog.BlockerLabels[-2] == "Orphaned DTC" && Catalog.BlockerLabels.Count == 4
@@ -52,15 +56,21 @@ internal static class ActivityChecks
             ["IO_QUEUE_LIMIT"] = "otherDiskIo", ["POOL_LOG_RATE_GOVERNOR"] = "logRateGovernor", ["RBIO_RG_STORAGE"] = "logRateGovernor", ["RESOURCE_SEMAPHORE_QUERY_COMPILE"] = "compilation",
             ["SQLCLR_QUANTUM_PUNISHMENT"] = "sqlClr", ["XACT_OWN_TRANSACTION"] = "transaction", ["DTC_STATE"] = "transaction", ["FULLTEXT GATHERER"] = "fullTextSearch", ["TRACEWRITE"] = "tracing",
             ["WAITFOR"] = "userWait", ["BROKER_TRANSMISSION_WORK"] = "serviceBroker", ["DBMIRROR_SEND"] = "mirroring", ["PWAIT_HADRSIM"] = "replication", ["EXTERNAL_SCRIPT_NETWORK_IO"] = "networkIo",
-            ["BROKER_RECEIVE_WAITFOR"] = "userWait", ["HADR_THROTTLE_LOG_RATE_GOVERNOR"] = "logRateGovernor", ["SLEEP_TASK"] = "idle", ["XE_TIMER_EVENT"] = "idle",
+            ["BROKER_RECEIVE_WAITFOR"] = "userWait", ["HADR_THROTTLE_LOG_RATE_GOVERNOR"] = "logRateGovernor", ["LOGMGR"] = "tranLogIo",
             ["NEW_WAIT_2030"] = "unknown", ["MSQL_XP"] = "unknown", [""] = "unknown", ["lck_m_x"] = "unknown", ["LCK_M"] = "unknown"
         };
         var wrong = expected.Where(entry => Catalog.Classify(entry.Key) != new WaitClass(entry.Value, false)).Select(entry => entry.Key).ToList();
-        check(wrong.Count == 0, "wait types map to Query Store's categories, exceptions before patterns, and unknown types stay Unknown, as in TypeScript: " + string.Join(", ", wrong));
+        check(wrong.Count == 0 && expected.Keys.All(name => Catalog.Classify(name).CountsAsWaiting),
+            "wait types map to Query Store's categories, exceptions before patterns, and unknown types stay Unknown and count as waiting, as in TypeScript: " + string.Join(", ", wrong));
         var benign = Catalog.BenignWaits.ToList();
         check(benign.Count == 47 && benign.All(name => Catalog.Classify(name) == new WaitClass("idle", true))
             && new[] { "CLR_AUTO_EVENT", "HADR_FILESTREAM_IOMGR_IOCOMPLETION", "BROKER_TO_FLUSH", "PREEMPTIVE_XE_GETTARGETSTATE", "SOS_WORK_DISPATCHER" }.All(name => Catalog.Classify(name).Benign),
             "Varia's benign waits count as Idle before any pattern can claim them");
+        // Query Store's own Idle waits accrue about 11 s per second on an idle server; counted, they would show 11 waiting tasks.
+        string[] idle = ["LAZYWRITER_SLEEP", "SLEEP_TASK", "LOGMGR_QUEUE", "CHECKPOINT_QUEUE", "XE_TIMER_EVENT", "XE_DISPATCHER_WAIT", "SQLTRACE_INCREMENTAL_FLUSH_SLEEP", "REQUEST_FOR_DEADLOCK_SEARCH"];
+        check(Catalog.BenignCategories.SequenceEqual(["idle"]) && idle.All(name => Catalog.Classify(name) == new WaitClass("idle", true) && !Catalog.Classify(name).CountsAsWaiting)
+            && benign.All(name => !Catalog.Classify(name).CountsAsWaiting),
+            "every Idle wait is benign and never counts in Waiting Tasks, whether Varia's list or Query Store's names claim it");
     }
 
     private static IEnumerable<ActivityStatement> All(ActivityRender render) => Catalog.Probes.Keys.SelectMany(probe => ActivitySql.Statements(probe, render));
@@ -123,7 +133,8 @@ internal static class ActivityChecks
             ("DDL", sessions with { Text = "DROP TABLE t;\n" + sessions.Text }, render),
             ("WAITFOR", sessions with { Text = "WAITFOR DELAY '00:00:01';\n" + sessions.Text }, render),
             ("SELECT *", With(sessions, "SELECT TOP (@rowCap) s.session_id,", "SELECT TOP (@rowCap) *, s.session_id,"), render),
-            ("a TOP without ORDER BY", With(sessions, "\nORDER BY s.session_id, r.request_id", ""), render),
+            // The window's ORDER BY that remains orders no TOP.
+            ("a TOP without ORDER BY", With(sessions, "\nORDER BY CASE WHEN e.session_id", "\n, CASE WHEN e.session_id"), render),
             ("a TOP literal above 20", With(sessions, "TOP (@rowCap)", "TOP (21)") with { Parameters = [] }, render),
             ("a bare TOP", With(sessions, "TOP (@rowCap)", "TOP 5") with { Parameters = [] }, render),
             ("an undeclared parameter", With(sessions, "@rowCap", "@cap"), render),
@@ -141,6 +152,27 @@ internal static class ActivityChecks
         };
         var missed = mutations.Where(mutation => (mutation.Statement == sessions && mutation.Render == render) || ActivitySql.Lint(mutation.Statement, mutation.Render).Count == 0).Select(mutation => mutation.Name).ToList();
         check(missed.Count == 0 && ActivitySql.Lint(sessions, render).Count == 0, "the Activity Monitor lint catches every mutation: " + string.Join(", ", missed));
+        var unflagged = ActivitySql.ForbiddenTokens.Where(token => !ActivitySql.Lint(With(sessions, "d.name AS database_name", token + "1) AS database_name"), render).Contains("uses " + token)).ToList();
+        check(ActivitySql.ForbiddenTokens.Count >= 25 && unflagged.Count == 0, "the lint refuses each forbidden built-in, view and token on its own: " + string.Join(", ", unflagged));
+    }
+
+    private static void Sizes(Action<bool, string> check)
+    {
+        var render = new ActivityRender(17, "box", true);
+        string Text(string probe, string id) => ActivitySql.Statements(probe, render).Single(statement => statement.Id == id).Text;
+        var sessions = Text("activity.sessions", "sessions");
+        check(Text("activity.sessions", "edges").Contains($"LEFT(w.resource_description, {Catalog.Limit("resourceChars")}) AS resource_description", StringComparison.Ordinal)
+            && Text("activity.sessions", "leadBatches").StartsWith($"SELECT TOP ({Catalog.Limit("leadBlockerBatches")}) ", StringComparison.Ordinal)
+            && Text("activity.sessions", "leadBatches").Contains($"LEFT(ib.event_info, {Catalog.Limit("inputBufferChars")}) AS event_info", StringComparison.Ordinal)
+            && Text("activity.sessions", "activeQueries").Contains($"END), {Catalog.Limit("statementChars")}) AS statement_text", StringComparison.Ordinal)
+            && Text("activity.queries", "text").Contains($"END), {Catalog.Limit("statementChars")}) AS statement_text", StringComparison.Ordinal)
+            && Catalog.Limit("textBatch") == ActivitySql.TextSlots,
+            "the SQL reads the text sizes and lead blocker batches the catalogue's limits (and docs/activity-monitor.md) state");
+        // One row per session: requests come only from the ranked derived table, joined on rank 1.
+        check(sessions.Split("sys.dm_exec_requests").Length == 2 && sessions.Contains(") AS r ON r.session_id = s.session_id AND r.request_rank = 1\n", StringComparison.Ordinal)
+            && sessions.Contains("COUNT(*) OVER (PARTITION BY q.session_id) AS request_count", StringComparison.Ordinal)
+            && sessions.Contains("ORDER BY CASE WHEN e.session_id IS NOT NULL OR r.blocking_session_id <> 0 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END, s.session_id;", StringComparison.Ordinal),
+            "the sessions statement returns one row per session with MARS requests folded, so its TOP counts sessions and keeps blocking sessions first");
     }
 
     private static void Bands(Action<bool, string> check)
@@ -168,9 +200,16 @@ internal static class ActivityChecks
         check(parallel.Of(80) is null && parallel.Of(97) is null && parallel.Of(90) is { BlockedBy: 92, WaitMs: 500 } && parallel.Of(91) is null && parallel.Of(95)!.BlockedBy == 96 && parallel.Of(96)!.HeadBlocker,
             "a parallel query's waits on itself are no blocking; a session hangs under its longest task wait, deduplicated, and a request's blocker counts only without task waits");
         var special = BlockingGraph.Build([W(100, -2, 9_000), W(101, -4, 9_000), W(101, 102, 10), W(103, 100)], 32, 2_000);
-        check(special.Of(100) is { BlockedBy: -2, HeadBlocker: false, Downstream: 1 } && special.Of(-2) is null && special.Of(101)!.BlockedBy == 102
-            && special.Rows.Where(row => row.Depth == 0).Select(row => row.Node.SessionId).SequenceEqual([100, 102]),
+        check(special.Of(100) is { BlockedBy: -2, HeadBlocker: true, Downstream: 1 } && special.Of(-2) is null && special.Of(101)!.BlockedBy == 102
+            && special.Rows.Where(row => row.Depth == 0).Select(row => row.Node.SessionId).SequenceEqual([100, 102]) && special.BlockedSessions == 2,
             "a negative blocker (orphaned DTC, latch owner) is shown, never a node; a session blocker wins over it, and the waiter heads its own chain");
+        // Under PAGELATCH contention every SH latch waiter waits on -5: no chain, no blocked session, and a lead blocker keeps its mark.
+        var latch = BlockingGraph.Build([W(70, 60, 2_000), W(60, -5, 9_000, "PAGELATCH_SH"), W(80, -5, 50, "PAGELATCH_SH"), W(81, -4, 50, "LATCH_EX")], 32, 2_000);
+        check(latch.Of(60) is { BlockedBy: -5, HeadBlocker: true, Downstream: 1 } && latch.Of(80) is { BlockedBy: -5, HeadBlocker: false } && latch.Of(81)!.BlockedBy == -4
+            && latch.Rows.Select(row => (row.Node.SessionId, row.Depth)).SequenceEqual([(60, 0), (70, 1)]) && latch.BlockedSessions == 1,
+            "latch-only waiters keep their negative Blocked By but are no Blocking rows and not blocked, and a lead blocker waiting on a latch stays the head blocker");
+        var ties = BlockingGraph.Build([W(130, 132, 500), W(130, 131, 500), W(140, -2, 500), W(140, -5, 500)], 32, 2_000);
+        check(ties.Of(130)!.BlockedBy == 131 && ties.Of(140)!.BlockedBy == -2, "equal waits hang a session under the lowest blocker id (by magnitude for negative ids)");
         var cycle = BlockingGraph.Build([W(110, 111, 50), W(111, 112, 60), W(112, 110, 70), W(113, 111, 10)], 32, 2_000);
         check(cycle.Rows.Select(row => (row.Node.SessionId, row.Depth)).SequenceEqual([(110, 0), (112, 1), (111, 2), (113, 3)]) && new[] { 110, 111, 112 }.All(id => cycle.Of(id)!.Cycle)
             && !cycle.Of(113)!.Cycle && cycle.Of(110) is { BlockedBy: 111, HeadBlocker: false, Downstream: 3 },
@@ -205,6 +244,30 @@ internal static class ActivityChecks
         var accepted = invalid.Where(entry => Refused(entry.Filter) != "INVALID_PARAMS").Select(entry => entry.Name).ToList();
         check(accepted.Count == 0 && Refused(new("sessions", "blocked", true, true, new string('x', 400), [new("login", [new string('v', 256)]), new("database", Blanks: true)])) == "accepted",
             "the filter engine refuses what zod refuses, at the catalogue's bounds: " + string.Join(", ", accepted));
+        // Bodies as the wire delivers them, deserialized with the backend's options: nulls are refused as values, never thrown.
+        var wire = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
+        };
+        string RefusedJson(string json)
+        {
+            try { return Refused(System.Text.Json.JsonSerializer.Deserialize<ActivityFilterDto>(json, wire)!); }
+            catch (Exception error) when (error is not RequestException) { return error.GetType().Name; }
+        }
+        var nulls = new[]
+        {
+            """{"table":null}""", """{"table":"sessions","columnFilters":[{"column":null,"values":["a"]}]}""", """{"table":"sessions","columnFilters":[{"column":"login","values":[null]}]}""",
+            """{"table":"sessions","columnFilters":[null]}"""
+        }.Where(json => RefusedJson(json) != "INVALID_PARAMS").ToList();
+        check(nulls.Count == 0, "the filter engine refuses null members as INVALID_PARAMS: " + string.Join(", ", nulls));
+        check(Refused(new("waitTypes", HideBenign: false)) == "accepted" && Refused(new("waitCategories", HideBenign: true)) == "accepted" && Refused(new("sessions", HideBenign: true)) == "INVALID_PARAMS"
+            && Refused(new("files", HideBenign: false)) == "INVALID_PARAMS",
+            "Hide benign waits applies to Resource Waits' two tables only, as zod has it");
+        bool Passes(ActivityFilterDto dto, bool benign) => ActivityFilter.Compile(Catalog, dto).Matches(_ => "x", benign: benign);
+        check(!Passes(new("waitTypes"), true) && Passes(new("waitTypes"), false) && Passes(new("waitTypes", HideBenign: false), true) && !Passes(new("waitCategories"), true)
+            && Passes(new("files"), true),
+            "Resource Waits hides benign rows unless Hide benign waits is turned off");
 
         var rows = new (string Name, Dictionary<string, string?> Cells, SessionFacts Facts)[]
         {

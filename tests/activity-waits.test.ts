@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { benignWaits, waitCategories, waitCategoryOf } from '../src/shared/activity/catalog'
+import { benignCategories, benignWaits, countsAsWaiting, waitCategories, waitCategoryOf } from '../src/shared/activity/catalog'
 
 const label = (waitType: string) => {
   const { category, benign } = waitCategoryOf(waitType)
@@ -24,11 +24,19 @@ describe('activity monitor wait categories', () => {
   it('applies Query Store\'s exceptions before its patterns', () => {
     expect([label('BROKER_RECEIVE_WAITFOR'), label('HADR_THROTTLE_LOG_RATE_GOVERNOR')]).toEqual(['User Wait', 'Log Rate Governor'])
   })
-  it('puts benign waits in Idle before any pattern, and keeps Query Store\'s own idle waits unflagged', () => {
+  it('puts benign waits in Idle before any pattern, and treats Query Store\'s own Idle waits as benign too', () => {
     for (const { name } of benignWaits) expect(label(name), name).toBe('Idle (benign)')
     // CLR%, HADR_%, BROKER_% and PREEMPTIVE_% would otherwise claim these.
     expect(['CLR_AUTO_EVENT', 'HADR_FILESTREAM_IOMGR_IOCOMPLETION', 'BROKER_TO_FLUSH', 'PREEMPTIVE_XE_GETTARGETSTATE', 'SOS_WORK_DISPATCHER'].map(label)).toEqual(Array(5).fill('Idle (benign)'))
-    expect(['SLEEP_TASK', 'LAZYWRITER_SLEEP', 'XE_TIMER_EVENT', 'CHECKPOINT_QUEUE'].map(label)).toEqual(Array(4).fill('Idle'))
+    // Query Store's Idle names and SLEEP_% accrue about 11 s of wait per second on an idle server: benign, like the list.
+    expect(benignCategories).toEqual(['idle'])
+    expect(['SLEEP_TASK', 'LAZYWRITER_SLEEP', 'LOGMGR_QUEUE', 'XE_TIMER_EVENT', 'CHECKPOINT_QUEUE', 'SQLTRACE_INCREMENTAL_FLUSH_SLEEP', 'XE_DISPATCHER_WAIT', 'REQUEST_FOR_DEADLOCK_SEARCH'].map(label))
+      .toEqual(Array(8).fill('Idle (benign)'))
+  })
+  it('counts every type but benign ones in Waiting Tasks, Unknown ones too', () => {
+    expect(['LAZYWRITER_SLEEP', 'SLEEP_TASK', 'LOGMGR_QUEUE', 'SOS_WORK_DISPATCHER', 'CLR_AUTO_EVENT'].filter(countsAsWaiting)).toEqual([])
+    expect(['LCK_M_X', 'PAGEIOLATCH_SH', 'CXPACKET', 'SOS_SCHEDULER_YIELD', 'THREADPOOL', 'NEW_WAIT_2030', 'LOGMGR', 'WRITELOG'].every(countsAsWaiting)).toBe(true)
+    for (const category of waitCategories) for (const name of category.names) expect(countsAsWaiting(name), name).toBe(!benignCategories.includes(category.id))
   })
   it('shows anything else as Unknown rather than dropping it, matching names exactly', () => {
     expect(['NEW_WAIT_2030', 'MSQL_XP', '', 'lck_m_x', 'LCK_M', 'PAGEIOLATCH'].map(label)).toEqual(Array(6).fill('Unknown'))
