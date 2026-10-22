@@ -496,7 +496,8 @@ async function workbench(id, method, params, credit) {
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0 }
+      // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }

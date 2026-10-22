@@ -703,6 +703,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-pill[data-tone="critical"] { background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); }
 .status-pill[data-tone="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
 .status-pill[data-tone="neutral"] { background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
+/* A connection's environment tag where it labels the connection: it keeps its word whole and the row gives way around it. */
+.environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; }
+.environment-tag[data-place="explorer"] { margin-left: var(--varia-space-1); }
+.environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
+.environment-tag[data-place="list"] { vertical-align: middle; }
+.environment-tag[data-place="query"] { margin-right: 10px; }
+.environment-preview { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.environment-field input { flex: 1; min-width: 0; }
 .chip-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 24px; padding: 0 10px; border: 1px solid var(--varia-chip-border); border-radius: var(--varia-radius-pill); background: var(--varia-chip-background); color: var(--varia-chip-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .chip[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); transition: none; }

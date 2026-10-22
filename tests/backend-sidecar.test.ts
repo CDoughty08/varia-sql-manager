@@ -98,6 +98,12 @@ describe('real .NET sidecar over protocol v2', () => {
     expect(value.connectionString).not.toContain('super-secret')
     expect(value.connectionString).toContain('Trust Server Certificate=False')
   })
+  it('takes a connection environment label with the options, bounds it, and keeps it out of the connection string', async () => {
+    const connection = backend(), options = { server: 'localhost', database: '', authentication: 'windows' as const, trustServerCertificate: false }
+    const value = await call(connection, 'connections.preview', { ...options, environment: 'Production' })
+    expect(value.connectionString).not.toContain('Production')
+    await expect(call(connection, 'connections.preview', { ...options, environment: 'P'.repeat(33) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+  })
   it('rejects invalid enclave and discovery settings before connecting', async () => {
     const connection = backend()
     await expect(call(connection, 'connections.preview', { server: 'localhost', database: '', authentication: 'windows', trustServerCertificate: false, advanced: { columnEncryption: false, secureEnclaves: true } })).rejects.toThrow('Secure enclaves require Always Encrypted')

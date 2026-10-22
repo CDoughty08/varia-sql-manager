@@ -21,6 +21,8 @@ internal static class ConnectionSettings
         if (advanced.SecureEnclaves && !advanced.ColumnEncryption) throw new RequestException("INVALID_PARAMS", "Secure enclaves require Always Encrypted.");
         if (advanced.SecureEnclaves && advanced.AttestationProtocol is "HGS" or "AAS" && string.IsNullOrWhiteSpace(advanced.EnclaveAttestationUrl))
             throw new RequestException("INVALID_PARAMS", "An attestation URL is required for HGS or AAS.");
+        if (options.Environment is { } environment && (string.IsNullOrWhiteSpace(environment) || environment.Length > 32 || environment.Any(char.IsControl)))
+            throw new RequestException("INVALID_PARAMS", "Environment exceeds its supported length or contains control characters.");
         var server = Text(options.Server.Trim(), 256, "Server name");
         if (advanced.NetworkProtocol != "default")
         {

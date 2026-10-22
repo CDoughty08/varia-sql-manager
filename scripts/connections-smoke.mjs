@@ -22,6 +22,8 @@ const failures = []
 const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 300000)
 // Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
+// Environment labels' phase: the fake backend behind main's real request, history and library handlers.
+const environmentProfile = await mkdtemp(resolve('artifacts', 'connections-environments-'))
 async function launch(options = launchOptions, ready = /\.NET 10\..*Ready/) {
   app = await electron.launch(options)
   page = await app.firstWindow()
@@ -36,6 +38,8 @@ async function open() {
   await expect(page.getByText('Loading saved connections…')).toHaveCount(0)
   return page.getByRole('dialog', { name: 'Connect', exact: true })
 }
+/** A saved connection's row by its name: the Environment list has a Development option too. */
+const savedNamed = (dialog, name) => dialog.locator('.connection-choice strong', { hasText: new RegExp('^' + name + '$') })
 async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
 try {
   await launch()
@@ -129,15 +133,15 @@ try {
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await expect(dialog.getByText('Discovering local servers…')).toHaveCount(0, { timeout: 10000 })
   await dialog.getByLabel('Server source', { exact: true }).selectOption('registered')
-  await expect(dialog.getByText('Development', { exact: true })).toBeVisible()
-  await dialog.getByText('Development', { exact: true }).click()
+  await expect(savedNamed(dialog, 'Development')).toBeVisible()
+  await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('#e66b73')
   // A saved profile's name and color describe its server, so typing another server drops them.
   await dialog.getByLabel('Server Name', { exact: true }).fill('another-server')
   await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('')
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('')
-  await dialog.getByText('Development', { exact: true }).click()
+  await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('#e66b73')
   await dialog.getByRole('tab', { name: 'History', exact: true }).click()
   const controlMetrics = await dialog.locator('.property-row select').evaluateAll(controls => controls.filter(control => control.getClientRects().length).map(control => {
@@ -160,8 +164,8 @@ try {
   await launch()
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   dialog = await open()
-  await expect(dialog.getByText('Development', { exact: true })).toBeVisible()
-  await dialog.getByText('Development', { exact: true }).click()
+  await expect(savedNamed(dialog, 'Development')).toBeVisible()
+  await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
   await dialog.getByRole('button', { name: 'Advanced…', exact: true }).click()
   advanced = page.getByRole('dialog', { name: 'Advanced Properties', exact: true })
@@ -210,7 +214,7 @@ try {
     expect(liveLibrary.profiles.some(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.lastConnected)).toBe(true)
     dialog = await open()
     await expect(dialog.getByText(process.env.VARIA_TEST_SQL_SERVER, { exact: true })).toBeVisible()
-    await dialog.getByText('Development', { exact: true }).click()
+    await savedNamed(dialog, 'Development').click()
   }
   // Keep native profile persistence but supply deterministic discovery/failure fixtures.
   await app.evaluate(({ ipcMain }, statics) => {
@@ -275,7 +279,7 @@ try {
     await expect.poll(integratedRows).toEqual(['master · alice@CONTOSO.COM'])
     expect(await identityCalls()).toBe(1)
   }
-  await dialog.getByText('Development', { exact: true }).click()
+  await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   if (process.platform === 'win32') {
@@ -299,7 +303,7 @@ try {
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await entraChecks(dialog, windowsIdentity)
-  await dialog.getByText('Development', { exact: true }).click()
+  await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await dialog.getByLabel('Server source', { exact: true }).selectOption('network')
@@ -382,12 +386,15 @@ try {
   await app.close(); app = undefined
   await rememberPassword()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication).')
+  await environmentLabels()
+  expect(failures).toEqual([])
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, and bounded in main).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
   await rm(passwordProfile, { recursive: true, force: true })
+  await rm(environmentProfile, { recursive: true, force: true })
 }
 
 /**
@@ -642,3 +649,107 @@ async function rememberPassword() {
   await app.close(); app = undefined
 }
 
+
+/**
+ * Environment labels through main's own handlers and the fake backend: chosen in the Connect dialog and saved with the
+ * history entry, shown as a tag on the server's Object Explorer row, its query tab, the query status bar and the window's
+ * status bar, changed from the server's menu, and dropped when the form moves to another server.
+ */
+async function environmentLabels() {
+  const userData = join(environmentProfile, 'user-data'), control = join(environmentProfile, 'control')
+  await mkdir(control, { recursive: true })
+  const connectionsFile = join(userData, 'connections.json')
+  const fake = { ...env, VARIA_TEST_USER_DATA: userData, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
+  await launch({ ...launchOptions, env: fake }, 'fake · Ready')
+  const saved = async () => JSON.parse(await readFile(connectionsFile, 'utf8')).profiles.find(item => item.options.server === 'prod-server')?.options.environment
+  const tag = place => page.locator(`.environment-tag[data-place="${place}"] .status-pill`)
+  async function shows(text, tone) {
+    for (const place of ['explorer', 'tab', 'query', 'status']) {
+      await expect(tag(place), place).toHaveText(text)
+      await expect(tag(place), place).toHaveAttribute('data-tone', tone)
+    }
+  }
+  const serverMenu = async row => {
+    await row.locator('.oe-label').click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Object Explorer', exact: true }).getByRole('menuitem', { name: 'Environment…', exact: true }).click()
+    return page.getByRole('dialog', { name: 'Connection Environment', exact: true })
+  }
+  // (1) Production, chosen in the dialog's Custom Properties beside the colour.
+  let dialog = await open()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('prod-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await dialog.getByLabel('Password', { exact: true }).fill('any-password')
+  await expect(dialog.getByLabel('Environment', { exact: true }).locator('option')).toHaveText(['<none>', 'Production', 'Staging', 'Test', 'Development', 'Custom…'])
+  await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('Production')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await shows('PROD', 'critical')
+  const row = await explorerRow(page, 'prod-server')
+  await expect(row).toHaveAttribute('aria-label', /, Production environment$/)
+  await expect(page.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab', { selected: true })).toHaveAttribute('aria-description', 'Production environment')
+  expect(await saved()).toBe('Production')
+  // The tag is the kit's red tag beside the connection colour, which still marks the row; it fits the row, whole.
+  const look = await row.evaluate(element => {
+    const pill = element.querySelector('.environment-tag .status-pill'), style = getComputedStyle(pill), probe = document.createElement('span')
+    probe.style.color = 'var(--varia-statusPill-criticalForeground)'
+    probe.style.backgroundColor = 'var(--varia-statusPill-criticalBackground)'
+    document.body.append(probe)
+    const expected = getComputedStyle(probe), box = pill.getBoundingClientRect(), outer = element.getBoundingClientRect()
+    const result = { color: style.color === expected.color, fill: style.backgroundColor === expected.backgroundColor, accent: !!element.querySelector('.oe-accent'),
+      inside: box.top >= outer.top && box.bottom <= outer.bottom && box.right <= outer.right + 0.5, whole: pill.scrollWidth <= pill.clientWidth }
+    probe.remove()
+    return result
+  })
+  expect(look).toEqual({ color: true, fill: true, accent: true, inside: true, whole: true })
+  await page.screenshot({ path: resolve('artifacts', 'environment-production.png') })
+  // (2) From the server's menu: a Custom label left blank cannot be saved; one typed is saved and shown everywhere.
+  let labelling = await serverMenu(row)
+  const choice = labelling.getByLabel('Environment', { exact: true })
+  await expect(choice).toBeFocused()
+  await expect(choice).toHaveValue('Production')
+  await choice.selectOption('custom')
+  await expect(labelling.getByText('Enter an environment label.', { exact: true })).toBeVisible()
+  await expect(labelling.getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await expect(labelling.getByLabel('Custom environment label', { exact: true })).toHaveAttribute('maxlength', '32')
+  await labelling.getByLabel('Custom environment label', { exact: true }).fill('UAT-EU')
+  await labelling.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(labelling).toHaveCount(0)
+  await shows('UAT-EU', 'neutral')
+  await expect.poll(saved).toBe('UAT-EU')
+  // (3) Escape changes nothing; Staging is the info tone.
+  labelling = await serverMenu(row)
+  await expect(labelling.getByLabel('Custom environment label', { exact: true })).toHaveValue('UAT-EU')
+  await labelling.getByLabel('Environment', { exact: true }).selectOption('Staging')
+  await page.keyboard.press('Escape')
+  await expect(labelling).toHaveCount(0)
+  await shows('UAT-EU', 'neutral')
+  labelling = await serverMenu(row)
+  await labelling.getByLabel('Environment', { exact: true }).selectOption('Staging')
+  await labelling.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(labelling).toHaveCount(0)
+  await shows('STAGING', 'info')
+  await expect.poll(saved).toBe('Staging')
+  // (4) The history row shows it, choosing the entry fills it in, and another server drops it with the name and colour.
+  dialog = await open()
+  const entry = dialog.locator('.connection-choice', { hasText: 'prod-server' }).first()
+  await expect(entry.locator('.status-pill')).toHaveText('STAGING')
+  await entry.click()
+  await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue('Staging')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('other-server')
+  await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue('')
+  await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  // (5) The page cannot store or send a label main refuses: too long, or with a character that reorders text.
+  const forged = await page.evaluate(async () => {
+    const base = { server: 'prod-server', database: '', authentication: 'sql', username: 'reader', trustServerCertificate: false, encrypt: 'mandatory' }
+    const long = await window.varia.saveConnectionProfile({ options: { ...base, environment: 'P'.repeat(33) } })
+    const hidden = await window.varia.connect({ ...base, password: 'any-password', environment: 'PROD' + String.fromCharCode(0x202e) })
+    return [long.ok, hidden.ok]
+  })
+  expect(forged).toEqual([false, false])
+  expect(await saved()).toBe('Staging')
+  await app.close(); app = undefined
+}

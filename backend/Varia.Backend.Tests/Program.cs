@@ -88,6 +88,13 @@ Check(builder.MultiSubnetFailover && builder.ServerSPN == "MSSQLSvc/db.example" 
 Check(!JsonSerializer.Serialize(ConnectionSettings.Preview(settings)).Contains("private-marker"), "connection preview never contains a password");
 builder = ConnectionSettings.Build(settings with { Authentication = "windows", Encrypt = "mandatory", Advanced = new(ColumnEncryption: true, SecureEnclaves: true, AttestationProtocol: "None") });
 Check(builder.ColumnEncryptionSetting.ToString() == "Enabled" && builder.AttestationProtocol.ToString() == "None" && builder.Password == "", "enclaves and Windows authentication map without SQL credentials");
+builder = ConnectionSettings.Build(settings with { Environment = new string('P', 32) });
+Check(!builder.ConnectionString.Contains("PPPP"), "a connection's environment label is accepted up to 32 characters and never reaches the connection string");
+foreach (var (environment, problem) in new[] { (new string('P', 33), "over 32 characters"), (" ", "that is blank"), ("PROD\u0007", "with a control character") })
+{
+    try { ConnectionSettings.Build(settings with { Environment = environment }); throw new Exception("Invalid environment accepted"); }
+    catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects an environment label " + problem); }
+}
 try { ConnectionSettings.Build(settings with { Advanced = new(PacketSize: 1) }); throw new Exception("Invalid packet size accepted"); }
 catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects invalid advanced ranges"); }
 try { ConnectionSettings.Build(settings with { Advanced = new(ColumnEncryption: true, SecureEnclaves: true, AttestationProtocol: "HGS") }); throw new Exception("Missing attestation URL accepted"); }

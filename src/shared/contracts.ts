@@ -56,6 +56,8 @@ export interface ConnectionOptions {
   hostNameInCertificate?: string
   displayName?: string
   color?: string
+  /** None when absent; a preset (Production, Staging, Test, Development) or a custom label of 1–32 characters (src/shared/environments.ts). */
+  environment?: string
   advanced?: Partial<AdvancedConnectionOptions>
 }
 

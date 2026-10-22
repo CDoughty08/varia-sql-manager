@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { AdvancedConnectionOptions, ConnectionOptions } from './contracts'
 import { authenticationModes, requiresUser, showsIdentity, usesPassword } from './auth'
+import { environmentSchema } from './environments'
 
 export const advancedDefaults: AdvancedConnectionOptions = {
   commandTimeout: 0, connectTimeout: 15, columnEncryption: false, secureEnclaves: false,
@@ -48,7 +49,7 @@ export const connectionOptionsSchema = z.object({
   server: z.string().trim().min(1, 'Enter a server name.').max(256), database: z.string().trim().max(128), authentication: z.enum(authenticationModes),
   username: text.optional(), password: z.string().max(1024).optional(), trustServerCertificate: z.boolean(),
   encrypt: z.enum(['optional', 'mandatory', 'strict']).optional(), hostNameInCertificate: z.string().max(256).optional(),
-  displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), advanced: advancedConnectionSchema.optional()
+  displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), environment: environmentSchema.optional(), advanced: advancedConnectionSchema.optional()
 }).strict().refine(value => !requiresUser(value.authentication) || !!value.username?.trim(), { error: issue => (issue.input as ConnectionOptions).authentication === 'sql' ? 'SQL authentication requires a username.' : 'This authentication requires a user name.' })
 
 // Persistence is built from a whitelist; neither passwords nor raw connection strings enter the file.
@@ -79,7 +80,7 @@ export interface SecretStorageState { available: boolean; reason?: 'no-keyring' 
 export function canRememberPassword(authentication: ConnectionOptions['authentication']): boolean { return usesPassword(authentication) }
 /**
  * Everything that decides where a password goes and how the server is verified. A remembered password is sent only to
- * a request with the same binding, so changing the database, name or color keeps it, and anything else needs it typed.
+ * a request with the same binding, so changing the database, name, color or environment keeps it, and anything else needs it typed.
  */
 export function credentialBinding(options: Omit<ConnectionOptions, 'password'>): string {
   return JSON.stringify([options.server.trim().toLowerCase(), options.authentication, options.username ?? '', options.encrypt ?? 'mandatory',
