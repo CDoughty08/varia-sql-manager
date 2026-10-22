@@ -3,7 +3,9 @@ import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHan
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
 import type { QueryEvent, ResultDescriptor, ResultsReadParams } from '../src/shared/contracts'
-import type { PortMessage } from '../src/shared/ipc/port-messages'
+import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
+import { buildLiveSchemas } from '../src/shared/live/schema'
+import type { LiveProbeSpec, LiveSourceSpec } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../src/shared/live/schema'
 
 const MiB = 1024 * 1024
@@ -30,7 +32,7 @@ interface FakeRead { generation: number; params: ResultsReadParams; sink: Stream
 interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (event: LiveEvent, bytes: number) => void; credit: number; credits: number[]; cancels: number[]; resolve(value: LiveEnd): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
 
-function fixture(o: { now?: () => number; testSources?: boolean } = {}) {
+function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema } = {}) {
   const reads: FakeRead[] = []
   const lives: FakeLive[] = []
   const updates: FakeUpdate[] = []
@@ -55,7 +57,7 @@ function fixture(o: { now?: () => number; testSources?: boolean } = {}) {
     liveUpdate: (generation, params) => new Promise<LiveUpdateResult>((resolve, reject) => { updates.push({ generation, params, resolve, reject }) })
   }
   const ports: FakePort[] = []
-  const host = new ResultsPortHost({ backend, createChannel: () => { const port1 = new FakePort(); ports.push(port1); return { port1, port2: { renderer: true } } }, now: o.now, testSources: o.testSources ?? true })
+  const host = new ResultsPortHost({ backend, createChannel: () => { const port1 = new FakePort(); ports.push(port1); return { port1, port2: { renderer: true } } }, now: o.now, testSources: o.testSources ?? true, schema: o.schema })
   const frame: FrameLike & { sent: unknown[][] } = { sent: [], postMessage(...args: unknown[]) { this.sent.push(args) } }
   host.backendState({ status: 'ready', generation: 1, pid: 10, runtime: 'test', platform: 'test' })
   host.open(frame)
@@ -369,6 +371,67 @@ describe('ResultsPortHost live subscriptions', () => {
     port().send({ t: 'liveUpdate', rid: 81, generation: 1, params: { subscriptionId: params.subscriptionId, source: 'debug.synthetic', refresh: true } })
     expect(codes(port()).slice(-1)).toEqual([[81, 'TOO_MANY_REQUESTS']])
     expect(lives).toHaveLength(1)
+  })
+
+  it('refuses a read or an update that reuses the rid of a running live stream, without reaching the backend', () => {
+    const { host, live, lives, reads, updates, port, read } = fixture()
+    const params = live(1)
+    lives[0].onLive(tick(1, table(10, 1)), 400)
+    host.own([descriptor(7)])
+    read(1, 7)
+    port().send({ t: 'liveUpdate', rid: 1, generation: 1, params: { subscriptionId: params.subscriptionId, source: 'debug.synthetic', paused: true } })
+    expect(codes(port())).toEqual([[1, 'INVALID_REQUEST'], [1, 'INVALID_REQUEST']])
+    expect(reads).toHaveLength(0)
+    expect(updates).toHaveLength(0)
+    // Credit for the rid still reaches the live stream alone.
+    port().send({ t: 'credit', rid: 1, bytes: 400 })
+    expect(lives[0].credits).toEqual([400])
+  })
+
+  it('refuses an update naming another source than the subscription has, which the schema alone cannot tell', () => {
+    const column = (id: string) => ({ id, name: id, dataType: 'int' })
+    const probes: Record<string, LiveProbeSpec> = {
+      'one.rows': { id: 'one.rows', source: 'one', label: 'Rows', description: 'Rows', intervalMs: { default: 1000, min: 1000, max: 60_000 }, tables: [{ id: 't', mode: 'snapshot', key: ['k'], columns: [column('k')] }] },
+      'two.rows': { id: 'two.rows', source: 'two', label: 'Rows', description: 'Rows', intervalMs: { default: 1000, min: 1000, max: 60_000 }, tables: [{ id: 't', mode: 'snapshot', key: ['k'], columns: [column('k')] }] }
+    }
+    const sources: Record<string, LiveSourceSpec> = {
+      one: { id: 'one', label: 'One', description: 'One', scope: 'server', testOnly: false, probes: ['one.rows'] },
+      two: { id: 'two', label: 'Two', description: 'Two', scope: 'server', testOnly: false, probes: ['two.rows'] }
+    }
+    const schema = buildPortRequestSchema(buildLiveSchemas({ sources, probes, args: {} }, { test: false })) as unknown as typeof portRequestSchema
+    const { live, lives, updates, port } = fixture({ schema })
+    const params = live(1, { source: 'one' as never, probes: [{ probe: 'one.rows' as never, intervalMs: 1000 }] })
+    expect(lives).toHaveLength(1)
+    port().send({ t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: params.subscriptionId, source: 'two', probes: [{ probe: 'two.rows', paused: true }] } })
+    port().send({ t: 'liveUpdate', rid: 3, generation: 1, params: { subscriptionId: params.subscriptionId, source: 'one', probes: [{ probe: 'one.rows', paused: true }] } })
+    expect(codes(port())).toEqual([[2, 'INVALID_REQUEST']])
+    expect(updates.map(update => update.params.source)).toEqual(['one'])
+  })
+
+  it('closes what a source kept when it ends after the port closed, since nothing else can', async () => {
+    const { host, backend, live, lives, frame } = fixture()
+    live(1)
+    live(2)
+    lives[0].onLive(tick(1, table(12, 1)), 400)
+    lives[1].onLive(tick(1, table(13, 1)), 400)
+    host.close()
+    expect(host.owns(1, 12)).toBe(false)
+    // Both RESPONSEs were already on the wire: one source ended, keeping its table; the other was cancelled.
+    lives[0].resolve(ended({ ended: 'sourceEnded', kept: [12], ticks: 1 }))
+    lives[1].resolve(ended({ ended: 'cancelled' }))
+    await settle()
+    expect(backend.close).toHaveBeenCalledTimes(1)
+    expect(backend.close).toHaveBeenCalledWith(1, [12])
+    expect(host.owns(1, 12)).toBe(false)
+    // After a backend loss there is nothing to close: the kept results went with that generation.
+    host.open(frame)
+    live(3)
+    lives[2].onLive(tick(1, table(14, 1)), 400)
+    host.close()
+    host.backendState({ status: 'ready', generation: 2, pid: 11, runtime: 'test', platform: 'test' })
+    lives[2].resolve(ended({ ended: 'sourceEnded', kept: [14], ticks: 1 }))
+    await settle()
+    expect(backend.close).toHaveBeenCalledTimes(1)
   })
 
   it('cancels a stream on request, and with reason 3 when the port closes, taking back its results', () => {

@@ -153,7 +153,18 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     internal LiveService Live => live;
     bool ILiveHost.TestHooks => hooks;
     bool ILiveHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
+    string? ILiveHost.ServerOf(string connectionId) => ServerOf(connectionId);
     ResultStore ILiveHost.Store => store;
+
+    /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
+    /// connections to one server count as one whatever name, login or database they used; the connection's data source when
+    /// the probe failed. Null when the id is not connected.</summary>
+    internal string? ServerOf(string connectionId)
+    {
+        if (!connections.TryGetValue(connectionId, out var connectionString)) return null;
+        if (profiles.TryGetValue(connectionId, out var profile) && !string.IsNullOrWhiteSpace(profile.ServerName)) return "server:" + profile.ServerName.Trim().ToUpperInvariant();
+        return "source:" + new SqlConnectionStringBuilder(connectionString).DataSource.Trim().ToUpperInvariant();
+    }
 
     /// <summary>Cancellation and cleanup never wait for a slot, and scripts are bounded by the per-tab session limit, so
     /// long-running queries cannot starve Object Explorer and connection requests of the 8 metadata slots. Result reads,

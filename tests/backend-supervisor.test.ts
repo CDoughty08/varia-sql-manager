@@ -522,7 +522,7 @@ describe('BackendSupervisor live subscriptions', () => {
     const gap = supervisor('live-seq-gap')
     let id = 0
     const seqs: number[] = []
-    expect(await failure(gap.request('live.subscribe', subscription(), { onSent: sent => { id = sent }, onLive: (event, bytes) => { seqs.push(event.seq); gap.credit(1, id, bytes) } }))).toMatchObject({ code: 'STREAM_PROTOCOL' })
+    expect(await failure(gap.request('live.subscribe', subscription({ probes: ['debug.synthetic.status'] }), { onSent: sent => { id = sent }, onLive: (event, bytes) => { seqs.push(event.seq); gap.credit(1, id, bytes) } }))).toMatchObject({ code: 'STREAM_PROTOCOL' })
     expect(seqs).toEqual([0])
     const { value, last } = simulated({ configure: backend => { backend.answer = false } })
     value.start()
@@ -533,6 +533,34 @@ describe('BackendSupervisor live subscriptions', () => {
     last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, { type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 1000, state: 'ok' }] })
     last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, { type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'debug.synthetic.table', costMs: 0, effectiveIntervalMs: 1000, metrics: [1] }] })
     expect(await live).toMatchObject({ code: 'STREAM_PROTOCOL' })
+  })
+  it('fails a live stream whose events name another source or probes it did not subscribe to', async () => {
+    // The echo backend reports the probes asked for and samples the status probe: fine for a status subscription.
+    const echo = supervisor('echo')
+    let id = 0
+    const ok = await echo.request('live.subscribe', subscription({ probes: ['debug.synthetic.status'] }), { onSent: sent => { id = sent }, onLive: (_event, bytes) => echo.credit(1, id, bytes) })
+    expect(ok).toMatchObject({ ended: 'sourceEnded', ticks: 3 })
+    // A table subscription: its ticks sample a probe it never asked for, though the catalogue allows them on the source.
+    const seqs: number[] = []
+    expect(await failure(echo.request('live.subscribe', subscription(), { onSent: sent => { id = sent }, onLive: (event, bytes) => { seqs.push(event.seq); echo.credit(1, id, bytes) } }))).toMatchObject({ code: 'STREAM_PROTOCOL' })
+    expect(seqs).toEqual([0])
+    const send = async (events: Record<string, unknown>[], probes?: string[]) => {
+      const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+      value.start()
+      await settle(8)
+      const received: number[] = []
+      const live = failure(value.request('live.subscribe', subscription({ probes }), { onLive: event => { received.push(event.seq) } }))
+      await settle(8)
+      for (const event of events) last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, event)
+      return { error: await live, received }
+    }
+    const openedFor = (probes: string[]) => ({ type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 1000, state: 'ok' })) })
+    // An opened frame that leaves out a subscribed probe, or adds one.
+    expect(await send([openedFor(['debug.synthetic.table'])], ['debug.synthetic.table', 'debug.synthetic.status'])).toMatchObject({ error: { code: 'STREAM_PROTOCOL' }, received: [] })
+    expect(await send([openedFor(['debug.synthetic.table', 'debug.synthetic.status'])])).toMatchObject({ error: { code: 'STREAM_PROTOCOL' }, received: [] })
+    // An error value for a probe the subscription does not have.
+    const error = { type: 'live.tick', seq: 1, sampledAt: 1, samples: [], errors: [{ probe: 'debug.synthetic.metrics', code: 'SQL_ERROR', message: 'Failed.', retryInMs: 1000, terminal: false }] }
+    expect(await send([openedFor(['debug.synthetic.table']), error])).toMatchObject({ error: { code: 'STREAM_PROTOCOL' }, received: [0] })
   })
   it('ends live streams with BACKEND_LOST when their generation is lost, and checks their answers', async () => {
     const { value, last } = simulated({ configure: backend => { backend.answer = false } })

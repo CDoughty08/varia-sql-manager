@@ -22,6 +22,9 @@ internal static class LiveChecks
         RequestChecks(check);
         RegistryChecks(check);
         EndChecks(check);
+        BudgetChecks(check);
+        await LaneChecks(check);
+        await FixtureChecks(check);
     }
 
     private static async Task ContextChecks(Action<bool, string> check)
@@ -68,12 +71,14 @@ internal static class LiveChecks
         try { unary.TrySendCreditedEvent("x"); }
         catch (InvalidOperationException) { notStream = true; }
         check(tooLarge && notStream, "a live frame over the event limit is a BACKEND_ERROR, never a silent drop, and only a stream sends credited EVENTs");
+        check(LiveService.IsResumeToken("AAAA_-9z") && !LiveService.IsResumeToken("AAAA\n") && !LiveService.IsResumeToken("\nAAAA") && !LiveService.IsResumeToken("a=b") && !LiveService.IsResumeToken(""),
+            "a resume token is base64url only, as main's pattern is: a trailing newline is refused");
     }
 
     private static void CatalogChecks(Action<bool, string> check)
     {
         var catalog = LiveCatalog.Current;
-        check(catalog.Limits is { PortStreams: 16, BackendSubscriptions: 32, PerConnection: 8, Probes: 8, InitialCredit: Credit, EventBody: ProtocolLimits.EventBody, FrameBudget: 192 * 1024 }
+        check(catalog.Limits is { PortStreams: 16, BackendSubscriptions: 32, PerServer: 8, Probes: 8, InitialCredit: Credit, EventBody: ProtocolLimits.EventBody, FrameBudget: 192 * 1024 }
             && catalog.Sources.TryGetValue(SyntheticSampler.Source, out var source) && source.TestOnly
             && source.Probes.SequenceEqual([SyntheticSampler.MetricsProbe, SyntheticSampler.TableProbe, SyntheticSampler.StatusProbe])
             && catalog.Probes[SyntheticSampler.TableProbe].Tables is [{ Mode: "snapshot", Key: ["id"], Columns.Count: 3 }],
@@ -147,6 +152,15 @@ internal static class LiveChecks
             && sortedTable?.GetProperty("tracked").GetProperty("seq").GetInt32() == 7 && sortedTable?.GetProperty("tracked").GetProperty("rows").EnumerateArray().Select(row => row.GetInt32()).SequenceEqual([2, -1]) == true,
             "an update's sort orders the next revision, and its track list finds each key, the stored cell text, at its new row (−1 when gone)");
 
+        // Clearing the sort returns the next revision to the source's own order.
+        host.Request(20, "live.update", new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, clear = new[] { "sort" } } } });
+        var cleared = host.Next(FrameKind.Response);
+        var unsorted = Next(host, 1, ref frame)?.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe).GetProperty("tables")[0];
+        var plainSet = unsorted is { } u ? Stored(store, u) : null;
+        var plainPage = plainSet?.PagesFor(0, 10) is [{ } plainStored] ? PageReader.Read(plainStored.Body, plainSet.Wires) : null;
+        check(cleared?.Header.Id == 20 && Result(cleared).GetProperty("applied").GetBoolean() && unsorted?.GetProperty("revision").GetInt64() == 5
+            && plainPage?.Rows.Select(row => row[0].Text).SequenceEqual(["5", "6", "7"]) == true, "an update's clear drops the probe's sort: the next revision is in the source's order");
+
         // Pause stops sampling; resuming marks the next samples resumed.
         host.Request(3, "live.update", new { subscriptionId = subscription, source = SyntheticSampler.Source, paused = true });
         var pause = host.Next(FrameKind.Response);
@@ -212,7 +226,8 @@ internal static class LiveChecks
             ["unknown sort"] = Refused(With(probes: new[] { new { probe = SyntheticSampler.TableProbe, intervalMs = 1000, sort = new[] { new { column = "nope", descending = true } } } })),
             ["view"] = Refused(With(probes: new[] { new { probe = SyntheticSampler.TableProbe, intervalMs = 1000, view = "blocked" } })),
             ["filter"] = Refused(With(probes: new[] { new { probe = SyntheticSampler.TableProbe, intervalMs = 1000, filter = new { text = "x" } } })),
-            ["subscription id"] = Refused(With(subscription: "not-a-uuid"))
+            ["subscription id"] = Refused(With(subscription: "not-a-uuid")),
+            ["clear"] = Refused(With(probes: new[] { new { probe = SyntheticSampler.TableProbe, intervalMs = 1000, clear = new[] { "sort" } } }))
         };
         check(refused.All(item => item.Value == "INVALID_PARAMS"), "live.subscribe refuses what main's schema refuses, as INVALID_PARAMS: "
             + string.Join(", ", refused.Where(item => item.Value != "INVALID_PARAMS").Select(item => item.Key + " " + item.Value)));
@@ -234,7 +249,16 @@ internal static class LiveChecks
             ["track keys"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 1, keys = Enumerable.Repeat("k", 65).ToArray() } } }),
             ["track key length"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 1, keys = new[] { new string('k', 513) } } } }),
             ["track table"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 1, seq = 1, keys = Array.Empty<string>() } } }),
-            ["args"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, args = new { tickMs = 5 } })
+            ["args"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, args = new { tickMs = 5 } }),
+            ["track seq"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 0, keys = Array.Empty<string>() } } }),
+            ["unknown sort"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "nope", descending = true } } } } }),
+            ["repeated sort"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "id", descending = true }, new { column = "id", descending = false } } } } }),
+            ["view"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, view = "blocked" } } }),
+            ["filter"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, filter = new { text = "x" } } } }),
+            ["clear unknown"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, clear = new[] { "rows" } } } }),
+            ["clear twice"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, clear = new[] { "sort", "sort" } } } }),
+            ["clear empty"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, clear = Array.Empty<string>() } } }),
+            ["clear and set"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "id", descending = true } }, clear = new[] { "sort" } } } })
         };
         check(updates.All(item => item.Value == "INVALID_PARAMS") && Update(new { subscriptionId = Guid.NewGuid().ToString(), source = SyntheticSampler.Source, paused = true }) == "NOT_FOUND"
             && Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, refresh = true, args = new { rows = 5 } }) == "accepted",
@@ -264,7 +288,7 @@ internal static class LiveChecks
         var over = Enumerable.Range(0, 8).Select(_ => host.Next(FrameKind.Response)).ToList();
         check(perConnection && over.All(answer => ErrorCode(answer) == "BUSY") && over.All(answer => answer?.Header.Id > 9)
             && SpinWait.SpinUntil(() => service.Live.Count == 32, 2000),
-            "at most 8 live subscriptions per connection and 32 in the backend; the next is BUSY");
+            "at most 8 live subscriptions per server (a connection id that reaches none counts as its own) and 32 in the backend; the next is BUSY");
         var duplicate = Guid.NewGuid().ToString();
         host.Request(++id, "live.subscribe", Subscribe(duplicate, connections[4], [SyntheticSampler.StatusProbe]), credit: Credit);
         var full = host.Next(FrameKind.Response);
@@ -323,6 +347,219 @@ internal static class LiveChecks
         service.Live.TestSampler = null;
         check(failed?.Header.Id == 3 && Result(failed).GetProperty("ended").GetString() == "failed" && Result(failed).GetProperty("code").GetString() == "BACKEND_ERROR"
             && Result(failed).GetProperty("message").GetString()!.Length > 0 && host.Next(FrameKind.Event, 200) is null, "a tick over 256 KiB ends the subscription failed (BACKEND_ERROR) and is never sent");
+    }
+
+    /// <summary>Live SQL: a second connection to the same server, with another database, counts against the same
+    /// per-server cap, by the server's own name.</summary>
+    public static async Task LiveAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions other, JsonSerializerOptions json)
+    {
+        var second = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(other, json), json);
+        try
+        {
+            var server = service.ServerOf(info.Id);
+            check(server is { Length: > 7 } && server.StartsWith("server:", StringComparison.Ordinal) && service.ServerOf(second.Id) == server && service.ServerOf(Guid.NewGuid().ToString()) is null,
+                "two connections to one SQL Server, with different databases, resolve to the same server for the live per-server cap");
+        }
+        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(second.Id), json), json); }
+    }
+
+    /// <summary>The table probe's sample or error in a tick.</summary>
+    private static (JsonElement? Table, string? Error) TableOf(JsonElement? tick)
+    {
+        if (tick is not { } value) return (null, null);
+        foreach (var sample in value.GetProperty("samples").EnumerateArray())
+            if (sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe) return (sample.GetProperty("tables")[0], null);
+        return value.TryGetProperty("errors", out var errors) ? (null, errors[0].GetProperty("code").GetString()) : (null, null);
+    }
+
+    private static void BudgetChecks(Action<bool, string> check)
+    {
+        // A refused duplicate leaves the running subscription's revisions alone.
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using (var host = new HostHarness(dispatcher: () => new SqlService(store, hooks: true)))
+        {
+            host.Hello();
+            var subscription = Guid.NewGuid().ToString();
+            host.Request(1, "live.subscribe", Subscribe(subscription, Guid.NewGuid().ToString(), [SyntheticSampler.TableProbe]), credit: Credit);
+            Frame? frame = null;
+            Next(host, 1, ref frame);
+            var (table, _) = TableOf(Next(host, 1, ref frame));
+            host.Request(2, "live.subscribe", Subscribe(subscription, Guid.NewGuid().ToString(), [SyntheticSampler.TableProbe]), credit: Credit);
+            var refused = host.Next(FrameKind.Response);
+            check(refused?.Header.Id == 2 && ErrorCode(refused) == "DUPLICATE_REQUEST" && table is { } t && Stored(store, t) is { IsComplete: true, RowsAvailable: 3 },
+                "a refused duplicate subscription leaves the running one's current revision readable");
+            host.Send(FrameKind.Cancel, 1, 1, []);
+            host.Next(FrameKind.Response);
+        }
+
+        // Revisions that fill the budget together: each has its own budget and the oldest goes before the next is stored,
+        // so the probe keeps storing, and a smaller row count afterwards is stored in full.
+        var small = new ResultStore(1L << 20, 1L << 19);
+        using (var host = new HostHarness(dispatcher: () => new SqlService(small, hooks: true)))
+        {
+            host.Hello();
+            var subscription = Guid.NewGuid().ToString();
+            host.Request(1, "live.subscribe", Subscribe(subscription, Guid.NewGuid().ToString(), [SyntheticSampler.TableProbe], new { tickMs = 20, rows = 10_000 }), credit: Credit);
+            Frame? frame = null;
+            Next(host, 1, ref frame);
+            var full = Enumerable.Range(0, 5).Select(_ => TableOf(Next(host, 1, ref frame))).ToList();
+            host.Request(2, "live.update", new { subscriptionId = subscription, source = SyntheticSampler.Source, args = new { rows = 3 } });
+            var updated = host.Next(FrameKind.Response);
+            var after = Enumerable.Range(0, 4).Select(_ => TableOf(Next(host, 1, ref frame))).ToList();
+            check(full.All(item => item.Table is not null) && ErrorCode(updated) is null
+                && after.TakeLast(2).All(item => item.Table is { } value && Stored(small, value) is { RowsAvailable: 3 }) && small.Count <= 2,
+                "revisions that fill the result budget keep being stored, each with its own budget, and a smaller row count afterwards is stored in full: " + string.Join(", ", full.Concat(after).Select(item => item.Error ?? "table")));
+            host.Send(FrameKind.Cancel, 1, 1, []);
+            host.Next(FrameKind.Response);
+        }
+
+        // A budget full of other results: the probe reports BUDGET, and stores again once they are closed.
+        var held = new ResultStore(1L << 20, 1L << 19);
+        var hogs = new[] { held.BeginQuery("hog-1"), held.BeginQuery("hog-2") };
+        var reserved = hogs.All(hog => held.TryReserve(hog, 1L << 19, false, out _));
+        using (var host = new HostHarness(dispatcher: () => new SqlService(held, hooks: true)))
+        {
+            host.Hello();
+            host.Request(1, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), [SyntheticSampler.TableProbe]), credit: Credit);
+            Frame? frame = null;
+            Next(host, 1, ref frame);
+            var refused = Enumerable.Range(0, 2).Select(_ => TableOf(Next(host, 1, ref frame))).ToList();
+            foreach (var hog in hogs) held.Return(hog, 1L << 19);
+            var recovered = Enumerable.Range(0, 2).Select(_ => TableOf(Next(host, 1, ref frame))).ToList();
+            check(reserved && refused.All(item => item.Error == "BUDGET") && recovered.All(item => item.Table is { } value && Stored(held, value) is { RowsAvailable: 3 }),
+                "a probe reports BUDGET while the result budget is full, and stores again as soon as memory is free: " + string.Join(", ", refused.Concat(recovered).Select(item => item.Error ?? "table")));
+            host.Send(FrameKind.Cancel, 1, 1, []);
+            host.Next(FrameKind.Response);
+        }
+    }
+
+    /// <summary>A live EVENT is never droppable: with the control lane full (main not reading), droppable events are refused
+    /// but the subscription's frame is still queued, since the source would otherwise wait for an acknowledgement forever.</summary>
+    private static async Task LaneChecks(Action<bool, string> check)
+    {
+        var service = new SqlService(new ResultStore(1L << 30, 1L << 29), hooks: true);
+        using var host = new HostHarness(dispatcher: () => service, valve: true);
+        host.Hello();
+        host.Valve!.Shut();
+        var full = false;
+        for (var i = 0; i < 1_000_000 && !full; i++) full = !host.Host.Publish(new { type = "results.memory", usedBytes = 0, globalBytes = 1, seq = i });
+        host.Request(1, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), [SyntheticSampler.StatusProbe]), credit: Credit);
+        var running = SpinWait.SpinUntil(() => service.Live.Count == 1, 5000);
+        // The opened frame is queued synchronously once the subscription is registered.
+        await Task.Delay(200);
+        host.Valve.Open();
+        var opened = false;
+        while (!opened && host.Next(FrameKind.Event, 5000) is { } frame) opened = frame.Header.Id == 1 && Body(frame).GetProperty("type").GetString() == "live.opened";
+        check(full && running && opened, "a live EVENT is queued even while the control lane is full, where droppable events are refused");
+        host.Send(FrameKind.Cancel, 1, 1, []);
+        host.Next(FrameKind.Response);
+    }
+
+    /// <summary>The backend's rules against a catalogue with shapes the shipped one lacks: two sources, a probe with a view
+    /// and a filter mode. Driven on LiveService directly, with a host whose connections reach named servers.</summary>
+    private static async Task FixtureChecks(Action<bool, string> check)
+    {
+        LiveColumnJson Column(string id) => new(id, id, "int");
+        LiveTableJson Table(string key) => new("rows", "snapshot", [Column(key), Column("v")], [key]);
+        var interval = new LiveIntervalJson(1000, 1000, 3_600_000);
+        var catalog = LiveCatalog.Create(LiveCatalog.Current.Limits,
+            [new("fixture.one.rows", "fixture.one", "Rows", "Rows", interval, [], [Table("k")], [], ["blocked"], "memory"), new("fixture.two.rows", "fixture.two", "Rows", "Rows", interval, [], [Table("j")], [], [], "none")],
+            [new("fixture.one", "One", "One", "server", false, ["fixture.one.rows"]), new("fixture.two", "Two", "Two", "server", false, ["fixture.two.rows"])]);
+        var servers = new Dictionary<string, string>
+        {
+            [Guid.NewGuid().ToString()] = "server:A", [Guid.NewGuid().ToString()] = "server:A", [Guid.NewGuid().ToString()] = "server:B"
+        };
+        var ids = servers.Keys.ToArray();
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new LiveService(new FixtureHost(servers, store), catalog) { TestSampler = _ => new IdleSampler() };
+        var contexts = new List<RequestContext>();
+        var tasks = new List<Task<LiveEnd>>();
+        uint next = 0;
+        Task<LiveEnd> Start(string connection, LiveProbeArgs? probe = null, string source = "fixture.one", string? subscription = null)
+        {
+            var context = new RequestContext(++next, "live.subscribe", RequestLane.Live, 0, Credit, sendCreditedEvent: (_, _) => 10);
+            contexts.Add(context);
+            var task = service.SubscribeAsync(new LiveSubscribeArgs(subscription ?? Guid.NewGuid().ToString(), connection, source, [probe ?? new LiveProbeArgs(source + ".rows", 1000)]), context, HostChecks.Json);
+            tasks.Add(task);
+            return task;
+        }
+        static string Code(Task task) => task.IsFaulted ? (task.Exception!.InnerException as RequestException)?.Code ?? "other" : task.IsCompleted ? "ended" : "running";
+        string Updated(LiveUpdateArgs args)
+        {
+            try { service.Update(args, HostChecks.Json); return "accepted"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        async Task Settle()
+        {
+            service.CancelAll();
+            try { await Task.WhenAll(tasks); }
+            catch (RequestException) { /* The refused ones. */ }
+            tasks.Clear();
+        }
+
+        // 8 per server: two connections to server A share its 8; server B has its own.
+        var first = Enumerable.Range(0, 8).Select(index => Code(Start(ids[index % 2]))).ToList();
+        var ninth = Code(Start(ids[1]));
+        var other = Code(Start(ids[2]));
+        check(first.All(code => code == "running") && ninth == "BUSY" && other == "running" && service.Count == 9,
+            "at most 8 live subscriptions per SQL Server, counted across every connection that reaches it: " + string.Join(", ", first) + ", " + ninth + ", " + other);
+        await Settle();
+
+        string Subscribed(LiveProbeArgs probe) => Code(Start(ids[2], probe));
+        var subscribes = new Dictionary<string, string>
+        {
+            ["filter"] = Subscribed(new("fixture.one.rows", 1000, Filter: new(new string('x', 400), ["k", "v"]))),
+            ["view"] = Subscribed(new("fixture.one.rows", 1000, View: "blocked")),
+            ["long filter"] = Subscribed(new("fixture.one.rows", 1000, Filter: new(new string('x', 401)))),
+            ["filter column"] = Subscribed(new("fixture.one.rows", 1000, Filter: new("x", ["j"]))),
+            ["unknown view"] = Subscribed(new("fixture.one.rows", 1000, View: "other")),
+            ["no filter mode"] = Code(Start(ids[2], new("fixture.two.rows", 1000, Filter: new("x")), "fixture.two")),
+            ["other source's probe"] = Subscribed(new("fixture.two.rows", 1000))
+        };
+        check(subscribes.Take(2).All(item => item.Value == "running") && subscribes.Skip(2).All(item => item.Value == "INVALID_PARAMS"),
+            "live.subscribe takes a filter of up to 400 characters on the probe's columns and a view it declares, only where it has them: "
+            + string.Join(", ", subscribes.Select(item => item.Key + " " + item.Value)));
+        await Settle();
+
+        var id = Guid.NewGuid().ToString();
+        _ = Start(ids[2], subscription: id);
+        LiveUpdateArgs Patch(LiveProbeArgs probe) => new(id, "fixture.one", Probes: [probe]);
+        var updates = new Dictionary<string, string>
+        {
+            ["filter"] = Updated(Patch(new("fixture.one.rows", Filter: new(new string('x', 400))))),
+            ["clear"] = Updated(Patch(new("fixture.one.rows", Clear: ["filter", "view", "sort"]))),
+            ["long filter"] = Updated(Patch(new("fixture.one.rows", Filter: new(new string('x', 401))))),
+            ["filter column"] = Updated(Patch(new("fixture.one.rows", Filter: new("x", ["j"])))),
+            ["unknown view"] = Updated(Patch(new("fixture.one.rows", View: "other"))),
+            ["another source"] = Updated(new(id, "fixture.two", Paused: true)),
+            ["another source's probe"] = Updated(new(id, "fixture.two", Probes: [new("fixture.two.rows", Paused: true)])),
+            ["another source's table"] = Updated(new(id, "fixture.one", Track: [new("fixture.two.rows", 0, 1, [])]))
+        };
+        check(updates.Take(2).All(item => item.Value == "accepted") && updates.Skip(2).All(item => item.Value == "INVALID_PARAMS"),
+            "live.update checks filters, views and the source against the catalogue as subscribe does: " + string.Join(", ", updates.Select(item => item.Key + " " + item.Value)));
+        await Settle();
+        foreach (var context in contexts) context.Dispose();
+    }
+
+    private sealed class FixtureHost(Dictionary<string, string> servers, ResultStore store) : ILiveHost
+    {
+        public bool TestHooks => false;
+        public bool IsConnected(string connectionId) => servers.ContainsKey(connectionId);
+        public string? ServerOf(string connectionId) => servers.GetValueOrDefault(connectionId);
+        public ResultStore Store => store;
+    }
+
+    /// <summary>Opens every probe and samples nothing.</summary>
+    private sealed class IdleSampler : ILiveSampler
+    {
+        public int? PeriodMs => null;
+        public bool Ended => false;
+        public IReadOnlyList<LiveOpenedProbe> Open(IReadOnlyList<LiveProbeState> probes) => [.. probes.Select(probe => new LiveOpenedProbe(probe.Spec.Id, 1000, 1000, 1000, "ok"))];
+        public Task<LiveSampleBatch> SampleAsync(IReadOnlyList<LiveDue> due, CancellationToken token) => Task.FromResult(new LiveSampleBatch([], []));
+        public void Apply(object args) { }
+        public uint[] Keep() => [];
+        public void Release() { }
+        public void Dispose() { }
     }
 
     /// <summary>A sampler whose one sample is over the event limit (17 statuses of 128 characters would not be; this is bigger).</summary>

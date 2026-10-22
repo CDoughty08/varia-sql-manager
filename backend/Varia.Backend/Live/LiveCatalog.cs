@@ -15,7 +15,7 @@ internal sealed record LiveProbeJson(string Id, string Source, string Label, str
 /// <summary>Scope is server, ssisdb or none (a test source that touches no SQL Server).</summary>
 internal sealed record LiveSourceJson(string Id, string Label, string Description, string Scope, bool TestOnly, List<string> Probes);
 /// <summary>limits.live of src/shared/ipc/wire/protocol.ts, plus the event body limit.</summary>
-internal sealed record LiveLimitsJson(int PortStreams, int BackendSubscriptions, int PerConnection, int Probes, int TablesPerProbe, int AppendPerProbe, int TablesPerTick,
+internal sealed record LiveLimitsJson(int PortStreams, int BackendSubscriptions, int PerServer, int Probes, int TablesPerProbe, int AppendPerProbe, int TablesPerTick,
     int Series, int Statuses, int StatusCharacters, int Errors, int MessageCharacters, int NoteCharacters, int Columns, LiveIntervalBoundsJson IntervalMs, int InitialCredit,
     int FrameBudget, int SortColumns, int FilterCharacters, int FilterColumns, int TrackedKeys, int KeyCharacters, int ResumeCharacters, int Kept, int EventBody);
 
@@ -44,6 +44,10 @@ internal sealed class LiveCatalog
     }
 
     public static LiveCatalog Current => Embedded.Value;
+
+    /// <summary>A catalogue the checks build, with shapes the shipped one does not have yet (views, filter modes, a second
+    /// source), so the backend's rules can be checked against them as main's are (tests/live-schema.test.ts).</summary>
+    internal static LiveCatalog Create(LiveLimitsJson limits, IEnumerable<LiveProbeJson> probes, IEnumerable<LiveSourceJson> sources) => new(new CatalogJson(limits, [.. probes], [.. sources], Version));
 
     public static LiveCatalog Parse(Stream stream) => new(JsonSerializer.Deserialize<CatalogJson>(stream,
         new JsonSerializerOptions(JsonSerializerDefaults.Web) { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow })

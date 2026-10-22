@@ -736,8 +736,8 @@ results port, and a backend whose HELLO lacks either is refused.
 live.subscribe { subscriptionId: uuid, connectionId: uuid, source, probes: { probe, intervalMs: 1,000..3,600,000, paused?,
                  sort?: { column, descending }[1..4], view?, filter?: { text: 1..400, columns?: id[1..8] } }[1..8],
                  args?, resume?: base64url ≤ 256 }
-live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs optional)[1..8], refresh?: true,
-                 track?: { probe, table, seq: u31, keys: str ≤ 512 [≤ 64] }[1..8], args? }
+live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs optional, clear?: (sort | view | filter)[1..3])[1..8],
+                 refresh?: true, track?: { probe, table, seq: u31, keys: str ≤ 512 [≤ 64] }[1..8], args? }
 ```
 
 Every probe belongs to the source and is named once; the interval is then clamped to the probe's own minimum and maximum.
@@ -747,8 +747,11 @@ be one the probe declares, and a filter needs a probe with a filter mode. `args`
 errorEvery?: 1..1,000 }`, a sampling period below the 1 s minimum so tests run fast (samples still report the requested
 interval), a sample count after which the source ends, and an error value every n-th table sample. Tracking names a keyed
 snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F. A source without append
-tables has nothing to resume from and refuses `resume`. An update must change something, and repeats the subscription's
-source; main and the backend check it matches.
+tables has nothing to resume from and refuses `resume`; a token is base64url characters only (the backend matches the whole
+string, so a trailing newline is refused on both sides). An update must change something, and repeats the subscription's
+source; main and the backend check it matches. In an update, an absent setting keeps its value, so `clear` drops one: the
+sort (back to the source's order), the view (all rows) or the filter, each named once and never alongside a new value for
+the same setting; a subscribe refuses `clear`.
 
 **Frames.** The first EVENT is `live.opened` (seq 0, before any sample): `{ source, band?, spid?, isolation?, probes: {
 probe, intervalMs, minIntervalMs, maxIntervalMs, state: ok | limited | unavailable, reason?, note? ≤ 400 }[] }`. Then one
@@ -761,10 +764,12 @@ error is a value, never an exception, so the other probes carry on: `{ probe, co
 names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
 probe's batch would have filled), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
 DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING or NOT_FOUND.
-Main checks every frame against `liveEventSchema`: each probe sampled once and its source's, metrics aligned with the
-catalogue's series, tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a
-tick, status ids the probe declares, error tables and series the probe has, and `seq` 0 and then one more each time. It
-stamps the generation on every descriptor. The catalogue's worst-case tick (every list at its maximum, every string in
+Main checks every frame against `liveEventSchema` (each probe sampled once, metrics aligned with the catalogue's series,
+tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, status ids the
+probe declares, error tables and series the probe has, and `seq` 0 and then one more each time) and against the
+subscription it arrived on (`liveEventFits`, in the supervisor): `live.opened` names the subscription's source and reports
+each subscribed probe once, and a tick samples or fails only subscribed probes, so another source's or an unsubscribed
+probe's tables are never owned. It stamps the generation on every descriptor. The catalogue's worst-case tick (every list at its maximum, every string in
 three-byte characters) encodes to at most 192 KiB (`tests/live-schema.test.ts`); a tick over 256 KiB is never sent: the
 backend ends the subscription `failed` with `BACKEND_ERROR`, a bug rather than a silent drop.
 
@@ -796,15 +801,25 @@ ending `CANCELLED`.
 
 **Ownership.** `ResultsPortHost` owns each table a tick carries (so the worker can read it with `results.read`), takes
 back on `retired` only the stream's own results (never a query's or another stream's), and when the stream ends takes back
-all of its results except a finished source's `kept`. Closing the port cancels its live streams with reason 3.
+all of its results except a finished source's `kept`. Closing the port cancels its live streams with reason 3 and takes
+back their results; a stream whose answer was already on its way (`sourceEnded` with `kept`) then has no reader, so main
+closes what it kept with `results.close` (while that generation is still ready) rather than leave it in the budget.
 
-**Backend** (`Live/LiveService.cs`): a registry by subscription id, at most 32 in the backend and 8 per connection id
-(`BUSY`: "Too many live views are open for this server. Close one and retry."), a duplicate id `DUPLICATE_REQUEST`. Each
-subscription is one task with its own schedule, so it never overlaps itself; a source runs its due probes through an
-`ILiveSampler`. `debug.synthetic` (`SyntheticSampler.cs`) runs no SQL: its metrics probe counts samples and draws a wave
-(the rate is null until a second sample), its table probe stores one snapshot result per sample whose rows move on by one id
-each time (two revisions alive, the one before them retired and released), sorted as asked, with diff counts and tracked
-rows, and its status probe reports the phase and the sample count. Its scope is `none`, so any connection id is accepted;
+**Backend** (`Live/LiveService.cs`): a registry by subscription id, at most 32 in the backend and 8 per SQL Server
+(`BUSY`: "Too many live views are open for this server. Close one and retry."), a duplicate id `DUPLICATE_REQUEST`. The
+per-server count goes by the server a connection reaches (`SERVERPROPERTY('ServerName')`, probed at connect, or the
+connection's data source when that probe failed), so two connections to one server with other logins or databases share
+its 8; a source that reaches no server (`debug.synthetic`) counts by connection id. Both refusals come before the source's
+sampler is built, and a sampler acquires nothing (store, pools, connections) until the subscription runs, so a refused
+request never touches what a running subscription holds. Each subscription is one task with its own schedule, so it never
+overlaps itself; a source runs its due probes through an `ILiveSampler`. `debug.synthetic` (`SyntheticSampler.cs`) runs
+no SQL: its metrics probe counts samples and draws a wave (the rate is null until a second sample), its table probe stores
+one snapshot result per sample whose rows move on by one id each time (two revisions alive: the oldest is released before
+the next is stored, since the renderer has applied the newest by then, and the next stored revision names it as retired),
+sorted as asked, with diff counts and tracked rows, and its status probe reports the phase and the sample count. Each
+revision has its own query budget, so a revision that did not fit (a `BUDGET` error value) never stops later ones: the
+probe stores again once memory is free. The per-subscription cap (64 MiB, all live views within 25 % of the result budget)
+comes with the SQL sources' snapshot writers. Its scope is `none`, so any connection id is accepted;
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
 
 Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets.
@@ -985,7 +1000,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
-| Live subscriptions | 16 per results port, 32 per backend, 8 per connection; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results | zod, main and backend |
+| Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results | zod, main and backend |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
 | Results grid | tiles of 128 rows × 32 columns; 512 characters per displayed cell; one window cache of 256 windows / 16,777,216 UTF-16 units; at most 12 grids mounted, 2 a frame | renderer |
 | Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s; backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |

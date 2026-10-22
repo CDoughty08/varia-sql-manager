@@ -27,7 +27,7 @@ catalogue declares, and what each probe emits. Sources marked test only are acce
 
 | Item | Value |
 | --- | --- |
-| Subscriptions | 16 per results port (main), 32 per backend, 8 per SQL connection |
+| Subscriptions | 16 per results port (main), 32 per backend, 8 per SQL Server (by the server a connection reaches) |
 | Probes | 8 per subscription; 4 snapshot and 4 append tables per probe, 8 tables per tick |
 | Interval | 1 s to 3,600 s requested, then clamped to the probe's own minimum and maximum |
 | Frames | one unacknowledged per subscription; initial credit 64 KiB; at most 256 KiB each, and the catalogue's worst case at most 192 KiB |

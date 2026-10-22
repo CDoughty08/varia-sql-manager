@@ -176,10 +176,12 @@ const statusTick = (seq, sample = seq) => ({ type: 'live.tick', seq, sampledAt: 
 /** Echo-mode live.subscribe: protocol tests of main's credited-EVENT rule. */
 function liveEcho(id, credit = 65_536, params = {}) {
   const event = value => process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, encodeControl(value)))
+  // The opened frame reports the probes asked for (main refuses any other set); ticks sample the status probe.
+  const probes = Array.isArray(params.probes) ? params.probes.map(probe => probe.probe) : syntheticProbes
   switch (mode) {
-    case 'live-overrun': event(opened(syntheticProbes)); event(statusTick(1)); return
-    case 'live-data': event(opened(syntheticProbes)); process.stdout.write(encodeFrame(FrameKind.DATA, id, 1, new Uint8Array(16))); return
-    case 'live-big': event({ ...opened(syntheticProbes), padding: 'x'.repeat(300 * 1024) }); return
+    case 'live-overrun': event(opened(probes)); event(statusTick(1)); return
+    case 'live-data': event(opened(probes)); process.stdout.write(encodeFrame(FrameKind.DATA, id, 1, new Uint8Array(16))); return
+    case 'live-big': event({ ...opened(probes), padding: 'x'.repeat(300 * 1024) }); return
   }
   const ticks = params.ticks ?? 3
   const live = { id, initial: credit, available: credit, seq: 0 }
@@ -193,7 +195,7 @@ function liveEcho(id, credit = 65_536, params = {}) {
   }
   live.end = ended => respond(id, { ended, ticks: live.seq, elapsedMs: 1 })
   lives.set(id, live)
-  send(opened(syntheticProbes))
+  send(opened(probes))
 }
 function endLive(live, ended) {
   lives.delete(live.id)
@@ -599,6 +601,7 @@ function liveUpdate(id, params) {
     if (patch.intervalMs !== undefined) probe.intervalMs = patch.intervalMs
     if (patch.paused !== undefined) { if (probe.paused && !patch.paused) resume(probe); probe.paused = patch.paused }
     if (patch.sort !== undefined) probe.sort = patch.sort
+    if (patch.clear?.includes('sort')) probe.sort = undefined
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
   if (params.args) live.args = { ...live.args, ...params.args }

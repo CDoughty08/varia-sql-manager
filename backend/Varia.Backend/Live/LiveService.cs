@@ -13,6 +13,9 @@ internal interface ILiveHost
     /// <summary>VARIA_BACKEND_TEST_HOOKS=1: test-only sources (debug.synthetic) are accepted.</summary>
     bool TestHooks { get; }
     bool IsConnected(string connectionId);
+    /// <summary>The server a connection reaches, the same for every login and database on it (the per-server cap), or
+    /// null when the id is not connected.</summary>
+    string? ServerOf(string connectionId);
     ResultStore Store { get; }
 }
 
@@ -39,7 +42,11 @@ internal sealed record LiveDue(LiveProbeState Probe, string? Gap, int? Skipped, 
 internal sealed record LiveSampleBatch(List<LiveSample> Samples, List<LiveProbeError> Errors);
 
 /// <summary>What a source does: the probes' states when it opens, one batch per tick for the due probes, and its end.
-/// debug.synthetic implements it here; the SQL sources' scheduler and pools implement it in later PRs.</summary>
+/// debug.synthetic implements it here; the SQL sources' scheduler and pools implement it in later PRs. A sampler is built
+/// before the registry admits its subscription, which may still refuse it (BUSY, DUPLICATE_REQUEST), so its constructor
+/// acquires nothing (no store session, pool or connection): Open does, once the subscription runs. Each stored revision
+/// takes its own budget, so a failed one never stops later ones; the per-subscription memory cap (64 MiB, all live views
+/// within 25 % of the result budget) belongs to the SQL sources' snapshot writers (L2b).</summary>
 internal interface ILiveSampler : IDisposable
 {
     /// <summary>A sampling period that replaces the probes' intervals (debug.synthetic's tickMs), or null.</summary>
@@ -66,10 +73,11 @@ internal sealed class LiveSubscription : IDisposable
     private string? endReason;
     private bool disposed;
 
-    public LiveSubscription(string id, string connectionId, LiveSourceJson source, List<LiveProbeState> probes, ILiveSampler sampler, RequestContext context)
+    public LiveSubscription(string id, string connectionId, string server, LiveSourceJson source, List<LiveProbeState> probes, ILiveSampler sampler, RequestContext context)
     {
         Id = id;
         ConnectionId = connectionId;
+        Server = server;
         Source = source;
         Probes = probes;
         Sampler = sampler;
@@ -79,6 +87,9 @@ internal sealed class LiveSubscription : IDisposable
 
     public string Id { get; }
     public string ConnectionId { get; }
+    /// <summary>What the per-server cap counts by: the server the connection reaches, or the connection id for a source
+    /// that reaches none.</summary>
+    public string Server { get; }
     public LiveSourceJson Source { get; }
     public List<LiveProbeState> Probes { get; }
     public ILiveSampler Sampler { get; }
@@ -164,21 +175,29 @@ internal sealed class LiveSubscription : IDisposable
 }
 
 /// <summary>live.subscribe and live.update (docs/ipc.md, Live subscriptions). A registry by subscription id: at most 32
-/// in the backend and 8 per connection (BUSY), a duplicate id refused (DUPLICATE_REQUEST); a disconnect ends that
-/// connection's subscriptions (disconnected) and a shutdown all of them. Every request is validated against the
-/// catalogue as main's schemas validate it. Nothing is logged.</summary>
-internal sealed partial class LiveService(ILiveHost host) : IDisposable
+/// in the backend and 8 per SQL Server, counted by the server a connection reaches (BUSY), a duplicate id refused
+/// (DUPLICATE_REQUEST) before its sampler is built; a disconnect ends that connection's subscriptions (disconnected) and a
+/// shutdown all of them. Every request is validated against the catalogue as main's schemas validate it. Nothing is
+/// logged.</summary>
+internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog = null) : IDisposable
 {
+    /// <summary>Settings an update may drop (LiveProbeArgs.Clear).</summary>
+    private static readonly string[] Clearable = ["sort", "view", "filter"];
     private readonly ConcurrentDictionary<string, LiveSubscription> running = new(StringComparer.Ordinal);
     private readonly Lock registration = new();
+    private readonly LiveCatalog catalog = catalog ?? LiveCatalog.Current;
     private static readonly Stopwatch Clock = Stopwatch.StartNew();
     private static long Now => Clock.ElapsedMilliseconds;
 
     public int Count => running.Count;
-    private static LiveLimitsJson Limits => LiveCatalog.Current.Limits;
+    private LiveLimitsJson Limits => catalog.Limits;
 
-    [GeneratedRegex("^[A-Za-z0-9_-]+$")]
+    // \A and \z: .NET's $ also matches before a final newline, which main's pattern refuses.
+    [GeneratedRegex(@"\A[A-Za-z0-9_-]+\z")]
     private static partial Regex ResumePattern();
+
+    /// <summary>A resume token's characters (base64url), as main's resumeToken schema checks them.</summary>
+    internal static bool IsResumeToken(string value) => ResumePattern().IsMatch(value);
 
     private static RequestException Invalid(string message) => new("INVALID_PARAMS", message);
 
@@ -201,12 +220,15 @@ internal sealed partial class LiveService(ILiveHost host) : IDisposable
         var sourceArgs = ArgsOf(source, args.Args, json);
         if (args.Resume is { } resume)
         {
-            if (resume.Length is 0 || resume.Length > Limits.ResumeCharacters || !ResumePattern().IsMatch(resume)) throw Invalid("Invalid resume token.");
+            if (resume.Length is 0 || resume.Length > Limits.ResumeCharacters || !IsResumeToken(resume)) throw Invalid("Invalid resume token.");
             // Only append tables have cursors to resume from.
             if (!probes.Any(probe => probe.Spec.Tables.Any(table => table.Mode == "append"))) throw Invalid("This live source cannot resume.");
         }
         if (source.Scope != "none" && !host.IsConnected(args.ConnectionId)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
-        var subscription = new LiveSubscription(args.SubscriptionId, args.ConnectionId, source, probes, CreateSampler(source, sourceArgs, args.SubscriptionId), context);
+        var server = host.ServerOf(args.ConnectionId) ?? args.ConnectionId;
+        // Refused before the sampler exists, so a refusal touches nothing the running subscriptions hold.
+        lock (registration) Admit(args.SubscriptionId, server);
+        var subscription = new LiveSubscription(args.SubscriptionId, args.ConnectionId, server, source, probes, CreateSampler(source, sourceArgs, args.SubscriptionId), context);
         try
         {
             Register(subscription);
@@ -240,6 +262,10 @@ internal sealed partial class LiveService(ILiveHost host) : IDisposable
         {
             if (patch.IntervalMs is { } interval) Clamp(state.Spec, interval);
             Validate(state.Spec, patch);
+            if (patch.Clear is { } clear && (clear.Length is 0 || clear.Length > Clearable.Length || clear.Any(setting => !Clearable.Contains(setting, StringComparer.Ordinal))
+                || clear.Distinct(StringComparer.Ordinal).Count() != clear.Length
+                || clear.Contains("sort") && patch.Sort is not null || clear.Contains("view") && patch.View is not null || clear.Contains("filter") && patch.Filter is not null))
+                throw Invalid("Clear names sort, view or filter once each, and none the update also sets.");
         }
         if (args.Track is { } tracks)
         {
@@ -270,6 +296,12 @@ internal sealed partial class LiveService(ILiveHost host) : IDisposable
                 if (patch.Sort is not null) state.Sort = patch.Sort;
                 if (patch.View is not null) state.View = patch.View;
                 if (patch.Filter is not null) state.Filter = patch.Filter;
+                foreach (var setting in patch.Clear ?? [])
+                {
+                    if (setting == "sort") state.Sort = null;
+                    else if (setting == "view") state.View = null;
+                    else state.Filter = null;
+                }
             }
             foreach (var track in args.Track ?? []) subscription.Probes.Find(probe => probe.Spec.Id == track.Probe)!.Tracks[track.Table] = track;
             if (sourceArgs is not null) subscription.Sampler.Apply(sourceArgs);
@@ -295,13 +327,21 @@ internal sealed partial class LiveService(ILiveHost host) : IDisposable
 
     public void Dispose() => CancelAll();
 
+    /// <summary>Under <see cref="registration"/>: refuses a duplicate id, then a full backend or server.</summary>
+    private void Admit(string id, string server)
+    {
+        if (running.ContainsKey(id)) throw new RequestException("DUPLICATE_REQUEST", "This live view is already open.");
+        if (running.Count >= Limits.BackendSubscriptions || running.Values.Count(other => other.Server == server) >= Limits.PerServer)
+            throw new RequestException("BUSY", "Too many live views are open for this server. Close one and retry.");
+    }
+
+    /// <summary>Admits again, since another subscription may have registered while the sampler was built, and adds it.</summary>
     private void Register(LiveSubscription subscription)
     {
         lock (registration)
         {
-            if (running.Count >= Limits.BackendSubscriptions || running.Values.Count(other => other.ConnectionId == subscription.ConnectionId) >= Limits.PerConnection)
-                throw new RequestException("BUSY", "Too many live views are open for this server. Close one and retry.");
-            if (!running.TryAdd(subscription.Id, subscription)) throw new RequestException("DUPLICATE_REQUEST", "This live view is already open.");
+            Admit(subscription.Id, subscription.Server);
+            running[subscription.Id] = subscription;
         }
     }
 
@@ -371,25 +411,26 @@ internal sealed partial class LiveService(ILiveHost host) : IDisposable
 
     private LiveSourceJson SourceOf(string? id)
     {
-        if (id is null || !LiveCatalog.Current.Sources.TryGetValue(id, out var source) || source.TestOnly && !host.TestHooks) throw Invalid("Unknown live source.");
+        if (id is null || !catalog.Sources.TryGetValue(id, out var source) || source.TestOnly && !host.TestHooks) throw Invalid("Unknown live source.");
         return source;
     }
 
-    private static LiveProbeJson ProbeOf(LiveSourceJson source, string? id)
+    private LiveProbeJson ProbeOf(LiveSourceJson source, string? id)
     {
-        if (id is null || !LiveCatalog.Current.Probes.TryGetValue(id, out var spec) || spec.Source != source.Id) throw Invalid("The probe is not one of this source's.");
+        if (id is null || !catalog.Probes.TryGetValue(id, out var spec) || spec.Source != source.Id) throw Invalid("The probe is not one of this source's.");
         return spec;
     }
 
-    private static int Clamp(LiveProbeJson spec, int interval)
+    private int Clamp(LiveProbeJson spec, int interval)
     {
         if (interval < Limits.IntervalMs.Min || interval > Limits.IntervalMs.Max) throw Invalid("A probe's interval is 1,000 to 3,600,000 ms.");
         return Math.Clamp(interval, spec.IntervalMs.Min, spec.IntervalMs.Max);
     }
 
-    private static void Apply(LiveProbeState state, LiveProbeArgs settings)
+    private void Apply(LiveProbeState state, LiveProbeArgs settings)
     {
         Validate(state.Spec, settings);
+        if (settings.Clear is not null) throw Invalid("Only an update clears settings.");
         state.Paused = settings.Paused ?? false;
         state.Sort = settings.Sort;
         state.View = settings.View;
@@ -397,7 +438,7 @@ internal sealed partial class LiveService(ILiveHost host) : IDisposable
     }
 
     /// <summary>Sort by the probe's snapshot columns, a view it declares, a filter only where it has a filter mode.</summary>
-    private static void Validate(LiveProbeJson spec, LiveProbeArgs settings)
+    private void Validate(LiveProbeJson spec, LiveProbeArgs settings)
     {
         if (settings.Sort is { } sort)
         {

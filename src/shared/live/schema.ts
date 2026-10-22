@@ -27,7 +27,10 @@ export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 export interface LiveSort { column: string; descending: boolean }
 export interface LiveFilter { text: string; columns?: string[] }
 export interface LiveProbeSettings { probe: LiveProbeId; intervalMs: number; paused?: boolean; sort?: LiveSort[]; view?: string; filter?: LiveFilter }
-export type LiveProbePatch = Omit<LiveProbeSettings, 'intervalMs'> & { intervalMs?: number }
+/** Settings an update may drop, since an absent member keeps its setting: back to the source's order, all rows, no filter. */
+export const liveClearable = ['sort', 'view', 'filter'] as const
+export type LiveClearable = typeof liveClearable[number]
+export type LiveProbePatch = Omit<LiveProbeSettings, 'intervalMs'> & { intervalMs?: number; clear?: LiveClearable[] }
 export interface LiveSubscribeParams {
   subscriptionId: string
   connectionId: string
@@ -152,7 +155,7 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     view: catalogId.optional(),
     filter: filterSchema.optional()
   }).strict()
-  const probePatch = probeSettings.partial({ intervalMs: true })
+  const probePatch = probeSettings.partial({ intervalMs: true }).extend({ clear: z.array(z.enum(liveClearable)).min(1).max(liveClearable.length).optional() })
 
   /** Settings only some probes take: sort by a snapshot column, a declared view, a filter where the probe has a mode. */
   function checkProbe(settings: z.infer<typeof probePatch>, source: string, ctx: z.RefinementCtx, path: (string | number)[]): void {
@@ -166,6 +169,8 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
       const filterable = columnsOf(spec)
       if (spec.filterMode === undefined || (settings.filter.columns ?? []).some(column => !filterable.has(column))) ctx.addIssue({ code: 'custom', message: 'The probe does not take this filter.', path: [...path, 'filter'] })
     }
+    const clear = settings.clear ?? []
+    if (new Set(clear).size !== clear.length || clear.some(setting => settings[setting] !== undefined)) ctx.addIssue({ code: 'custom', message: 'Clear names each setting once, and none the update also sets.', path: [...path, 'clear'] })
   }
   function checkProbes(probes: readonly z.infer<typeof probePatch>[], source: string, ctx: z.RefinementCtx): void {
     if (new Set(probes.map(probe => probe.probe)).size !== probes.length) ctx.addIssue({ code: 'custom', message: 'Each probe may be named once.', path: ['probes'] })
@@ -350,6 +355,15 @@ export const testLiveUpdateParamsSchema = test.update
 export const liveEventSchema = production.event
 export const liveEndSchema = production.end
 export const liveUpdateResultSchema = production.updateResult
+
+/** Whether an event (already valid for the catalogue) belongs to the subscription it arrived on: `live.opened` names its
+ *  source and reports each subscribed probe once, and a tick samples or fails only subscribed probes. The catalogue
+ *  schema alone would accept another source's or an unsubscribed probe's tables, which main would then own. */
+export function liveEventFits(event: BackendLiveEvent, subscription: Pick<LiveSubscribeParams, 'source' | 'probes'>): boolean {
+  const subscribed = new Set<string>(subscription.probes.map(probe => probe.probe))
+  if (event.type === 'live.opened') return event.source === subscription.source && event.probes.length === subscribed.size && event.probes.every(probe => subscribed.has(probe.probe))
+  return event.samples.every(sample => subscribed.has(sample.probe)) && (event.errors ?? []).every(error => subscribed.has(error.probe))
+}
 
 /** The descriptors a tick carries, in sample order. */
 export function liveDescriptors<D>(event: LiveOpenedEvent | LiveTickEvent<D>): D[] {

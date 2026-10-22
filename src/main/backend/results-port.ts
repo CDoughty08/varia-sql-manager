@@ -75,10 +75,11 @@ export class ResultsPortHost {
   private invalid = 0
   private opens: number[] = []
 
-  /** `testSources`: accept test-only live sources (debug.synthetic); main sets it only for unpackaged smoke runs. */
-  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits>; testSources?: boolean }) {
+  /** `testSources`: accept test-only live sources (debug.synthetic); main sets it only for unpackaged smoke runs. `schema`
+   *  replaces the request schema (tests, with a catalogue the shipped one does not match yet). */
+  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits>; testSources?: boolean; schema?: typeof portRequestSchema }) {
     this.backend = o.backend
-    this.schema = o.testSources ? testPortRequestSchema : portRequestSchema
+    this.schema = o.schema ?? (o.testSources ? testPortRequestSchema : portRequestSchema)
     this.createChannel = o.createChannel
     this.now = o.now ?? (() => Date.now())
     this.limits = { ...portLimits, ...o.limits }
@@ -276,7 +277,14 @@ export class ResultsPortHost {
     }
     stream.handle = this.backend.live(request.generation, params, onLive, credit)
     stream.handle.done.then(result => {
-      if (this.lives.get(rid) !== stream || this.port !== port) return
+      if (this.lives.get(rid) !== stream || this.port !== port) {
+        // The port closed (and disowned the stream's results) while the source was ending: nothing can read or close what
+        // it kept, so main closes it, rather than leave it counted against the result budget until the backend restarts.
+        if (result.ended === 'sourceEnded' && result.kept?.length && stream.generation === this.generation && this.backend.readyGeneration() === stream.generation) {
+          this.backend.close(stream.generation, result.kept).catch(() => { /* The backend went away; its results went with it. */ })
+        }
+        return
+      }
       this.forgetLive(stream)
       this.disown(stream, result.ended === 'sourceEnded' ? result.kept ?? [] : [])
       this.post({ t: 'end', rid, ok: true, result })

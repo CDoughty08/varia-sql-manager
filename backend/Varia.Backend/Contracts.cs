@@ -85,8 +85,10 @@ internal sealed record SynthesizeArgs(string Shape, int Rows);
 /// <summary>live.subscribe (results port only; docs/ipc.md, Live subscriptions). Args are read per source
 /// (Live/LiveService.cs), so each source's members are checked and unknown ones refused.</summary>
 internal sealed record LiveSubscribeArgs(string SubscriptionId, string ConnectionId, string Source, LiveProbeArgs[] Probes, JsonElement? Args = null, string? Resume = null);
-/// <summary>One probe's settings: IntervalMs is required on subscribe and optional in an update.</summary>
-internal sealed record LiveProbeArgs(string Probe, int? IntervalMs = null, bool? Paused = null, LiveSortArgs[]? Sort = null, string? View = null, LiveFilterArgs? Filter = null);
+/// <summary>One probe's settings: IntervalMs is required on subscribe and optional in an update. Clear (updates only) names
+/// settings to drop (sort, view, filter): an absent member keeps its setting, so null cannot mean "none".</summary>
+internal sealed record LiveProbeArgs(string Probe, int? IntervalMs = null, bool? Paused = null, LiveSortArgs[]? Sort = null, string? View = null, LiveFilterArgs? Filter = null,
+    string[]? Clear = null);
 internal sealed record LiveSortArgs(string Column, bool Descending);
 internal sealed record LiveFilterArgs(string Text, string[]? Columns = null);
 /// <summary>live.update: Source repeats the subscription's.</summary>

@@ -46,7 +46,7 @@ export function renderLiveDocs(): string {
     '',
     '| Item | Value |',
     '| --- | --- |',
-    `| Subscriptions | ${L.portStreams} per results port (main), ${L.backendSubscriptions} per backend, ${L.perConnection} per SQL connection |`,
+    `| Subscriptions | ${L.portStreams} per results port (main), ${L.backendSubscriptions} per backend, ${L.perServer} per SQL Server (by the server a connection reaches) |`,
     `| Probes | ${L.probes} per subscription; ${L.tablesPerProbe} snapshot and ${L.appendPerProbe} append tables per probe, ${L.tablesPerTick} tables per tick |`,
     `| Interval | ${seconds(L.intervalMs.min)} to ${seconds(L.intervalMs.max)} requested, then clamped to the probe's own minimum and maximum |`,
     `| Frames | one unacknowledged per subscription; initial credit ${L.initialCredit / 1024} KiB; at most ${limits.eventBody / 1024} KiB each, and the catalogue's worst case at most ${L.frameBudget / 1024} KiB |`,

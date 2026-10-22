@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor } from '../../shared/ipc/methods'
 import { jobProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent } from '../../shared/ipc/port-messages'
-import { liveEndSchema, liveEventSchema, liveUpdateResultSchema, stampLive, type LiveEvent } from '../../shared/live/schema'
+import { liveEndSchema, liveEventFits, liveEventSchema, liveUpdateResultSchema, stampLive, type LiveEvent, type LiveSubscribeParams } from '../../shared/live/schema'
 import { PROTOCOL_VERSION, limits as wire, type CancelReason } from '../../shared/ipc/wire/protocol'
 import { BackendConnection, systemClock, type BackendHello, type Clock, type ConnectionDeps, type Loss, type SendOptions, type SpawnSpec } from './connection'
 import { BackendError, failureMessage, sentences } from './errors'
@@ -35,7 +35,8 @@ export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
   /** results.copy and results.export progress, validated the same way. */
   onProgress?: (progress: JobProgressEvent) => void
   /** live.subscribe events with their EVENT body's length (what the renderer acknowledges), validated, in sequence (0 for
-   *  live.opened, then 1, 2, …) and stamped with the generation; anything else fails the stream (STREAM_PROTOCOL). */
+   *  live.opened, then 1, 2, …), for the subscription's own source and probes, and stamped with the generation; anything
+   *  else fails the stream (STREAM_PROTOCOL). */
   onLive?: (event: LiveEvent, bytes: number) => void
   /** Only this generation may serve the request, and only while it is ready: results belong to one generation. */
   generation?: number
@@ -143,6 +144,8 @@ export class BackendSupervisor {
     }
     const { onEvent, onProgress, onLive } = o
     let nextSeq = 0
+    // The subscription the events must belong to: its source, and only the probes it named.
+    const subscribed = method === 'live.subscribe' ? params as LiveSubscribeParams : undefined
     const sent = connection.send(method, params, {
       ...deadlineFor(method, params), stream: o.stream, credit: o.credit,
       onEvent: onEvent ? raw => {
@@ -152,7 +155,7 @@ export class BackendSupervisor {
         onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? { ...event, descriptor: stamp(event.descriptor, connection.generation) } : event)
       } : onLive ? (raw, bytes) => {
         const parsed = liveEventSchema.safeParse(raw)
-        if (!parsed.success || parsed.data.seq !== nextSeq) return false
+        if (!parsed.success || parsed.data.seq !== nextSeq || !subscribed || !liveEventFits(parsed.data, subscribed)) return false
         nextSeq++
         onLive(stampLive(parsed.data, connection.generation), bytes)
       } : onProgress && (raw => {

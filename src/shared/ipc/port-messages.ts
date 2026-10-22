@@ -13,7 +13,8 @@ const u32 = z.number().int().min(1).max(0xffffffff)
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const generation = u31
 
-const portRequests = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update: z.ZodType<LiveUpdateParams> }) => z.discriminatedUnion('t', [
+/** The port schema around a set of live schemas (buildLiveSchemas): the shipped ones, or a test catalogue's. */
+export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update: z.ZodType<LiveUpdateParams> }) => z.discriminatedUnion('t', [
   z.object({ t: z.literal('read'), rid: u31, generation, resultId: u32, firstRow: count, maxRows: z.number().int().min(1).max(65_536), credit: z.number().int().min(limits.credit.min).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('credit'), rid: u31, bytes: z.number().int().min(1).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('cancel'), rid: u31 }).strict(),
@@ -23,9 +24,9 @@ const portRequests = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update:
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
 ])
 /** Worker → main. `rid` names the request in the worker; every request ends with one `end` message. */
-export const portRequestSchema = portRequests({ subscribe: liveSubscribeParamsSchema, update: liveUpdateParamsSchema })
+export const portRequestSchema = buildPortRequestSchema({ subscribe: liveSubscribeParamsSchema, update: liveUpdateParamsSchema })
 /** The same for unpackaged smoke runs: live requests may also name test-only sources (debug.synthetic). */
-export const testPortRequestSchema = portRequests({ subscribe: testLiveSubscribeParamsSchema, update: testLiveUpdateParamsSchema })
+export const testPortRequestSchema = buildPortRequestSchema({ subscribe: testLiveSubscribeParamsSchema, update: testLiveUpdateParamsSchema })
 export type PortRequest = z.infer<typeof portRequestSchema>
 
 /** Main → worker. Page bodies are exact-size ArrayBuffers, never decoded by main. A live event carries the EVENT body's

@@ -5,7 +5,7 @@ import { limits } from '../src/shared/ipc/wire/protocol'
 import { portRequestSchema, testPortRequestSchema } from '../src/shared/ipc/port-messages'
 import { liveProbeIds, liveProbes, liveSourceIds, liveSources, type LiveProbeSpec, type LiveSourceSpec } from '../src/shared/live/catalog'
 import {
-  buildLiveSchemas, liveEndSchema, liveErrorCodes, liveEventSchema, liveUpdateResultSchema, stampLive, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema,
+  buildLiveSchemas, liveEndSchema, liveErrorCodes, liveEventFits, liveEventSchema, liveUpdateResultSchema, stampLive, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema,
   type BackendLiveEvent, type LiveSubscribeParams
 } from '../src/shared/live/schema'
 
@@ -39,11 +39,12 @@ const fixtureProbes: Record<string, LiveProbeSpec> = {
     status: ['state']
   },
   'one.plain': { id: 'one.plain', source: 'one', label: 'Plain', description: 'Plain', intervalMs: { default: 1000, min: 1000, max: 60_000 }, tables: [{ id: 't', mode: 'snapshot', key: ['x'], columns: [column('x')] }] },
-  'two.only': { id: 'two.only', source: 'two', label: 'Two', description: 'Two', intervalMs: { default: 1000, min: 1000, max: 60_000 }, series: [{ id: 'b', unit: 'count', label: 'B' }] }
+  'two.only': { id: 'two.only', source: 'two', label: 'Two', description: 'Two', intervalMs: { default: 1000, min: 1000, max: 60_000 }, series: [{ id: 'b', unit: 'count', label: 'B' }] },
+  'two.rows': { id: 'two.rows', source: 'two', label: 'Rows', description: 'Rows', intervalMs: { default: 1000, min: 1000, max: 60_000 }, tables: [{ id: 't', mode: 'snapshot', key: ['y'], columns: [column('y')] }] }
 }
 const fixtureSources: Record<string, LiveSourceSpec> = {
   one: { id: 'one', label: 'One', description: 'One', scope: 'server', testOnly: false, probes: ['one.all', 'one.plain'] },
-  two: { id: 'two', label: 'Two', description: 'Two', scope: 'server', testOnly: true, probes: ['two.only'] }
+  two: { id: 'two', label: 'Two', description: 'Two', scope: 'server', testOnly: true, probes: ['two.only', 'two.rows'] }
 }
 const fixture = buildLiveSchemas({ sources: fixtureSources, probes: fixtureProbes, args: { one: z.object({ id: z.number().int().min(1).max(10) }).strict() } }, { test: false })
 const fixtureTest = buildLiveSchemas({ sources: fixtureSources, probes: fixtureProbes, args: {} }, { test: true })
@@ -125,8 +126,26 @@ describe('live request schemas', () => {
       args: { args: { rows: -1 } }
     })) expect(ok(schema, update(patch)), name).toBe(false)
     // An unkeyed snapshot table and an append table are never tracked.
-    const fixtureUpdate = (table: number) => ({ subscriptionId: uuid(), source: 'one', track: [{ probe: 'one.all', table, seq: 1, keys: ['a'] }] })
+    const fixtureUpdate = (table: number, probe = 'one.all') => ({ subscriptionId: uuid(), source: 'one', track: [{ probe, table, seq: 1, keys: ['a'] }] })
     expect([0, 1, 4].map(table => ok(fixture.update, fixtureUpdate(table)))).toEqual([true, false, false])
+    // Another source's keyed snapshot table is never tracked, nor its probe patched.
+    expect(ok(fixtureTest.update, fixtureUpdate(0, 'two.rows'))).toBe(false)
+    expect(ok(fixtureTest.update, { subscriptionId: uuid(), source: 'two', track: [{ probe: 'two.rows', table: 0, seq: 1, keys: ['a'] }] })).toBe(true)
+    expect(ok(fixtureTest.update, { subscriptionId: uuid(), source: 'one', probes: [{ probe: 'two.rows', paused: true }] })).toBe(false)
+  })
+  it('clears sort, view and filter only in updates, once each and never alongside a new value', () => {
+    const update = (probe: Record<string, unknown>) => ({ subscriptionId: uuid(), source: 'one', probes: [{ probe: 'one.all', ...probe }] })
+    expect(ok(fixture.update, update({ clear: ['sort', 'view', 'filter'] }))).toBe(true)
+    expect(ok(fixture.update, update({ clear: ['filter'], sort: [{ column: 'k0', descending: false }] }))).toBe(true)
+    for (const [name, probe] of Object.entries({
+      empty: { clear: [] },
+      twice: { clear: ['sort', 'sort'] },
+      unknown: { clear: ['rows'] },
+      four: { clear: ['sort', 'view', 'filter', 'sort'] },
+      clearAndSet: { clear: ['sort'], sort: [{ column: 'k0', descending: false }] },
+      clearAndView: { clear: ['view'], view: 'blocked' }
+    })) expect(ok(fixture.update, update(probe)), name).toBe(false)
+    expect(ok(fixture.subscribe, { ...subscribe(), source: 'one', probes: [{ probe: 'one.all', intervalMs: 1000, clear: ['sort'] }] })).toBe(false)
   })
 })
 
@@ -180,6 +199,22 @@ describe('live event schemas', () => {
     expect(ok(fixture.event, tick([{ ...full, append: [] }, plain]))).toBe(false)
     expect(ok(fixture.event, tick([{ ...full, append: append.slice(0, 3) }, plain]))).toBe(true)
     expect(ok(fixture.event, tick([{ ...full, tables: [...tables, tables[0]] }])), 'five snapshot entries').toBe(false)
+  })
+  it('fits an event to its subscription: its source, every probe it opened once, and only those probes sampled', () => {
+    const subscription = { source: 'debug.synthetic' as const, probes: [{ probe: 'debug.synthetic.table' as const, intervalMs: 1000 }] }
+    const opener = (probes: string[], source = 'debug.synthetic') => ({ ...opened, source, probes: probes.map(probe => ({ ...opened.probes[0], probe })) }) as BackendLiveEvent
+    expect(liveEventFits(opener(['debug.synthetic.table']), subscription)).toBe(true)
+    expect(liveEventFits(opener(['debug.synthetic.table', 'debug.synthetic.status']), subscription)).toBe(false)
+    expect(liveEventFits(opener(['debug.synthetic.status']), subscription)).toBe(false)
+    expect(liveEventFits(opener(['debug.synthetic.table'], 'activity'), subscription)).toBe(false)
+    const table = { table: 0, descriptor: descriptor(rows), revision: 1 }
+    expect(liveEventFits(tick([sample({ tables: [table] })]) as BackendLiveEvent, subscription)).toBe(true)
+    expect(liveEventFits(tick([sample({ probe: 'debug.synthetic.status', status: [{ id: 'phase', value: 'odd' }] })]) as BackendLiveEvent, subscription)).toBe(false)
+    expect(liveEventFits(tick([], { errors: [{ probe: 'debug.synthetic.metrics', code: 'SQL_ERROR', message: 'Failed.', retryInMs: 0, terminal: false }] }) as BackendLiveEvent, subscription)).toBe(false)
+    // With two sources, another source's probe and table pass the catalogue schema, so only the subscription can refuse them.
+    const foreign = tick([{ probe: 'two.rows', costMs: 0, effectiveIntervalMs: 1000, tables: [{ table: 0, descriptor: descriptor(['y']), revision: 1 }] }])
+    expect(ok(fixture.event, foreign)).toBe(true)
+    expect(liveEventFits(foreign as BackendLiveEvent, { source: 'one' as never, probes: [{ probe: 'one.plain' as never, intervalMs: 1000 }] })).toBe(false)
   })
   it('stamps the generation on every descriptor', () => {
     const value = tick([sample({ tables: [{ table: 0, descriptor: descriptor(rows, 4), revision: 1 }] })]) as BackendLiveEvent

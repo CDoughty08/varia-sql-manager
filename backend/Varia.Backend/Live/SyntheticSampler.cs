@@ -7,7 +7,9 @@ namespace Varia.Backend.Live;
 /// SQL Server. Its metrics probe counts samples and draws a wave; its table probe stores a snapshot result per sample,
 /// whose rows move on by one id each time (two revisions alive, the one before them retired), sorted as asked, with diff
 /// counts and tracked rows; its status probe reports the phase and sample count. Args set the row count, a sampling
-/// period below the 1 s minimum (tickMs), a sample count after which the source ends, and an error value every n-th sample.</summary>
+/// period below the 1 s minimum (tickMs), a sample count after which the source ends, and an error value every n-th sample.
+/// Each revision has its own budget, and the oldest is released before the next is stored (the renderer has applied the
+/// newest by then), so a revision that did not fit (BUDGET) never stops later ones once memory is free again.</summary>
 internal sealed class SyntheticSampler : ILiveSampler
 {
     public const string Source = "debug.synthetic";
@@ -16,8 +18,9 @@ internal sealed class SyntheticSampler : ILiveSampler
     public const string StatusProbe = "debug.synthetic.status";
     private readonly ResultStore store;
     private readonly string session;
-    private readonly QueryBudget budget;
     private readonly List<ResultSetBuffer> revisions = [];
+    /// <summary>Released before a revision that then did not fit: the next stored revision reports it as retired.</summary>
+    private readonly List<uint> retiring = [];
     private readonly Lock gate = new();
     private SyntheticLiveArgs args;
     private Dictionary<long, long> previous = [];
@@ -26,8 +29,8 @@ internal sealed class SyntheticSampler : ILiveSampler
     public SyntheticSampler(ResultStore store, string subscriptionId, SyntheticLiveArgs args)
     {
         this.store = store;
+        // Only a name for the store's bookkeeping: nothing is stored or released until the subscription samples.
         session = "live:" + subscriptionId;
-        budget = store.BeginQuery(session);
         this.args = args;
     }
 
@@ -110,8 +113,20 @@ internal sealed class SyntheticSampler : ILiveSampler
             rows = [.. ordered!.ThenBy(row => row.Id)];
         }
         var spec = probe.Spec.Tables[0];
-        var set = store.Open(budget, 0, 1, 1, "rows", [.. spec.Columns.Select(column => new ResultColumn(column.Name, column.DataType, "text", Nullable: false))], [WireKind.Text, WireKind.Text, WireKind.Text]);
+        lock (gate)
+        {
+            // Two revisions stay readable: the renderer shows the newest it applied, or, until it applies this one, the one
+            // before. The oldest is released first, so its memory is free for this one.
+            if (revisions.Count >= 2)
+            {
+                retiring.Add(revisions[0].ResultId);
+                store.Release(revisions[0].ResultId);
+                revisions.RemoveAt(0);
+            }
+        }
+        var set = store.Open(new QueryBudget(session), 0, 1, 1, "rows", [.. spec.Columns.Select(column => new ResultColumn(column.Name, column.DataType, "text", Nullable: false))], [WireKind.Text, WireKind.Text, WireKind.Text]);
         if (set is null) return null;
+        lock (gate) revisions.Add(set);
         foreach (var row in rows)
         {
             set.CountRow();
@@ -125,14 +140,8 @@ internal sealed class SyntheticSampler : ILiveSampler
         uint[]? retired = null;
         lock (gate)
         {
-            revisions.Add(set);
-            // Two revisions stay readable: the renderer shows the newest it applied, or the one before.
-            if (revisions.Count > 2)
-            {
-                retired = [revisions[0].ResultId];
-                store.Release(revisions[0].ResultId);
-                revisions.RemoveAt(0);
-            }
+            if (retiring.Count > 0) retired = [.. retiring];
+            retiring.Clear();
             revision++;
         }
         var current = rows.ToDictionary(row => row.Id, row => row.Value);
@@ -156,10 +165,16 @@ internal sealed class SyntheticSampler : ILiveSampler
         }
     }
 
+    /// <summary>Releases only this subscription's own revisions, never anything else stored under its session name.</summary>
     public void Release()
     {
-        lock (gate) revisions.Clear();
-        store.ReleaseSession(session);
+        uint[] ids;
+        lock (gate)
+        {
+            ids = [.. revisions.Select(set => set.ResultId)];
+            revisions.Clear();
+        }
+        store.Release(ids);
     }
 
     public void Dispose() { }
