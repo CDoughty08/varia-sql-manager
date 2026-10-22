@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
 import type { ErrorCode } from '../../shared/ipc/wire/protocol'
 import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, connectionKey, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
@@ -6,6 +6,9 @@ import { connectionPickerColor, connectionPresets } from '../../shared/theme/con
 import Icon from './Icon'
 import InlineError, { type ErrorAction } from './kit/InlineError'
 import { connectFix } from './connect-fix'
+import { EnvironmentField } from './EnvironmentDialog'
+import EnvironmentTag from './EnvironmentTag'
+import { entryKey, parseEnvironment, savedEntry } from './services/environments'
 import { trapFocus } from './trap-focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { IntegratedIdentityLookup } from './services/integrated-identity'
@@ -122,9 +125,15 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const dbRequest = useRef(0)
   const browseRequest = useRef(0)
   const dbLoadedKey = useRef('')
-  // The server an inherited Name/Color describes (a saved profile or the prefilled last connection), or null once the user owns them.
-  const labelServer = useRef<string | null>(initial.displayName || initial.color ? initial.server : null)
+  // The server an inherited Name/Color/Environment describes (a saved profile or the prefilled last connection), or null once the user owns them.
+  const labelServer = useRef<string | null>(initial.displayName || initial.color || initial.environment ? initial.server : null)
   const selected = library.profiles.find(profile => profile.id === selectedId)
+  // The server for which the user set (or cleared) Environment; for any other server the saved entry the form names
+  // supplies it, so a typed server keeps its label, and a connect without one keeps the entry's (setsEnvironment).
+  const environmentOwner = useRef<string | null>(null)
+  const ownsEnvironment = () => environmentOwner.current !== null && environmentOwner.current === currentOptions.current.server.trim().toLowerCase()
+  const entryKeys = useMemo(() => new Map(library.profiles.map(profile => [profile.id, entryKey(profile.options)])), [library])
+  const entry = useMemo(() => savedEntry(library.profiles, entryKeys, options), [library, entryKeys, options])
   const locked = busy || saving
   const auth = authenticationCatalog[options.authentication]
   const authReady = !requiresUser(options.authentication) || !!options.username?.trim()
@@ -181,6 +190,13 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     return () => { if (active instanceof HTMLElement && active.isConnected) active.focus() }
   }, [])
   useEffect(() => { identityLookup.authenticationChanged(options.authentication) }, [identityLookup, options.authentication])
+  useEffect(() => {
+    if (!entry || ownsEnvironment() || entry.options.environment === currentOptions.current.environment) return
+    setOptions(current => ({ ...current, environment: entry.options.environment }))
+    // Changing the server again drops it, as it drops a label inherited from history.
+    if (entry.options.environment && labelServer.current === null) labelServer.current = entry.options.server
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry?.id, entry?.options.environment, options.server])
   // Connect disables the form, so focus moves to Stop, where Escape and Enter still reach the dialog, and back to Connect after.
   useEffect(() => {
     if (busy) stopButton.current?.focus()
@@ -210,15 +226,15 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     return () => { cancelled = true; clearTimeout(timer) }
   }, [properties, options, authReady])
 
-  /** Changing the server drops an inherited Name/Color, which would otherwise mislabel the new server (e.g. production shown as DEV). */
+  /** Changing the server drops an inherited Name/Color/Environment, which would otherwise mislabel the new server (e.g. production shown as DEV). */
   function changeServer(server: string, patch: Partial<ConnectionOptions> = {}) {
     const inherited = labelServer.current !== null && server.trim().toLowerCase() !== labelServer.current.trim().toLowerCase()
     if (inherited) labelServer.current = null
     setSelectedId(undefined)
-    update({ server, ...patch, ...(inherited ? { displayName: '', color: undefined } : {}) })
+    update({ server, ...patch, ...(inherited ? { displayName: '', color: undefined, environment: undefined } : {}) })
   }
   function update(patch: Partial<ConnectionOptions>) { setOptions(current => ({ ...current, ...patch })); setError(''); setNotice('') }
-  function choose(profile: ConnectionProfile) { setSelectedId(profile.id); setOptions({ ...profile.options, password: '' }); labelServer.current = profile.options.displayName || profile.options.color ? profile.options.server : null; setError(''); setNotice('') }
+  function choose(profile: ConnectionProfile) { environmentOwner.current = null; setSelectedId(profile.id); setOptions({ ...profile.options, password: '' }); labelServer.current = profile.options.displayName || profile.options.color || profile.options.environment ? profile.options.server : null; setError(''); setNotice('') }
   async function browse(next: 'local' | 'network') {
     const request = ++browseRequest.current
     setBrowseBusy(true); setServers([]); setBrowseNote('')
@@ -231,7 +247,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   }
   async function loadDatabases() {
     if (dbBusy || !authReady || !options.server.trim()) return
-    const key = JSON.stringify({ ...options, database: '', displayName: '', color: '' })
+    const key = JSON.stringify({ ...options, database: '', displayName: '', color: '', environment: '' })
     const request = ++dbRequest.current
     const requestId = crypto.randomUUID()
     databasesRequest.current = requestId
@@ -257,10 +273,19 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
       if (alive.current && request === dbRequest.current) setDbBusy(false)
     }
   }
+  /** The form's options with the environment as stored (a preset by its own name), or undefined after saying why a
+   *  Custom label cannot be one. */
+  function labelledOptions(from: ConnectionOptions = options): ConnectionOptions | undefined {
+    const environment = parseEnvironment(from.environment)
+    if (!environment.ok) { setError(environment.error); return undefined }
+    return { ...from, environment: environment.environment }
+  }
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile) {
+    const labelled = profile ? profile.options : labelledOptions()
+    if (!labelled) return
     setSaving(true); setError(''); setNotice('')
     try {
-      const input = { id: profile?.id ?? selectedId, options: profile?.options ?? options, favorite, registered }
+      const input = { id: profile?.id ?? selectedId, options: labelled, favorite, registered }
       const value = unwrap(await window.varia.saveConnectionProfile(input))
       if (!alive.current) return
       showLibrary(value)
@@ -276,15 +301,18 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   }
   /** Connects with the form's options, or with `chosen` when a fix changed them in the same click. */
   async function connect(chosen: ConnectionOptions = options) {
+    const labelled = labelledOptions(chosen)
+    if (!labelled) return
     // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
     setBusy(true); setError(''); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     connectRequest.current = requestId
     const saved = chosen === options ? match : rememberedProfile(library.profiles, savedIds, chosen, selectedId)
     try {
-      const result = await window.varia.connect(chosen, { ...saved ? { profileId: saved.id } : {}, remember: remember && rememberable, requestId })
+      const result = await window.varia.connect(labelled, { ...saved ? { profileId: saved.id } : {}, remember: remember && rememberable, requestId, ...ownsEnvironment() ? { setsEnvironment: true } : {} })
       if (!alive.current) return
-      if (result.ok) onConnected(result.value, { ...chosen, password: '' })
+      // Main says which label the entry kept when the form had none (the history had not loaded yet).
+      if (result.ok) { const { environment: kept, ...info } = result.value; onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }) }
       // Stop: the form is the user's again, with nothing to report.
       else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {
@@ -320,7 +348,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const favorite = filtered.filter(profile => profile.favorite)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><strong>{profile.options.displayName || profile.options.server}</strong><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}>{profile.favorite ? '★' : '☆'}</button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>
@@ -360,7 +388,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
             <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => setRemember(event.target.checked)} />Remember password</label></div>
             {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
             {authNote && <div className="property-row"><span /><p className="field-note" id="connect-auth-note">{authNote}</p></div>}
-            <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { const key = JSON.stringify({ ...currentOptions.current, database: '', displayName: '', color: '' }); if (dbLoadedKey.current !== key) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}>{dbBusy ? '…' : '↻'}</button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
+            <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { const key = JSON.stringify({ ...currentOptions.current, database: '', displayName: '', color: '', environment: '' }); if (dbLoadedKey.current !== key) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}>{dbBusy ? '…' : '↻'}</button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
             {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
             <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>
             <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={options.encrypt !== 'strict' && options.trustServerCertificate} disabled={locked || options.encrypt === 'strict'} onChange={event => update({ trustServerCertificate: event.target.checked })} />Trust server certificate</label></div>
@@ -372,6 +400,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
         <fieldset className="property-section custom-properties"><legend>Custom Properties</legend><div className="property-grid">
           <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => { labelServer.current = null; update({ displayName: event.target.value }) }} /></div>
           <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
+          <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" value={options.environment} disabled={locked} onChange={environment => { labelServer.current = null; environmentOwner.current = options.server.trim().toLowerCase(); update({ environment }) }} /></div>
         </div><div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}>{selected?.favorite ? '★ Remove favorite' : '☆ Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div></fieldset>
         {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
         {notice && <p className="field-note" role="status">{notice}</p>}
