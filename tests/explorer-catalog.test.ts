@@ -7,10 +7,10 @@ import { describe, expect, it } from 'vitest'
 import {
   bandOf, childParentKinds, cloudEngineEditions, engineOf, explorerCatalogJson, explorerIcons, explorerLimits, filterProperties, folderGates, folderIds, folderOwnerKinds,
   folderServed, folderSpecs, foldersFor, kindScopes, kindSpecs, laterFolders, maxBand, minBand, nodeKinds, nodeSubtypes, parentKinds, queryIds, refFields,
-  rootFolder, scopeFields, staticChildren, statusBadges, subfolders, svgIcons, type ExplorerProfile, type FolderId, type NodeKind
+  rootFolder, scopeFields, staticChildren, statusBadges, subfolders, type ExplorerProfile, type FolderId, type NodeKind
 } from '../src/shared/explorer/catalog'
 import { renderExplorerDocs } from '../src/shared/explorer/docs'
-import { svgPaths } from '../src/renderer/src/Icon'
+import { iconSpec, isIconId } from '../src/shared/icons'
 
 const unique = (values: readonly unknown[]) => new Set(values).size === values.length
 const box = (band: number): ExplorerProfile => ({ band, engine: 'box' })
@@ -51,7 +51,7 @@ const database12 = without(database13, ['  External Tables', 'External Resources
 
 describe('Object Explorer catalogue', () => {
   it('has unique ids in every list', () => {
-    for (const [name, values] of Object.entries({ nodeKinds, folderIds, nodeSubtypes, queryIds, explorerIcons, svgIcons, kindScopes, parentKinds, filterProperties })) {
+    for (const [name, values] of Object.entries({ nodeKinds, folderIds, nodeSubtypes, queryIds, explorerIcons, kindScopes, parentKinds, filterProperties })) {
       expect(unique(values), name).toBe(true)
     }
     expect(nodeKinds).toHaveLength(51)
@@ -188,18 +188,14 @@ describe('Object Explorer catalogue', () => {
       expect([...required, ...forbidden].sort(), scope).toEqual([...refFields].sort())
     }
   })
-  it('uses icons that exist: codicons in the bundled font, svg icons in Icon.tsx', async () => {
-    // Untyped Monaco internals, as in command-catalog.test.ts.
-    const library = 'monaco-editor/base/common/codiconsLibrary.js', util = 'monaco-editor/base/common/codiconsUtil.js'
-    await import(library)
-    const { getCodiconFontCharacters } = await import(util) as { getCodiconFontCharacters(): Record<string, number> }
-    const characters = getCodiconFontCharacters()
-    for (const icon of [...explorerIcons, ...Object.values(statusBadges)]) {
-      if (icon.startsWith('svg:')) expect(svgIcons, icon).toContain(icon.slice(4))
-      else expect(Object.hasOwn(characters, icon), icon).toBe(true)
-    }
-    for (const icon of svgIcons) expect(Object.hasOwn(svgPaths, icon), icon).toBe(true)
-    expect(explorerIcons.filter(icon => icon.startsWith('svg:'))).toEqual(svgIcons.map(icon => 'svg:' + icon))
+  it('uses icons of the registry, with Varia\'s own for the objects it draws', () => {
+    // tests/icons.test.ts checks that the registry's codicons exist in the bundled font.
+    for (const icon of [...explorerIcons, ...Object.values(statusBadges)]) expect(isIconId(icon), icon).toBe(true)
+    expect(unique(explorerIcons)).toBe(true)
+    // Badges are glyphs of the codicon font, drawn as a class on the badge element itself.
+    expect(Object.values(statusBadges).filter(icon => iconSpec(icon)?.source !== 'codicon')).toEqual([])
+    const drawn: readonly NodeKind[] = ['server', 'database', 'table', 'tableType', 'view', 'procedure', 'login', 'serverRole', 'credential', 'audit']
+    expect(drawn.filter(kind => iconSpec(kindSpecs[kind].icon)?.source !== 'svg')).toEqual([])
   })
   it('serves the SSMS server folders, and only Databases on cloud editions', () => {
     for (const band of [12, 13, 14, 16, 17]) {

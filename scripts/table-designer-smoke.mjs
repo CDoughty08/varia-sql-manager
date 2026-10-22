@@ -114,7 +114,7 @@ try {
   await expect(designerMenu).toBeVisible()
   expect(await designerMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Set Primary Key', 'Insert Column', 'Delete Column', 'Generate Change Script…', 'Properties'])
   await designerMenu.getByRole('menuitem', { name: 'Set Primary Key', exact: true }).click(fast)
-  await expect(rows().nth(0).locator('.codicon-key')).toHaveCount(1)
+  await expect(rows().nth(0).locator('[data-icon="key"]')).toHaveCount(1)
   await expect(rows().nth(0).getByRole('checkbox')).toBeDisabled()
   // Column Properties: (Is Identity) Yes; its parent mirrors it.
   const properties = designer().getByRole('region', { name: 'Column Properties', exact: true })

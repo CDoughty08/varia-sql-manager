@@ -120,7 +120,7 @@ export function renderExplorerDocs(): string {
     '',
     `## Node kinds (${nodeKinds.length})`,
     '',
-    'Icons are codicons, or `svg:` stroke icons drawn by `Icon.tsx`. Folders show `folder` (`folder-opened` while expanded).',
+    'Icons are ids of the [icon registry](icons.md): Varia\'s own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).',
     'Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.',
     '',
     table(['Kind', 'Title', 'Scope', 'Icons', 'SMO', 'Scriptable', 'Inserts'], nodeKinds.map(kind => {

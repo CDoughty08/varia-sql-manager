@@ -167,6 +167,11 @@ pages, limits, error codes, display formats, benchmarks).
   keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
   spinners included; regenerate `docs/themes/metrics.md` with
   `npx vitest run tests/theme-metrics.test.ts -u`.
+- Icons live only in `src/shared/icons.ts` (codicons and Varia's own SVGs, by id); catalogues name icons by those ids and
+  the renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
+  (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs in the renderer). Fonts are fixed in
+  `src/renderer/src/fonts.ts`. After changing the registry, regenerate `docs/icons.md` with
+  `npx vitest run tests/icons.test.ts -u`.
 
 ## Testing expectations
 

@@ -190,14 +190,14 @@ describe('editor options from settings', () => {
     const { api, service } = setup()
     const options = new EditorOptionsService(service)
     cleanups.push(() => options.dispose())
-    expect(options.monacoOptions()).toEqual({ wordWrap: 'off', lineNumbers: 'on', renderWhitespace: 'none', fontSize: 14, dragAndDrop: true, renderLineHighlight: 'line' })
+    expect(options.monacoOptions()).toEqual({ wordWrap: 'off', lineNumbers: 'on', renderWhitespace: 'none', fontSize: 13, dragAndDrop: true, renderLineHighlight: 'line' })
     const applied: unknown[] = []
     options.bindEditor({ updateOptions: value => applied.push(value) })
     await service.load()
     api.onSettingsChanged.mock.calls[0][0]({ revision: 2, values: { ...stored, 'textEditor.sql.lineNumbers': false, 'textEditor.sql.viewWhiteSpace': true, 'environment.fonts.editorFontSize': 18, 'textEditor.dragAndDrop': false, 'textEditor.highlightCurrentLine': false } })
     expect(applied).toEqual([
-      { wordWrap: 'off', lineNumbers: 'on', renderWhitespace: 'none', fontSize: 14, dragAndDrop: true, renderLineHighlight: 'line' },
-      { wordWrap: 'on', lineNumbers: 'on', renderWhitespace: 'none', fontSize: 14, dragAndDrop: true, renderLineHighlight: 'line' },
+      { wordWrap: 'off', lineNumbers: 'on', renderWhitespace: 'none', fontSize: 13, dragAndDrop: true, renderLineHighlight: 'line' },
+      { wordWrap: 'on', lineNumbers: 'on', renderWhitespace: 'none', fontSize: 13, dragAndDrop: true, renderLineHighlight: 'line' },
       { wordWrap: 'on', lineNumbers: 'off', renderWhitespace: 'all', fontSize: 18, dragAndDrop: false, renderLineHighlight: 'none' }
     ])
     // A change to a setting the editor does not use leaves it alone.

@@ -241,7 +241,7 @@ try {
       if (method === 'explorer.children') {
         const { node } = params, owner = node.type === 'object' ? node.object : node.owner
         const nodes = (node.type === 'object' ? statics.objects[node.object.kind] : statics.folders[node.folder]).map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
-        if (node.type === 'folder' && node.folder === 'databases') nodes.push({ ref: { type: 'object', object: { kind: 'database', name: 'AppData' } }, label: 'AppData', icon: 'svg:database', hasChildren: true })
+        if (node.type === 'folder' && node.folder === 'databases') nodes.push({ ref: { type: 'object', object: { kind: 'database', name: 'AppData' } }, label: 'AppData', icon: 'database', hasChildren: true })
         return { ok: true, value: { nodes, total: nodes.length, elapsedMs: 1 } }
       }
       if (method === 'query.session.close') return { ok: true, value: { closed: true } }

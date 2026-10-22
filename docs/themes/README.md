@@ -205,16 +205,26 @@ bidirectional-text characters are removed from names, and the window chrome only
   surface each text color is drawn on, Monaco's widgets included, and fails when a `styles.css` rule sets a text color
   and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` keeps
   Varia Dark within a small distance of the colors it replaced.
-- Sizes are not theme keys. The type scale (nothing under 11 px), spacing, radii, shadows, motion and bar heights live in
-  `metrics.ts`, and `:root` in `styles.css` repeats them as `--varia-size-*`, `--varia-line-*`, `--varia-space-*`,
-  `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key), `--varia-motion-*`, `--varia-header`,
-  `--varia-bar`, `--varia-control`, `--varia-row` and `--varia-status`. `tests/theme-css.test.ts` keeps the two equal and
+- Sizes are not theme keys. The type scale (nothing under 11 px), spacing, radii, shadows, motion, icon sizes and bar
+  heights live in `metrics.ts`, and `:root` in `styles.css` repeats them as `--varia-size-*`, `--varia-line-*`,
+  `--varia-space-*`, `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key),
+  `--varia-motion-*`, `--varia-glyph-*`, `--varia-header`, `--varia-bar`, `--varia-control`, `--varia-row` and
+  `--varia-status`. `tests/theme-css.test.ts` keeps the two equal and
   apart from the color keys' variables; `tests/theme-metrics.test.ts` rejects px font sizes, radii and shadows and literal
-  durations outside the tokens (icon glyphs and 1 px indicator edges excepted) and font-size literals in renderer code,
+  durations outside the tokens (1 px indicator edges excepted), glyph sizes on rules other than the icons `glyphUse` lists, and font-size literals in renderer code,
   keeps the fast transition on `:hover` rules (state rules such as a selected row set `transition: none`), requires every
   looping animation, Monaco's codicon spinners included, to stop under `prefers-reduced-motion: reduce` (which sets the
   transitions to 0 ms), and regenerates [`metrics.md`](metrics.md)
   with `npx vitest run tests/theme-metrics.test.ts -u`. Smoke runs emulate reduced motion in every window, so their
   checks never read a color partway through a transition.
+- Fonts are not theme keys either: `src/renderer/src/fonts.ts` fixes the stacks (Segoe UI Variable Text, then Segoe
+  UI, for the UI; Cascadia Mono, then Consolas, for results and messages; Cascadia Code for the editor, without
+  ligatures), and `tests/theme-css.test.ts` checks that `styles.css` uses them.
+- Icons come from the registry in `src/shared/icons.ts` ([`icons.md`](../icons.md)): codicons, plus Varia's own stroke
+  icons for database objects, drawn on the 16 px grid. Catalogues name icons by registry id, the renderer draws them
+  only through `Icon.tsx` (or `codiconClass` where Monaco takes a class), and icons take their color from theme keys
+  such as `icon.foreground` and `objectExplorer.objectIconForeground`. `tests/icons.test.ts` checks the codicons exist,
+  keeps the SVG drawings inside the grid with straight lines on half pixels, and regenerates `icons.md` with
+  `npx vitest run tests/icons.test.ts -u`.
 - `scripts/theme-smoke.mjs`, part of `npm run test:smoke`, switches themes in the real app and saves
   `artifacts/theme-dark.png` and `artifacts/theme-light.png`.
