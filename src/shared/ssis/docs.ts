@@ -1,7 +1,7 @@
 // Renders the generated part of docs/integration-services.md from the catalogue: everything after `generatedMarker`.
 // tests/ssis-catalog.test.ts keeps the file in sync and leaves the hand-written part above the marker as it is.
 import {
-  catalogDatabase, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
+  catalogDatabase, catalogFingerprints, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
   valueTypes, finalStatuses, type CodeLabel
 } from './catalog.ts'
@@ -70,6 +70,23 @@ export function renderSsisDocs(): string {
     'catalog\'s database, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`. The catalog row itself is read from `sys.databases` on the Object',
     'Explorer pool. A catalog that was dropped answers `NOT_FOUND` (refresh the parent); one that is offline, restoring or single-user in',
     'use, `DATABASE_UNAVAILABLE` (retry); one the login cannot open, `NO_DB_ACCESS`.',
+    '',
+    '### The live tree (`ssis.catalogProbe`)',
+    '',
+    'While a connection\'s SSISDB node is open (expanded, or listed with no folders), Object Explorer holds one live view of the',
+    '`ssis.catalog` source for that connection (docs/live.md): every 30 s by default (Tools › Options › SQL Server Integration Services;',
+    '10 to 300 s, or off), one query fingerprints each catalog view below as its row count and a checksum (the sum of a SHA-256 prefix per',
+    'row, over the columns the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets',
+    'the login see. The first sample of a connection is its baseline; a later one, or the first of a new view on the same connection',
+    '(SSISDB closed and opened again, Object Explorer shown again), reloads in the background only the expanded or listed nodes that show',
+    'a view whose fingerprint changed, keeping expansion and selection and announcing what was added or removed; a reload never opens',
+    'a node. The view pauses 2 s after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in',
+    'the catalog\'s database, READ UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no',
+    'longer exists ends the view (`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline is',
+    'retried (`DATABASE_UNAVAILABLE`); one the login cannot open stops it (`PERMISSION_DENIED`).',
+    '',
+    table(['Fingerprint', 'Catalog view', 'Object Explorer reloads'], catalogFingerprints.map(fingerprint => [code(fingerprint.id), code(fingerprint.view),
+      [...(fingerprint.reloads.kinds ?? []).map(kind => kindSpecs[kind].title + ' (deeply)'), ...(fingerprint.reloads.folders ?? []).map(folder => folderSpecs[folder].label)].join(', ') || 'Nothing in the tree (documents)'])),
     '',
     '### Reads (`ssis.describe`)',
     '',

@@ -108,7 +108,8 @@ pages, limits, error codes, display formats, benchmarks).
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
   constant text per probe and band in `Live/LiveSql.cs` (its offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
-  Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
+  Monitor" for server DMVs, " - Integration Services" in the catalog's database for SSISDB) with the scope's prologue
+  (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
   the live gates and a per-statement budget, and its failures are values that back off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
   ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves.

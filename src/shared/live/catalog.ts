@@ -4,6 +4,7 @@
 // Live/live-catalog.json (a vitest file snapshot keeps that copy in sync). Erasable TypeScript (no enums), so Node's
 // type stripping can load it as well.
 import { limits } from '../ipc/wire/protocol.ts'
+import { catalogFingerprintStatus } from '../ssis/catalog.ts'
 
 /** Where a source reads: server DMVs, the SSISDB catalog, or nothing (a test source that touches no SQL Server). */
 export type LiveScope = 'server' | 'ssisdb' | 'none'
@@ -79,9 +80,9 @@ const anyInterval = { default: 1000, min: limits.live.intervalMs.min, max: limit
 export const defaultBudgetMs = { min: limits.live.budgetMs.min, max: 5000 } as const
 export const defaultDutyCycle = 0.25
 
-export const liveSourceIds = ['debug.synthetic', 'activity'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'ssis.catalog'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
-export const liveProbeIds = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'activity.overview'] as const
+export const liveProbeIds = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'activity.overview', 'ssis.catalogProbe'] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
 export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
@@ -92,6 +93,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   activity: {
     id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: ['activity.overview'],
     description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW).'
+  },
+  'ssis.catalog': {
+    id: 'ssis.catalog', label: 'SSIS Catalog', scope: 'ssisdb', testOnly: false, probes: ['ssis.catalogProbe'],
+    description: 'The SSIS Catalog\'s views, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Object Explorer holds one per connection while an SSISDB node is open. A catalog that no longer exists ends it (CATALOG_MISSING).'
   }
 }
 
@@ -122,6 +127,11 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
       { id: 'recompilations', unit: 'perSecond', label: 'SQL re-compilations/sec', counter: 'rate' },
       { id: 'userSessions', unit: 'count', label: 'User sessions', counter: 'gauge' }
     ]
+  },
+  'ssis.catalogProbe': {
+    id: 'ssis.catalogProbe', source: 'ssis.catalog', label: 'Catalog changes', intervalMs: { default: 30_000, min: 10_000, max: 300_000 }, budgetMs: { min: 500, max: 10_000 },
+    description: 'A fingerprint of each catalog view the SSIS tree and its documents show, in one query: its row count and a checksum of the columns they show (catalogFingerprints in src/shared/ssis/catalog.ts), over the rows row-level security lets the login see. Object Explorer reloads only what changed, keeping expansion and selection.',
+    status: catalogFingerprintStatus
   }
 }
 

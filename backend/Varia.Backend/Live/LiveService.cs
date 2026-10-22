@@ -26,6 +26,8 @@ internal interface ILiveHost
     SqlConnection PoolConnection(string connectionId, string? database, string suffix);
     /// <summary>Opens it; a Kerberos or Entra sign-in failure throws AUTH_KERBEROS, AUTH_UNSUPPORTED or AUTH_ENTRA.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
+    /// <summary>The SSIS Catalog's database, which SSISDB sources open: SSISDB, or the checks' fake catalog.</summary>
+    string SsisCatalog => Ssis.SsisCatalog.Current.CatalogDatabase;
 }
 
 /// <summary>One probe of a subscription: its settings, its schedule and its back-off.</summary>
@@ -655,7 +657,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs()),
-        _ when source.Scope == "server" => new SqlSampler(host, Gates, connectionId, source, TestText),
+        _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, connectionId, source, TestText),
         _ => throw Invalid("Unknown live source.")
     };
 

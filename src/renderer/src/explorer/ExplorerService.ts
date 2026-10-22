@@ -1012,7 +1012,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.holdPaging(node)
     node.error = undefined
     if (node.load === 'error') node.load = node.children?.length ? 'loaded' : 'none'
-    if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
+    // A node that listed nothing has no expander. Varia's own change opens the folder on what it made; a background
+    // reconcile (a probe saw a change) never opens anything: the node only gets its expander back, and lists when opened.
+    if (options.background && !node.hasChildren && node.children !== undefined) { node.hasChildren = true; node.load = 'none' }
+    else if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
     if (options.select && node.hasChildren) node.expanded = true
     // A node never listed (one that could not load, say) has its first load, with nothing to announce as added.
     if (node.expanded) this.loadFirst(node, node.children !== undefined || this.pendingSelect?.folder === node.id ? 'reconcile' : 'keep', priority, deep)

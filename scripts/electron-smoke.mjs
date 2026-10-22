@@ -451,6 +451,27 @@ try {
   await expect(child.locator('.codicon-symbol-file')).toHaveCount(1)
   const packagesLoad = (await calls()).find(call => call.method === 'explorer.children' && call.params.node.type === 'folder' && call.params.node.folder === 'ssisPackages')
   expect(packagesLoad?.params.node.owner).toEqual({ kind: 'ssisProject', ssisFolder: 'Finance', name: 'Loads' })
+  // The SSIS tree is live (S2): while SSISDB is open, one catalog probe runs on server-b's connection. A project deployed
+  // elsewhere (the fake's extra/ssisProjects changes the probe's fingerprints) appears under Projects without F5; Loads
+  // keeps its row and stays expanded, and only the Projects folder is listed again. Closing SSISDB ends the probe.
+  const ssisViews = () => page.evaluate(() => window.__variaLive.ssisTree())
+  await expect.poll(async () => (await ssisViews()).map(view => view.connectionId)).toEqual([idB])
+  const probes = (await calls()).filter(call => call.method === 'live.subscribe' && call.params.source === 'ssis.catalog')
+  expect(probes.map(call => [call.params.connectionId, call.params.probes])).toEqual([[idB, [{ probe: 'ssis.catalogProbe', intervalMs: 30_000 }]]])
+  const ssisPath = ['server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects']
+  const loadsRow = await (await explorerRow(page, ...ssisPath, 'Loads')).getAttribute('id')
+  const listed = async folder => (await loads()).filter(([, node]) => node === folder).length
+  const [projectsBefore, catalogBefore] = [await listed('ssisProjects'), await listed('ssisCatalog')]
+  await writeFile(join(control, 'extra', 'ssisProjects'), '')
+  await expect(await explorerRow(page, ...ssisPath, 'Nightly')).toBeVisible()
+  expect(await (await explorerRow(page, ...ssisPath, 'Loads')).getAttribute('id')).toBe(loadsRow)
+  await expect(await explorerRow(page, ...ssisPath, 'Loads')).toHaveAttribute('aria-expanded', 'true')
+  expect([await listed('ssisProjects') - projectsBefore, await listed('ssisCatalog') - catalogBefore]).toEqual([1, 0])
+  await rm(join(control, 'extra', 'ssisProjects'))
+  await expect.poll(async () => (await explorerLines(page)).filter(line => line.includes(' Nightly '))).toEqual([])
+  await (await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB')).click()
+  await page.keyboard.press('ArrowLeft')
+  await expect.poll(ssisViews).toEqual([])
   await (await explorerRow(page, 'server-b', 'Integration Services Catalogs')).click()
   await page.keyboard.press('ArrowLeft')
   await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs')).toHaveAttribute('aria-expanded', 'false')

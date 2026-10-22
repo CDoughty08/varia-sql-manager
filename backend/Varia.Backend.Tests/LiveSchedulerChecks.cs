@@ -38,6 +38,10 @@ internal static class LiveSchedulerChecks
             && overview.Gates.Editions.SequenceEqual([1, 2, 3, 4, 8]) && overview.Budget is { Min: 500, Max: 5000 }
             && overview.Series.Select(series => series.Id + ":" + series.Counter).SequenceEqual(["cpuPercent:cpuPercent", "runnableTasks:gauge", "batchRequests:rate", "compilations:rate", "recompilations:rate", "userSessions:gauge"]),
             "the embedded catalogue ships the Activity Monitor source with its overview probe: 2 s by default, a 0.2 load guard, server state, 2016 and later on box and Managed Instance");
+        check(catalog.Sources.TryGetValue("ssis.catalog", out var ssis) && ssis is { Scope: "ssisdb", TestOnly: false } && ssis.Probes.SequenceEqual([LiveSql.CatalogProbe])
+            && catalog.Probes[LiveSql.CatalogProbe] is { IntervalMs: { Default: 30_000, Min: 10_000, Max: 300_000 }, Permission: "none", Gates: null, Series.Count: 0, Tables.Count: 0 } probe
+            && probe.Budget is { Min: 500, Max: 10_000 } && probe.Status.SequenceEqual(LiveSql.FingerprintIds.SelectMany(id => new[] { id + "Count", id + "Checksum" })),
+            "the embedded catalogue ships the SSIS Catalog source (scope ssisdb) with its tree probe: every 30 s (10 s to 300 s), a 10 s budget, and a count and checksum per fingerprinted view, in LiveSql's order");
     }
 
     private static void SqlChecks(Action<bool, string> check)
@@ -45,16 +49,34 @@ internal static class LiveSchedulerChecks
         var catalog = LiveCatalog.Current;
         var queries = LiveSql.All(catalog).ToList();
         var problems = queries.SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue)).Select(problem => query.Probe + " band " + query.Band + ": " + problem))
-            .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.Session).Select(problem => "session: " + problem)).ToList();
-        check(queries.Count == LiveSql.MaxBand - LiveSql.MinBand + 1 && problems.Count == 0,
-            "every SQL probe's text passes the live lint at every band, with the session probe (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
+            .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.Session).Select(problem => "session: " + problem))
+            .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.CatalogState).Select(problem => "catalog state: " + problem))
+            .Concat(queries.Where(query => query.Probe == LiveSql.CatalogProbe).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.CommittedPrologue))).Select(problem => "catalog probe, read committed: " + problem)).ToList();
+        check(queries.Count == 2 * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
+            "every SQL probe's text passes the live lint at every band, with the session probe and the catalog state read (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // Every series of a SQL probe comes from a column its query returns, and the clock columns are among them.
         var unmapped = queries.SelectMany(query => catalog.Probes[query.Probe].Series.Where(series => query.Series.FirstOrDefault(entry => entry.Series == series.Id) is not { } mapping
             || !query.Columns.Contains(mapping.Column) || mapping.Base is { } baseColumn && !query.Columns.Contains(baseColumn)
             || series.Counter is "ratio" or "cpuPercent" && mapping.Base is null).Select(series => query.Probe + "." + series.Id)).ToList();
-        check(unmapped.Count == 0 && queries.All(query => query.Columns.Distinct(StringComparer.Ordinal).Count() == query.Columns.Length && query.Columns.Contains(query.MsTicks) && query.Columns.Contains(query.StartTicks))
+        check(unmapped.Count == 0 && queries.All(query => query.Columns.Distinct(StringComparer.Ordinal).Count() == query.Columns.Length
+                && (query.MsTicks is null || query.Columns.Contains(query.MsTicks)) && (query.StartTicks is null || query.Columns.Contains(query.StartTicks)))
             && LiveSql.For(LiveSql.OverviewProbe, 12) is null && LiveSql.For("debug.synthetic.metrics", 17) is null,
-            "every series maps to a column of its probe's one row (ratios and CPU with a base), the clock columns are there, and no query exists below 2016: " + string.Join(", ", unmapped));
+            "every series maps to a column of its probe's one row (ratios and CPU with a base), the clock columns are there, and no overview query exists below 2016: " + string.Join(", ", unmapped));
+        // Every status value of a SQL probe comes from a column of its one row, in the catalogue's order; the SSIS Catalog's
+        // views are the same on every version, so its probe also runs at Azure SQL Database's band (12).
+        var unmappedStatus = queries.Where(query => !catalog.Probes[query.Probe].Status.SequenceEqual((query.Status ?? []).Select(entry => entry.Status))
+            || (query.Status ?? []).Any(entry => !query.Columns.Contains(entry.Column))).Select(query => query.Probe + " band " + query.Band).ToList();
+        var fingerprint = LiveSql.For(LiveSql.CatalogProbe, 12);
+        check(unmappedStatus.Count == 0 && fingerprint is { MsTicks: null, StartTicks: null, Series.Length: 0, Status.Length: 16 } && LiveSql.For(LiveSql.CatalogProbe, 11) is null
+            && fingerprint.Body == LiveSql.For(LiveSql.CatalogProbe, LiveSql.MaxBand)!.Body && fingerprint.Returns([.. fingerprint.Columns.Select(column => (column, typeof(long)))]),
+            "every status value maps to a column of its probe's one row, in the catalogue's order, and the catalog probe runs at any band from 12, with one text: " + string.Join(", ", unmappedStatus));
+        // The checksum sums a hash per row (equal rows never cancel, as CHECKSUM_AGG's XOR would), covers sql_variant values as
+        // bytes, and reads only the catalog's own views, as row-level security shows them.
+        check(fingerprint!.Body.Contains("HASHBYTES('SHA2_256', ", StringComparison.Ordinal) && !fingerprint.Body.Contains("CHECKSUM_AGG", StringComparison.OrdinalIgnoreCase) && !fingerprint.Body.Contains("BINARY_CHECKSUM", StringComparison.OrdinalIgnoreCase)
+            && fingerprint.Body.Contains("ISNULL(CONVERT(varbinary(8000), x.value), 0x)", StringComparison.Ordinal) && fingerprint.Body.Contains("ISNULL(CONVERT(varbinary(8000), x.default_value), 0x)", StringComparison.Ordinal)
+            && System.Text.RegularExpressions.Regex.Matches(fingerprint.Body, @"FROM (\S+) AS x").Select(match => match.Groups[1].Value).All(from => from.StartsWith("[catalog].[", StringComparison.Ordinal))
+            && System.Text.RegularExpressions.Regex.Matches(fingerprint.Body, @"FROM (\S+) AS x").Count == 8,
+            "the catalog probe sums a SHA-256 prefix per row of each of its 8 catalog views (no CHECKSUM_AGG), with sql_variant values as bytes");
         // The lint catches what it is for.
         var bad = new Dictionary<string, string>
         {
@@ -109,11 +131,12 @@ internal static class LiveSchedulerChecks
             && LiveSql.UncommittedPrologue.Contains("SET LOCK_TIMEOUT " + LiveSql.LockTimeoutMs + ";", StringComparison.Ordinal) && LiveSql.UncommittedPrologue.Contains("SET DEADLOCK_PRIORITY LOW;", StringComparison.Ordinal),
             "server DMVs read uncommitted; SSISDB reads committed only with READ_COMMITTED_SNAPSHOT on; both wait 1 s for a lock and lose any deadlock");
         ServerProfile Profile(int major, int edition) => new(major, null, edition, null, false, true, false);
-        check(LiveConnections.Pool("server") == (null, " - Activity Monitor") && LiveConnections.Pool("ssisdb") == ("SSISDB", " - Integration Services")
+        check(LiveConnections.Pool("server", "SSISDB") == (null, " - Activity Monitor") && LiveConnections.Pool("ssisdb", "SSISDB") == ("SSISDB", " - Integration Services")
+            && LiveConnections.Pool("ssisdb", "VariaScratch_x_ssis") == ("VariaScratch_x_ssis", " - Integration Services")
             && LiveConnections.Band(Profile(16, 3)) == 16 && LiveConnections.Band(Profile(12, 8)) == LiveSql.MaxBand && LiveConnections.Band(Profile(18, 3)) == LiveSql.MaxBand
             && LiveConnections.Band(Profile(12, 3)) == 12 && LiveConnections.ServerStatePermission(Profile(16, 2)) == "VIEW SERVER PERFORMANCE STATE"
             && LiveConnections.ServerStatePermission(Profile(15, 2)) == "VIEW SERVER STATE" && LiveConnections.ServerStatePermission(Profile(12, 8)) == "VIEW SERVER STATE",
-            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one; Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
+            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one, in the catalog's database (the checks' fake one too); Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
     }
 
     private static LiveRawSample Raw(long? ms, long? start, double?[] values, double?[]? bases = null) => new(ms, start, values, bases ?? new double?[values.Length]);
@@ -496,7 +519,8 @@ internal static class LiveSchedulerChecks
             [(18456, 14)] = "LOGIN_FAILED", [(18486, 14)] = "LOGIN_FAILED", [(18487, 14)] = "LOGIN_FAILED", [(18488, 14)] = "LOGIN_FAILED", [(18452, 14)] = "LOGIN_FAILED"
         };
         var wrong = expected.Where(item => LiveErrors.Classify(item.Key.Item1, item.Key.Item2) != item.Value).Select(item => item.Key.Item1 + "/" + item.Key.Item2).ToList();
-        check(wrong.Count == 0 && LiveErrors.IsTerminal("PERMISSION_DENIED") && LiveErrors.IsTerminal("NOT_SUPPORTED") && LiveErrors.IsTerminal("LOGIN_FAILED") && !LiveErrors.IsTerminal("BLOCKED") && !LiveErrors.IsTerminal("DATABASE_UNAVAILABLE")
+        check(wrong.Count == 0 && LiveErrors.IsTerminal("PERMISSION_DENIED") && LiveErrors.IsTerminal("NOT_SUPPORTED") && LiveErrors.IsTerminal("LOGIN_FAILED") && LiveErrors.IsTerminal("CATALOG_MISSING")
+            && !LiveErrors.IsTerminal("BLOCKED") && !LiveErrors.IsTerminal("DATABASE_UNAVAILABLE")
             && LiveErrors.Breaks("CONNECTION_LOST") && LiveErrors.Breaks("TIMEOUT") && !LiveErrors.Breaks("BLOCKED"),
             "SQL errors map to live codes: lock timeouts and deadlocks BLOCKED, permission errors PERMISSION_DENIED (terminal), unknown objects NOT_SUPPORTED (terminal), offline databases DATABASE_UNAVAILABLE, transport errors CONNECTION_LOST, a refused sign-in (failed, locked out, expired, untrusted) LOGIN_FAILED (terminal, so a reconnect never repeats it alone): " + string.Join(", ", wrong));
         var long_ = LiveErrors.Create("activity.overview", "SQL_ERROR", new string('x', 5000));
@@ -504,6 +528,16 @@ internal static class LiveSchedulerChecks
         check(long_.Message.Length == 2000 && !long_.Terminal && signIn is { Code: "AUTH_KERBEROS", Terminal: false } && signIn.Message == "Install the GSSAPI library."
             && new[] { LiveErrors.BlockedMessage, LiveErrors.TimeoutMessage, LiveErrors.PermissionMessage, LiveErrors.UnsupportedMessage, LiveErrors.UnavailableMessage, LiveErrors.LostMessage, LiveErrors.BusyMessage, LiveErrors.LoginFailedMessage }.All(message => message.EndsWith('.')),
             "probe error messages are complete sentences of at most 2,000 characters, and a sign-in failure keeps its own advice");
+        // An SSISDB source that cannot open the catalog's database, by its sys.databases row (state, user_access).
+        var missing = LiveErrors.Catalog(LiveSql.CatalogProbe, null, null);
+        var offline = LiveErrors.Catalog(LiveSql.CatalogProbe, 6, 0);
+        var restoring = LiveErrors.Catalog(LiveSql.CatalogProbe, 1, 0);
+        var single = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 1);
+        var closed = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 0);
+        check(missing is { Code: "CATALOG_MISSING", Terminal: true, Message: LiveErrors.CatalogMissingMessage } && offline is { Code: "DATABASE_UNAVAILABLE", Terminal: false }
+            && restoring is { Code: "DATABASE_UNAVAILABLE", Terminal: false } && single is { Code: "DATABASE_UNAVAILABLE", Terminal: false }
+            && closed is { Code: "PERMISSION_DENIED", Terminal: true, Message: LiveErrors.CatalogAccessMessage } && LiveErrors.CatalogMissingMessage.EndsWith('.') && LiveErrors.CatalogAccessMessage.EndsWith('.'),
+            "an SSISDB source whose catalog database cannot be opened says why: none (CATALOG_MISSING, terminal), offline, restoring or single-user (DATABASE_UNAVAILABLE, retried), or closed to the login (PERMISSION_DENIED, terminal)");
     }
 
     private static async Task LoopChecks(Action<bool, string> check)

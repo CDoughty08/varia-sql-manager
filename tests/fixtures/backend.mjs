@@ -13,7 +13,9 @@
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
-//   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE
+//   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE; for
+//                       ssisFolders and ssisProjects the SSIS catalog probe's fingerprints change with it, as after a
+//                       deployment elsewhere
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
 //   silent-<generation> that generation stops answering PING, as a hung backend would
@@ -26,7 +28,8 @@
 // live.subscribe for debug.synthetic (docs/ipc.md, Live subscriptions) runs as the real backend's test source does, with
 // stop-and-wait credit: live.opened, then a live.tick per wake only once the previous one is acknowledged, a snapshot
 // table stored per sample (two revisions alive), live.update for pause, intervals, refresh, sort, tracking and args, and
-// an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded).
+// an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). The SSIS tree's
+// ssis.catalog source samples every 200 ms whatever its interval, its fingerprints counting the extra/ssis* rows.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -172,7 +175,7 @@ function stream(id, credit, { pages = 4, bytes = 40 * 1024 } = {}) {
 }
 
 const syntheticProbes = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
-const opened = probes => ({ type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' })) })
+const opened = (probes, source = 'debug.synthetic') => ({ type: 'live.opened', seq: 0, source, probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' })) })
 const statusTick = (seq, sample = seq) => ({ type: 'live.tick', seq, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.status', costMs: 0, effectiveIntervalMs: 1000, status: [{ id: 'samples', value: sample }] }] })
 /** Echo-mode live.subscribe: protocol tests of main's credited-EVENT rule. */
 function liveEcho(id, credit = 65_536, params = {}) {
@@ -286,7 +289,16 @@ const explorerRows = {
 // What extra/<folder> adds: a role or table created since the folder was first listed.
 const explorerExtras = {
   serverRoles: () => explorerObject({ kind: 'serverRole', name: 'VariaAuditors' }, 'VariaAuditors'),
-  tables: owner => explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Shipments' }, 'dbo.Shipments', { hasChildren: true })
+  tables: owner => explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Shipments' }, 'dbo.Shipments', { hasChildren: true }),
+  ssisFolders: () => explorerObject({ kind: 'ssisFolder', name: 'Sales' }, 'Sales', { hasChildren: true }),
+  ssisProjects: owner => explorerObject({ kind: 'ssisProject', ssisFolder: owner.name, name: 'Nightly' }, 'Nightly', { hasChildren: true, sublabel: '(Deployed 2026-10-22 09:30)' })
+}
+/** The SSIS catalog probe's fingerprints: each view's count 1 and checksum 100, and one more row per extra/ssis* cue. */
+function catalogFingerprints() {
+  const extra = folder => !!controlDirectory && existsSync(join(controlDirectory, 'extra', folder))
+  const views = ['folders', 'projects', 'packages', 'environments', 'variables', 'references', 'parameters', 'properties']
+  const more = { folders: extra('ssisFolders') ? 1 : 0, projects: extra('ssisProjects') ? 1 : 0 }
+  return views.flatMap(view => [{ id: view + 'Count', value: 1 + (more[view] ?? 0) }, { id: view + 'Checksum', value: 100 + 7 * (more[view] ?? 0) }])
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {
@@ -537,7 +549,7 @@ const fixtures = {
 /** Workbench live.subscribe for debug.synthetic, as Live/SyntheticSampler.cs behaves. */
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
-  if (params.source !== 'debug.synthetic' || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (!['debug.synthetic', 'ssis.catalog'].includes(params.source) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   const now = Date.now()
   const live = {
@@ -553,7 +565,7 @@ function liveSubscribe(id, credit, params) {
     respond(id, { ended, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
-  sendLive(live, opened([...live.probes.keys()]))
+  sendLive(live, opened([...live.probes.keys()], params.source))
   wakeLive(live)
 }
 function sendLive(live, value) {
@@ -561,7 +573,7 @@ function sendLive(live, value) {
   live.available -= body.length
   process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
 }
-const periodOf = (live, probe) => live.args.tickMs ?? probe.intervalMs
+const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
 function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return
@@ -584,6 +596,7 @@ function wakeLive(live) {
     const n = ++probe.samples
     if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
+    else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
     else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })
   }

@@ -33,6 +33,7 @@ from Microsoft's documentation, so Varia keeps its own.
 - SQL Server Object Explorer
   - Commands (`objectExplorer.commands`)
   - Scripting (`objectExplorer.scripting`)
+- SQL Server Integration Services (`integrationServices`)
 
 A node without a page id is a category: selecting it shows its first page. The search box (Ctrl+E, ⌘E on macOS) matches
 page titles, setting labels, descriptions and keywords.
@@ -198,6 +199,15 @@ A property grid: True/False lists, values that differ from their default in bold
 | `objectExplorer.scripting.targetEngineType` | Script for database engine type | One of `standalone` (Stand-alone instance) | Stand-alone instance |  | All | At once | The database engine type the script is for. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 | `objectExplorer.scripting.targetServerVersion` | Script for server version | One of `130` (SQL Server 2016), `140` (SQL Server 2017), `150` (SQL Server 2019), `160` (SQL Server 2022), `170` (SQL Server 2025) | SQL Server 2022 |  | All | At once | The SQL Server version the script is for; features it lacks cannot be scripted. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 
+### SQL Server Integration Services
+
+How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `integrationServices.treeLive` | Update the SSIS Catalog in Object Explorer as it changes | Boolean | True |  | All | At once | While a connection's SSISDB node is open in Object Explorer, Varia checks the catalog for changes made elsewhere, such as a deployment or a new folder, project or environment, and updates only the folders that changed, keeping what is expanded and selected. The check is one small query that pauses while Object Explorer is hidden. While it is False, the tree changes only on Refresh (F5) and after Varia's own changes. Not in SSMS. |
+| `integrationServices.treeRefreshSeconds` | Check the catalog for changes every | Integer 10–300 seconds | 30 seconds |  | All | At once | How often an open SSISDB node checks the catalog for changes. Each check reads every catalog folder, project, package, environment, variable, reference and parameter the login may see, so a large catalog on a busy server may want a longer interval. Not in SSMS. Greyed while `integrationServices.treeLive` is False. |
+
 ## Storage
 
 - `<userData>/settings.json` holds `{ "version": 1, "values": { ... } }`: only the values that differ from their
@@ -228,4 +238,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (69 today).
+A patch holds at most one entry per setting (71 today).

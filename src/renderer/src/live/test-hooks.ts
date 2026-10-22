@@ -5,6 +5,7 @@
 import { liveSources, type LiveProbeId } from '../../../shared/live/catalog'
 import type { DocumentService } from '../services/documents'
 import type { PaneService } from '../services/panes'
+import type { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { documentOwner, type LiveHandle, type LiveService } from './LiveService'
 
 export interface SyntheticOptions {
@@ -19,11 +20,13 @@ export interface SyntheticOptions {
   readonly endAfterTicks?: number
 }
 
-export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService) {
+export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, ssisTree?: SsisTreeProbe) {
   const handles = new Map<string, LiveHandle>()
   const handle = (id: string) => handles.get(id)
   return {
-    snapshot: (id?: string) => id === undefined ? live.getSnapshot() : handle(id)?.getSnapshot(),
+    snapshot: (id?: string) => id === undefined ? live.getSnapshot() : (handle(id) ?? live.get(id))?.getSnapshot(),
+    /** The SSIS tree's views: one per connection whose SSISDB node is open. */
+    ssisTree: () => (ssisTree?.connections ?? []).map(connectionId => ({ connectionId, id: ssisTree?.handle(connectionId)?.id })),
     frames: (id: string) => live.frames(id),
     setPageHidden: (hidden?: boolean) => live.setPageHidden(hidden),
     subscribeSynthetic: (o: SyntheticOptions = {}): string => {

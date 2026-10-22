@@ -7,10 +7,13 @@ namespace Varia.Backend.Live;
 /// ratio or cpuPercent series the column holding its base (the base counter, or the scheduler count).</summary>
 internal sealed record LiveSeriesColumn(string Series, string Column, string? Base = null);
 
+/// <summary>A status value of a probe read from its query's single row: the catalogue's status id and its column.</summary>
+internal sealed record LiveStatusColumn(string Status, string Column);
+
 /// <summary>One probe's constant text for one band: the statement after the prologue, the columns its one row has (in
-/// order), the server clock columns (ms_ticks and the start time in ticks, null where the probe cannot read them) and where
-/// each catalogue series comes from.</summary>
-internal sealed record LiveQuery(string Probe, int Band, string Body, string[] Columns, string? MsTicks, string? StartTicks, LiveSeriesColumn[] Series)
+/// order), the server clock columns (ms_ticks and the start time in ticks, null where the probe cannot read them), where
+/// each catalogue series comes from, and each status value (whole numbers).</summary>
+internal sealed record LiveQuery(string Probe, int Band, string Body, string[] Columns, string? MsTicks, string? StartTicks, LiveSeriesColumn[] Series, LiveStatusColumn[]? Status = null)
 {
     public string Text(string prologue) => prologue + Body;
 
@@ -40,11 +43,19 @@ internal static partial class LiveSql
     /// <summary>SSISDB with READ_COMMITTED_SNAPSHOT: versioned reads never wait on writers.</summary>
     public const string CommittedPrologue = "SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW;\n";
 
-    /// <summary>Once per opened connection: its session id and whether the login may read server state (the permission name
-    /// is a parameter: VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before and on Managed Instance).</summary>
-    public const string Session = "SELECT @@SPID, CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, @permission), 0));";
+    /// <summary>Once per opened connection: its session id, whether the login may read server state (the permission name
+    /// is a parameter: VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before and on Managed Instance),
+    /// and for an SSISDB source whether the catalog's database has READ_COMMITTED_SNAPSHOT on (@catalog; NULL for server
+    /// DMVs, which reads no row), which picks the prologue of its later commands.</summary>
+    public const string Session = "SELECT @@SPID, CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, @permission), 0)),"
+        + " (SELECT CONVERT(int, d.is_read_committed_snapshot_on) FROM sys.databases AS d WHERE d.name = @catalog);";
+
+    /// <summary>An SSISDB source whose connection could not open the catalog's database: its state and user access, read on
+    /// a connection in the login's own database. No row: there is no catalog.</summary>
+    public const string CatalogState = "SELECT d.state, d.user_access FROM sys.databases AS d WHERE d.name = @catalog;";
 
     public const string OverviewProbe = "activity.overview";
+    public const string CatalogProbe = "ssis.catalogProbe";
 
     // One row from four DMVs, so a sample is one round trip. total_cpu_usage_ms (2016 and later) counts only
     // non-preemptive time, as the series' label says. The counters' object name carries the instance prefix
@@ -70,10 +81,53 @@ internal static partial class LiveSql
         new("compilations", "compilations"), new("recompilations", "recompilations"), new("userSessions", "user_sessions")
     ];
 
-    /// <summary>The probe's query at a band, or null when the probe has none there (not a SQL probe, or below its gate).</summary>
+    /// <summary>What ssis.catalogProbe fingerprints, in the catalogue's order (src/shared/ssis/catalog.ts catalogFingerprints):
+    /// each view's columns that the tree and its documents show, as text, and its sql_variant values as their bytes (text would
+    /// round a datetime to the minute).</summary>
+    private static readonly (string Id, string From, string Text, string[] Values)[] Fingerprints =
+    [
+        ("folders", "[catalog].[folders]", "x.folder_id, x.name, x.description", []),
+        ("projects", "[catalog].[projects]", "x.project_id, x.folder_id, x.name, x.description, x.deployed_by_name, x.last_deployed_time, x.object_version_lsn", []),
+        ("packages", "[catalog].[packages]", "x.package_id, x.project_id, x.name, x.entry_point, x.description", []),
+        ("environments", "[catalog].[environments]", "x.environment_id, x.folder_id, x.name, x.description", []),
+        ("variables", "[catalog].[environment_variables]", "x.variable_id, x.environment_id, x.name, x.description, x.type, x.sensitive", ["x.value"]),
+        ("references", "[catalog].[environment_references]", "x.reference_id, x.project_id, x.reference_type, x.environment_folder_name, x.environment_name", []),
+        ("parameters", "[catalog].[object_parameters]",
+            "x.parameter_id, x.project_id, x.object_type, x.object_name, x.parameter_name, x.data_type, x.required, x.sensitive, x.description, x.value_type, x.value_set, x.referenced_variable_name",
+            ["x.design_default_value", "x.default_value"]),
+        ("properties", "[catalog].[catalog_properties]", "x.property_name, x.property_value", [])
+    ];
+
+    /// <summary>The view ids ssis.catalogProbe fingerprints, in order (the checks compare them with the catalogue).</summary>
+    public static IEnumerable<string> FingerprintIds => Fingerprints.Select(view => view.Id);
+
+    // One row: per view, its row count and a checksum, the sum of the first 3 bytes of each row's SHA-256 (under 2^53 for any
+    // row count below 2^29, so it is exact in JavaScript). CHECKSUM_AGG would be cheaper, but it XORs: two equal rows cancel,
+    // and BINARY_CHECKSUM misses changes past a long string's first characters. Rows are what row-level security shows the
+    // login, so a fingerprint changes only when something it may see does.
+    private static readonly string Catalog = BuildCatalog();
+    private static readonly string[] CatalogColumns = [.. Fingerprints.SelectMany(view => new[] { view.Id + "_count", view.Id + "_checksum" })];
+    private static readonly LiveStatusColumn[] CatalogStatus = [.. Fingerprints.SelectMany(view => new LiveStatusColumn[] { new(view.Id + "Count", view.Id + "_count"), new(view.Id + "Checksum", view.Id + "_checksum") })];
+
+    private static string BuildCatalog()
+    {
+        static string Row((string Id, string From, string Text, string[] Values) view)
+        {
+            var text = "CONVERT(varbinary(max), CONCAT(" + string.Join(", NCHAR(31), ", view.Text.Split(", ")) + "))";
+            return string.Concat(view.Values.Select(value => " + 0x1F + ISNULL(CONVERT(varbinary(8000), " + value + "), 0x)").Prepend(text));
+        }
+        var selects = Fingerprints.Select((view, index) => "v" + (index + 1) + ".n AS " + view.Id + "_count, v" + (index + 1) + ".h AS " + view.Id + "_checksum");
+        var sources = Fingerprints.Select((view, index) => "(SELECT COUNT_BIG(*) AS n, ISNULL(SUM(CONVERT(bigint, SUBSTRING(HASHBYTES('SHA2_256', " + Row(view) + "), 1, 3))), 0) AS h\n"
+            + "    FROM " + view.From + " AS x) AS v" + (index + 1));
+        return "SELECT " + string.Join(",\n    ", selects) + "\nFROM " + string.Join("\nCROSS JOIN ", sources) + ";";
+    }
+
+    /// <summary>The probe's query at a band, or null when the probe has none there (not a SQL probe, or below its gate). The
+    /// SSIS Catalog's views are the same on every version, and Azure SQL Database reports 12, so its probe runs at any band.</summary>
     public static LiveQuery? For(string probe, int band) => probe switch
     {
         OverviewProbe when band is >= MinBand and <= MaxBand => new(probe, band, Overview, OverviewColumns, "ms_ticks", "start_ticks", OverviewSeries),
+        CatalogProbe when band is >= MinBand - 1 and <= MaxBand => new(probe, band, Catalog, CatalogColumns, null, null, [], CatalogStatus),
         _ => null
     };
 

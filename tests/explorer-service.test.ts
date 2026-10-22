@@ -880,6 +880,25 @@ describe('ExplorerService: reconcile', () => {
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added')
     expect(f.emitted.slice(events).filter(event => event.type === 'explorer.refreshed')).toEqual([])
   })
+  it('never opens a node from a background reconcile: an empty one gets its expander back, while Varia\'s own change opens it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const views = await f.open('Databases', 'AppData', 'Views')
+    expect(f.explorer.node(views)).toMatchObject({ expanded: false, hasChildren: false, load: 'loaded' })
+    const from = f.calls().length
+    f.explorer.reconcile(views, { background: true })
+    await settle()
+    // Nothing loads until the user opens it; then it lists again.
+    expect(f.calls().length).toBe(from)
+    expect(f.explorer.node(views)).toMatchObject({ expanded: false, hasChildren: true, load: 'none' })
+    f.explorer.expand(views)
+    await settle()
+    expect(f.calls().slice(from).map(params => params.node)).toEqual([{ type: 'folder', owner: { kind: 'database', name: 'AppData' }, folder: 'views' }])
+    // Varia's own change (DDL) opens the folder on what it made.
+    f.explorer.reconcile(views)
+    expect(f.explorer.node(views)!.expanded).toBe(true)
+  })
   it('reconciles a folder of 99,000 rows page by page, each page within the budget', async () => {
     const f = fixture()
     const names = Array.from({ length: 99_000 }, (_, index) => `dbo.Table${index}`)

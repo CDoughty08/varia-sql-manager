@@ -22,7 +22,9 @@ export const liveArgsSchemas = {
     errorEvery: z.number().int().min(1).max(1000).optional()
   }).strict(),
   // The Activity Monitor's probes take only their own settings (interval, pause) for now: no args.
-  activity: z.never()
+  activity: z.never(),
+  // The catalog probe fingerprints all of the catalog the login may see: no args.
+  'ssis.catalog': z.never()
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

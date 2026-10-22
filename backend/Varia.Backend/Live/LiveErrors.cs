@@ -24,6 +24,20 @@ internal static class LiveErrors
     public const string LostMessage = "The connection for this view was lost. It reconnects on its own.";
     public const string LoginFailedMessage = "SQL Server refused this view's sign-in (the password may have changed, or the login is locked or disabled). Refresh or reconnect to sign in again.";
     public const string BusyMessage = "Too many live views are reading this server at once. It tries again.";
+    public const string CatalogMissingMessage = "This server has no SSIS Catalog (it may have been deleted).";
+    public const string CatalogAccessMessage = "This login cannot read the SSIS Catalog. Ask for access to the catalog's database, or connect with a login that has it.";
+
+    /// <summary>Opening a connection in a database failed because of that database (it does not exist, is unavailable or
+    /// closed to the login), not the server or the sign-in.</summary>
+    public static bool OpensNoDatabase(SqlException error) => error.Errors.Cast<SqlError>().Any(item => item.Number is 4060 or 916) || Unavailable.Contains(error.Number);
+
+    /// <summary>Why an SSISDB source cannot open the catalog's database, from its sys.databases row (state and user_access;
+    /// null when there is none): no catalog (terminal), an unavailable one (offline, restoring, recovering, suspect, or
+    /// single-user: it can come back, so it retries), or an online one the login may not open (terminal).</summary>
+    public static LiveProbeError Catalog(string probe, int? state, int? userAccess) =>
+        state is null ? Create(probe, "CATALOG_MISSING", CatalogMissingMessage)
+        : state != 0 || userAccess == 1 ? Create(probe, "DATABASE_UNAVAILABLE", UnavailableMessage)
+        : Create(probe, "PERMISSION_DENIED", CatalogAccessMessage);
 
     /// <summary>The live error code of a SQL Server error number and severity.</summary>
     public static string Classify(int number, byte severity) => number switch
@@ -38,7 +52,7 @@ internal static class LiveErrors
         _ => "SQL_ERROR"
     };
 
-    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED";
+    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING";
 
     /// <summary>The connection cannot be used again: it is dropped (and never returned to the pool).</summary>
     public static bool Breaks(string code) => code is "CONNECTION_LOST" or "TIMEOUT";
