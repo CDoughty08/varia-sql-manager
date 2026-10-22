@@ -408,6 +408,43 @@ describe('results worker core: live relay', () => {
     expect(idle.sent).toEqual([])
   })
 
+  it('holds live requests while the backend starts or restarts and sends them to the generation that becomes ready', () => {
+    const { core, sent, of } = live({ backend: false })
+    // Main announces a generation as soon as it starts; it accepts streams only once that generation is ready.
+    core.receive({ t: 'backend', generation: 1, status: 'starting' })
+    core.handle({ type: 'live', id: 7, params: subscription })
+    core.handle({ type: 'liveUpdate', id: 8, live: 7, params: { subscriptionId: subscription.subscriptionId, source: 'debug.synthetic', paused: true } })
+    core.handle({ type: 'live', id: 9, params: { ...subscription, subscriptionId: '1b6f6c1e-8f61-4d7a-9a51-1d2b3c4d5e6f' } })
+    core.handle({ type: 'cancel', id: 9 })
+    expect(sent).toEqual([])
+    expect(of(9)).toEqual([{ type: 'liveEnd', id: 9, result: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } }])
+    core.receive({ t: 'backend', generation: 1, status: 'ready' })
+    expect(sent.map(request => [request.t, request.rid, 'generation' in request && request.generation])).toEqual([['live', 1, 1], ['liveUpdate', 2, 1]])
+    expect(of(7)).toEqual([])
+
+    // A restart announces the generation that ended, then the next one starting: a resubscribe waits for that one's ready.
+    core.receive({ t: 'backend', generation: 1, status: 'restarting' })
+    core.handle({ type: 'live', id: 10, params: subscription })
+    core.receive({ t: 'backend', generation: 2, status: 'starting' })
+    core.handle({ type: 'live', id: 11, params: { ...subscription, subscriptionId: '2b6f6c1e-8f61-4d7a-9a51-1d2b3c4d5e6f' } })
+    expect(sent).toHaveLength(2)
+    expect([...of(10), ...of(11)]).toEqual([])
+    core.receive({ t: 'backend', generation: 2, status: 'ready' })
+    expect(sent.slice(2).map(request => [request.t, 'generation' in request && request.generation])).toEqual([['live', 2], ['live', 2]])
+    // An unresponsive backend still serves its generation, so requests go out at once.
+    core.receive({ t: 'backend', generation: 2, status: 'unresponsive' })
+    core.handle({ type: 'live', id: 12, params: { ...subscription, subscriptionId: '3b6f6c1e-8f61-4d7a-9a51-1d2b3c4d5e6f' } })
+    expect(sent.at(-1)).toMatchObject({ t: 'live', generation: 2 })
+
+    // A start that fails leaves no backend: what waited for it fails at once, and nothing is sent.
+    const failing = live({ backend: false })
+    failing.core.receive({ t: 'backend', generation: 1, status: 'starting' })
+    failing.core.handle({ type: 'live', id: 7, params: subscription })
+    failing.core.receive({ t: 'backend', generation: 0, status: 'failed' })
+    expect(failing.of(7)).toEqual([{ type: 'error', id: 7, code: 'BACKEND_UNAVAILABLE', message: 'The SQL backend is not running. Use Restart SQL Backend from the command palette.' }])
+    expect(failing.sent).toEqual([])
+  })
+
   it('ends streams and updates of an earlier generation when a new backend runs, and when the port is replaced', () => {
     const { core, sent, of } = live()
     core.handle({ type: 'live', id: 7, params: subscription })
@@ -433,14 +470,22 @@ describe('results worker core: live relay', () => {
     expect(next).toMatchObject([{ t: 'live', generation: 2 }])
   })
 
-  it('never gives a read the rid of a live stream that is still running', () => {
+  it('never gives a read a rid still in use by a live stream, a live update, a close or another read', () => {
     const { core, sent } = live()
     core.handle({ type: 'live', id: 7, params: subscription })
-    expect(sent[0]).toMatchObject({ t: 'live', rid: 1 })
-    // The counter wraps after 2^31 - 1 rids: the next read would be rid 1 again.
+    core.handle({ type: 'liveUpdate', id: 8, live: 7, params: { subscriptionId: subscription.subscriptionId, source: 'debug.synthetic', refresh: true } })
+    core.handle({ type: 'close', id: 9, generation: 1, resultIds: [40] })
+    core.handle({ type: 'window', id: 10, key, wires, first: 0, count: 4, colStart: 0, colEnd: 3, maxCellChars: 100, textBudget: 1000 })
+    expect(sent.map(request => [request.t, request.rid])).toEqual([['live', 1], ['liveUpdate', 2], ['close', 3], ['read', 4]])
+    // The counter wraps after 2^31 - 1 rids: the next read would be rid 1 again, and every rid up to 4 is still in use.
     ;(core as unknown as { nextRid: number }).nextRid = 1
-    core.handle({ type: 'window', id: 8, key, wires, first: 0, count: 4, colStart: 0, colEnd: 3, maxCellChars: 100, textBudget: 1000 })
-    expect(sent[1]).toMatchObject({ t: 'read', rid: 2 })
+    core.handle({ type: 'window', id: 11, key: { generation: 1, resultId: 6 }, wires, first: 0, count: 4, colStart: 0, colEnd: 3, maxCellChars: 100, textBudget: 1000 })
+    expect(sent[4]).toMatchObject({ t: 'read', rid: 5 })
+    // Rids free again once their requests end.
+    core.receive({ t: 'end', rid: 2, ok: true, result: { applied: true, probes: [] } })
+    ;(core as unknown as { nextRid: number }).nextRid = 1
+    core.handle({ type: 'close', id: 12, generation: 1, resultIds: [41] })
+    expect(sent[5]).toMatchObject({ t: 'close', rid: 2 })
   })
 
   it('forgets released results: their pages go and their reads end, and no close is sent', () => {

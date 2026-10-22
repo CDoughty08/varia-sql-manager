@@ -38,15 +38,15 @@ class WorkerPort implements PortMainLike {
 }
 
 /** The fake backend's workbench mode behind main's supervisor and results port; with `custom`, the port is the caller's and
- *  opening it is left to the caller (a ResultClient asks for it). */
-async function workbench<P extends PortMainLike = WorkerPort>(custom?: P) {
+ *  opening it is left to the caller (a ResultClient asks for it); with `ready: false` it returns while the backend starts. */
+async function workbench<P extends PortMainLike = WorkerPort>(custom?: P, o: { ready?: boolean } = {}) {
   const supervisor = new BackendSupervisor({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', resolve('tests/fixtures/backend.mjs'), 'workbench'], cwd: process.cwd(), packaged: false })
   supervisors.push(supervisor)
   const port = custom ?? new WorkerPort()
   const host = new ResultsPortHost({ backend: supervisorResults(supervisor), createChannel: () => ({ port1: port, port2: {} }), testSources: true })
   supervisor.onState(state => host.backendState(state))
   supervisor.start()
-  await expect.poll(() => supervisor.state.status).toBe('ready')
+  if (o.ready !== false) await expect.poll(() => supervisor.state.status).toBe('ready')
   if (!custom) host.open({ postMessage: () => {} })
   return { supervisor, host, port: port as P }
 }
@@ -135,24 +135,75 @@ class LoopWorker implements WorkerLike {
   terminate(): void {}
 }
 
+/** A ResultClient over the real worker core and main's port host, its port handed over as the preload does. */
+function connect(host: ResultsPortHost, port: LoopPort) {
+  const ports: MessagePort[] = []
+  const window = { listener: undefined as ((event: PortMessageEvent) => void) | undefined, addEventListener(_type: 'message', listener: (event: PortMessageEvent) => void) { this.listener = listener }, removeEventListener() { this.listener = undefined } }
+  let worker: LoopWorker | undefined
+  const client = new ResultClient({
+    // As the preload hands the port over: a message from the page's own window carrying one port.
+    api: { openResultsPort: async () => {
+      host.open({ postMessage: () => {} })
+      const { port1 } = new MessageChannel()
+      ports.push(port1)
+      window.listener?.({ source: window, data: { type: 'varia:results-port' }, ports: [port1] })
+      return { ok: true, value: undefined }
+    } },
+    window, createWorker: () => (worker = new LoopWorker(port)), schedule: callback => queueMicrotask(callback)
+  })
+  const close = () => {
+    client.dispose()
+    host.close()
+    for (const item of ports) item.close()
+  }
+  return { client, worker: () => worker, close }
+}
+
 describe('live subscriptions through the results worker and ResultClient', () => {
+  it('waits for a backend that is starting or restarting instead of reporting the view lost', async () => {
+    const port = new LoopPort()
+    const { supervisor, host } = await workbench(port, { ready: false })
+    const { client, close } = connect(host, port)
+    try {
+      await client.ready()
+      // A view restored with the workspace subscribes while the backend that will serve it is still starting.
+      expect(supervisor.state.status).toBe('starting')
+      const subscribe = () => {
+        let ticks = 0
+        const stream = client.live(params({ tickMs: 30 }, ['debug.synthetic.table']), (event, bytes) => {
+          if (event.type === 'live.tick') ticks++
+          stream.ack(bytes)
+        })
+        return { stream, ticks: () => ticks }
+      }
+      const first = subscribe()
+      await expect.poll(() => first.ticks()).toBeGreaterThanOrEqual(2)
+      expect(host.liveCount).toBe(1)
+
+      // A restart loses the running stream; a resubscribe as soon as the page hears of the next generation (while it is
+      // still starting) waits for it.
+      let second: ReturnType<typeof subscribe> | undefined
+      let status: string | undefined
+      client.onGeneration(generation => {
+        if (generation !== 2 || second) return
+        status = supervisor.state.status
+        second = subscribe()
+      })
+      void supervisor.restart('manual')
+      expect(await first.stream.done).toMatchObject({ ok: false })
+      await expect.poll(() => second?.ticks() ?? 0).toBeGreaterThanOrEqual(2)
+      expect(status).toBe('starting')
+      second!.stream.cancel()
+      expect(await second!.stream.done).toMatchObject({ ok: true, value: { ended: 'cancelled' } })
+    } finally {
+      close()
+    }
+  })
+
   it('opens each table as a handle, paces the stream by the page\'s acknowledgements, and releases its results when it ends', async () => {
     const port = new LoopPort()
-    const { host: host } = await workbench(port)
-    const ports: MessagePort[] = []
-    const window = { listener: undefined as ((event: PortMessageEvent) => void) | undefined, addEventListener(_type: 'message', listener: (event: PortMessageEvent) => void) { this.listener = listener }, removeEventListener() { this.listener = undefined } }
-    let worker: LoopWorker | undefined
-    const client = new ResultClient({
-      // As the preload hands the port over: a message from the page's own window carrying one port.
-      api: { openResultsPort: async () => {
-        host.open({ postMessage: () => {} })
-        const { port1 } = new MessageChannel()
-        ports.push(port1)
-        window.listener?.({ source: window, data: { type: 'varia:results-port' }, ports: [port1] })
-        return { ok: true, value: undefined }
-      } },
-      window, createWorker: () => (worker = new LoopWorker(port)), schedule: callback => queueMicrotask(callback)
-    })
+    const { host } = await workbench(port)
+    const { client, worker, close } = connect(host, port)
     try {
       await client.ready()
       await expect.poll(() => client.backendGeneration).toBe(1)
@@ -191,11 +242,9 @@ describe('live subscriptions through the results worker and ResultClient', () =>
       stream.cancel()
       expect(await stream.done).toMatchObject({ ok: true, value: { ended: 'cancelled' } })
       expect(handles.every(handle => handle.getSnapshot().state === 'released')).toBe(true)
-      expect([host.liveCount, host.ownedCount, client.liveStreams, worker!.core.liveStreams]).toEqual([0, 0, 0, 0])
+      expect([host.liveCount, host.ownedCount, client.liveStreams, worker()!.core.liveStreams]).toEqual([0, 0, 0, 0])
     } finally {
-      client.dispose()
-      host.close()
-      for (const item of ports) item.close()
+      close()
     }
   })
 })

@@ -554,6 +554,16 @@ describe('ResultClient live streams', () => {
     early.handOver()
     expect(await stream.done).toEqual({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
     expect(early.worker().received.map(message => message.type)).toEqual(['attach'])
+    // A port that is slow to come, or never does: the cancellation still settles at once, as cancelled.
+    const waiting = fixture()
+    const pending = waiting.client.live(subscription(), () => {})
+    pending.cancel()
+    expect(await Promise.race([pending.done, settle().then(() => 'still waiting')])).toEqual({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    expect(waiting.client.liveStreams).toBe(0)
+    waiting.handOver()
+    await waiting.client.ready()
+    await settle()
+    expect(waiting.worker().received.map(message => message.type)).toEqual(['attach'])
 
     const crashed = await started()
     await crashed.event(tick(1, 10))
@@ -581,6 +591,35 @@ describe('ResultClient live streams', () => {
     closed.client.dispose()
     expect(await closed.stream.done).toEqual({ ok: false, code: 'PORT_CLOSED', error: 'The workbench closed.' })
     expect(await closed.client.live(subscription(), () => {}).done).toMatchObject({ ok: false, code: 'PORT_CLOSED' })
+  })
+
+  it('keeps a stream\'s bookkeeping when the page fails on an event, which then stays unacknowledged', async () => {
+    const f = fixture()
+    f.handOver()
+    await f.client.ready()
+    f.worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    await settle()
+    const seen: number[] = []
+    const stream = f.client.live(subscription(), event => {
+      seen.push(event.seq)
+      throw new Error('the page failed to apply it')
+    })
+    await settle()
+    const sent = f.worker().received.find(message => message.type === 'live')
+    const id = sent?.type === 'live' ? sent.id : -1
+    // The worker's message as the client receives it, synchronously, so an exception would surface here.
+    const deliver = (event: LiveEvent) => { for (const listener of f.worker().listeners.message) listener({ data: { type: 'live', id, bytes: 100, event } }) }
+    expect(() => deliver(tick(1, 10))).not.toThrow()
+    const older = f.client.open(table(10))
+    expect(() => deliver(tick(2, 11, [10]))).not.toThrow()
+    expect(seen).toEqual([1, 2])
+    const newer = f.client.open(table(11))
+    expect([older.getSnapshot().state, newer.getSnapshot().state]).toEqual(['released', 'complete'])
+    await settle()
+    expect(f.worker().fromWorker.filter(request => request.t === 'credit')).toEqual([])
+    f.worker().toWorker({ t: 'end', rid: 1, ok: true, result: { ended: 'cancelled', ticks: 2, elapsedMs: 9 } })
+    expect(await stream.done).toMatchObject({ ok: true, value: { ended: 'cancelled' } })
+    expect(newer.getSnapshot().state).toBe('released')
   })
 
   it('keeps counting a cancelled stream\'s results without handing its events to the page', async () => {

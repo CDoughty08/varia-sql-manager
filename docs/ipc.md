@@ -878,10 +878,13 @@ The worker also relays live subscriptions. The page sends `live { id, params }`,
 names the stream by the page's id), `liveAck { id, bytes }`, `cancel { id }` and `forget { generation, resultIds }`; the
 worker answers `live { id, bytes, event }`, `liveEnd { id, result }`, `liveUpdated { id, result }` or `error`. It takes a
 port rid for each from the counter reads use, skipping rids still in use (a live stream can outlive 2^31 reads), and
-sends a stream to the generation main last announced on the port; requests that come before main's first `backend`
-message wait for it, and with no backend running (generation 0) a stream fails `BACKEND_UNAVAILABLE`. An update goes to
-its stream's generation; one for a stream that ended or is being cancelled fails `NOT_FOUND` at once. A stream cancelled
-before it was sent ends `cancelled` with no ticks. Events are relayed as main validated them, never decoded; `liveAck`
+sends a stream to the generation main last announced on the port. Main takes a stream only for a generation that is
+ready (an `unresponsive` one still is), so requests that come before main's first `backend` message, or while the
+backend is `starting` or `restarting`, wait and go to the generation that becomes ready, never to more than one; a view
+restored at launch, or resubscribed as soon as the page hears of a new generation, is not reported lost. With no backend
+running (generation 0: `stopped` or `failed`) a stream fails `BACKEND_UNAVAILABLE`, including one that was waiting.
+An update goes to its stream's generation; one for a stream that ended or is being cancelled fails `NOT_FOUND` at once.
+A stream cancelled before it was sent ends `cancelled` with no ticks. Events are relayed as main validated them, never decoded; `liveAck`
 becomes `credit` only within the bytes outstanding. When a new generation is announced the worker ends the older
 generation's streams and updates with `RESULT_UNAVAILABLE` ("This live view ended because the SQL backend restarted."),
 in case main's own `BACKEND_LOST` never arrives, and a replaced port ends them with `PORT_CLOSED`; later answers for them
@@ -906,8 +909,9 @@ workbench."
 
 `live(params, onEvent)` runs a live subscription and returns a `LiveStream`: `done` (settles once with the `LiveEnd`, or
 with the failure as a value: never a rejection), `update(patch)` (live.update with the stream's subscription id and
-source; failures are values, and a stream that ended answers `NOT_FOUND`), `cancel()` and `ack(bytes)`. Before
-`onEvent(event, bytes)` runs, each table the event carries is applied (`applyLive`) and the results it retires are
+source; failures are values, and a stream that ended answers `NOT_FOUND`), `cancel()` (`done` settles `cancelled` at once
+when the stream was never sent, even if the port never attaches) and `ack(bytes)`. An exception from `onEvent` is
+caught: the stream's bookkeeping goes on and the event stays unacknowledged. Before `onEvent(event, bytes)` runs, each table the event carries is applied (`applyLive`) and the results it retires are
 forgotten, but only those this stream delivered (a retired list can never release a query's results). The caller applies
 the event synchronously and then acknowledges it with `ack(bytes)`; nothing more arrives until it does. A cancelled
 stream's events still count its results but no longer reach `onEvent`. When the stream ends, its results are forgotten

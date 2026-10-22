@@ -99,11 +99,12 @@ export class ResultsWorkerCore {
   private readonly liveIds = new Map<number, Live>()
   /** Live updates in flight: the page's id and the generation they were sent to, by rid. */
   private readonly updates = new Map<number, { readonly id: number; readonly generation: number }>()
-  /** Live requests that came before main said which backend runs (its first message on a port): sent once it has. */
+  /** Live requests that came while no generation was ready to take them (before main's first message on a port, or while
+   *  a backend starts or restarts): sent once one is, or failed when none runs. */
   private deferred: (Extract<WorkerRequest, { type: 'live' | 'liveUpdate' }>)[] = []
   private port: PortLike | undefined
-  /** Whether main has told this port which generation runs; until then live requests wait. */
-  private known = false
+  /** The backend's status as main last announced it on this port; undefined until its first message. */
+  private status: BackendStatus | undefined
   private generation = 0
   private cacheBytes = 0
   private nextRid = 1
@@ -123,7 +124,7 @@ export class ResultsWorkerCore {
   attach(port: PortLike): void {
     if (this.port && this.port !== port) {
       this.endLives(() => true, 'PORT_CLOSED', portClosed)
-      this.known = false
+      this.status = undefined
     }
     this.port = port
   }
@@ -341,18 +342,22 @@ export class ResultsWorkerCore {
     // Main ends these with BACKEND_LOST; this covers an end that never comes (the port's answer raced the loss). The page
     // hears of the new generation first, so the streams' results are already lost there.
     this.endLives(live => live.generation !== generation, 'RESULT_UNAVAILABLE', liveLost)
-    if (!this.known) {
-      this.known = true
+    this.status = status
+    if (!this.holding() && this.deferred.length > 0) {
       const deferred = this.deferred
       this.deferred = []
       for (const request of deferred) this.handle(request)
     }
   }
 
+  /** Main takes a stream only for a generation that is ready (an unresponsive one still is), so until one is, live requests
+   *  wait rather than fail as if a backend had been lost; with none running they fail. */
+  private holding(): boolean { return this.status === undefined || this.status === 'starting' || this.status === 'restarting' }
+
   private live(request: Extract<WorkerRequest, { type: 'live' }>): void {
     const { id, params } = request
     if (!this.port) return this.error(id, 'PORT_CLOSED', portClosed)
-    if (!this.known) { this.deferred.push(request); return }
+    if (this.holding()) { this.deferred.push(request); return }
     if (this.generation === 0) return this.error(id, 'BACKEND_UNAVAILABLE', notRunning)
     if (this.liveIds.has(id)) return this.error(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
     const live: Live = { id, rid: this.allocate(), generation: this.generation, unacked: 0, cancelled: false }
@@ -364,7 +369,7 @@ export class ResultsWorkerCore {
   private liveUpdate(request: Extract<WorkerRequest, { type: 'liveUpdate' }>): void {
     const { id, params } = request
     if (!this.port) return this.error(id, 'PORT_CLOSED', portClosed)
-    if (!this.known && this.deferred.some(item => item.type === 'live' && item.id === request.live)) { this.deferred.push(request); return }
+    if (this.holding() && this.deferred.some(item => item.type === 'live' && item.id === request.live)) { this.deferred.push(request); return }
     const live = this.liveIds.get(request.live)
     if (!live || live.cancelled) return this.error(id, 'NOT_FOUND', liveEnded)
     const rid = this.allocate()

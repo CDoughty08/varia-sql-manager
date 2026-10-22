@@ -377,7 +377,9 @@ export class ResultClient implements Disposable {
       cancel: () => {
         if (ended || state.cancelled) return
         state.cancelled = true
-        if (state.sent) this.worker.postMessage({ type: 'cancel', id })
+        // Never sent (the port has not attached): nothing ran, so it ends now rather than when, or if, the port comes.
+        if (!state.sent) return state.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+        this.worker.postMessage({ type: 'cancel', id })
       },
       ack: bytes => { if (!ended && state.sent) this.worker.postMessage({ type: 'liveAck', id, bytes }) }
     }
@@ -388,7 +390,6 @@ export class ResultClient implements Disposable {
       const worker = this.worker
       this.attached.then(() => {
         if (ended || this.worker !== worker) return
-        if (state.cancelled) return state.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
         state.sent = true
         worker.postMessage({ type: 'live', id, params })
       }, error => state.end(failureOf(error)))
