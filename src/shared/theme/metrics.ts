@@ -53,13 +53,15 @@ export const shadows = {
  * `--varia-motion-<name>`, in ms, and one easing curve. Transitions are 80 ms for hover and pressed fills, carried only
  * by `:hover` rules so that selection and other state changes are instant, and 120 ms for menus, popovers and dialogs;
  * `prefers-reduced-motion: reduce` sets both to 0. The loops (Varia's spinners, Monaco's codicon spinners and the live
- * dot) have their own periods and stop under reduced motion through `animation: none`.
+ * dot) have their own periods and stop under reduced motion through `animation: none`. `delay` holds a loading
+ * placeholder back (as an animation delay) and is not motion, so reduced motion leaves it alone.
  */
 export const motion = {
   fast: { ms: 80, use: 'Hover and pressed fills.' },
   base: { ms: 120, use: 'Menus, popovers and dialogs appearing.' },
   spin: { ms: 1500, use: 'One turn of a loading spinner (a loop).' },
-  pulse: { ms: 2000, use: 'One beat of the live dot, 0.5 Hz (a loop).' }
+  pulse: { ms: 2000, use: 'One beat of the live dot, 0.5 Hz (a loop).' },
+  delay: { ms: 300, use: 'The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it.' }
 } as const
 export const motionEasing = 'cubic-bezier(0.2, 0, 0, 1)'
 /** The transitions reduced motion turns off; loops are stopped per rule instead. */
@@ -87,7 +89,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: [], bar: ['.query-tabs'], control: ['.icon-button'], row: ['.explorer-row'], status: ['.status-bar', '.query-status-bar']
+  header: [], bar: ['.query-tabs'], control: ['.icon-button'], row: ['.explorer-row', '.skeleton-row'], status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {

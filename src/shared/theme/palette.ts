@@ -39,6 +39,7 @@ const slots = {
   error: ['Error text.', '#f39a9a', '#b42229'],
   warning: ['Warning text.', '#e4bb6a', '#875800'],
   success: ['Success text.', '#74d19c', '#146f3b'],
+  successText: ['Success text on tinted fills, such as success status pills over a selected row or a tinted status bar.', '#a6e8bf', '#0f5a2f'],
   info: ['Information text.', '$accent', '$accent'],
   errorSurface: ['Error banner and the status bar error state.', '#3a1d22', '#fdecec'],
   errorSurfaceText: ['Text on the error surface.', '#f6bcc1', '#8f1d24'],

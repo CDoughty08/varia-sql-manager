@@ -7,7 +7,7 @@ Theme files (format 1) override palette slots, color keys, and SQL token colors.
 key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that name. In CSS, a key is available as
 `var(--varia-editor-background)`: `--varia-` followed by the key with dots replaced by hyphens.
 
-## Palette slots (66)
+## Palette slots (67)
 
 | Slot | Drives | Varia Dark | Varia Light |
 | --- | --- | --- | --- |
@@ -44,6 +44,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `error` | Error text. | `#f39a9a` | `#b42229` |
 | `warning` | Warning text. | `#e4bb6a` | `#875800` |
 | `success` | Success text. | `#74d19c` | `#146f3b` |
+| `successText` | Success text on tinted fills, such as success status pills over a selected row or a tinted status bar. | `#a6e8bf` | `#0f5a2f` |
 | `info` | Information text. Follows `$accent`. | `#8f9cff` | `#4453d0` |
 | `errorSurface` | Error banner and the status bar error state. | `#3a1d22` | `#fdecec` |
 | `errorSurfaceText` | Text on the error surface. | `#f6bcc1` | `#8f1d24` |
@@ -78,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (206)
+## Color keys (233)
 
 ### Base
 
@@ -327,6 +328,38 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `quickInputList.focusForeground` | VS Code | `@list.activeSelectionForeground` | `#d9dce3` | `#1c1f26` | Text of the active command palette row. |
 | `pickerGroup.foreground` | VS Code | `$textAccent` | `#bcc5ff` | `#3240b0` | Command palette group labels, such as "recently used". |
 | `pickerGroup.border` | VS Code | `$separator` | `#30343c` | `#dcdfe5` | Line above each command palette group. |
+
+### Status pills, chips, live views, and tiles
+
+| Key | Source | Default | Varia Dark | Varia Light | Description |
+| --- | --- | --- | --- | --- | --- |
+| `statusPill.runningBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Status pills and tags of work in progress, such as a running execution or a restoring database. |
+| `statusPill.runningForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Text and glyph of running pills. |
+| `statusPill.successBackground` | Varia | `$success/14` | `#74d19c24` | `#146f3b24` | Status pills of a good outcome, such as a succeeded execution or a healthy availability group. |
+| `statusPill.successForeground` | Varia | `$successText` | `#a6e8bf` | `#0f5a2f` | Text and glyph of success pills. |
+| `statusPill.warningBackground` | Varia | `$warning/14` | `#e4bb6a24` | `#87580024` | Status pills that need attention, such as a stopping execution or a read-only database. |
+| `statusPill.warningForeground` | Varia | `$warningSurfaceText` | `#f0d49e` | `#6b4400` | Text and glyph of warning pills. |
+| `statusPill.criticalBackground` | Varia | `$error/14` | `#f39a9a24` | `#b4222924` | Status pills of a failure or a state at risk, and the Production environment tag. |
+| `statusPill.criticalForeground` | Varia | `$errorSurfaceText` | `#f6bcc1` | `#8f1d24` | Text and glyph of critical pills and the Production tag. |
+| `statusPill.infoBackground` | Varia | `$info/14` | `#8f9cff24` | `#4453d024` | Status pills and tags that inform without alarming, such as a Staging environment. |
+| `statusPill.infoForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Text and glyph of information pills. |
+| `statusPill.neutralBackground` | Varia | `$active` | `#30343e` | `#d6dae0` | Status pills and tags without a state color, such as a canceled execution or a Test environment. |
+| `statusPill.neutralForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text and glyph of neutral pills. |
+| `chip.background` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default. |
+| `chip.foreground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Label of a filter chip while off. |
+| `chip.border` | Varia | `$controlBorder/45` | `#6b728673` | `#878e9b73` | Outline of a filter chip while off. |
+| `chip.activeBackground` | Varia | `$selection` | `#21273b` | `#e7ebfc` | A filter chip while on. |
+| `chip.activeForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Label and check mark of a filter chip while on. |
+| `chip.activeBorder` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on. |
+| `live.indicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot of a live view that is collecting; it pulses unless the system asks for reduced motion. |
+| `live.pausedForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Text and glyph of a paused live view. |
+| `live.staleForeground` | Varia | `$warning` | `#e4bb6a` | `#875800` | Text and glyph of live data that is out of date, as in "Stale since 22:44:03". |
+| `live.staleBackground` | Varia | `$warning/14` | `#e4bb6a24` | `#87580024` | Badge behind out-of-date live data. |
+| `tile.background` | Varia | `$panel` | `#16181d` | `#ffffff` | Metric tiles of live documents. |
+| `tile.border` | Varia | `$border` | `#262a31` | `#e3e6eb` | Outline of a metric tile. |
+| `tile.warningBorder` | Varia | `$warning` | `#e4bb6a` | `#875800` | Outline of a tile whose value crossed its warning threshold. |
+| `tile.criticalBorder` | Varia | `$error` | `#f39a9a` | `#b42229` | Outline of a tile whose value crossed its critical threshold. |
+| `skeleton.background` | Varia | `$active` | `#30343e` | `#d6dae0` | Placeholder bars shown while a first load takes longer than 300 ms. |
 
 ### Connection colors
 

@@ -18,7 +18,7 @@ const subject = (part: string) => part.split(/\s*[\s>+~]\s*(?![^(]*\))/).pop() ?
 // Codicon and text glyphs sized as icons, not text. They move to the icon registry's sizes with the icon system.
 const glyphSizes: Readonly<Record<string, string>> = {
   '.oe-icon .codicon': '15px', '.oe-icon .oe-badge': '9px', '.oe-actions .codicon': '14px', '.query-status-state .codicon': '12px',
-  '.output-empty-icon': '25px', '.memory-indicator .codicon': '12px', '.editor-status .codicon': '12px', '.favorite-button': '18px'
+  '.memory-indicator .codicon': '12px', '.editor-status .codicon': '12px', '.favorite-button': '18px'
 }
 // A 3 px connection colour edge keeps its own rounding.
 const indicatorRadii: Readonly<Record<string, string>> = { '.connection-swatch': '1px' }

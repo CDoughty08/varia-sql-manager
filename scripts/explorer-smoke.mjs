@@ -609,6 +609,14 @@ try {
   await expect(page.getByText('Object Explorer stopped because of a rendering error.')).toBeVisible()
   // Focus went with the tree to the Reload button, and after Reload to the new tree, which repeats no old announcement.
   await expect(page.getByRole('button', { name: 'Reload Object Explorer', exact: true })).toBeFocused()
+  // Copy details puts the fault and where it happened on the clipboard, through main, and says so.
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await page.locator('.explorer-fault').getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(page.locator('.explorer-fault .inline-error-status')).toHaveText('Details copied.')
+  await expect.poll(clipboard).toContain('Message: Object Explorer stopped because of a rendering error.')
+  expect(await clipboard()).toContain('Object Explorer test fault.')
+  expect(await clipboard()).toContain('Component stack:')
+  await page.getByRole('button', { name: 'Reload Object Explorer', exact: true }).focus()
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-b')).toHaveAttribute('aria-expanded', 'true')
   await expect(tree()).toBeFocused()
