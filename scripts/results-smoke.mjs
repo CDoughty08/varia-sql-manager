@@ -945,6 +945,7 @@ try {
     // The set's rows are painted a frame or more after the run completes.
     const nullColors = { color: await tokenColor('resultsGrid.nullForeground'), background: await tokenColor('resultsGrid.nullBackground') }
     await expect.poll(() => computed(nullCell)).toEqual(nullColors)
+    expect(await nullCell.evaluate(element => getComputedStyle(element).fontStyle)).toBe('italic')
     expect((await computed(cell(1, 3), '::after')).color).toBe(await tokenColor('resultsGrid.truncationForeground'))
     expect((await computed(cell(2, 4))).color).toBe(await tokenColor('errorForeground'))
     await cell(0, 0).click()

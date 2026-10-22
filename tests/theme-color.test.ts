@@ -101,7 +101,8 @@ describe('contrast repair and window chrome', () => {
   })
   it('maps preset connection colors to theme variables and repairs custom ones', () => {
     expect(connectionPresets.map(preset => [preset.label, preset.stored])).toEqual([['Red', '#e66b73'], ['Orange', '#e6a15c'], ['Yellow', '#dec766'], ['Green', '#79bb8b'], ['Blue', '#71a7df'], ['Purple', '#ad8bd8']])
-    for (const preset of connectionPresets) expect(builtinPalettes.dark[preset.name]).toBe(preset.stored)
+    // Saved profiles hold these first Varia Dark values; they must not follow later palette changes.
+    for (const preset of connectionPresets) expect(builtinPalettes.dark[preset.name]).not.toBe(preset.stored)
     const light = resolveBuiltin('light'), dark = resolveBuiltin('dark')
     expect(connectionAccent('#E66B73', light)).toBe('var(--varia-connection-red)')
     expect(connectionAccent('#71a7df', dark)).toBe('var(--varia-connection-blue)')
@@ -118,7 +119,7 @@ describe('contrast repair and window chrome', () => {
       const theme = resolveBuiltin(type)
       expect(nativeOverlay(theme)).toEqual({ color: theme.colors['titleBar.activeBackground'], symbolColor: theme.colors['titleBar.controlsForeground'] })
     }
-    expect(nativeOverlay(resolveBuiltin('light'))).toEqual({ color: '#e9edf2', symbolColor: '#1f2733' })
+    expect(nativeOverlay(resolveBuiltin('light'))).toEqual({ color: '#f7f8fa', symbolColor: '#1c1f26' })
     const dark = resolveBuiltin('dark')
     const lowContrast = { ...dark, colors: { ...dark.colors, 'titleBar.activeBackground': '#202020', 'titleBar.controlsForeground': '#303030' } }
     expect(nativeOverlay(lowContrast)).toEqual({ color: '#202020', symbolColor: '#ffffff' })

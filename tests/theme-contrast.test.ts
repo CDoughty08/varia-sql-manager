@@ -72,8 +72,8 @@ describe('built-in theme contrast', () => {
   })
   it('composites translucent foregrounds and backgrounds before measuring', () => {
     const dark = resolveBuiltin('dark')
-    const pair: ContrastPair = { foreground: 'resultsGrid.nullForeground', background: ['panel.background', 'resultsGrid.alternateRowBackground'], minimum: 4.5 }
-    const striped = composite(hexColor('#d9e1ec08'), hexColor('#141a23'))
-    expect(ratio(dark, pair)).toBeCloseTo(contrast(composite(hexColor('#dfbd82b3'), striped), striped), 6)
+    const pair: ContrastPair = { foreground: 'emptyState.iconForeground', background: ['panel.background', 'resultsGrid.alternateRowBackground'], minimum: 3 }
+    const striped = composite(hexColor('#d9dce305'), hexColor('#16181d'))
+    expect(ratio(dark, pair)).toBeCloseTo(contrast(composite(hexColor('#7f869499'), striped), striped), 6)
   })
 })

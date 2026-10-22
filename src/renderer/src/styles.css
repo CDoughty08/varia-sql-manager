@@ -375,7 +375,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-rn:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-rn.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .rg-c { position: absolute; top: 0; height: 20px; box-sizing: border-box; padding: 0 6px; white-space: pre; overflow: hidden; text-overflow: clip; unicode-bidi: isolate; contain: strict; border-right: 1px solid var(--varia-resultsGrid-gridlines); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
-.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background: var(--varia-resultsGrid-nullBackground); }
+.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background: var(--varia-resultsGrid-nullBackground); font-style: italic; }
 .rg-c.is-trunc::after { content: '…'; position: absolute; top: 0; right: 0; padding: 0 3px; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-truncationForeground); }
 .rg-c.is-err { color: var(--varia-errorForeground); font-style: italic; }
 .rg-c.is-link { color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; cursor: pointer; }

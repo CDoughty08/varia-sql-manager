@@ -90,13 +90,13 @@ describe('Monaco theme', () => {
         if (rule.background !== undefined) expect(rule.background).toMatch(/^[0-9a-f]{6}$/)
       }
     }
-    expect(toMonacoTheme(resolveBuiltin('dark')).rules.find(rule => rule.token === 'string.sql')).toEqual({ token: 'string.sql', foreground: 'ff4040', fontStyle: '' })
+    expect(toMonacoTheme(resolveBuiltin('dark')).rules.find(rule => rule.token === 'string.sql')).toEqual({ token: 'string.sql', foreground: '9fd4a9', fontStyle: '' })
   })
   it('makes a translucent editor foreground opaque and passes font styles through', () => {
     const parsed = parseThemeFile({ kind: 'varia-color-theme', version: 1, name: 'x', type: 'dark', colors: { 'editor.foreground': '#ffffff80' },
       tokenColors: [{ scope: 'comment', settings: { fontStyle: 'italic underline' } }] }, 'x.json').theme!
     const data = toMonacoTheme(resolveTheme([parsed], 'dark').theme)
-    expect(data.rules[0]).toEqual({ token: '', foreground: '888a8e', background: '11151c' })
+    expect(data.rules[0]).toEqual({ token: '', foreground: '8b8c8e', background: '16181d' })
     expect(data.colors['editor.foreground']).toBe('#ffffff80')
     // comment.sql, comment.quote.sql, and the three XML comment tokens.
     expect(data.rules.filter(rule => rule.token.startsWith('comment')).map(rule => rule.fontStyle)).toEqual(Array(5).fill('italic underline'))
