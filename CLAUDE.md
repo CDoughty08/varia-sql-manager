@@ -44,17 +44,18 @@ pages, limits, error codes, display formats, benchmarks).
   server state or times work against a fixed bound needs the same care.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
-- Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`.
-  Every `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
+- Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`. Every
+  `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
   `--no-sandbox`); only root, as in cloud sessions, runs without it. Only in unpackaged smoke runs, main also honours
-  `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
-  takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `globalThis.__variaTest` (kill, pid, state,
-  states, synthesize, and the renderer hooks rendererLosses, holdNextRenderer and releaseHolders), the renderer's test
-  mode (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`, which saves AutoRecover's
-  copies at once, and `window.__variaTestShellFault()`, which makes the workbench's next render throw), and passes the
-  backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and
-  `expect` from `scripts/fixtures/smoke.mjs`: assertions wait 15 s on Windows, whose runners can take seconds to write a
-  file, and closing the app logs main's file operations that took 500 ms or more.
+  `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench` takes
+  cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
+  cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
+  holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
+  `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, and `window.__variaTestShellFault()`,
+  which makes the workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
+  and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
+  wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
+  that took 500 ms or more.
 
 ## Architecture invariants
 
@@ -66,7 +67,14 @@ pages, limits, error codes, display formats, benchmarks).
   and a `SqlService.DispatchAsync` case plus its `MethodNames` entry, with its record in `backend/Varia.Backend/Contracts.cs`.
   Unknown methods and unknown members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
 - Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
-  connection strings. Passwords stay in memory: not in `connections.json`, process arguments, or previews.
+  connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
+  logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
+  (async API only, in `src/main/secret-cipher.ts`) in `saved-passwords.json` (atomic, 0600, quarantined if unreadable),
+  keyed by its history entry's id and bound to its server, login and TLS settings by a hash beside it and a check inside
+  the ciphertext. Only main reads that file or decrypts; the renderer learns only which entries have one, and main injects
+  it into `connections.connect`/`.databases` only for a matching binding. Remember password is disabled where
+  safeStorage is unavailable, Linux's backend is `basic_text`/`unknown`, or its keyring cannot be reached (Electron's
+  fallback key, tag `v10`; only `v11`/`v12` count, not yet confirmed on a Linux desktop, so any other tag disables it).
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
@@ -82,7 +90,7 @@ pages, limits, error codes, display formats, benchmarks).
   New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
   never re-sent.
 - Preferences are written atomically (`src/main/json-file.ts`) (`settings.json`, `appearance.json`, `connections.json`,
-  `workspace-layouts.json`); unreadable files are quarantined, never overwritten.
+  `workspace-layouts.json`, `saved-passwords.json` (0600)); unreadable files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
   (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { z } from 'zod'
@@ -23,6 +23,10 @@ import { recentFilesMenuModel } from '../shared/files/recent'
 import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
+import { SavedPasswordStore } from './saved-passwords'
+import { safeStorageCipher, testCipher } from './secret-cipher'
+import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
+import { connectionLibrary } from './connection-library'
 import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { lossDetails } from '../shared/files/recovery'
@@ -37,7 +41,6 @@ import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { contentSecurityPolicy } from '../shared/csp'
 import { userInfo } from 'node:os'
-import { connectionProfileInputSchema } from '../shared/connections'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
@@ -609,6 +612,10 @@ app.whenReady().then(async () => {
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
+  // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
+  const secretCipher = testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
+  const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
+  const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
   await appearance.initialize()
@@ -655,9 +662,9 @@ app.whenReady().then(async () => {
   ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined } })
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
-  handle('varia:connections-load', async () => ({ ...await connectionStore.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
-  handle('varia:connections-save', value => connectionStore.save(connectionProfileInputSchema.parse(value)))
-  handle('varia:connections-remove', value => connectionStore.remove(z.uuid().parse(value)))
+  handle('varia:connections-load', async () => ({ ...await library.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
+  handle('varia:connections-save', value => library.save(value))
+  handle('varia:connections-remove', value => library.remove(value))
   handle('varia:settings-get', () => settings.load({ showsWarning: true }))
   handle('varia:settings-update', value => settings.update(value))
   handle('varia:layouts-load', () => layouts.load())
@@ -680,27 +687,33 @@ app.whenReady().then(async () => {
     if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent())
   })
   handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
-  ipcMain.handle('varia:request', async (event, method: string, params: unknown): Promise<ApiResult<unknown>> => {
+  // `context` (ConnectContext) only for connections.connect and .databases: the history entry whose remembered
+  // password main may fill in (connection-requests.ts), and whether to remember the password.
+  ipcMain.handle('varia:request', async (event, method: string, params: unknown, context: unknown): Promise<ApiResult<unknown>> => {
     if (!trusted(event)) {
       return { ok: false, error: 'Untrusted IPC sender.' }
     }
     try {
       const validated = validateRequest(method, params)
+      const prepared = await prepareConnection(method, validated, context, { savedPasswords })
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
       // An Object Explorer load, a script or an object action is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests })
       const load = cancellable?.begin((validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute']['params']).requestId)
       let result: unknown
+      let outcome: Settled
       try {
-        result = await backend.request(method as RpcMethod, validated as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
-      } finally { load?.end() }
-      result = validateResult(method as RpcMethod, result)
+        try {
+          result = await backend.request(method as RpcMethod, prepared.params as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
+        } finally { load?.end() }
+        result = validateResult(method as RpcMethod, result)
+        outcome = { ok: true, value: result }
+      } catch (error) { outcome = { ok: false, error } }
+      // History and remembered passwords for the connect methods; other methods pass through.
+      outcome = await settleConnection(prepared, outcome, { savedPasswords, connections: connectionStore })
+      if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}) }
       if (queryId !== undefined) results.own((result as QueryResult).resultSets)
-      if (method === 'connections.connect') {
-        try { await connectionStore.remember(validated as RpcMethods['connections.connect']['params']) }
-        catch { (result as RpcMethods['connections.connect']['result']).historyWarning = 'Connected successfully, but recent connections could not be saved.' }
-      }
       return { ok: true, value: result }
     } catch (error) { return failure(error, 'Backend request failed.') }
   })

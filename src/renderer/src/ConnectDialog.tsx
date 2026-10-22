@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
-import { advancedDefaults, advancedToStore, connectionDefaults, connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../../shared/connections'
+import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, connectionKey, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
 import { trapFocus } from './trap-focus'
@@ -29,6 +29,12 @@ function FailureDetails({ details }: { details: ErrorDetails }) {
   const rows: [string, string | number | undefined][] = [['Error number', details.number], ['Severity', details.class], ['State', details.state], ['Server', details.server]]
   return <details className="connect-error-details"><summary>Error details</summary><dl>{rows.filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
 }
+const storageNotes: Record<NonNullable<SecretStorageState['reason']>, string> = {
+  'no-keyring': 'Remember password needs a system keyring (GNOME Keyring or KWallet), and none was found. Passwords are used for this connection only.',
+  'unknown-backend': 'Remember password is unavailable because the operating system could not encrypt passwords. Passwords are used for this connection only.',
+  unavailable: 'Remember password is unavailable because the operating system could not encrypt passwords. Passwords are used for this connection only.'
+}
+const forgottenNotice = 'The saved password was rejected, so it has been removed. Enter the password.'
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
 /** Advanced Properties. A command timeout the profile does not set is left empty, showing Tools › Options' Execution time-out. */
@@ -63,6 +69,10 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const { active } = useServiceSnapshot(theme)
   const [options, setOptions] = useState<ConnectionOptions>({ ...initial, password: '' })
   const [library, setLibrary] = useState<ConnectionLibrary>({ version: 1, profiles: [] })
+  // The entries with a remembered password (ids only: the password stays in main), and whether the OS can protect one.
+  const [savedIds, setSavedIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [storage, setStorage] = useState<SecretStorageState>()
+  const [remember, setRemember] = useState(false)
   const [identity, setIdentity] = useState('Current Windows user')
   // Off Windows: the Kerberos principal Windows Authentication signs in with, while there is a valid ticket.
   const [principal, setPrincipal] = useState<string>()
@@ -100,6 +110,17 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const selected = library.profiles.find(profile => profile.id === selectedId)
   const locked = busy || saving
   const authReady = options.authentication === 'windows' || !!options.username?.trim()
+  // The entry whose remembered password main would use for this form: Password left empty sends that entry's id.
+  const match = rememberedProfile(library.profiles, savedIds, options, selectedId)
+  const rememberable = canRememberPassword(options.authentication) && !!storage?.available
+  const storageNote = canRememberPassword(options.authentication) && storage && !storage.available ? storageNotes[storage.reason ?? 'unavailable'] : ''
+  function showLibrary(view: ConnectionLibraryView) { setLibrary(view.library); setSavedIds(new Set(view.savedPasswords)) }
+  /** Main forgot every remembered password for these credentials, which SQL Server rejected. */
+  function passwordRejected() {
+    const binding = credentialBinding(currentOptions.current)
+    setSavedIds(current => new Set([...current].filter(id => { const profile = library.profiles.find(item => item.id === id); return !!profile && credentialBinding(profile.options) !== binding })))
+    setRemember(false); setNotice(forgottenNotice)
+  }
   // SSMS shows the identity integrated authentication uses: DOMAIN\user on Windows, the ticket's principal elsewhere
   // (the OS user name without one).
   const integratedUser = principal ?? identity
@@ -110,7 +131,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     void window.varia.loadConnectionLibrary().then(result => {
       if (!alive.current) return
       const value = unwrap(result)
-      setLibrary(value.library); setIdentity(value.windowsIdentity); setNotice(value.warning ?? ''); setLoaded(true)
+      showLibrary(value); setStorage(value.passwordStorage); setIdentity(value.windowsIdentity); setNotice([value.warning, value.passwordWarning].filter(Boolean).join(' ')); setLoaded(true)
     }).catch(reason => { if (alive.current) { setError(message(reason)); setLoaded(true) } })
     return () => { alive.current = false; dbRequest.current++; browseRequest.current++ }
   }, [])
@@ -120,6 +141,10 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     return () => { if (active instanceof HTMLElement && active.isConnected) active.focus() }
   }, [])
   useEffect(() => { identityLookup.authenticationChanged(options.authentication) }, [identityLookup, options.authentication])
+  // Choosing an entry with a remembered password checks Remember password, as SSMS does; a typed password keeps the choice.
+  useEffect(() => {
+    if (!currentOptions.current.password) setRemember(!!match)
+  }, [match?.id])
   useEffect(() => {
     dbRequest.current++; dbLoadedKey.current = ''; setDatabases([]); setDbNote(''); setDbDetails(undefined); setDbBusy(false)
   }, [options.server, options.authentication, options.username, options.password, options.encrypt, options.trustServerCertificate, options.hostNameInCertificate, options.advanced])
@@ -170,9 +195,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
       setDbNote('Could not load databases: ' + reason + ' You can enter a database name manually.'); setDbDetails(details)
     }
     try {
-      const result = await window.varia.discoverDatabases(options)
+      const result = await window.varia.discoverDatabases(options, match ? { profileId: match.id } : undefined)
       if (!alive.current || request !== dbRequest.current) return
-      if (!result.ok) { failed(result.error, result.details); return }
+      if (!result.ok) { failed(result.error, result.details); if (result.passwordForgotten) passwordRejected(); return }
       const values = result.value
       setDatabases(values); dbLoadedKey.current = key
       setDbNote(values.length ? `${values.length} databases available.` : 'No databases are visible to this login. You can still enter a database name.')
@@ -188,24 +213,27 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
       const input = { id: profile?.id ?? selectedId, options: profile?.options ?? options, favorite, registered }
       const value = unwrap(await window.varia.saveConnectionProfile(input))
       if (!alive.current) return
-      setLibrary(value)
-      if (!profile) setSelectedId(value.profiles.find(item => connectionKey(item.options) === connectionKey(options))?.id)
+      showLibrary(value)
+      if (!profile) setSelectedId(value.library.profiles.find(item => connectionKey(item.options) === connectionKey(options))?.id)
     } catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
   async function remove(profile: ConnectionProfile) {
     setSaving(true); setError('')
-    try { const value = unwrap(await window.varia.removeConnectionProfile(profile.id)); if (alive.current) { setLibrary(value); if (selectedId === profile.id) setSelectedId(undefined) } }
+    try { const value = unwrap(await window.varia.removeConnectionProfile(profile.id)); if (alive.current) { showLibrary(value); if (selectedId === profile.id) setSelectedId(undefined) } }
     catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
   async function connect(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('')
     try {
-      const result = await window.varia.connect(options)
+      const result = await window.varia.connect(options, { ...match ? { profileId: match.id } : {}, remember: remember && rememberable })
       if (!alive.current) return
       if (result.ok) onConnected(result.value, { ...options, password: '' })
-      else { setError(result.error); setFailure(result.details ? { error: result.error, details: result.details } : undefined) }
+      else {
+        setError(result.error); setFailure(result.details ? { error: result.error, details: result.details } : undefined)
+        if (result.passwordForgotten) passwordRejected()
+      }
     } catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setBusy(false) }
   }
@@ -249,8 +277,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
             <div className="property-row"><label htmlFor="connect-server">Server Name</label><input id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
             <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as ConnectionOptions['authentication'], password: '' })}><option value="windows">Windows Authentication</option><option value="sql">SQL Server Authentication</option></select></div>
             <div className="property-row"><label htmlFor="connect-user">User Name</label><input id="connect-user" required={options.authentication === 'sql'} disabled={locked || options.authentication === 'windows'} autoComplete="off" maxLength={128} value={options.authentication === 'windows' ? integratedUser : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
-            <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked || options.authentication === 'windows'} maxLength={1024} value={options.password ?? ''} onChange={event => update({ password: event.target.value })} /></div>
-            <div className="property-row"><span /><p className="field-note">Passwords are used for this connection only.</p></div>
+            <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked || options.authentication === 'windows'} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => update({ password: event.target.value })} />{match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}</div>
+            <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => setRemember(event.target.checked)} />Remember password</label></div>
+            {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
             <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { const key = JSON.stringify({ ...currentOptions.current, database: '', displayName: '', color: '' }); if (dbLoadedKey.current !== key) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}>{dbBusy ? '…' : '↻'}</button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
             {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
             <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>

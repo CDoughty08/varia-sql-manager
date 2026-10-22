@@ -1,5 +1,5 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
-import type { ConnectionLibrary, ConnectionProfileInput } from './connections'
+import type { ConnectContext, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -279,8 +279,9 @@ export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
  *  server that answered (at most 256 characters). Never the connection string or the password. */
 export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
-/** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is. */
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails }
+/** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is.
+ *  `passwordForgotten`: SQL Server rejected the remembered password main filled in, so main forgot it. */
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true }
 
 /** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'
@@ -336,15 +337,17 @@ export interface VariaApi {
   showContextMenu(request: ContextMenuRequest): Promise<ApiResult<void>>
   onContextMenuCommand(callback: (command: ContextMenuCommand) => void): () => void
   health(): Promise<ApiResult<BackendHealth>>
-  connect(options: ConnectionOptions): Promise<ApiResult<ConnectionInfo>>
-  discoverDatabases(options: ConnectionOptions): Promise<ApiResult<DatabaseInfo[]>>
+  /** `context` names the history entry whose remembered password main may use (when Password is empty), and whether to
+   *  remember the password once connected. */
+  connect(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<ConnectionInfo>>
+  discoverDatabases(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<DatabaseInfo[]>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
-  loadConnectionLibrary(): Promise<ApiResult<{ library: ConnectionLibrary; windowsIdentity: string; warning?: string }>>
+  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string }>>
   /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User Name). */
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
-  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibrary>>
-  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibrary>>
+  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibraryView>>
+  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
