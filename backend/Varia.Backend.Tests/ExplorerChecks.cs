@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
@@ -26,6 +29,7 @@ internal static class ExplorerChecks
         Errors(check);
         Cursors(check);
         Refs(check);
+        Identity(check);
         Filters(check);
         await SweepAsync(check);
         await ServiceAsync(check);
@@ -282,6 +286,16 @@ internal static class ExplorerChecks
         var valid = ExplorerCursor.Encode("tables", new("dbo", "Orders", null));
         var payload = valid["v1.tables.".Length..];
         string Raw(params byte[] bytes) => "v1.columns." + Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var ids = new long[] { 0, 1, 2147483648, long.MaxValue };
+        check(ids.All(id => ExplorerCursor.Parse(ExplorerCursor.Encode("ssisPackages", new(null, null, null, id)), "ssisPackages", Keyset.Id) == new CursorKey(null, null, null, id))
+            && ExplorerCursor.Encode("ssisPackages", new(null, null, null, long.MaxValue)).Length < 40,
+            "bigint id cursors round-trip from 0 to 2^63 - 1 (Keyset.Id: SSIS packages, whose names can exceed sysname)");
+        string Id(params byte[] bytes) => "v1.ssisPackages." + Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var id = ExplorerCursor.Encode("ssisPackages", new(null, null, null, 7));
+        check(Rejected(Id(4, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff), "ssisPackages", Keyset.Id) && Rejected(Id(4, 1, 0, 0, 0, 0, 0, 0), "ssisPackages", Keyset.Id)
+            && Rejected(Id(4, 1, 0, 0, 0, 0, 0, 0, 0, 0), "ssisPackages", Keyset.Id) && Rejected(id, "ssisPackages", Keyset.Name) && Rejected(id, "ssisPackages", Keyset.Ordinal)
+            && Rejected(Id(3, 1, 0, 0, 0), "ssisPackages", Keyset.Id) && Rejected(Id(1, 1, 65, 0), "ssisPackages", Keyset.Id),
+            "negative, short, long and other-keyset id cursors are rejected, and an id cursor fits no other keyset");
         check(Rejected(valid, "views", Keyset.SchemaName) && Rejected(valid, "tables", Keyset.Name) && Rejected("v2.tables." + payload, "tables", Keyset.SchemaName)
             && Rejected("v1.tables." + payload[..^2] + "+/", "tables", Keyset.SchemaName) && Rejected("v1.tables." + new string('A', 1601), "tables", Keyset.SchemaName)
             && Rejected("v1.tables.", "tables", Keyset.SchemaName) && Rejected("v1.tables." + payload + "AAAA", "tables", Keyset.SchemaName)
@@ -362,6 +376,122 @@ internal static class ExplorerChecks
         var cloudSecurity = ExplorerRefs.Validate(Args(Folder(new ObjectRefDto("server"), "logins")), catalog);
         try { ExplorerRefs.CheckServed(cloudSecurity, catalog, new(16, true)); check(false, "a box-only folder is refused on a cloud edition"); }
         catch (RequestException error) { check(error.Code == "INVALID_PARAMS", "a box-only folder is refused on a cloud edition"); }
+    }
+
+    /// <summary>The embedded catalogue with changes, for the mechanisms no shipped kind uses yet (the SSIS kinds arrive in S1b).</summary>
+    internal static ExplorerCatalog Variant(Action<JsonObject> change)
+    {
+        using var stream = typeof(ExplorerCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Explorer.explorer-catalog.json")!;
+        var json = JsonNode.Parse(stream)!.AsObject();
+        change(json);
+        return ExplorerCatalog.Parse(new MemoryStream(Encoding.UTF8.GetBytes(json.ToJsonString())));
+    }
+
+    internal static void SetKind(JsonObject catalog, string kind, params (string Field, JsonNode? Value)[] fields)
+    {
+        var item = catalog["kinds"]!.AsArray().Single(entry => (string?)entry!["kind"] == kind)!.AsObject();
+        foreach (var (field, value) in fields) item[field] = value;
+    }
+
+    /// <summary>A listing paged by a bigint id past int's range: every object of the database, labelled by its key.</summary>
+    internal static readonly ExplorerQuery Ids = new()
+    {
+        Id = "testIds", Scope = QueryScope.Database, Keyset = Keyset.Id, From = _ => "sys.all_objects AS o", Keys = ["CONVERT(bigint, o.object_id) + 4294967296"], Select = _ => "o.name",
+        Map = row => ExplorerQueries.Node(row.Context, new ObjectRefDto("schema", row.Context.Database, Name: row.S(0)), row.Id.ToString(CultureInfo.InvariantCulture))
+    };
+
+    /// <summary>SSIS identity (S1a): ref fields and scopes, per-kind name bounds, kinds that list rows after their folders,
+    /// and the bigint keyset, checked through catalogue variants before any shipped kind uses them.</summary>
+    private static void Identity(Action<bool, string> check)
+    {
+        var catalog = ExplorerCatalog.Current;
+        bool Valid(ExplorerCatalog with, ObjectRefDto value)
+        {
+            try { ExplorerRefs.Object(value, with); return true; }
+            catch (RequestException error) when (error.Code == "INVALID_PARAMS") { return false; }
+        }
+        ObjectRefDto Minimal(ExplorerCatalog with, CatalogKind kind)
+        {
+            var required = with.Scopes[kind.Scope].Required;
+            return new(kind.Kind, required.Contains("database") ? "db" : null, required.Contains("schema") ? "s" : null, required.Contains("name") ? "n" : null,
+                required.Contains("parent") ? new ParentRefDto(kind.Parents[0], "s", "p") : null, required.Contains("ssisFolder") ? "f" : null, required.Contains("ssisProject") ? "p" : null);
+        }
+        var kinds = catalog.Kinds.ToList();
+        check(kinds.All(kind => kind.MaxName == 128 && kind.List is null && kind.Rows.Count == 0) && catalog.Scopes.Count == 11
+            && catalog.Scopes["ssisProjectObject"].Required.SequenceEqual(["ssisFolder", "ssisProject", "name"]),
+            "the embedded catalogue has the SSIS scopes, and every shipped kind keeps sysname's bound and lists no rows of its own");
+        var wrong = kinds.Where(kind => !Valid(catalog, Minimal(catalog, kind)) || Valid(catalog, Minimal(catalog, kind) with { SsisFolder = "f" })
+            || Valid(catalog, Minimal(catalog, kind) with { SsisProject = "p" })
+            || Minimal(catalog, kind).Name is not null && (!Valid(catalog, Minimal(catalog, kind) with { Name = new string('x', 128) }) || Valid(catalog, Minimal(catalog, kind) with { Name = new string('x', 129) })))
+            .Select(kind => kind.Kind).ToList();
+        check(wrong.Count == 0, "every shipped kind refuses SSIS fields and names past 128 UTF-16 code units: " + string.Join(", ", wrong));
+
+        var ssis = Variant(json =>
+        {
+            SetKind(json, "server", ("scope", "ssisCatalog"));
+            SetKind(json, "login", ("scope", "ssisFolder"));
+            SetKind(json, "user", ("scope", "ssisFolderObject"));
+            SetKind(json, "table", ("scope", "ssisProjectObject"), ("maxName", 260));
+        });
+        var scoped = new[] { "server", "login", "user", "table" }.Select(ssis.KindOf).ToList();
+        var problems = new List<string>();
+        foreach (var kind in scoped)
+        {
+            var scope = ssis.Scopes[kind.Scope];
+            var exact = Minimal(ssis, kind);
+            if (!Valid(ssis, exact)) problems.Add(kind.Scope + " minimal");
+            ObjectRefDto Without(string field) => field switch
+            {
+                "name" => exact with { Name = null }, "ssisFolder" => exact with { SsisFolder = null }, "ssisProject" => exact with { SsisProject = null }, _ => exact with { Database = null }
+            };
+            ObjectRefDto With(string field) => field switch
+            {
+                "database" => exact with { Database = "db" }, "schema" => exact with { Schema = "s" }, "parent" => exact with { Parent = new("table", "s", "p") },
+                "ssisFolder" => exact with { SsisFolder = "f" }, "ssisProject" => exact with { SsisProject = "p" }, _ => exact with { Name = "n" }
+            };
+            problems.AddRange(scope.Required.Where(field => Valid(ssis, Without(field))).Select(field => kind.Scope + " without " + field));
+            problems.AddRange(scope.Forbidden.Where(field => Valid(ssis, With(field))).Select(field => kind.Scope + " with " + field));
+        }
+        var package = Minimal(ssis, ssis.KindOf("table"));
+        check(problems.Count == 0 && Valid(ssis, package with { Name = new string('x', 260) }) && !Valid(ssis, package with { Name = new string('x', 261) })
+            && !Valid(ssis, package with { SsisFolder = new string('f', 129) }) && !Valid(ssis, package with { SsisProject = "a\0b" }) && !Valid(ssis, package with { SsisFolder = "" })
+            && Valid(ssis, Minimal(ssis, ssis.KindOf("user")) with { Name = new string('x', 128) }) && !Valid(ssis, Minimal(ssis, ssis.KindOf("user")) with { Name = new string('x', 129) }),
+            "SSIS scopes require and forbid their fields, folder and project names are sysnames, and a kind's own name bound (260) applies to it alone: " + string.Join(", ", problems));
+        bool Refused(int maxName)
+        {
+            try { Variant(json => SetKind(json, "table", ("maxName", maxName))); return false; }
+            catch (InvalidOperationException) { return true; }
+        }
+        check(Refused(127) && Refused(261) && !Refused(260), "a catalogue whose kind declares a name bound outside 128-260 does not load");
+
+        // A kind may list rows after its static folders: the cursor names that query, and the node can expand.
+        var listing = Variant(json =>
+        {
+            SetKind(json, "server", ("list", "logins"), ("rows", new JsonArray("login")));
+            SetKind(json, "login", ("list", "credentials"), ("rows", new JsonArray("credential")));
+        });
+        bool Accepted(ExplorerCatalog with, ExplorerChildrenArgs args)
+        {
+            try { return ExplorerRefs.Validate(args, with).List is not null; }
+            catch (RequestException error) when (error.Code == "INVALID_PARAMS") { return false; }
+        }
+        var server = new ObjectRefDto("server");
+        check(Accepted(listing, Args(Object(server), cursor: ExplorerCursor.Encode("logins", new("sa", null, null)))) && Accepted(listing, Args(Object(server)))
+            && !Accepted(listing, Args(Object(server), cursor: ExplorerCursor.Encode("credentials", new("c", null, null))))
+            && !Accepted(catalog, Args(Object(server), cursor: ExplorerCursor.Encode("logins", new("sa", null, null)))) && !Accepted(catalog, Args(Object(server)))
+            && ExplorerRefs.Validate(Args(Folder(server, "logins")), listing).List == "logins" && !Accepted(listing, Args(Object(server), filter: new(Name: new("equals", "sa")))),
+            "an object whose kind lists rows takes cursors of that query only; filters stay a folder's");
+        var box = new ExplorerProfile(16, false);
+        check(listing.HasChildren("login", null, box) && !catalog.HasChildren("login", null, box), "a kind that lists rows of its own can expand without static folders");
+
+        // The bigint keyset renders a TOP (@take) listing that passes the lint, and the scope wrapper passes every declared parameter.
+        var lint = Enumerable.Range(ExplorerCatalog.MinBand, ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1).SelectMany(band => CatalogSql.Lint(Ids.Render(new SqlRender(band)), new SqlRender(band), true, false)).ToList();
+        check(lint.Count == 0 && Ids.Render(new SqlRender(16)).EndsWith("WHERE (@kb IS NULL OR CONVERT(bigint, o.object_id) + 4294967296 > @kb) ORDER BY CONVERT(bigint, o.object_id) + 4294967296;", StringComparison.Ordinal),
+            "a Keyset.Id listing pages by @kb and passes the lint: " + string.Join("; ", lint));
+        var declared = CatalogSql.Declarations.Split(", ").Select(item => item.Split(' ')[0]).ToList();
+        check(declared.Count == 15 && declared.Contains("@ssis_folder") && declared.Contains("@ssis_project") && declared.Contains("@kb")
+            && declared.All(name => CatalogSql.ModuleCall.Contains(name + " = " + name, StringComparison.Ordinal)) && CatalogSql.ModuleCall.Split(" = @").Length - 1 == declared.Count,
+            "the scope wrapper passes exactly the declared parameters, the SSIS folder, project and bigint key among them");
     }
 
     private static void Filters(Action<bool, string> check)
@@ -470,6 +600,16 @@ internal static class ExplorerChecks
         check(instanceServer.SequenceEqual(["databases", "serverSecurity", "serverObjects"]) && instanceTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"])
             && instanceDatabase.Contains("externalResources") && instanceSecurity.Contains("alwaysEncryptedKeys") && instanceSecurity.Contains("securityPolicies"),
             "Managed Instance reporting version 12 serves the server folders and the folders its catalog columns allow: " + string.Join(",", instanceTables));
+
+        // A kind that lists rows (S1b's SSIS catalog) serves its static folders, then reads its query; later pages read rows only.
+        var listing = new FakeHost();
+        using (var lists = new ExplorerService(listing, catalog: Variant(json => SetKind(json, "server", ("list", "logins"), ("rows", new JsonArray("login"))))))
+        {
+            var page = await lists.ChildrenAsync(Args(Object(server)), CancellationToken.None);
+            var next = await lists.ChildrenAsync(Args(Object(server), cursor: ExplorerCursor.Encode("logins", new("sa", null, null))), CancellationToken.None);
+            check(page.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["databases", "serverSecurity", "serverObjects"]) && page.Error is { Retryable: true } && next.Nodes.Count == 0
+                && next.Error is not null && listing.Connections == 2, "an object kind that lists rows serves its folders first, then runs its query; a cursor page runs the query alone");
+        }
 
         // A request cancelled before it runs takes no slot and opens nothing.
         using (var cancelled = new CancellationTokenSource())

@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
@@ -130,6 +132,7 @@ internal static class ExplorerLiveChecks
         check(gone.Error is { Code: "NOT_FOUND", Action: "refreshParent" } && goneNode.Error?.Code == "NOT_FOUND" && goneTable.Error is { Code: "NOT_FOUND", Action: "refreshParent", Message: "dbo.VariaNoSuchTable no longer exists." },
             "a missing database or parent object is NOT_FOUND with refresh-parent");
 
+        await KindListsAsync(check, service, info.Id, text => Sql(text));
         await CancellationAsync(check, service, client, live, json);
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
@@ -137,6 +140,54 @@ internal static class ExplorerLiveChecks
             return;
         }
         await ScratchAsync(check, service, client, live, json, (text, database) => Sql(text, database));
+    }
+
+    /// <summary>Kinds that list rows after their static folders (S1b's SSIS catalog lists its folders so), through catalogue
+    /// variants: master listing its schemas by name, and its objects by a bigint key past int's range, in both scope
+    /// strategies, page by page against one independent ORDER BY.</summary>
+    private static async Task KindListsAsync(Action<bool, string> check, SqlService host, string connectionId, Func<string, Task<SqlRun>> sql)
+    {
+        static async Task<(List<ExplorerNode> Nodes, int? Total, int Pages, ExplorerError? Error)> All(ExplorerService service, string connectionId, int pageSize)
+        {
+            var nodes = new List<ExplorerNode>();
+            string? cursor = null;
+            int? total = null;
+            var pages = 0;
+            do
+            {
+                var page = await service.ChildrenAsync(new(connectionId, Guid.NewGuid().ToString(), Object(Database("master")), Cursor: cursor, PageSize: pageSize), CancellationToken.None);
+                if (page.Error is not null) return (nodes, total, pages, page.Error);
+                if (pages++ == 0) total = page.Total;
+                nodes.AddRange(page.Nodes);
+                cursor = page.Cursor;
+            } while (cursor is not null && pages < 10_000);
+            return (nodes, total, pages, null);
+        }
+        var folders = (await host.Explorer.ChildrenAsync(new(connectionId, Guid.NewGuid().ToString(), Object(Database("master"))), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
+
+        using (var schemas = new ExplorerService(host, catalog: ExplorerChecks.Variant(json => ExplorerChecks.SetKind(json, "database", ("list", "schemas"), ("rows", new JsonArray("schema"))))))
+        {
+            var listed = await All(schemas, connectionId, 3);
+            var expected = (await sql("SELECT s.name FROM sys.schemas AS s ORDER BY s.name;")).Sets[0].Select(row => row[0]!).ToList();
+            var rows = listed.Nodes.Skip(folders.Count).ToList();
+            check(listed.Error is null && folders.Count > 5 && listed.Nodes.Take(folders.Count).Select(node => node.Ref.Folder).SequenceEqual(folders)
+                && rows.All(node => node.Ref is { Type: "object", Object.Kind: "schema" }) && rows.Select(node => node.Label).SequenceEqual(expected)
+                && listed.Total == folders.Count + expected.Count && listed.Pages > 3,
+                "a database kind that lists its schemas serves its folders first, then pages of 3 schemas matching one ORDER BY (" + listed.Pages + " pages; " + listed.Error?.Message + ")");
+        }
+
+        var queries = ExplorerQueries.All.Append(new(ExplorerChecks.Ids.Id, ExplorerChecks.Ids)).ToDictionary(StringComparer.Ordinal);
+        var ids = ExplorerChecks.Variant(json => ExplorerChecks.SetKind(json, "database", ("list", ExplorerChecks.Ids.Id), ("rows", new JsonArray("schema"))));
+        var keys = (await sql("SELECT CONVERT(bigint, o.object_id) + 4294967296 FROM sys.all_objects AS o ORDER BY 1;")).Sets[0].Select(row => row[0]!).ToList();
+        foreach (var perDatabase in new[] { false, true })
+        {
+            using var service = new ExplorerService(host, new ExplorerOptions { ForcePerDatabaseScope = perDatabase }, ids, queries);
+            var listed = await All(service, connectionId, 500);
+            var labels = listed.Nodes.Skip(folders.Count).Select(node => node.Label).ToList();
+            check(listed.Error is null && labels.SequenceEqual(keys) && listed.Pages > 2 && labels.Distinct().Count() == labels.Count && labels.All(label => long.Parse(label, CultureInfo.InvariantCulture) > int.MaxValue),
+                "a bigint keyset (Keyset.Id) pages master's " + keys.Count + " objects past int's range without gaps or duplicates" + (perDatabase ? " on a pool per database" : " through the scope wrapper")
+                + " (" + listed.Pages + " pages, " + labels.Count + " rows; " + listed.Error?.Message + "; first difference at " + Enumerable.Range(0, Math.Min(labels.Count, keys.Count)).FirstOrDefault(i => labels[i] != keys[i], -1) + ")");
+        }
     }
 
     /// <summary>The children a walk expands: those that have children, except temp tables (tempdb's # names, including the

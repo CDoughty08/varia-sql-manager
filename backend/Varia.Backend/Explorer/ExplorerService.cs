@@ -44,15 +44,19 @@ internal sealed class ExplorerService : IDisposable
 {
     private readonly IExplorerHost host;
     private readonly ExplorerCatalog catalog;
+    private readonly IReadOnlyDictionary<string, ExplorerQuery> queries;
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim total;
 
-    public ExplorerService(IExplorerHost host, ExplorerOptions? options = null, ExplorerCatalog? catalog = null)
+    /// <param name="catalog">A catalogue other than the embedded one, with <paramref name="queries"/> for the ids it lists
+    /// (checks of mechanisms no shipped kind uses yet).</param>
+    public ExplorerService(IExplorerHost host, ExplorerOptions? options = null, ExplorerCatalog? catalog = null, IReadOnlyDictionary<string, ExplorerQuery>? queries = null)
     {
         this.host = host;
         Options = options ?? new ExplorerOptions();
         this.catalog = catalog ?? ExplorerCatalog.Current;
+        this.queries = queries ?? ExplorerQueries.All;
         total = new SemaphoreSlim(Options.Total);
         running = new RequestRegistry(Options.MaxRegistered, "Object Explorer");
     }
@@ -66,7 +70,7 @@ internal sealed class ExplorerService : IDisposable
         var watch = Stopwatch.StartNew();
         var request = ExplorerRefs.Validate(args, catalog);
         CursorKey? key = null;
-        if (request.Cursor is not null) key = ExplorerCursor.Parse(request.Cursor, request.Folder!.List!, ExplorerQueries.All[request.Folder.List!].Keyset);
+        if (request.Cursor is not null) key = ExplorerCursor.Parse(request.Cursor, request.List!, queries[request.List!].Keyset);
         var server = host.Profile(request.ConnectionId);
         var real = server.Explorer(catalog);
         var profile = Options.ForceBand is { } band ? real with { Band = band } : real;
@@ -106,9 +110,10 @@ internal sealed class ExplorerService : IDisposable
     {
         var target = request.Object;
         var nodes = new List<ExplorerNode>();
-        if (request.Folder is not { } folder)
+        // Static folders (and an object's checks before them) lead the first page only; filters never apply to them. The
+        // node's rows follow: a folder's, or those an object kind lists directly below itself.
+        if (key is null && request.Folder is null)
         {
-            var folders = catalog.StaticFolders(target.Kind, request.Subtype, profile);
             if (target.Kind == "database")
             {
                 var problem = await DatabaseProblemAsync(request, profile, token);
@@ -120,13 +125,11 @@ internal sealed class ExplorerService : IDisposable
                 if (error is not null) return new(nodes, 0, Error: error);
                 if (history is not null) nodes.Add(history);
             }
-            nodes.AddRange(folders.Select(id => FolderNode(target, id)));
-            return new(nodes, 0, Total: nodes.Count);
+            nodes.AddRange(catalog.StaticFolders(target.Kind, request.Subtype, profile).Select(id => FolderNode(target, id)));
         }
-        // Static subfolders lead the first page only; filters never apply to them.
-        if (key is null) nodes.AddRange(catalog.Subfolders(folder.Id, profile).Select(id => FolderNode(target, id)));
-        if (folder.List is null) return new(nodes, 0, Total: nodes.Count);
-        var query = ExplorerQueries.All[folder.List];
+        else if (key is null) nodes.AddRange(catalog.Subfolders(request.Folder!.Id, profile).Select(id => FolderNode(target, id)));
+        if (request.List is null) return new(nodes, 0, Total: nodes.Count);
+        var query = queries[request.List];
         var render = new SqlRender(profile.Band, vector, FilterShape.From(request.Filter), query.ChildFolder ? target.Kind : null);
         var first = key is null;
         var statics = nodes.Count;
@@ -222,19 +225,22 @@ internal sealed class ExplorerService : IDisposable
     {
         var value = node.Ref.Object ?? node.Ref.Owner!;
         return 96 + 2L * (node.Label.Length + (node.Sublabel?.Length ?? 0) + (node.Detail?.Length ?? 0) + (value.Database?.Length ?? 0) + (value.Schema?.Length ?? 0)
-            + (value.Name?.Length ?? 0) + (value.Parent is { } parent ? parent.Schema.Length + parent.Name.Length : 0));
+            + (value.Name?.Length ?? 0) + (value.Parent is { } parent ? parent.Schema.Length + parent.Name.Length : 0) + (value.SsisFolder?.Length ?? 0)
+            + (value.SsisProject?.Length ?? 0));
     }
 
-    private sealed record Values(string? ObjectSchema, string? ObjectName, CursorKey? Key, bool First, int Take, string? Name, string? Schema, string? Owner, DateTime? D1, DateTime? D2);
+    private sealed record Values(string? ObjectSchema, string? ObjectName, CursorKey? Key, bool First, int Take, string? Name, string? Schema, string? Owner, DateTime? D1, DateTime? D2,
+        string? SsisFolder, string? SsisProject);
 
     private static Values Parameters(ExplorerRequest request, CursorKey? key, bool first, string? objectName = null, string? objectSchema = null)
     {
         var filter = request.Filter;
         string? Text(TextFilterDto? value) => value is null ? null : value.Op == "equals" ? value.Value : CatalogSql.EscapeLike(value.Value);
-        // Child folders and the history row resolve their parent object by (schema, name).
+        // Listings name their owner by its own fields: child folders and the history row resolve their parent object by
+        // (schema, name), and SSIS listings their folder and project.
         var owner = request.Object;
-        return new(objectSchema ?? (request.Folder is not null ? owner.Schema : null), objectName ?? (request.Folder is not null ? owner.Name : null), key, first,
-            request.PageSize + 1, Text(filter?.Name), Text(filter?.Schema), Text(filter?.Owner), ExplorerRefs.Date(filter?.Created?.Value), ExplorerRefs.Date(filter?.Created?.Value2));
+        return new(objectSchema ?? owner.Schema, objectName ?? owner.Name, key, first, request.PageSize + 1, Text(filter?.Name), Text(filter?.Schema), Text(filter?.Owner),
+            ExplorerRefs.Date(filter?.Created?.Value), ExplorerRefs.Date(filter?.Created?.Value2), owner.SsisFolder, owner.SsisProject);
     }
 
     /// <summary>Takes the connection's gate and then the global one, runs one batch, and reads it; SQL errors become values.</summary>
@@ -276,6 +282,9 @@ internal sealed class ExplorerService : IDisposable
                 Add(command, "@fowner", SqlDbType.NVarChar, 400, values.Owner);
                 Add(command, "@d1", SqlDbType.Date, 0, values.D1);
                 Add(command, "@d2", SqlDbType.Date, 0, values.D2);
+                Add(command, "@ssis_folder", SqlDbType.NVarChar, 128, values.SsisFolder);
+                Add(command, "@ssis_project", SqlDbType.NVarChar, 128, values.SsisProject);
+                Add(command, "@kb", SqlDbType.BigInt, 0, values.Key?.Kb);
                 await using var reader = await command.ExecuteReaderAsync(token);
                 return await read(command, reader);
             }
