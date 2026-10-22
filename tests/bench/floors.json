@@ -13,6 +13,8 @@
     "node.w1.eventLoopP99Ms": { "title": "Main event-loop delay during W1, p99", "unit": "ms", "better": "lower", "target": 20, "floor": 100 },
     "node.w1.sentPerDistinct": { "title": "Page bytes sent ÷ distinct page bytes, W1", "unit": "×", "better": "lower", "target": 1.05, "floor": null },
     "node.storedPerWire": { "title": "Budget charged ÷ page bytes", "unit": "×", "better": "lower", "target": 1.15, "floor": 1.5 },
+    "node.liveData.snapshotSwapsPerSecond": { "title": "Live snapshot revisions of 5,000 × 23 stored, sent, acknowledged and released", "unit": "swaps/s", "better": "higher", "target": 50, "floor": 10 },
+    "node.liveData.snapshotGen2PerMinute": { "title": "Backend gen2 collections while those revisions swap", "unit": "collections/min", "better": "lower", "target": 60, "floor": null },
     "node.grid.selection.opsPerSecond": { "title": "Grid frame: 64 selection blocks clipped, 1,800 cells tested", "unit": "ops/s", "better": "higher", "target": 5000, "floor": 1000 },
     "node.grid.scroll.opsPerSecond": { "title": "Grid frame: Mode B scroll mapping, 100M rows", "unit": "ops/s", "better": "higher", "target": 5000000, "floor": 1000000 },
     "node.grid.tiles.opsPerSecond": { "title": "Grid frame: visible range, tiles and prefetch ring, 300 columns", "unit": "ops/s", "better": "higher", "target": 500000, "floor": 100000 },

@@ -7,8 +7,15 @@ internal sealed record LiveOpenedProbe(string Probe, int IntervalMs, int MinInte
 internal sealed record LiveOpenedEvent(string Type, long Seq, string Source, int? Band, int? Spid, string? Isolation, IReadOnlyList<LiveOpenedProbe> Probes);
 internal sealed record LiveDiff(int Added, int Removed, int Changed);
 internal sealed record LiveTracked(int Seq, int[] Rows);
-internal sealed record LiveSnapshotSample(int Table, ResultDescriptor Descriptor, long Revision, uint[]? Retired = null, LiveDiff? Diff = null, LiveTracked? Tracked = null);
-internal sealed record LiveAppendSample(int Table, ResultDescriptor Descriptor, int Segment, uint? RolledFrom = null, uint[]? Retired = null);
+internal sealed record LiveFacetValue(string Text, int Count);
+/// <summary>A facet column's distinct values, most frequent first; More (true or null) when some were left out.</summary>
+internal sealed record LiveFacet(string Column, IReadOnlyList<LiveFacetValue> Values, bool? More = null);
+/// <summary>Departed: rows that left the source and stay this one revision (tracked, in a table that keeps them); Facets:
+/// the facet columns whose values changed.</summary>
+internal sealed record LiveSnapshotSample(int Table, ResultDescriptor Descriptor, long Revision, uint[]? Retired = null, LiveDiff? Diff = null, LiveTracked? Tracked = null,
+    int[]? Departed = null, IReadOnlyList<LiveFacet>? Facets = null);
+/// <summary>Restarted (true or null): the table started again, and Retired names every segment it had.</summary>
+internal sealed record LiveAppendSample(int Table, ResultDescriptor Descriptor, int Segment, uint? RolledFrom = null, uint[]? Retired = null, bool? Restarted = null);
 /// <summary>Value is a whole number or a string of at most 128 characters.</summary>
 internal sealed record LiveStatus(string Id, object Value);
 internal sealed record LiveSample(string Probe, int CostMs, int EffectiveIntervalMs, long? ElapsedMs = null, string? Gap = null, int? Skipped = null, double?[]? Metrics = null,

@@ -612,7 +612,7 @@ internal static class LiveSchedulerChecks
         var overview = LiveCatalog.Current.Probes[LiveSql.OverviewProbe];
         {
             var host = new HangingHost(id);
-            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), id, activity, null) { ConnectBudgetMs = 200 };
+            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null) { ConnectBudgetMs = 200 };
             var opening = await sampler.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             check(host.Pooled == 0 && host.Opens == 0 && opening is { Spid: null, Probes: [{ State: "ok" }] },
                 "a view subscribed with every probe paused opens no connection and runs no SQL (the session is read when a probe first runs)");
@@ -621,7 +621,7 @@ internal static class LiveSchedulerChecks
             var host = new HangingHost(id);
             // One gate in the backend: were the connect holding it, the other connection could not have it.
             var gates = new LiveGates(2, 1, other => other == id || other == "other");
-            using var sampler = new SqlSampler(host, gates, id, activity, null) { ConnectBudgetMs = 400 };
+            using var sampler = new SqlSampler(host, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null) { ConnectBudgetMs = 400 };
             var probe = new LiveProbeState(overview, 2000);
             var opening = await sampler.OpenAsync([probe], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             var sampling = sampler.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), probe.BudgetMs, 2000)], CancellationToken.None);

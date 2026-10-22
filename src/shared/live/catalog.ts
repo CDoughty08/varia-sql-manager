@@ -18,6 +18,8 @@ export type LiveTableMode = 'snapshot' | 'append'
  *  time across them (cpuPercent). Every kind but gauge has no value until a second sample. */
 export const liveCounters = ['gauge', 'rate', 'msPerSecond', 'ratio', 'cpuPercent'] as const
 export type LiveCounter = typeof liveCounters[number]
+/** The SQL types a live table stores (Live/LiveTables.cs, LiveCells): each cell is the display text a query of it shows. */
+export const liveDataTypes = ['tinyint', 'smallint', 'int', 'bigint', 'nvarchar', 'varchar', 'nchar', 'char', 'sysname', 'bit', 'float', 'real', 'decimal', 'numeric', 'datetime', 'datetime2', 'datetimeoffset', 'uniqueidentifier'] as const
 export interface LiveSeriesSpec { readonly id: string; readonly unit: LiveUnit; readonly label: string; readonly counter: LiveCounter }
 /** `id` names the column in requests (sort, filter); `name` and `dataType` are what the stored result's columns carry. */
 export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string }
@@ -25,8 +27,26 @@ export interface LiveTableSpec {
   readonly id: string
   readonly mode: LiveTableMode
   readonly columns: readonly LiveColumnSpec[]
-  /** The column ids whose cell texts, joined with U+001F, identify a row across revisions (tracked selection). */
+  /** The column ids whose cell texts, joined with U+001F, identify a row across revisions (tracked selection; a NULL cell
+   *  counts as empty text). An append table has exactly one: its keyset id, an integer that grows with every row, by which
+   *  the table reads only rows above the id it has settled. */
   readonly key: readonly string[]
+  /** Snapshot: the most rows a revision stores (defaultSnapshotRows, at most limits.live.snapshotRows); the rest are cut,
+   *  and the descriptor says rowLimit. */
+  readonly rowCap?: number
+  /** Snapshot, keyed: a tracked row that left the source stays in one more revision, listed in the sample's `departed`,
+   *  so a selection on a session that just ended still has its row. */
+  readonly departed?: boolean
+  /** Snapshot: columns whose distinct values, with their counts, samples carry whenever they change (column value
+   *  filters), at most limits.live.facetColumns. */
+  readonly facets?: readonly string[]
+  /** Append: an id counts as settled once it was first seen at least this many ticks and milliseconds ago
+   *  (defaultSettle). Ids are assigned at insert, not commit, so a lower id can appear after a higher one; until the ids
+   *  around it settle, every tick reads them again and appends only the ones it has not seen. */
+  readonly settle?: { readonly ticks: number; readonly ms: number }
+  /** Append: the most new rows one tick reads (defaultBatchRows, at most limits.live.batchRows), so a catch-up never runs
+   *  one huge read; twice as many unsettled ids are remembered to skip repeats. */
+  readonly batchRows?: number
 }
 export interface LiveProbeSpec {
   readonly id: string
@@ -67,22 +87,34 @@ export interface LiveSourceSpec {
   /** Only main's test schemas (unpackaged smoke runs) and a backend with VARIA_BACKEND_TEST_HOOKS=1 accept it. */
   readonly testOnly: boolean
   readonly probes: readonly string[]
+  /** While its view is hidden: pause every probe (the default), or keep only its probes without tables, sampled at most
+   *  every limits.live.hiddenIntervalMs (an execution this window started, for its completion notice). The renderer
+   *  applies it through live.update. */
+  readonly hidden?: 'pause' | 'statusOnly'
 }
 
 const column = (id: string, dataType: string): LiveColumnSpec => ({ id, name: id, dataType })
+/** The types debug.synthetic.wide's columns cycle through. */
+const wideTypes = ['nvarchar', 'bigint', 'datetime2', 'float', 'bit', 'int']
 const anyInterval = { default: 1000, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }
 /** A probe's statement budget and load guard when its entry names none. */
 export const defaultBudgetMs = { min: limits.live.budgetMs.min, max: 5000 } as const
 export const defaultDutyCycle = 0.25
+/** A snapshot table's row cap, and an append table's settle window and rows per tick, when its entry names none. */
+export const defaultSnapshotRows = 5000
+export const defaultSettle = { ticks: 2, ms: 5000 } as const
+export const defaultBatchRows = 5000
 
 export const liveSourceIds = ['debug.synthetic', 'activity'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
-export const liveProbeIds = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'activity.overview'] as const
+export const liveProbeIds = [
+  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', 'activity.overview'
+] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
 export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'debug.synthetic': {
-    id: 'debug.synthetic', label: 'Synthetic', scope: 'none', testOnly: true, probes: ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status'],
+    id: 'debug.synthetic', label: 'Synthetic', scope: 'none', testOnly: true, probes: ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide'],
     description: 'Generated values for protocol, renderer and smoke tests. It runs no SQL, so any connection id is accepted; a disconnect of that id still ends it.'
   },
   activity: {
@@ -100,11 +132,33 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   'debug.synthetic.table': {
     id: 'debug.synthetic.table', source: 'debug.synthetic', label: 'Synthetic rows', intervalMs: anyInterval,
     description: 'A snapshot table whose rows move on by one id per sample, so rows leave at the top and arrive at the bottom.',
-    tables: [{ id: 'rows', mode: 'snapshot', key: ['id'], columns: [column('id', 'int'), column('label', 'nvarchar'), column('value', 'int')] }]
+    tables: [{ id: 'rows', mode: 'snapshot', key: ['id'], rowCap: 10_000, columns: [column('id', 'int'), column('label', 'nvarchar'), column('value', 'int')] }]
   },
   'debug.synthetic.status': {
     id: 'debug.synthetic.status', source: 'debug.synthetic', label: 'Synthetic status', intervalMs: anyInterval,
     description: 'The phase (even or odd) and the sample count.', status: ['phase', 'samples']
+  },
+  'debug.synthetic.grid': {
+    id: 'debug.synthetic.grid', source: 'debug.synthetic', label: 'Synthetic grid', intervalMs: anyInterval, views: ['even'], filterMode: 'memory',
+    description: 'Two snapshot tables from one sample. Items move on by one id per sample, as the table probe\'s rows do, in five groups, with group facets and departed rows; the even view keeps the items with an even id. Groups count the items of each group, built from the source\'s own state rather than read from SQL Server.',
+    tables: [
+      { id: 'items', mode: 'snapshot', key: ['itemId'], rowCap: 10_000, departed: true, facets: ['group'], columns: [column('itemId', 'int'), column('group', 'nvarchar'), column('name', 'nvarchar'), column('amount', 'int')] },
+      { id: 'groups', mode: 'snapshot', key: ['groupName'], rowCap: 10, columns: [column('groupName', 'nvarchar'), column('items', 'int')] }
+    ]
+  },
+  'debug.synthetic.log': {
+    id: 'debug.synthetic.log', source: 'debug.synthetic', label: 'Synthetic log', intervalMs: anyInterval, filterMode: 'restart',
+    description: 'An append table that grows by logRows messages a sample (levels 0 to 3). With lateEvery, one message of every n-th sample becomes visible a sample late, after higher ids, as a slow writer\'s commit would. A filter or a new logLevel (the lowest level shown) starts the table again under the new predicate, and start picks its first row.',
+    tables: [{ id: 'messages', mode: 'append', key: ['messageId'], settle: { ticks: 2, ms: 0 }, batchRows: 5000, columns: [column('messageId', 'bigint'), column('level', 'int'), column('text', 'nvarchar')] }]
+  },
+  'debug.synthetic.wide': {
+    id: 'debug.synthetic.wide', source: 'debug.synthetic', label: 'Synthetic wide rows', intervalMs: anyInterval,
+    description: 'A snapshot of rows rows of 23 columns, the shape of a session list, for the snapshot churn benchmark. Its status reports how many gen2 collections the backend has run.',
+    status: ['gen2'],
+    tables: [{
+      id: 'rows', mode: 'snapshot', key: ['rowId'], rowCap: 10_000,
+      columns: [column('rowId', 'int'), ...Array.from({ length: 22 }, (_, index) => column('c' + (index + 1), wideTypes[index % wideTypes.length]))]
+    }]
   },
   'activity.overview': {
     id: 'activity.overview', source: 'activity', label: 'Overview', intervalMs: { default: 2000, min: 1000, max: limits.live.intervalMs.max },
@@ -136,8 +190,11 @@ const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + 
 export function liveCatalogJson(): string {
   const probes = liveProbeIds.map(id => {
     const spec = liveProbes[id]
+    const tables = (spec.tables ?? []).map(table => table.mode === 'snapshot'
+      ? { id: table.id, mode: table.mode, columns: table.columns, key: table.key, rowCap: table.rowCap ?? defaultSnapshotRows, departed: table.departed ?? false, facets: table.facets ?? [] }
+      : { id: table.id, mode: table.mode, columns: table.columns, key: table.key, settle: table.settle ?? defaultSettle, batchRows: table.batchRows ?? defaultBatchRows })
     return {
-      ...spec, series: spec.series ?? [], tables: spec.tables ?? [], status: spec.status ?? [], views: spec.views ?? [], filterMode: spec.filterMode ?? 'none',
+      ...spec, series: spec.series ?? [], tables, status: spec.status ?? [], views: spec.views ?? [], filterMode: spec.filterMode ?? 'none',
       budgetMs: spec.budgetMs ?? defaultBudgetMs, minGapMs: spec.minGapMs ?? 0, maxDutyCycle: spec.maxDutyCycle ?? defaultDutyCycle, gates: spec.gates ?? null, permission: spec.permission ?? 'none'
     }
   })
@@ -145,7 +202,7 @@ export function liveCatalogJson(): string {
     '{',
     `  "limits": ${line({ ...limits.live, eventBody: limits.eventBody })},`,
     `  "probes": ${block(probes)},`,
-    `  "sources": ${block(liveSourceIds.map(id => liveSources[id]))},`,
+    `  "sources": ${block(liveSourceIds.map(id => ({ ...liveSources[id], hidden: liveSources[id].hidden ?? 'pause' })))},`,
     '  "version": 1',
     '}',
     ''

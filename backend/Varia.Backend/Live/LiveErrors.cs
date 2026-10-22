@@ -24,6 +24,7 @@ internal static class LiveErrors
     public const string LostMessage = "The connection for this view was lost. It reconnects on its own.";
     public const string LoginFailedMessage = "SQL Server refused this view's sign-in (the password may have changed, or the login is locked or disabled). Refresh or reconnect to sign in again.";
     public const string BusyMessage = "Too many live views are reading this server at once. It tries again.";
+    public const string BudgetMessage = "The result memory budget is full. Close some results, and the view continues.";
 
     /// <summary>The live error code of a SQL Server error number and severity.</summary>
     public static string Classify(int number, byte severity) => number switch
@@ -38,7 +39,9 @@ internal static class LiveErrors
         _ => "SQL_ERROR"
     };
 
-    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED";
+    /// <summary>A missing SSISDB catalog (CATALOG_MISSING) or a missing object the view follows (NOT_FOUND, such as an execution
+    /// that was cleaned up) will not come back by retrying either.</summary>
+    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND";
 
     /// <summary>The connection cannot be used again: it is dropped (and never returned to the pool).</summary>
     public static bool Breaks(string code) => code is "CONNECTION_LOST" or "TIMEOUT";

@@ -48,14 +48,17 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string DesignerOdd => Name + "_tbd.]";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
+    /// <summary>Where the live table checks read a message log and a snapshot table (created on demand).</summary>
+    public string Live => Name + "_live";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
     public int Major { get; private set; }
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
-    // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\])?$")]
+    // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
+    // _live the live tables'.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -184,6 +187,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked Database Properties database.</summary>
     public Task<string> CreatePropertiesAsync() => CreateMarkedAsync(Properties);
+
+    /// <summary>Creates the empty, marked live tables database.</summary>
+    public Task<string> CreateLiveAsync() => CreateMarkedAsync(Live);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);

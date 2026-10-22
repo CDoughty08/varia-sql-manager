@@ -43,13 +43,20 @@ export const limits = {
    *  backend, shared with unary methods on lane live); a statement's budget is 0.8 × its probe's interval within the
    *  probe's `budgetMs`, itself within `budgetMs` here; a failing or costly probe backs off up to `backoffMs` (or its asked
    *  interval when that is longer); and a subscription returns its connection to the pool while every probe is
-   *  paused or its next probe is at least `idleMs` away. */
+   *  paused or its next probe is at least `idleMs` away.
+   *  Tables (Live/LiveTables.cs): a snapshot revision holds at most `snapshotRows`; an append segment rolls at
+   *  `segmentRows` or `segmentBytes`, `segments` kept; an append read takes at most `batchRows` new rows a tick. A
+   *  subscription's tables share `subscriptionBytes`, and all live tables at most `budgetShare` of the result budget.
+   *  Facets: `facetColumns` columns of `facetValues` values of `facetCharacters` characters, at most `facetBytes` of
+   *  UTF-8 text in one tick. A source whose `hidden` policy is statusOnly samples at most every `hiddenIntervalMs` while hidden. */
   live: {
     portStreams: 16, backendSubscriptions: 32, perServer: 8, probes: 8, tablesPerProbe: 4, appendPerProbe: 4, tablesPerTick: 8,
     series: 64, statuses: 16, statusCharacters: 128, errors: 8, messageCharacters: 2000, noteCharacters: 400, columns: 64,
     intervalMs: { min: 1000, max: 3_600_000 }, initialCredit: 64 * KiB, frameBudget: 192 * KiB,
     sortColumns: 4, filterCharacters: 400, filterColumns: 8, trackedKeys: 64, keyCharacters: 512, resumeCharacters: 256, kept: 64,
-    statementsPerConnection: 2, statements: 8, budgetMs: { min: 500, max: 10_000 }, backoffMs: 60_000, idleMs: 30_000
+    statementsPerConnection: 2, statements: 8, budgetMs: { min: 500, max: 10_000 }, backoffMs: 60_000, idleMs: 30_000,
+    snapshotRows: 10_000, segmentRows: 200_000, segmentBytes: 32 * MiB, segments: 2, batchRows: 10_000, subscriptionBytes: 64 * MiB, budgetShare: 0.25,
+    facetColumns: 7, facetValues: 100, facetCharacters: 128, facetBytes: 32 * KiB, hiddenIntervalMs: 30_000
   }
 } as const
 
