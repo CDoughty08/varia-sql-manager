@@ -2,29 +2,36 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Data.SqlClient;
 using Varia.Backend.Ssis;
 
 namespace Varia.Backend.Tests;
 
 /// <summary>Live checks of PR S9a, Create Catalog. Always: ssis.catalogSetup on the server says what an independent read says
 /// (CLR in use, scan for startup procs, the catalog backup and the files' places, or why not: Linux, no sysadmin, a catalog
-/// that exists, Integration Services not installed), and changes nothing. With VARIA_TEST_SQL_SCRATCH=1 and Integration Services
-/// on the server: the dry run (the internal SsisOptions.CreateScratch) restores the catalog backup into a marked
-/// VariaScratch_…_ssiscc database through the product's own steps, with a 128-character password made to break out of quotes,
-/// brackets and comments, which then opens the master key while another does not; a second run is CATALOG_EXISTS; a step that
-/// fails after the restore removes the database; Stop after the restore began is answered only once it finished; Stop before it
-/// creates nothing. The dry run never touches CLR, the assembly trust, sp_ssis_startup, logins or jobs, and checks so. With
-/// VARIA_TEST_SSIS_CREATE=1 only (a server whose owner allows it; never set by default), the destructive check: it drops an
-/// existing SSISDB with what SSMS's DropCatalog does, creates the catalog with Varia, checks what SSMS's Create leaves, and
-/// removes it again (restoring CLR) unless a catalog was there before. Passwords are never printed.</summary>
+/// that exists, other configuration changes a RECONFIGURE would apply, Integration Services not installed), and leaves what only
+/// Create Catalog makes as it was. With VARIA_TEST_SQL_SCRATCH=1 and Integration Services on the server: the dry run (the internal
+/// SsisOptions.CreateScratch) restores the catalog backup into a marked VariaScratch_…_ssiscc database through the product's own
+/// steps, with a 128-character password made to break out of quotes, brackets and comments and holding apostrophes a
+/// width-insensitive collation confuses with ', which then opens the master key while another does not; a second run is
+/// CATALOG_EXISTS; a step that fails after the restore removes the database; Stop during the restore lets it end and then removes
+/// it; Stop while the master key waits for another session's lock ends it within the grace and removes the database; Stop before
+/// the restore creates nothing. The dry run never touches CLR, the assembly trust, sp_ssis_startup, logins or jobs, and checks so.
+/// With VARIA_TEST_SSIS_CREATE=1 only (a server whose owner allows it; never set by default), and only on a server without SSISDB
+/// (it never drops a catalog it did not create): the destructive check creates the catalog with Varia, checks what SSMS's Create
+/// leaves, removes it, creates it again with the startup procedure chosen and makes its last step fail, and checks that the
+/// server is as before (CLR restored). Passwords are never printed.</summary>
 internal static class SsisCreateLiveChecks
 {
     private static string Literal(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
     private static string Dump(object? value) => JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
     private static readonly string[] Titles = [.. SsisCatalog.Current.Action("createCatalog")!.Steps];
+    /// <summary>The dynamic configuration changes a RECONFIGURE would apply besides CLR, as the setup read finds them.</summary>
+    private const string PendingRead = "SELECT COUNT(*) FROM sys.configurations AS c WHERE c.is_dynamic = 1 AND c.value <> c.value_in_use AND c.name <> N'clr enabled' "
+        + "AND NOT (c.name = N'min server memory (MB)' AND CONVERT(int, c.value) = 0);";
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
         async Task<SqlRun> Sql(string text, string database = "master")
         {
@@ -43,9 +50,11 @@ internal static class SsisCreateLiveChecks
             + "CONVERT(int, IS_SRVROLEMEMBER(N'sysadmin')), (SELECT h.host_platform FROM sys.dm_os_host_info AS h), CONVERT(nvarchar(1024), SERVERPROPERTY('MasterFile'));")).Sets[0][0];
         var major = int.Parse(facts[0]!, CultureInfo.InvariantCulture);
         bool clr = facts[1] == "1", scan = facts[2] == "1", exists = facts[3] == "1", sysadmin = facts[4] == "1", linux = facts[5] == "Linux";
+        var pending = (await Sql(PendingRead)).Scalar != "0";
         var objects = await ServerObjectsAsync(Sql);
         var watch = Stopwatch.StartNew();
         var setup = await service.Ssis.CatalogSetupAsync(new(info.Id, Guid.NewGuid().ToString()), CancellationToken.None);
+        var elapsed = watch.Elapsed;
         var expectedBackup = SsisCatalog.Current.BackupFile(major);
         if (linux) check(setup is { Setup: null, Error: { Code: "NOT_SUPPORTED", Message: "The SSIS Catalog isn't supported on SQL Server on Linux." } }, "ssis.catalogSetup refuses SQL Server on Linux before it reads: " + Dump(setup));
         else if (!sysadmin) check(setup is { Setup: null, Error.Code: "PERMISSION_DENIED" }, "ssis.catalogSetup refuses a login that is not sysadmin, as SSMS does: " + Dump(setup));
@@ -53,13 +62,19 @@ internal static class SsisCreateLiveChecks
         else if (setup.Setup is { } found)
         {
             var directory = facts[6]![..facts[6]!.LastIndexOf('\\')] + "\\";
-            check(found.Catalog == "SSISDB" && found.ClrEnabled == clr && found.StartupDefault == scan && found.BackupFile.EndsWith(@"\DTS\Binn\" + expectedBackup, StringComparison.OrdinalIgnoreCase)
+            check(!(pending && !clr) && found.Catalog == "SSISDB" && found.ClrEnabled == clr && found.StartupDefault == scan && found.BackupFile.EndsWith(@"\DTS\Binn\" + expectedBackup, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(found.DataFile, directory + "SSISDB.mdf", StringComparison.OrdinalIgnoreCase) && string.Equals(found.LogFile, directory + "SSISDB.ldf", StringComparison.OrdinalIgnoreCase),
-                "ssis.catalogSetup reads what SSMS's Create reads: CLR in use (" + clr + "), scan for startup procs (" + scan + "), the " + expectedBackup + " in the registry's DTS folder, and the new files beside master.mdf: " + Dump(setup));
+                "ssis.catalogSetup reads what SSMS's Create reads: CLR in use (" + clr + "), scan for startup procs (" + scan + "), the " + expectedBackup + " in the registry's DTS folder, the new files "
+                + "beside master.mdf, and no other configuration change waiting for RECONFIGURE (" + pending + "): " + Dump(setup));
         }
+        else if (setup.Error?.Code == "CONFIGURATION_PENDING")
+            check(pending && !clr && setup.Error.Message.Contains("RECONFIGURE", StringComparison.Ordinal),
+                "ssis.catalogSetup refuses to enable CLR while other configuration changes wait for RECONFIGURE, as an independent read finds them: " + Dump(setup));
         else check(setup.Error?.Code == "NOT_SUPPORTED" && setup.Error.Message.Contains("catalog backup file", StringComparison.Ordinal),
             "without the Integration Services catalog backup, ssis.catalogSetup answers SSMS's NOT_SUPPORTED: " + Dump(setup));
-        check(watch.ElapsedMilliseconds < 15_000 && await ServerObjectsAsync(Sql) == objects, "ssis.catalogSetup changes nothing on the server and answers within 15 s (" + watch.ElapsedMilliseconds + " ms)");
+        // Bounded by the read's own budget, not a guess at a shared server's speed; and what only Create Catalog makes is unchanged.
+        check(elapsed < options.Budget + TimeSpan.FromSeconds(5) && await ServerObjectsAsync(Sql) == objects,
+            "ssis.catalogSetup changes nothing Create Catalog makes and answers within its " + (int)options.Budget.TotalSeconds + " s budget (" + (long)elapsed.TotalMilliseconds + " ms)");
 
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1" || linux || !sysadmin)
         {
@@ -81,7 +96,7 @@ internal static class SsisCreateLiveChecks
                 }
                 check(dry.Setup.Catalog == db && dry.Setup.DataFile.EndsWith("\\" + db + ".mdf", StringComparison.Ordinal) && dry.Setup.LogFile.EndsWith("\\" + db + ".ldf", StringComparison.Ordinal),
                     "the dry run's setup names its scratch database and files: " + Dump(dry));
-                await DryRunAsync(check, service, info, Sql, db, dry.Setup, objects);
+                await DryRunAsync(check, service, info, Sql, live, db, dry.Setup, objects);
             }
             finally
             {
@@ -91,33 +106,42 @@ internal static class SsisCreateLiveChecks
                 options.StopGrace = new SsisOptions().StopGrace;
             }
         }
-        if (Environment.GetEnvironmentVariable("VARIA_TEST_SSIS_CREATE") == "1") await DestructiveAsync(check, service, info, Sql, clr, exists);
-        else Console.WriteLine("Create Catalog's destructive check is skipped: it creates and drops SSISDB, so it runs only with VARIA_TEST_SSIS_CREATE=1 on a server whose owner allows it.");
+        if (Environment.GetEnvironmentVariable("VARIA_TEST_SSIS_CREATE") != "1")
+            Console.WriteLine("Create Catalog's destructive check is skipped: it creates and drops SSISDB, so it runs only with VARIA_TEST_SSIS_CREATE=1 on a server whose owner allows it.");
+        else if (exists)
+            Console.WriteLine("Create Catalog's destructive check is skipped: this server has an SSISDB, and the check never drops a catalog it did not create (its projects, environments, "
+                + "history and master key password would be lost). Run it on a server without SSISDB.");
+        else if (pending && !clr)
+            Console.WriteLine("Create Catalog's destructive check is skipped: other configuration changes wait for RECONFIGURE on this server, so Create Catalog refuses to enable CLR.");
+        else await DestructiveAsync(check, service, info, Sql, clr, objects);
     }
 
-    /// <summary>What only a real Create Catalog makes on the server: the startup procedure, the SSIS jobs, the cleanup login, trusted
-    /// assemblies and the assembly loading login. The dry run and the setup read must leave it as it was.</summary>
+    /// <summary>What only a real Create Catalog makes on the server: the startup procedure, the SSIS jobs, the SSIS logins and the
+    /// assembly loading login, the trusted assembly of the Integration Services assembly (by its description, the path Create Catalog
+    /// gives it), and CLR in use. Other runs on a shared server change none of them; the dry run and the setup read must not either.</summary>
     private static async Task<string> ServerObjectsAsync(Func<string, string, Task<SqlRun>> sql)
     {
         var run = await sql("SELECT (SELECT COUNT(*) FROM master.sys.procedures WHERE name = N'sp_ssis_startup'), (SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name LIKE N'SSIS %'), "
             + "(SELECT COUNT(*) FROM sys.server_principals WHERE name LIKE N'##MS[_]SSIS%' OR name = N'##MS_SQLEnableSystemAssemblyLoadingUser##'), "
             + "(SELECT COUNT(*) FROM sys.all_objects WHERE name = N'trusted_assemblies' AND schema_id = SCHEMA_ID(N'sys')), (SELECT CONVERT(int, value_in_use) FROM sys.configurations WHERE name = N'clr enabled');", "master");
         var row = run.Sets[0][0];
-        var trusted = row[3] == "1" ? (await sql("SELECT COUNT(*) FROM sys.trusted_assemblies;", "master")).Scalar : "-";
+        var trusted = row[3] == "1" ? (await sql("SELECT COUNT(*) FROM sys.trusted_assemblies WHERE description LIKE N'%" + SsisCatalog.Current.AssemblyFile + "';", "master")).Scalar : "-";
         return string.Join(",", row[0], row[1], row[2], trusted, row[4]);
     }
 
-    private static Task<SsisExecuteResult> CreateAsync(SqlService service, string connectionId, string password, CancellationToken token = default, bool startup = false) =>
-        service.SsisActions.ExecuteAsync(new(connectionId, Guid.NewGuid().ToString(), new SsisActionDto("createCatalog", Password: password, EnableClr: true, StartupProcedure: startup)), token);
+    private static Task<SsisExecuteResult> CreateAsync(SqlService service, string connectionId, string password, CancellationToken token = default, bool startup = false, string? requestId = null) =>
+        service.SsisActions.ExecuteAsync(new(connectionId, requestId ?? Guid.NewGuid().ToString(), new SsisActionDto("createCatalog", Password: password, EnableClr: true, StartupProcedure: startup)), token);
 
-    /// <summary>128 UTF-16 code units made to end a string, a bracketed name, a line and a comment, with characters outside any code page.</summary>
+    /// <summary>128 UTF-16 code units made to end a string, a bracketed name, a line and a comment, with characters outside any code page
+    /// and apostrophes a width- or kana-insensitive collation could take for ' (U+FF07, U+2019, U+02BC).</summary>
     private static string HostilePassword()
     {
-        var text = "'];--/*ü\U0001D49C*/\"" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)) + "'' N'x";
+        var text = "'];--/*ü\U0001D49C*/\"＇x’yʼz" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)) + "'' N'x＇";
         return (text + new string('p', 128))[..128];
     }
 
-    private static async Task DryRunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, string, Task<SqlRun>> sql, string db, SsisCatalogSetupDto setup, string objects)
+    private static async Task DryRunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, string, Task<SqlRun>> sql, Func<string, ConnectOptions> live, string db,
+        SsisCatalogSetupDto setup, string objects)
     {
         var options = service.Ssis.Options;
         async Task Mark()
@@ -133,75 +157,158 @@ internal static class SsisCreateLiveChecks
         }
         var password = HostilePassword();
         string[] Statuses(SsisExecuteResult result) => [.. result.Steps.Select(step => step.Status + " " + step.Message)];
+        // A check that throws (a lost session, a hook's failure) is a named failure (a failed check throws already), and the database
+        // it left is dropped.
+        async Task Guarded(string name, Func<Task> body)
+        {
+            try { await body(); }
+            catch (Exception error) when (!error.Message.StartsWith("FAIL: ", StringComparison.Ordinal)) { check(false, name + " threw " + error.GetType().Name + ": " + error.Message); }
+            finally { options.BeforeCreateStep = null; await Drop(); }
+        }
 
         // The product's restore and master key, with the dry run's name for the database.
-        options.BeforeCreateStep = async title => { if (title == Titles[2]) await Mark(); };
-        var created = await CreateAsync(service, info.Id, password);
-        var files = await sql("SELECT f.physical_name FROM sys.master_files AS f WHERE f.database_id = DB_ID(" + Literal(db) + ") ORDER BY f.type, f.file_id;", "master");
-        var key = await sql("SELECT COUNT(*) FROM sys.symmetric_keys WHERE name = N'##MS_DatabaseMasterKey##';", db);
-        var opened = await sql("OPEN MASTER KEY DECRYPTION BY PASSWORD = " + Literal(password) + "; CLOSE MASTER KEY; SELECT 1;", db);
-        var wrong = await sql("OPEN MASTER KEY DECRYPTION BY PASSWORD = N'not the password';", db);
-        check(created is { Error: null } && Statuses(created).SequenceEqual(["done " + Titles[1], "done " + Titles[2]]) && await State() == "0 0" && key.Scalar == "1"
-            && opened.Status == "completed" && wrong.Status != "completed" && files.Sets[0].Select(row => row[0]).SequenceEqual([setup.DataFile, setup.LogFile], StringComparer.OrdinalIgnoreCase),
-            "the dry run restores the catalog backup online, read-write, to the setup's files, and its master key opens with the 128-character password that breaks out of quotes, brackets and comments, "
-            + "and with no other: " + Dump(created.Steps) + " " + Dump(files.Sets));
-        var again = await CreateAsync(service, info.Id, password);
-        check(again is { Steps: [], Error: { Code: "CATALOG_EXISTS", Retryable: false } } && await State() == "0 0", "a second Create Catalog is refused before it changes anything: " + Dump(again));
-        await Drop();
+        await Guarded("the dry run restores the catalog backup and creates its master key", async () =>
+        {
+            options.BeforeCreateStep = async title => { if (title == Titles[2]) await Mark(); };
+            var created = await CreateAsync(service, info.Id, password);
+            var files = await sql("SELECT f.physical_name FROM sys.master_files AS f WHERE f.database_id = DB_ID(" + Literal(db) + ") ORDER BY f.type, f.file_id;", "master");
+            var key = await sql("SELECT COUNT(*) FROM sys.symmetric_keys WHERE name = N'##MS_DatabaseMasterKey##';", db);
+            var opened = await sql("OPEN MASTER KEY DECRYPTION BY PASSWORD = " + Literal(password) + "; CLOSE MASTER KEY; SELECT 1;", db);
+            // The same password with each look-alike apostrophe made ASCII, which a REPLACE in the database's collation would have stored.
+            var folded = await sql("OPEN MASTER KEY DECRYPTION BY PASSWORD = " + Literal(password.Replace('＇', '\'').Replace('’', '\'').Replace('ʼ', '\'')) + ";", db);
+            var wrong = await sql("OPEN MASTER KEY DECRYPTION BY PASSWORD = N'not the password';", db);
+            check(created is { Error: null } && Statuses(created).SequenceEqual(["done " + Titles[1], "done " + Titles[2]]) && await State() == "0 0" && key.Scalar == "1"
+                && opened.Status == "completed" && folded.Status != "completed" && wrong.Status != "completed"
+                && files.Sets[0].Select(row => row[0]).SequenceEqual([setup.DataFile, setup.LogFile], StringComparer.OrdinalIgnoreCase),
+                "the dry run restores the catalog backup online, read-write, to the setup's files, and its master key opens with the 128-character password that breaks out of quotes, brackets and "
+                + "comments, exactly as typed (not with its look-alike apostrophes made ASCII), and with no other: " + Dump(created.Steps) + " " + Dump(files.Sets));
+            var again = await CreateAsync(service, info.Id, password);
+            check(again is { Steps: [], Error: { Code: "CATALOG_EXISTS", Retryable: false } } && await State() == "0 0", "a second Create Catalog is refused before it changes anything: " + Dump(again));
+        });
 
         // A step that fails after the restore removes the database it restored.
-        options.BeforeCreateStep = async title =>
-        {
-            if (title != Titles[2]) return;
-            await Mark();
-            var readOnly = await sql("ALTER DATABASE " + Bracket(db) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;", "master");
-            if (readOnly.Status != "completed") throw new InvalidOperationException("The dry run's database could not be made read-only: " + readOnly.Error);
-        };
-        var failed = await CreateAsync(service, info.Id, password);
-        check(failed.Error is { Code: "SQL_ERROR" } error && error.Message.Contains("Varia removed what Create Catalog had created, so the catalog does not exist.", StringComparison.Ordinal)
-            && !error.Message.Contains(password[..8], StringComparison.Ordinal) && failed.Steps.Select(step => step.Status).SequenceEqual(["done", "failed", "done"])
-            && failed.Steps[^1].Message == SsisCatalog.Current.CleanupStep && await State() is null,
-            "a step that fails after the restore removes the database it restored, says so, and never echoes the password: " + Dump(failed));
-
-        // Stop once the restore began: the reply waits past the grace for Create Catalog to finish, and it does.
-        options.StopGrace = TimeSpan.FromMilliseconds(300);
-        using (var stop = new CancellationTokenSource())
+        await Guarded("a step that fails after the restore removes the database", async () =>
         {
             options.BeforeCreateStep = async title =>
             {
                 if (title != Titles[2]) return;
                 await Mark();
-                await stop.CancelAsync();
-                await Task.Delay(1500);
+                var readOnly = await sql("ALTER DATABASE " + Bracket(db) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;", "master");
+                if (readOnly.Status != "completed") throw new InvalidOperationException("The dry run's database could not be made read-only: " + readOnly.Error);
             };
+            var failed = await CreateAsync(service, info.Id, password);
+            check(failed.Error is { Code: "SQL_ERROR" } error && error.Message.Contains("Varia removed what Create Catalog had created, so the catalog does not exist.", StringComparison.Ordinal)
+                && !error.Message.Contains(password[..8], StringComparison.Ordinal) && failed.Steps.Select(step => step.Status).SequenceEqual(["done", "failed", "done"])
+                && failed.Steps[^1].Message == SsisCatalog.Current.CleanupStep && await State() is null,
+                "a step that fails after the restore removes the database it restored, says so, and never echoes the password: " + Dump(failed));
+        });
+
+        options.StopGrace = TimeSpan.FromSeconds(5);
+        // Stop during the restore: SQL Server cannot end it, so the reply waits for it, and then Create Catalog removes what it restored.
+        await Guarded("Stop during the restore", async () =>
+        {
+            using var stop = new CancellationTokenSource();
+            var requestId = Guid.NewGuid().ToString();
+            var running = CreateAsync(service, info.Id, password, stop.Token, requestId: requestId);
+            var restoring = false;
+            for (var tries = 0; tries < 400 && !running.IsCompleted && !restoring; tries++)
+            {
+                if (service.SsisActions.SessionOf(requestId) is { } session)
+                    restoring = (await sql("SELECT COUNT(*) FROM sys.dm_exec_requests AS r WHERE r.session_id = " + session.ToString(CultureInfo.InvariantCulture) + " AND r.command LIKE N'RESTORE%';", "master")).Scalar == "1";
+                if (!restoring) await Task.Delay(10);
+            }
+            if (!restoring)
+            {
+                var finished = await running;
+                Console.WriteLine("Stop during the restore is not checked: the restore ended before it could be seen running (" + Dump(finished.Steps) + ").");
+                return;
+            }
+            await stop.CancelAsync();
+            var stopped = await running;
+            check(stopped is { Error.Code: "CANCELLED" } && Statuses(stopped).SequenceEqual(["done " + Titles[1], "cancelled " + Titles[2], "done " + SsisCatalog.Current.CleanupStep])
+                && stopped.Error.Message.Contains("Varia removed what Create Catalog had created", StringComparison.Ordinal) && await State() is null,
+                "Stop during the restore lets the restore end, then stops Create Catalog before the master key and removes the database it restored: " + Dump(stopped));
+        });
+
+        // Stop while the master key waits for another session's lock (LOCK_TIMEOUT -1): SQL Server ends the wait, and the database goes.
+        await Guarded("Stop while a step waits for a lock", async () =>
+        {
+            await using var holder = new SqlConnection(new SqlConnectionStringBuilder(ConnectionSettings.Build(live(db)).ConnectionString) { Pooling = false, InitialCatalog = "master" }.ConnectionString);
+            using var stop = new CancellationTokenSource();
+            var requestId = Guid.NewGuid().ToString();
+            options.BeforeCreateStep = async title =>
+            {
+                if (title != Titles[2]) return;
+                await Mark();
+                await holder.OpenAsync();
+                await holder.ChangeDatabaseAsync(db);
+                await using var hold = holder.CreateCommand();
+                hold.CommandText = "BEGIN TRANSACTION; CREATE MASTER KEY ENCRYPTION BY PASSWORD = N'Varia-holder-" + Guid.NewGuid().ToString("N") + "';";
+                await hold.ExecuteNonQueryAsync();
+            };
+            var running = CreateAsync(service, info.Id, password, stop.Token, requestId: requestId);
+            var blocked = false;
+            var job = "0";
+            for (var tries = 0; tries < 300 && !running.IsCompleted && !blocked; tries++)
+            {
+                if (service.SsisActions.SessionOf(requestId) is { } session && holder.State == System.Data.ConnectionState.Open)
+                {
+                    job = session.ToString(CultureInfo.InvariantCulture);
+                    blocked = (await sql("SELECT COUNT(*) FROM sys.dm_exec_requests AS r WHERE r.session_id = " + job + " AND r.blocking_session_id = "
+                        + holder.ServerProcessId.ToString(CultureInfo.InvariantCulture) + ";", "master")).Scalar == "1";
+                }
+                if (!blocked) await Task.Delay(50);
+            }
+            check(blocked, "the master key step waits for the other session's lock (LOCK_TIMEOUT -1), as SSMS waits");
             var watch = Stopwatch.StartNew();
-            var held = await CreateAsync(service, info.Id, password, stop.Token);
-            check(held is { Error: null } && held.Steps.All(step => step.Status == "done") && watch.ElapsedMilliseconds >= 1400 && await State() == "0 0",
-                "Stop after the restore began cannot stop Create Catalog: the reply waits past its grace until it finished (" + watch.ElapsedMilliseconds + " ms): " + Dump(held));
-        }
-        await Drop();
+            await stop.CancelAsync();
+            // The holder's uncommitted master key also holds locks in master that the removal needs, so it lets go, but only once Stop
+            // has ended the step's statement: until then the step would just go on.
+            var ended = false;
+            for (var tries = 0; tries < 200 && !ended; tries++)
+            {
+                ended = (await sql("SELECT COUNT(*) FROM sys.dm_exec_requests AS r WHERE r.session_id = " + job + " AND r.database_id = DB_ID(" + Literal(db) + ");", "master")).Scalar == "0";
+                if (!ended) await Task.Delay(25);
+            }
+            await using (var release = holder.CreateCommand())
+            {
+                release.CommandText = "IF @@TRANCOUNT > 0 ROLLBACK;";
+                await release.ExecuteNonQueryAsync();
+            }
+            check(ended, "Stop ends the step's statement while the other session still holds its lock");
+            var stopped = await running;
+            check(stopped is { Error.Code: "CANCELLED" } && Statuses(stopped).SequenceEqual(["done " + Titles[1], "cancelled " + Titles[2], "done " + SsisCatalog.Current.CleanupStep])
+                && stopped.Error.Message.Contains("SQL Server cancelled that statement", StringComparison.Ordinal) && stopped.Error.Message.Contains("Varia removed what Create Catalog had created", StringComparison.Ordinal)
+                && watch.Elapsed < options.StopGrace && await State() is null && service.SsisActions.ActiveJobs == 0,
+                "Stop while a step after the restore waits for a lock has SQL Server cancel it, removes the database (ending the other session's hold) and answers within the grace ("
+                + watch.ElapsedMilliseconds + " ms): " + Dump(stopped));
+        });
 
         // Stop before the restore: nothing is created.
-        options.BeforeCreateStep = null;
-        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        options.BeforeWrite = async token => { reached.TrySetResult(); await Task.Delay(Timeout.Infinite, token); };
-        using (var stop = new CancellationTokenSource())
+        await Guarded("Stop before the restore", async () =>
         {
-            var running = CreateAsync(service, info.Id, password, stop.Token);
-            await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
-            await stop.CancelAsync();
-            var early = await running;
-            check(early is { Steps: [], Error: { Code: "CANCELLED", Message: "The action was stopped before it changed anything." } } && await State() is null,
-                "Stop before the restore ends Create Catalog at once with nothing created: " + Dump(early));
-        }
-        options.BeforeWrite = null;
+            var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            options.BeforeWrite = async token => { reached.TrySetResult(); await Task.Delay(Timeout.Infinite, token); };
+            try
+            {
+                using var stop = new CancellationTokenSource();
+                var running = CreateAsync(service, info.Id, password, stop.Token);
+                await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                await stop.CancelAsync();
+                var early = await running;
+                check(early is { Steps: [], Error: { Code: "CANCELLED", Message: "The action was stopped before it changed anything." } } && await State() is null,
+                    "Stop before the restore ends Create Catalog at once with nothing created: " + Dump(early));
+            }
+            finally { options.BeforeWrite = null; }
+        });
         check(await ServerObjectsAsync(sql) == objects && service.SsisActions.ActiveJobs == 0,
             "the dry run never touched CLR, the assembly trust, sp_ssis_startup, the SSIS jobs or their logins, and every job ended");
     }
 
-    /// <summary>VARIA_TEST_SSIS_CREATE=1 only: SSMS's DropCatalog for an existing catalog, then Varia's Create Catalog for real, what SSMS's
-    /// Create leaves checked, a second Create refused, and the catalog removed again unless one was there before (CLR restored).</summary>
-    private static async Task DestructiveAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, string, Task<SqlRun>> sql, bool clrBefore, bool existed)
+    /// <summary>VARIA_TEST_SSIS_CREATE=1 on a server without SSISDB only: Varia's Create Catalog for real (no startup procedure), what SSMS's
+    /// Create leaves checked, a second Create refused, and the catalog removed; then Create Catalog with the startup procedure, whose last
+    /// step is made to fail, which must leave the server as it was. CLR is restored. It never drops a catalog it did not create.</summary>
+    private static async Task DestructiveAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, string, Task<SqlRun>> sql, bool clrBefore, string objects)
     {
         const string DropCatalog = "IF EXISTS (SELECT 1 FROM master.sys.procedures WHERE name = N'sp_ssis_startup') BEGIN EXEC master.sys.sp_procoption N'sp_ssis_startup', 'startup', 'off'; DROP PROCEDURE dbo.sp_ssis_startup; END\n"
             + "IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'SSIS Server Maintenance Job') EXEC msdb.dbo.sp_delete_job @job_name = N'SSIS Server Maintenance Job';\n"
@@ -214,19 +321,19 @@ internal static class SsisCreateLiveChecks
             + "    IF @hash IS NOT NULL AND EXISTS (SELECT 1 FROM sys.trusted_assemblies WHERE hash = @hash) EXEC sys.sp_drop_trusted_assembly @hash;\n"
             + "END\n"
             + "IF DB_ID(N'SSISDB') IS NOT NULL BEGIN ALTER DATABASE [SSISDB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [SSISDB]; END";
+        // Only ever run against a catalog this check created: the caller skips a server that had one.
         async Task Drop()
         {
             var dropped = await sql(DropCatalog, "master");
-            if (dropped.Status != "completed") throw new InvalidOperationException("SSISDB could not be dropped: " + dropped.Error);
+            if (dropped.Status != "completed") throw new InvalidOperationException("The SSISDB this check created could not be dropped: " + dropped.Error);
         }
         var options = service.Ssis.Options;
-        Console.WriteLine("VARIA_TEST_SSIS_CREATE=1: Create Catalog's destructive check " + (existed ? "drops this server's SSISDB, then creates it again." : "creates SSISDB on this server, then removes it."));
+        Console.WriteLine("VARIA_TEST_SSIS_CREATE=1: Create Catalog's destructive check creates SSISDB on this server, then removes it.");
         var password = HostilePassword();
         try
         {
-            if (existed) await Drop();
             options.CatalogDatabase = SsisCatalog.Current.CatalogDatabase;
-            var created = await CreateAsync(service, info.Id, password, startup: true);
+            var created = await CreateAsync(service, info.Id, password, startup: false);
             var state = (await sql("SELECT d.state, d.is_read_only, (SELECT CONVERT(int, c.value_in_use) FROM sys.configurations AS c WHERE c.name = N'clr enabled'), "
                 + "(SELECT CONVERT(int, p.is_auto_executed) FROM master.sys.procedures AS p WHERE p.name = N'sp_ssis_startup'), "
                 + "(SELECT CONVERT(int, l.is_disabled) FROM sys.server_principals AS l WHERE l.name = N'##MS_SSISServerCleanupJobLogin##'), "
@@ -239,22 +346,44 @@ internal static class SsisCreateLiveChecks
                 + "WHERE u.name = N'##MS_SSISServerCleanupJobUser##' AND p.permission_name = N'EXECUTE');", "SSISDB");
             var opened = await sql("OPEN MASTER KEY DECRYPTION BY PASSWORD = " + Literal(password) + "; CLOSE MASTER KEY; SELECT 1;", "SSISDB");
             var describe = await service.Ssis.DescribeAsync(new SsisDescribeArgs(info.Id, Guid.NewGuid().ToString(), "catalog", new ObjectRefDto("ssisCatalog", Name: "SSISDB")), CancellationToken.None);
-            check(created is { Error: null } && created.Steps.All(step => step.Status == "done") && state.Count == 1 && state[0][0] == "0" && state[0][1] == "0" && state[0][2] == "1" && state[0][3] == "1"
+            check(created is { Error: null } && created.Steps.All(step => step.Status == "done") && state.Count == 1 && state[0][0] == "0" && state[0][1] == "0" && state[0][2] == "1" && state[0][3] == "0"
                 && state[0][4] == "1" && state[0][5] == "2" && state[0][6] == "1" && state[0][7] == "##MS_SSISServerCleanupJobLogin##" && inside.Status == "completed" && inside.Sets[0][0][0] == "1"
                 && inside.Sets[0][0][1] == "1" && inside.Sets[0][0][2] == "2" && opened.Status == "completed" && describe is { Error: null, Model: SsisCatalogModel },
-                "Create Catalog creates what SSMS's does: SSISDB online and read-write with its master key (opening with the password), CLR in use, sp_ssis_startup at startup, the disabled cleanup login and its "
-                + "user's two grants, the SSIS Server Maintenance Job with two steps and its daily schedule, owned by that login; and the catalog reads: " + Dump(created) + " " + Dump(state) + " " + Dump(describe.Error));
+                "Create Catalog creates what SSMS's does: SSISDB online and read-write with its master key (opening with the password), CLR in use, sp_ssis_startup not run at startup when not chosen, "
+                + "the disabled cleanup login and its user's two grants, the SSIS Server Maintenance Job with two steps and its daily schedule, owned by that login; and the catalog reads: "
+                + Dump(created) + " " + Dump(state) + " " + Dump(describe.Error));
             var again = await CreateAsync(service, info.Id, password);
             check(again is { Steps: [], Error.Code: "CATALOG_EXISTS" }, "a second Create Catalog on a server with SSISDB is refused: " + Dump(again));
+            service.Ssis.Forget(info.Id);
+            await Drop();
+            if (!clrBefore) await sql("EXEC sys.sp_configure N'clr enabled', 0; RECONFIGURE;", "master");
+
+            // The startup choice, and a failure at the last step: everything the earlier steps made is removed.
+            string? startupFlag = null;
+            options.BeforeCreateStep = async title =>
+            {
+                if (title != Titles[4]) return;
+                startupFlag = (await sql("SELECT CONVERT(int, p.is_auto_executed) FROM master.sys.procedures AS p WHERE p.name = N'sp_ssis_startup';", "master")).Scalar;
+                var readOnly = await sql("ALTER DATABASE [SSISDB] SET READ_ONLY WITH ROLLBACK IMMEDIATE;", "master");
+                if (readOnly.Status != "completed") throw new InvalidOperationException("SSISDB could not be made read-only: " + readOnly.Error);
+            };
+            var failed = await CreateAsync(service, info.Id, password, startup: true);
+            options.BeforeCreateStep = null;
+            var left = (await sql("SELECT CASE WHEN DB_ID(N'SSISDB') IS NULL THEN 0 ELSE 1 END;", "master")).Scalar;
+            if (!clrBefore) await sql("EXEC sys.sp_configure N'clr enabled', 0; RECONFIGURE;", "master");
+            var after = await ServerObjectsAsync(sql);
+            check(startupFlag == "1" && failed.Error is { Code: "SQL_ERROR" } error && error.Message.Contains("Varia removed what Create Catalog had created", StringComparison.Ordinal)
+                && failed.Steps.Select(step => step.Status).SequenceEqual([.. clrBefore ? Array.Empty<string>() : ["done"], "done", "done", "done", "failed", "done"]) && left == "0" && after == objects,
+                "Create Catalog marks sp_ssis_startup to run at startup when chosen, and a failure at its last step removes the trusted hash, sp_ssis_startup, the jobs, the cleanup login and SSISDB, "
+                + "so the server is as before: " + Dump(failed) + " " + after + " / " + objects);
         }
         finally
         {
+            options.BeforeCreateStep = null;
             service.Ssis.Forget(info.Id);
-            if (!existed)
-            {
-                await Drop();
-                if (!clrBefore) await sql("EXEC sys.sp_configure N'clr enabled', 0; RECONFIGURE;", "master");
-            }
+            // The caller runs this only on a server that had no SSISDB, so whatever SSISDB is here now, this check created it.
+            await Drop();
+            if (!clrBefore) await sql("EXEC sys.sp_configure N'clr enabled', 0; RECONFIGURE;", "master");
         }
     }
 }

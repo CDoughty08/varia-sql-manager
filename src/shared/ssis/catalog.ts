@@ -217,6 +217,8 @@ export const ssisErrorRetryable = {
   CATALOG_EXISTS: false,
   /** Create Catalog when CLR integration is off and the request did not agree to enable it. */
   CLR_REQUIRED: false,
+  /** Create Catalog would enable CLR while other sp_configure changes wait for a RECONFIGURE, which would apply them too. */
+  CONFIGURATION_PENDING: false,
   SQL_ERROR: true
 } as const
 export type SsisErrorCode = keyof typeof ssisErrorRetryable

@@ -51,8 +51,9 @@ pages, limits, error codes, display formats, benchmarks).
   backup restored by Varia's own steps as `VariaScratch_…_ssiscc`, no server-level changes); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` and of the Integration Services
   catalog backup (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1`
   rewrites (then regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These checks never
-  create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) may, on a
-  server whose owner allows it. docs/integration-services.md records what is verified.
+  create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) creates and
+  drops it, on a server whose owner allows it and only when the server has no `SSISDB`: it never drops a catalog it did
+  not create. docs/integration-services.md records what is verified.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`. Every
@@ -141,7 +142,7 @@ pages, limits, error codes, display formats, benchmarks).
 - Object actions (Select Top 1000 Rows, Rename, Delete, Properties), their dialogs, pages and database options live only
   in `src/shared/actions/catalog.ts` and `database.ts`; after changing them, regenerate `docs/object-actions.md` and the
   backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
-  only in `ActionService`: on its own unpooled connection (the application name plus " - Object Actions", never retried),
+  only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
   never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
   and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
   forms for the others), where names, the database a batch runs in included, go in as parameters through server-side
@@ -177,8 +178,14 @@ pages, limits, error codes, display formats, benchmarks).
   outer transaction; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`) until Stop, whose reply waits for SQL Server and
   lists the steps completed (`AnswersStop`); a verb SSISDB refuses to SQL Server logins answers `WINDOWS_AUTH_REQUIRED` on a
   box server before connecting. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
-  (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. Never log
-  names, values, SQL or messages.
+  (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. The
+  catalogue's server verbs (scope `server`; Create Catalog) are the second DDL path: the same connection rules but in
+  `master`, with commands only from `SsisCreateSql` (`ServerCommands(verb)`, every one checked by `SsisCreateSql.Lint`:
+  values as parameters, dynamic SQL only where SQL Server takes a literal, built from `QUOTENAME` or the server's quote
+  escape `REPLACE(… COLLATE Latin1_General_BIN2, N'''', N'''''')`), the database name from the catalogue (or the internal
+  `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
+  reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
+  most 30 s per lock. Never log names, values, SQL or messages.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

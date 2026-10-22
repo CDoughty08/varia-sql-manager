@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Varia.Backend.Common;
 using Varia.Backend.Explorer;
@@ -27,6 +28,66 @@ internal static class SsisCreateChecks
         await ValidationAsync(check);
         await RefusedFirstAsync(check);
         Registry(check);
+        Removal(check);
+        await StopAsync(check);
+    }
+
+    /// <summary>The startup choice reaches sp_procoption as chosen, and a Stop or failure after the restore removes exactly what Create
+    /// Catalog had made, in DropCatalog's order.</summary>
+    private static void Removal(Action<bool, string> check)
+    {
+        static object? Startup(bool? choice) => SsisCreate.StartupParameter(new SsisActionDto("createCatalog", Password: "x", EnableClr: true, StartupProcedure: choice)).Value;
+        var startup = SsisCreate.StartupParameter(Create(startup: true).Action);
+        check(startup is { ParameterName: "@startup", SqlDbType: System.Data.SqlDbType.Bit } && Equals(Startup(true), true) && Equals(Startup(false), false) && Equals(Startup(null), false),
+            "the startup procedure is marked to run at startup only when the request chose it");
+        string Plan(CreatedObjects created, bool restoring = false, string version = "17.0.1000.7") => string.Join(",", SsisCreate.Removal(created, "SSISDB", restoring, version)
+            .Select(item => item.Command.Id + string.Concat(item.Parameters.Select(parameter => " " + parameter.ParameterName + "=" + (parameter.Value is byte[] bytes ? Convert.ToHexString(bytes) : parameter.Value)))));
+        var cases = new (CreatedObjects Created, bool Restoring, string Version, string Expected)[]
+        {
+            (new(), false, "17.0.1000.7", ""),
+            (new() { Restored = true }, true, "17.0.1000.7", "dropDatabase @catalog=SSISDB @restoring=True"),
+            (new() { Restored = true, Recovered = true }, false, "17.0.1000.7", "dropDatabase @catalog=SSISDB @restoring=False"),
+            (new() { Restored = true, Recovered = true, Assembly = true }, false, "17.0.1000.7", "dropDatabase @catalog=SSISDB @restoring=False"),
+            (new() { Restored = true, Recovered = true, Assembly = true }, false, "13.0.7000.253", "dropLoadingLogin,dropDatabase @catalog=SSISDB @restoring=False"),
+            (new() { Restored = true, Recovered = true, Assembly = true, TrustedHash = [1, 2], Startup = true }, false, "17.0.1000.7", "dropTrusted @hash=0102,dropStartup,dropDatabase @catalog=SSISDB @restoring=False"),
+            (new() { Restored = true, Recovered = true, Assembly = true, TrustedHash = [1, 2], Startup = true, Jobs = true }, false, "17.0.1000.7",
+                "dropTrusted @hash=0102,dropStartup,dropJobs,dropDatabase @catalog=SSISDB @restoring=False")
+        };
+        var wrong = cases.Where(item => Plan(item.Created, item.Restoring, item.Version) != item.Expected).Select(item => item.Expected + " <> " + Plan(item.Created, item.Restoring, item.Version)).ToList();
+        check(wrong.Count == 0, "a Stop or failure after the restore removes only what Create Catalog made: the hash it added (or the loading login before 14.0.800.11), sp_ssis_startup, "
+            + "the jobs and their login, then the database it restored: " + string.Join("; ", wrong));
+    }
+
+    /// <summary>ExecuteAsync's Stop reply against fake jobs: within the grace it is the job's answer; past it, a job that answers Stop itself
+    /// (Create Catalog from its restore on) is waited for, and a disconnect still answers at once; any other job answers CANCELLED.</summary>
+    private static async Task StopAsync(Action<bool, string> check)
+    {
+        using var reads = new SsisService(new SsisChecks.FakeHost(), new SsisOptions { StopGrace = TimeSpan.FromMilliseconds(200) });
+        using var service = new SsisActionService(new SsisChecks.FakeHost(), reads);
+        var answer = new SsisExecuteResult([new("done", "x")], 0);
+        async Task<(string Outcome, long Ms)> Run(Task<SsisExecuteResult> job, bool committed, CancellationToken forgotten)
+        {
+            var progress = new SsisActionService.JobProgress();
+            if (committed) progress.Commit();
+            var watch = Stopwatch.StartNew();
+            try
+            {
+                var result = await service.AfterStopAsync(job, progress, forgotten, new CancellationToken(true));
+                return (result.Error?.Code ?? "answer", watch.ElapsedMilliseconds);
+            }
+            catch (RequestException error) { return ("request " + error.Code, watch.ElapsedMilliseconds); }
+            catch (OperationCanceledException) { return ("cancelled", watch.ElapsedMilliseconds); }
+        }
+        async Task<SsisExecuteResult> After(int ms) { await Task.Delay(ms); return answer; }
+        var quick = await Run(After(20), false, CancellationToken.None);
+        var late = await Run(After(700), true, CancellationToken.None);
+        var abandoned = await Run(After(700), false, CancellationToken.None);
+        using var disconnect = new CancellationTokenSource(400);
+        var lost = await Run(new TaskCompletionSource<SsisExecuteResult>().Task, true, disconnect.Token);
+        var early = await Run(Task.FromException<SsisExecuteResult>(new OperationCanceledException()), false, CancellationToken.None);
+        check(quick is ("answer", < 200) && late is ("answer", >= 600) && abandoned is ("cancelled", >= 150 and < 600) && lost is ("request CANCELLED", >= 300 and < 2_000) && early.Outcome == "CANCELLED",
+            "Stop's reply is the job's answer within the grace; past it, a job that answers Stop itself is waited for until it does, a disconnect answers at once, and any other job answers "
+            + "CANCELLED; a job that ended on the Stop before a step is a CANCELLED value: " + string.Join(", ", quick, late, abandoned, lost, early));
     }
 
     internal static SsisExecuteArgs Create(string password = "Pa'ss]--w0rd", bool? enableClr = true, bool? startup = false, string? connectionId = null) =>
@@ -67,12 +128,32 @@ internal static class SsisCreateChecks
             ("readWrite", "SELECT @other;", ["@catalog"], "names @other, which is neither its parameter nor declared"),
             ("dropJobs", "DROP DATABASE [SSISDB];", [], "drops a database"),
             ("dropJobs", "ALTER DATABASE [SSISDB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;", [], "rolls other sessions back"),
-            ("enableClr", "EXEC master.dbo.xp_cmdshell N'dir';", [], "runs the shell")
+            ("enableClr", "EXEC master.dbo.xp_cmdshell N'dir';", [], "runs the shell"),
+            // A parameter wrapped in a function, a REPLACE that is not the quote escape, the password quoted twice, and quoting in the
+            // database's collation (width-insensitive, it doubles U+FF07 and the literal reads it as an ASCII quote).
+            ("readWrite", "DECLARE @alter nvarchar(400) = N'ALTER DATABASE [' + LTRIM(@catalog) + N'] SET READ_WRITE;'; EXEC sys.sp_executesql @alter;", ["@catalog"],
+                "builds text that runs from the parameter @catalog other than through QUOTENAME or the server's quoting"),
+            ("readWrite", "DECLARE @alter nvarchar(400) = N'ALTER DATABASE ' + QUOTENAME(RTRIM(@catalog)) + N' SET READ_WRITE;'; EXEC sys.sp_executesql @alter;", ["@catalog"],
+                "builds text that runs from the parameter @catalog other than through QUOTENAME or the server's quoting"),
+            ("readWrite", "DECLARE @q nvarchar(400) = REPLACE(@catalog, N'a', N'a'); DECLARE @alter nvarchar(400) = N'ALTER DATABASE [' + @q + N'] SET READ_WRITE;'; EXEC sys.sp_executesql @alter;", ["@catalog"],
+                "concatenates @q, which the server did not quote"),
+            ("readWrite", "DECLARE @q nvarchar(400) = REPLACE(@catalog COLLATE Latin1_General_BIN2, N'''', N'''''') + N'x'; DECLARE @alter nvarchar(400) = N'PRINT ''' + @q + N''';'; EXEC (@alter);", ["@catalog"],
+                "concatenates @q, which the server did not quote"),
+            ("masterKey", SsisCreateSql.MasterKey.Text + "\nEXEC (N'PRINT N''' + REPLACE(@password COLLATE Latin1_General_BIN2, N'''', N'''''') + N'''');", ["@password"],
+                "uses the password other than through the server's quoting"),
+            ("masterKey", SsisCreateSql.MasterKey.Text.Replace(" COLLATE Latin1_General_BIN2", "", StringComparison.Ordinal), ["@password"], "uses the password other than through the server's quoting"),
+            ("assembly", SsisCreateSql.Assembly.Text.Replace(" COLLATE Latin1_General_BIN2", "", StringComparison.Ordinal), ["@assembly"], "concatenates @quoted, which the server did not quote"),
+            ("cleanupLogin", SsisCreateSql.CleanupLogin.Text.Replace(" COLLATE Latin1_General_BIN2", "", StringComparison.Ordinal), [], "concatenates @login_password, which the server did not quote")
         };
         var missed = caught.Where(item => !Problems(item.Id, item.Text, item.Parameters).Contains(item.Expected))
             .Select(item => item.Expected + " in " + item.Text + " (" + string.Join("; ", Problems(item.Id, item.Text, item.Parameters)) + ")").ToList();
-        check(missed.Count == 0, "the Create Catalog lint rejects a password or parameter concatenated into SQL, the password anywhere but the master key, unquoted dynamic text, "
-            + "RESTORE WITH REPLACE, a restore, drop or ROLLBACK IMMEDIATE outside their commands, format placeholders, unknown variables and the shell: " + string.Join("; ", missed));
+        check(missed.Count == 0, "the Create Catalog lint rejects a password or parameter concatenated into SQL, or wrapped in anything but QUOTENAME or the server's binary-collation quote escape, "
+            + "the password anywhere but once in the master key, unquoted dynamic text, RESTORE WITH REPLACE, a restore, drop or ROLLBACK IMMEDIATE outside their commands, format placeholders, "
+            + "unknown variables and the shell: " + string.Join("; ", missed));
+        var verbs = SsisCatalog.Current.Actions.Where(spec => spec.Server).Select(spec => (spec.Verb, Commands: SsisCreateSql.ServerCommands(spec.Verb))).ToList();
+        check(verbs.Count > 0 && verbs.All(item => item.Commands is { Count: > 0 } commands && commands.All(command => SsisCreateSql.Lint(command).Count == 0)) && SsisCreateSql.ServerCommands("stopOperation") is null
+            && SsisCreateSql.ServerCommands("deleteCatalog") is null,
+            "every server verb of the catalogue runs only commands SsisCreateSql lists for it, and they pass its lint; a server verb it does not know has none: " + string.Join(", ", verbs.Select(item => item.Verb + "=" + item.Commands?.Count)));
     }
 
     /// <summary>What SSMS 22's object model and scripts do, kept: the reads it makes, the restore's parameters, the master key's quoting,
@@ -82,25 +163,26 @@ internal static class SsisCreateChecks
         static bool Has(SsisCreateCommand command, params string[] parts) => parts.All(part => command.Text.Contains(part, StringComparison.Ordinal));
         check(Has(SsisCreateSql.Setup, "EXEC master.dbo.xp_regread N'HKEY_LOCAL_MACHINE', @key, N'', @dts OUTPUT;", "N'0\\SSIS\\Setup\\DTSPath'", "PARSENAME(@version, 4)", "N'Binn\\' + @backup_name",
                 "INSERT @found EXEC master.dbo.xp_fileexist @backup;", "SERVERPROPERTY('MasterFile')", "CHARINDEX(N'master.mdf', LOWER(@master))", "@directory + @catalog + N'.mdf'", "@directory + @catalog + N'.ldf'",
-                "c.name = N'clr enabled'", "c.name = N'scan for startup procs'", "IS_SRVROLEMEMBER(N'sysadmin')", "IF @sysadmin = 1", "SET LOCK_TIMEOUT 10000")
+                "c.name = N'clr enabled'", "c.name = N'scan for startup procs'", "IS_SRVROLEMEMBER(N'sysadmin')", "IF @sysadmin = 1", "SET LOCK_TIMEOUT 10000",
+                "WHERE c.is_dynamic = 1 AND c.value <> c.value_in_use AND c.name <> N'clr enabled'", "AND NOT (c.name = N'min server memory (MB)' AND CONVERT(int, c.value) = 0)", "@log_exists, @pending;")
             && SsisCreateSql.FileList.Text == "RESTORE FILELISTONLY FROM DISK = @backup;",
-            "the setup reads what SSMS's Create reads: the registry's DTSPath for the version, the Binn folder's backup with xp_fileexist, the master database's folder and the new files, sysadmin, CLR and the startup default, within a 10 s lock timeout");
+            "the setup reads what SSMS's Create reads: the registry's DTSPath for the version, the Binn folder's backup with xp_fileexist, the master database's folder and the new files, sysadmin, CLR, the startup default and the other dynamic configuration changes RECONFIGURE would apply, within a 10 s lock timeout");
         check(Has(SsisCreateSql.Restore, "RAISERROR(27135, 16, 1, @catalog)", "RESTORE DATABASE @catalog FROM DISK = @backup WITH MOVE @data_name TO @data_file, MOVE @log_name TO @log_file;",
                 "MOVE @second_name TO @second_file") && !SsisCreateSql.Restore.Text.Contains("REPLACE", StringComparison.Ordinal)
             && Has(SsisCreateSql.ReadWrite, "d.is_read_only = 1", "QUOTENAME(@catalog) + N' SET READ_WRITE WITH ROLLBACK IMMEDIATE;'")
-            && Has(SsisCreateSql.MasterKey, "DROP MASTER KEY", "N'CREATE MASTER KEY ENCRYPTION BY PASSWORD = N''' + REPLACE(@password, N'''', N'''''') + N''';'", "EXEC (@create);")
+            && Has(SsisCreateSql.MasterKey, "DROP MASTER KEY", "N'CREATE MASTER KEY ENCRYPTION BY PASSWORD = N''' + REPLACE(@password COLLATE Latin1_General_BIN2, N'''', N'''''') + N''';'", "EXEC (@create);")
             && SsisCreateSql.MasterKey.Context == SsisCreateContext.Catalog && SsisCreateSql.CleanupUser.Context == SsisCreateContext.Catalog
             && SsisCreateSql.EnableClr.Text == "EXEC sys.sp_configure N'clr enabled', 1;\nRECONFIGURE;",
             "the restore refuses a database that appeared (27135) and never replaces one; the master key takes the password only through the server's quoting, in the catalog; CLR is enabled as SMO does");
         check(Has(SsisCreateSql.Assembly, "IF NOT (@major > 14 OR (@major = 14 AND (@minor > 0 OR (@minor = 0 AND (@build > 800 OR (@build = 800 AND @revision > 11))))))",
                 "CREATE ASYMMETRIC KEY [MS_SQLEnableSystemAssemblyLoadingKey] FROM EXECUTABLE FILE", "GRANT UNSAFE ASSEMBLY TO [##MS_SQLEnableSystemAssemblyLoadingUser##]",
-                "OPENROWSET(BULK N''' + @quoted + N''', SINGLE_BLOB)", "HASHBYTES('SHA2_512', @bin)", "EXEC sys.sp_add_trusted_assembly @hash, @assembly;", "SELECT @added, @hash;")
+                "DECLARE @quoted nvarchar(2100) = REPLACE(@assembly COLLATE Latin1_General_BIN2, N'''', N'''''');", "OPENROWSET(BULK N''' + @quoted + N''', SINGLE_BLOB)", "HASHBYTES('SHA2_512', @bin)", "EXEC sys.sp_add_trusted_assembly @hash, @assembly;", "SELECT @added, @hash;")
             && Has(SsisCreateSql.CreateStartup, "CREATE PROCEDURE [dbo].[sp_ssis_startup]", "IF DB_ID('SSISDB') IS NULL", "SET @script = N'EXEC [SSISDB].[catalog].[startup]'", "EXECUTE sp_executesql @script")
             && SsisCreateSql.StartupOn.Text == "IF @startup = 1 EXEC sys.sp_procoption N'sp_ssis_startup', 'startup', 'on';"
             && SsisCreate.UsesAsymmetricKey("13.0.7000.253") && SsisCreate.UsesAsymmetricKey("14.0.800.11") && !SsisCreate.UsesAsymmetricKey("14.0.800.12")
             && !SsisCreate.UsesAsymmetricKey("14.0.1000.169") && !SsisCreate.UsesAsymmetricKey("14.1.0.0") && !SsisCreate.UsesAsymmetricKey("17.0.1000.7"),
             "the assembly is trusted by hash after 14.0.800.11 and through the asymmetric key before, as SSMS decides it; sp_ssis_startup is SSMS's, and the startup option follows the choice");
-        check(Has(SsisCreateSql.CleanupLogin, "REPLACE(CONVERT(nvarchar(256), CRYPT_GEN_RANDOM(64)), N'''', N'''''')", "CHECK_POLICY = OFF", "ALTER LOGIN [##MS_SSISServerCleanupJobLogin##] DISABLE;",
+        check(Has(SsisCreateSql.CleanupLogin, "REPLACE(CONVERT(nvarchar(256), CRYPT_GEN_RANDOM(64)) COLLATE Latin1_General_BIN2, N'''', N'''''')", "CHECK_POLICY = OFF", "ALTER LOGIN [##MS_SSISServerCleanupJobLogin##] DISABLE;",
                 "@job_name = N'SSIS Failover Monitor Job'")
             && Has(SsisCreateSql.CleanupUser, "GRANT EXECUTE ON [internal].[cleanup_server_retention_window]", "GRANT EXECUTE ON [internal].[cleanup_server_project_version]")
             && SsisCreateSql.CleanupGrant.Text == "GRANT VIEW SERVER STATE TO [##MS_SSISServerCleanupJobLogin##];"
@@ -111,10 +193,12 @@ internal static class SsisCreateChecks
                 "adc.[database_name] =''SSISDB'')", "CONVERT(nvarchar(128), SERVERPROPERTY('ServerName'))")
             && !SsisCreateSql.All.Any(command => command.Text.Contains("sp_add_job @job_name = N'SSIS Failover Monitor Job'", StringComparison.Ordinal)),
             "the maintenance job is SSMS's: a disabled cleanup login with a server-made password, its grants, two primary-only steps with three retries, daily at 00:00; no Failover Monitor Job is created");
-        check(Has(SsisCreateSql.DropDatabase, "(@restoring = 0 OR @state = 1)", "SET SINGLE_USER WITH ROLLBACK IMMEDIATE; ", "N'DROP DATABASE ' + QUOTENAME(@catalog)")
+        check(Has(SsisCreateSql.DropDatabase, "(@restoring = 0 OR (@state = 1 AND NOT EXISTS (SELECT 1 FROM sys.dm_tran_locks AS l WHERE l.resource_type = N'DATABASE'", "AND l.resource_database_id = DB_ID(@catalog) AND l.request_session_id <> @@SPID)))", "SET SINGLE_USER WITH ROLLBACK IMMEDIATE; ", "N'DROP DATABASE ' + QUOTENAME(@catalog)")
+            && SsisCreateSql.CleanupPrologue.Text == "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;\nSET LOCK_TIMEOUT 30000;" && SsisCreateSql.CleanupPrologue.Parameters.Count == 0
             && Has(SsisCreateSql.DropTrusted, "EXEC sys.sp_drop_trusted_assembly @hash;") && Has(SsisCreateSql.DropLoadingLogin, "N'DependencyCatalog'")
             && Has(SsisCreateSql.DropJobs, "N'SSIS Server Maintenance Job'", "N'SSIS Failover Monitor Job'", "DROP LOGIN [##MS_SSISServerCleanupJobLogin##]"),
-            "a failure after the restore removes what Create Catalog made, as DropCatalog.sql does: only the hash it added, and a database left restoring only while it still is");
+            "a failure after the restore removes what Create Catalog made, as DropCatalog.sql does: only the hash it added, and a database left restoring only while it still is and no other session holds it (another restore's exclusive lock); "
+            + "before it, a transaction a cancelled step left open ends and later lock waits are bounded (30 s), in a batch without parameters so the timeout lasts");
     }
 
     private static void Rules(Action<bool, string> check)
@@ -134,12 +218,18 @@ internal static class SsisCreateChecks
             (ok with { Directory = null, DataFile = null, LogFile = null }, "NOT_SUPPORTED", "The folder of the master database's files could not be determined"),
             (ok with { DataExists = true }, "NOT_SUPPORTED", @"The database file with name 'SSISDB.mdf' already exists in directory 'C:\Data\'."),
             (ok with { LogExists = true }, "NOT_SUPPORTED", @"The database file with name 'SSISDB.ldf' already exists in directory 'C:\Data\'."),
-            (ok with { DataFile = @"C:\" + new string('d', 1030) + ".mdf" }, "NOT_SUPPORTED", "longer than 1,024 characters")
+            (ok with { DataFile = @"C:\" + new string('d', 1030) + ".mdf" }, "NOT_SUPPORTED", "longer than 1,024 characters"),
+            (ok with { PendingConfiguration = "cost threshold for parallelism, max server memory (MB)" }, "CONFIGURATION_PENDING",
+                "Enabling CLR integration runs RECONFIGURE, which would also apply these pending server configuration changes: cost threshold for parallelism, max server memory (MB)."),
+            (ok with { PendingConfiguration = "max server memory (MB)", ClrEnabled = true }, null, ""),
+            (ok with { PendingConfiguration = "max server memory (MB)", Exists = true }, "CATALOG_EXISTS", "There already exists a catalog")
         };
         var wrong = cases.Where(item => SsisCreate.Refusal(catalog, item.Facts, "SSISDB") is var error && (error?.Code != item.Code || error is not null && !error.Message.Contains(item.Text, StringComparison.Ordinal)))
             .Select(item => JsonSerializer.Serialize(SsisCreate.Refusal(catalog, item.Facts, "SSISDB"), Json)).ToList();
         check(wrong.Count == 0, "Create Catalog refuses in SSMS's order and words: without sysadmin, when a catalog exists, without the backup's path or file, without the files' folder, "
-            + "when its files are there already, and past the path bound; CLR is not a refusal of the facts: " + string.Join("; ", wrong));
+            + "when its files are there already, and past the path bound; then, when CLR must be enabled, while other configuration changes wait for the RECONFIGURE that would apply them too; "
+            + "CLR itself is not a refusal of the facts: " + string.Join("; ", wrong));
+        check(!catalog.Retryable("CONFIGURATION_PENDING"), "CONFIGURATION_PENDING needs the user, so retrying alone does not help");
         var setup = SsisCreate.Setup("SSISDB", ok with { ScanForStartup = true });
         check(setup is { Catalog: "SSISDB", ClrEnabled: false, StartupDefault: true, DataFile: @"C:\Data\SSISDB.mdf", LogFile: @"C:\Data\SSISDB.ldf" } && setup.BackupFile.EndsWith("SSISDBBackup.bak", StringComparison.Ordinal),
             "the dialog's setup shows the catalog, CLR in use, SSMS's startup default (scan for startup procs), the backup and the files' places");

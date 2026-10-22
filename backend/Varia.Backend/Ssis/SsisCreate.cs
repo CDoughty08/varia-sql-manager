@@ -5,12 +5,25 @@ using Varia.Backend.Explorer;
 
 namespace Varia.Backend.Ssis;
 
-/// <summary>What Create Catalog reads on the server before it changes anything (SsisCreateSql.Setup). Paths are the server's.</summary>
+/// <summary>What Create Catalog reads on the server before it changes anything (SsisCreateSql.Setup). Paths are the server's;
+/// PendingConfiguration names the other dynamic sp_configure changes a RECONFIGURE would apply, or is null.</summary>
 internal sealed record CatalogFacts(bool Sysadmin, string Version, bool Exists, bool ClrEnabled, bool ScanForStartup, string? BackupFile, bool BackupExists, string? AssemblyFile,
-    string? Directory, string? DataFile, bool DataExists, string? LogFile, bool LogExists);
+    string? Directory, string? DataFile, bool DataExists, string? LogFile, bool LogExists, string? PendingConfiguration = null);
 
 /// <summary>The catalog backup's logical files: one data file (a second, as SSMS allows, goes to an .ndf) and one log file.</summary>
 internal sealed record CatalogBackupLayout(string DataName, string? SecondName, string LogName);
+
+/// <summary>What Create Catalog made so far, which a Stop or a failure after the restore removes, and only that.</summary>
+internal sealed class CreatedObjects
+{
+    /// <summary>The restore was sent; Recovered once it completed, so the database is this Create Catalog's for certain.</summary>
+    public bool Restored;
+    public bool Recovered;
+    public bool Assembly;
+    public byte[]? TrustedHash;
+    public bool Startup;
+    public bool Jobs;
+}
 
 /// <summary>Create Catalog's reads and rules (S9a), shared by the dialog's ssis.catalogSetup and the write's preflight, so both
 /// refuse alike. Messages are SSMS's own where it has one; none carries the password, SQL text or a connection string.</summary>
@@ -49,11 +62,11 @@ internal static class SsisCreate
         // SET NOCOUNT ON, and the INSERT … EXEC of xp_fileexist returns no rows to the client: the one result is the last SELECT.
         do
         {
-            if (reader.FieldCount != 13) continue;
+            if (reader.FieldCount != 14) continue;
             if (!await reader.ReadAsync(token)) break;
             string? Value(int index) => reader.IsDBNull(index) ? null : Convert.ToString(reader.GetValue(index), CultureInfo.InvariantCulture);
             bool Flag(int index) => !reader.IsDBNull(index) && Convert.ToInt32(reader.GetValue(index), CultureInfo.InvariantCulture) == 1;
-            var facts = new CatalogFacts(Flag(0), Value(1) ?? "", Flag(2), Flag(3), Flag(4), Value(5), Flag(6), Value(7), Value(8), Value(9), Flag(10), Value(11), Flag(12));
+            var facts = new CatalogFacts(Flag(0), Value(1) ?? "", Flag(2), Flag(3), Flag(4), Value(5), Flag(6), Value(7), Value(8), Value(9), Flag(10), Value(11), Flag(12), Value(13) is { Length: > 0 } pending ? pending : null);
             while (await reader.NextResultAsync(token)) { }
             return facts;
         }
@@ -86,7 +99,29 @@ internal static class SsisCreate
         var limit = catalog.Limit("serverPath");
         if (new[] { facts.BackupFile, facts.AssemblyFile, facts.DataFile, facts.LogFile }.Any(path => path.Length > limit))
             return Error("NOT_SUPPORTED", "A path of the catalog's files is longer than " + limit.ToString("N0", CultureInfo.InvariantCulture) + " characters.");
+        // Enabling CLR ends with RECONFIGURE, which applies every pending change; the user agreed to CLR integration only.
+        if (!facts.ClrEnabled && facts.PendingConfiguration is { Length: > 0 } pending)
+            return Error("CONFIGURATION_PENDING", "Enabling CLR integration runs RECONFIGURE, which would also apply these pending server configuration changes: " + pending
+                + ". Apply them (RECONFIGURE) or undo them (sp_configure) first, or enable CLR integration yourself, then create the catalog.");
         return null;
+    }
+
+    /// <summary>sp_procoption's choice: on only when the request checked "Enable automatic execution of Integration Services stored
+    /// procedure at SQL Server startup".</summary>
+    public static SqlParameter StartupParameter(SsisActionDto action) => new("@startup", SqlDbType.Bit) { Value = action.StartupProcedure == true };
+
+    /// <summary>What a Create Catalog that stopped or failed after its restore removes, in order: only what it made (the trusted hash
+    /// it added, or before 14.0.800.11 the assembly loading login, sp_ssis_startup, the SSIS jobs and their login, the database it
+    /// restored, while still restoring only when <paramref name="restoring"/>). The cleanup prologue runs before them.</summary>
+    public static List<(SsisCreateCommand Command, SqlParameter[] Parameters)> Removal(CreatedObjects created, string name, bool restoring, string version)
+    {
+        var plan = new List<(SsisCreateCommand, SqlParameter[])>();
+        if (created.TrustedHash is { } hash) plan.Add((SsisCreateSql.DropTrusted, [new SqlParameter("@hash", SqlDbType.VarBinary, 64) { Value = hash }]));
+        if (created.Assembly && UsesAsymmetricKey(version)) plan.Add((SsisCreateSql.DropLoadingLogin, []));
+        if (created.Startup) plan.Add((SsisCreateSql.DropStartup, []));
+        if (created.Jobs) plan.Add((SsisCreateSql.DropJobs, []));
+        if (created.Restored) plan.Add((SsisCreateSql.DropDatabase, [Name("@catalog", name), new SqlParameter("@restoring", SqlDbType.Bit) { Value = restoring }]));
+        return plan;
     }
 
     /// <summary>The backup's logical files (RESTORE FILELISTONLY), or why it cannot serve: unreadable, or not the files a catalog

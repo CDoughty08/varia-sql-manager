@@ -23,7 +23,7 @@ export interface OpenCreateCatalog {
   readonly enableClr: boolean
   /** "Enable automatic execution of Integration Services stored procedure at SQL Server startup". */
   readonly startupProcedure: boolean
-  /** Stop was pressed: from the restore on Create Catalog finishes instead, so the dialog waits for its answer. */
+  /** Stop was pressed: the dialog waits for the answer, which lists the steps (during the restore, after it ends and what it made is removed). */
   readonly stopping?: boolean
   readonly error?: SsisError
   readonly steps?: readonly ActionStep[]
@@ -122,7 +122,7 @@ export class CreateCatalogService extends SnapshotStore<CreateCatalogSnapshot> i
     this.update(open, { phase: 'failed', error, stopping: undefined, ...(value ? { steps: value.steps } : {}) })
   }
 
-  /** Stop: ends Create Catalog at once until its restore starts; after that the backend finishes and answers, which the dialog waits for. */
+  /** Stop: ends Create Catalog at its running statement, except the restore, which SQL Server cannot stop: the backend lets it end, removes what it created and answers. */
   stop(): void {
     const open = this.current, request = this.request
     if (!open || !request || request.dialog !== open.id || open.phase !== 'executing' || open.stopping) return

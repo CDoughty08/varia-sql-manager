@@ -382,7 +382,7 @@ try
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);
-    await SsisCreateLiveChecks.RunAsync(Check, service, info, json);
+    await SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json);
     await EntraChecks.LiveAsync(Check, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }

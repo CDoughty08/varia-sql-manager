@@ -25,6 +25,7 @@
     {"code":"CANCELLED","retryable":true},
     {"code":"CATALOG_EXISTS","retryable":false},
     {"code":"CLR_REQUIRED","retryable":false},
+    {"code":"CONFIGURATION_PENDING","retryable":false},
     {"code":"SQL_ERROR","retryable":true}
   ],
   "features": ["customizedLoggingLevels","scaleOut","eventMessageGuid","executedCount","operationLogSize","checkSchemaVersion"],

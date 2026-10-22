@@ -222,7 +222,7 @@ at most 30 s, then `BUSY`), so a request waiting on SSISDB never holds one eithe
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
-| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent. Create Catalog: Stop ends it only before its restore starts; after that the reply waits for it to finish or to remove what it created |
+| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent. Create Catalog: Stop ends it at any statement but its restore, and its reply waits (past the grace) for the restore to end and for the removal of what was created |
 | `ssis.catalogSetup` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (10 s lock timeout: `BLOCKED`) |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
@@ -380,11 +380,15 @@ its own connection, in `master`, a SQL Server login allowed as in SSMS. Its pref
 `RESTORE FILELISTONLY` (within 25 s), answers `CLR_REQUIRED` when CLR integration is off and `enableClr` is false, then runs
 SSMS 22's steps from `SsisCreateSql`'s constant commands (values as parameters; the password reaches SQL only through the
 server's own quoting in the master key's `EXEC`): CLR, the restore (never `WITH REPLACE`), the master key, the assembly
-trust and `sp_ssis_startup`, and the maintenance job. Stop cancels it at once until the restore begins; from then its steps
-run without the request's token and the reply, after the usual 10 s grace, waits for them to end (`RequestRegistry`'s
-disconnect-only token still answers a disconnect at once). A step that fails after the restore adds the step "Remove the
-incomplete catalog", which drops what this request made (and a database left restoring only while it still is), as SSMS's
+trust and `sp_ssis_startup`, and the maintenance job. Stop cancels the running statement (a lock wait included), except the
+restore and its switch to read-write, which run without the request's token: Stop during them takes effect when they end.
+From the start of the restore the reply, after the usual 10 s grace, waits for the job (`RequestRegistry`'s disconnect-only
+token still answers a disconnect at once). A step after the restore that fails or is stopped adds the step "Remove the
+incomplete catalog", which ends a transaction the cancelled statement left open and drops what this request made, waiting at
+most 30 s for each lock (a database left restoring only while it still is and no other session holds it), as SSMS's
 DropCatalog does; a restore refused because the database appeared (27135) answers `CATALOG_EXISTS` and removes nothing.
+When CLR integration is off and other dynamic `sp_configure` changes wait for a `RECONFIGURE`, both methods answer
+`CONFIGURATION_PENDING` (naming them), because enabling CLR would apply them too.
 
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers

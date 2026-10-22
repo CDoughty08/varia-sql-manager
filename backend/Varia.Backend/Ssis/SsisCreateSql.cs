@@ -21,7 +21,9 @@ internal static partial class SsisCreateSql
     /// in use, scan for startup procs (SSMS's default for the startup procedure), the Integration Services folder from the
     /// registry's SSIS\Setup\DTSPath for the server's version (CatalogHelper.GetCatalogBackupPath's xp_regread), the catalog backup
     /// and assembly in its Binn folder, whether the backup exists (xp_fileexist), and the master database's folder for the new
-    /// files (GetDataDirectoryPath) with whether they exist already (CheckIfDatabaseFilesExist). The extended procedures run only
+    /// files (GetDataDirectoryPath) with whether they exist already (CheckIfDatabaseFilesExist), and the other dynamic sp_configure
+    /// changes waiting for a RECONFIGURE, which enabling CLR would apply too (not 'min server memory (MB)' at 0, which SQL Server
+    /// always shows in use as 16 and no RECONFIGURE changes). The extended procedures run only
     /// for sysadmin, who alone may create the catalog. Its own lock timeout, as a write's preflight: parameterized, so the SET ends
     /// with the batch.</summary>
     public static readonly SsisCreateCommand Setup = new("setup",
@@ -31,6 +33,8 @@ internal static partial class SsisCreateSql
         + "DECLARE @exists bit = CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @catalog) THEN 1 ELSE 0 END;\n"
         + "DECLARE @clr int = (SELECT CONVERT(int, c.value_in_use) FROM sys.configurations AS c WHERE c.name = N'clr enabled');\n"
         + "DECLARE @scan int = (SELECT CONVERT(int, c.value) FROM sys.configurations AS c WHERE c.name = N'scan for startup procs');\n"
+        + "DECLARE @pending nvarchar(max) = STUFF((SELECT N', ' + c.name FROM sys.configurations AS c WHERE c.is_dynamic = 1 AND c.value <> c.value_in_use AND c.name <> N'clr enabled'\n"
+        + "    AND NOT (c.name = N'min server memory (MB)' AND CONVERT(int, c.value) = 0) ORDER BY c.name FOR XML PATH(N'')), 1, 2, N'');\n"
         + "DECLARE @dts nvarchar(1024), @backup nvarchar(1024), @assembly nvarchar(1024), @master nvarchar(1024), @directory nvarchar(1024), @data nvarchar(1024), @log nvarchar(1024);\n"
         + "DECLARE @backup_exists int = 0, @data_exists int = 0, @log_exists int = 0;\n"
         + "DECLARE @found TABLE (file_exists int, is_directory int, parent_directory_exists int);\n"
@@ -60,13 +64,14 @@ internal static partial class SsisCreateSql
         + "        SELECT @log_exists = f.file_exists FROM @found AS f;\n"
         + "    END\n"
         + "END\n"
-        + "SELECT @sysadmin, @version, @exists, ISNULL(@clr, 0), ISNULL(@scan, 0), @backup, @backup_exists, @assembly, @directory, @data, @data_exists, @log, @log_exists;",
+        + "SELECT @sysadmin, @version, @exists, ISNULL(@clr, 0), ISNULL(@scan, 0), @backup, @backup_exists, @assembly, @directory, @data, @data_exists, @log, @log_exists, @pending;",
         ["@catalog", "@backup_name", "@assembly_name"]);
 
     /// <summary>The backup's logical files (CatalogHelper.GetLogicalNamesFromBackupFile): LogicalName and Type of each.</summary>
     public static readonly SsisCreateCommand FileList = new("fileList", "RESTORE FILELISTONLY FROM DISK = @backup;", ["@backup"]);
 
-    /// <summary>The CLR checkbox: what SMO's Configuration.IsSqlClrEnabled with Alter() runs for SSMS's dialog.</summary>
+    /// <summary>The CLR checkbox: what SMO's Configuration.IsSqlClrEnabled with Alter() runs for SSMS's dialog. RECONFIGURE applies
+    /// every pending change, so Create Catalog refuses (CONFIGURATION_PENDING) while the setup read finds another one.</summary>
     public static readonly SsisCreateCommand EnableClr = new("enableClr", "EXEC sys.sp_configure N'clr enabled', 1;\nRECONFIGURE;", []);
 
     /// <summary>DatabaseCheck.sql's 27135, in the restore's own batch, then CatalogHelper.RestoreCatalogBackup with every name and
@@ -90,11 +95,13 @@ internal static partial class SsisCreateSql
         ["@catalog"]);
 
     /// <summary>DropMasterKey.sql, then Catalog.CreateMasterKey's statement, in the catalog's database. The password reaches the
-    /// text only through the server's REPLACE inside EXEC, as SSMS does; the literal is N'' so no character is lost.</summary>
+    /// text only through the server's REPLACE inside EXEC, as SSMS does; the literal is N'' so no character is lost, and the REPLACE
+    /// compares in a binary collation, because the database's own (width-insensitive, as SQL_Latin1_General_CP1_CI_AS is) would
+    /// double U+FF07, which the literal then reads as one ASCII quote: the key's password would not be the one typed.</summary>
     public static readonly SsisCreateCommand MasterKey = new("masterKey",
         "SET NOCOUNT ON;\n"
         + "IF EXISTS (SELECT 1 FROM sys.symmetric_keys AS k WHERE k.name = N'##MS_DatabaseMasterKey##') DROP MASTER KEY;\n"
-        + "DECLARE @create nvarchar(max) = N'CREATE MASTER KEY ENCRYPTION BY PASSWORD = N''' + REPLACE(@password, N'''', N'''''') + N''';';\n"
+        + "DECLARE @create nvarchar(max) = N'CREATE MASTER KEY ENCRYPTION BY PASSWORD = N''' + REPLACE(@password COLLATE Latin1_General_BIN2, N'''', N'''''') + N''';';\n"
         + "EXEC (@create);",
         ["@password"], SsisCreateContext.Catalog);
 
@@ -106,7 +113,7 @@ internal static partial class SsisCreateSql
         + "DECLARE @version nvarchar(128) = CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion'));\n"
         + "DECLARE @major int = CONVERT(int, PARSENAME(@version, 4)), @minor int = CONVERT(int, PARSENAME(@version, 3)), @build int = CONVERT(int, PARSENAME(@version, 2)), "
         + "@revision int = CONVERT(int, PARSENAME(@version, 1));\n"
-        + "DECLARE @quoted nvarchar(2100) = REPLACE(@assembly, N'''', N'''''');\n"
+        + "DECLARE @quoted nvarchar(2100) = REPLACE(@assembly COLLATE Latin1_General_BIN2, N'''', N'''''');\n"
         + "DECLARE @statement nvarchar(max), @bin varbinary(max), @hash varbinary(64), @added bit = 0;\n"
         + "IF NOT (@major > 14 OR (@major = 14 AND (@minor > 0 OR (@minor = 0 AND (@build > 800 OR (@build = 800 AND @revision > 11))))))\n"
         + "BEGIN\n"
@@ -172,7 +179,7 @@ internal static partial class SsisCreateSql
         + "IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs AS j WHERE j.name = N'SSIS Server Maintenance Job') EXEC msdb.dbo.sp_delete_job @job_name = N'SSIS Server Maintenance Job';\n"
         + "IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs AS j WHERE j.name = N'SSIS Failover Monitor Job') EXEC msdb.dbo.sp_delete_job @job_name = N'SSIS Failover Monitor Job';\n"
         + "IF EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = N'##MS_SSISServerCleanupJobLogin##') DROP LOGIN [##MS_SSISServerCleanupJobLogin##];\n"
-        + "DECLARE @login_password nvarchar(256) = REPLACE(CONVERT(nvarchar(256), CRYPT_GEN_RANDOM(64)), N'''', N'''''');\n"
+        + "DECLARE @login_password nvarchar(256) = REPLACE(CONVERT(nvarchar(256), CRYPT_GEN_RANDOM(64)) COLLATE Latin1_General_BIN2, N'''', N'''''');\n"
         + "DECLARE @login nvarchar(max) = N'CREATE LOGIN [##MS_SSISServerCleanupJobLogin##] WITH PASSWORD = N''' + @login_password + N''', CHECK_POLICY = OFF;';\n"
         + "EXEC (@login);\n"
         + "ALTER LOGIN [##MS_SSISServerCleanupJobLogin##] DISABLE;",
@@ -218,6 +225,11 @@ internal static partial class SsisCreateSql
 
     // --- What a failure after the restore removes (DropCatalog.sql and DropSSISDB.sql, limited to what Create Catalog made) ---
 
+    /// <summary>Before the removal, on the same connection: a step that Stop or an error ended inside a procedure's own transaction
+    /// (msdb's job procedures) may leave it open, and the removal must not wait for locks without end (the steps wait as SSMS does).
+    /// A batch without parameters, so the lock timeout lasts for the session.</summary>
+    public static readonly SsisCreateCommand CleanupPrologue = new("cleanupPrologue", "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;\nSET LOCK_TIMEOUT 30000;", []);
+
     /// <summary>The trusted assembly hash the assembly step added, and nothing else.</summary>
     public static readonly SsisCreateCommand DropTrusted = new("dropTrusted",
         "IF EXISTS (SELECT 1 FROM sys.trusted_assemblies AS t WHERE t.hash = @hash) EXEC sys.sp_drop_trusted_assembly @hash;", ["@hash"]);
@@ -239,12 +251,14 @@ internal static partial class SsisCreateSql
         []);
 
     /// <summary>DropSSISDB.sql, for the database this Create Catalog restored: single-user and dropped, or only dropped while it is
-    /// still restoring (a restore that failed part way). @restoring = 1 drops it only in that state, so a failed
-    /// restore never drops a database someone else created meanwhile.</summary>
+    /// still restoring (a restore that failed part way). @restoring = 1 drops it only in that state and only when no other session
+    /// holds a lock on it: a restore holds an exclusive database lock until it ends, and a restoring database admits nobody else, so
+    /// a failed restore never drops a database another session (a second Create Catalog, SSMS, a script) is restoring.</summary>
     public static readonly SsisCreateCommand DropDatabase = new("dropDatabase",
         "SET NOCOUNT ON;\n"
         + "DECLARE @state int = (SELECT d.state FROM sys.databases AS d WHERE d.name = @catalog);\n"
-        + "IF @state IS NOT NULL AND (@restoring = 0 OR @state = 1)\n"
+        + "IF @state IS NOT NULL AND (@restoring = 0 OR (@state = 1 AND NOT EXISTS (SELECT 1 FROM sys.dm_tran_locks AS l WHERE l.resource_type = N'DATABASE'\n"
+        + "    AND l.resource_database_id = DB_ID(@catalog) AND l.request_session_id <> @@SPID)))\n"
         + "BEGIN\n"
         + "    DECLARE @drop nvarchar(600) = CASE WHEN @state = 0 THEN N'ALTER DATABASE ' + QUOTENAME(@catalog) + N' SET SINGLE_USER WITH ROLLBACK IMMEDIATE; ' ELSE N'' END\n"
         + "        + N'DROP DATABASE ' + QUOTENAME(@catalog) + N';';\n"
@@ -256,8 +270,16 @@ internal static partial class SsisCreateSql
     public static IEnumerable<SsisCreateCommand> All =>
     [
         Setup, FileList, EnableClr, Restore, ReadWrite, MasterKey, Assembly, DropStartup, CreateStartup, StartupOn, CleanupLogin, CleanupUser, CleanupGrant, MaintenanceJob,
-        DropTrusted, DropLoadingLogin, DropJobs, DropDatabase
+        CleanupPrologue, DropTrusted, DropLoadingLogin, DropJobs, DropDatabase
     ];
+
+    /// <summary>The commands a server verb of the catalogue (scope 'server', run in master) may run, all covered by <see cref="Lint"/>;
+    /// null for any other verb, so a new server verb fails the checks until its commands are listed here and pass the lint.</summary>
+    public static IReadOnlyList<SsisCreateCommand>? ServerCommands(string verb) => verb switch
+    {
+        "createCatalog" => [.. All],
+        _ => null
+    };
 
     [GeneratedRegex(@"(?<![@\w])@[A-Za-z_]\w*")]
     private static partial Regex Variables();
@@ -271,48 +293,87 @@ internal static partial class SsisCreateSql
     /// <summary>Text that runs as SQL: EXEC of a string or a variable, or sp_executesql.</summary>
     [GeneratedRegex(@"\bEXEC(?:UTE)?\s*\(|\bsp_executesql\s+@", RegexOptions.IgnoreCase)]
     private static partial Regex Dynamic();
-    /// <summary>A variable assigned from the server's own quoting.</summary>
-    [GeneratedRegex(@"(@\w+)\s+nvarchar\(\d+\)\s*=\s*REPLACE\(")]
+    /// <summary>The variables a command runs as SQL.</summary>
+    [GeneratedRegex(@"\bEXEC(?:UTE)?\s*\(\s*(@\w+)\s*\)|\bsp_executesql\s+(@\w+)", RegexOptions.IgnoreCase)]
+    private static partial Regex Executed();
+    /// <summary>EXEC of an expression rather than one variable: the statement builds the text it runs.</summary>
+    [GeneratedRegex(@"\bEXEC(?:UTE)?\s*\((?!\s*@\w+\s*\))", RegexOptions.IgnoreCase)]
+    private static partial Regex ExecOfText();
+    /// <summary>A statement that assigns a variable (DECLARE @x type = …, SET @x = …).</summary>
+    [GeneratedRegex(@"\b(?:DECLARE\s+(@\w+)\s+\w+(?:\(\w+\))?|SET\s+(@\w+))\s*=(?!=)", RegexOptions.IgnoreCase)]
+    private static partial Regex Assignment();
+    /// <summary>The server's quoting of a value for an N'' literal, exactly: REPLACE of each quote, compared in a binary collation (the
+    /// database's own may be width-insensitive and double U+FF07, which the literal then reads as an ASCII quote).</summary>
+    [GeneratedRegex(@"REPLACE\((?<operand>(?:[^(),']|\((?:[^()']|\((?:[^()']|\([^()']*\))*\))*\))+?) COLLATE Latin1_General_BIN2, N'''', N''''''\)")]
+    private static partial Regex Escaped();
+    /// <summary>A variable assigned from the server's own quoting and nothing else (in code, where Escaped became __escaped(…)).</summary>
+    [GeneratedRegex(@"(@\w+)\s+nvarchar\(\d+\)\s*=\s*__escaped\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\s*(?:;|$)")]
     private static partial Regex QuotedAssignment();
-    private const string QuoteEscape = "REPLACE(@password, N'''', N'''''')";
+    /// <summary>What may carry a value into text that runs: QUOTENAME of a variable, or the server's quoting of one.</summary>
+    [GeneratedRegex(@"\bQUOTENAME\(\s*@\w+\s*\)|__escaped\(\s*@\w+\s*\)", RegexOptions.IgnoreCase)]
+    private static partial Regex SafeForms();
 
     /// <summary>Problems with one command; empty when it passes. Its text is constant (no format placeholder); it names only its
-    /// own parameters and the variables it declares; only the master key reads the password, and only through the server's
-    /// quoting; a variable concatenated into a statement is never a parameter, only one the command assigned from REPLACE's
-    /// quoting (or QUOTENAME inline); the restore never replaces; only the read-only fix and the database drop roll other
-    /// sessions back; and nothing runs the shell.</summary>
+    /// own parameters and the variables it declares; only the master key reads the password, exactly once, through the server's
+    /// binary-collation quoting; text that runs is built only from literals, QUOTENAME of a variable, the server's quoting of one,
+    /// variables assigned from that quoting and nothing else, and conditions (a parameter never directly, nor wrapped in anything
+    /// else); the restore never replaces; only the read-only fix and the database drop roll other sessions back; and nothing runs
+    /// the shell.</summary>
     public static List<string> Lint(SsisCreateCommand command)
     {
         var problems = new List<string>();
         var text = command.Text;
         if (text.Contains('{') || text.Contains('}')) problems.Add("has a format placeholder");
-        var code = Literals().Replace(text, "''");
+        var code = Literals().Replace(Escaped().Replace(text, match => "__escaped(" + match.Groups["operand"].Value + ")"), "''");
         var declared = Declarations().Matches(code).Select(match => match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool Parameter(string variable) => command.Parameters.Contains(variable, StringComparer.OrdinalIgnoreCase);
         // sp_executesql's OUTPUT parameter and a procedure's named parameters (@job_name = …) are not variables of the command.
         var named = Regex.Matches(code, @"(@\w+)\s*=(?!=)").Select(match => match.Groups[1].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var variable in Variables().Matches(code).Select(match => match.Value).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (declared.Contains(variable) || command.Parameters.Contains(variable, StringComparer.OrdinalIgnoreCase)) continue;
+            if (declared.Contains(variable) || Parameter(variable)) continue;
             if (named.Contains(variable) && Regex.IsMatch(code, @"EXEC\S*\s[^;]*" + Regex.Escape(variable) + @"\s*=", RegexOptions.IgnoreCase)) continue;
             problems.Add("names " + variable + ", which is neither its parameter nor declared");
         }
-        if (text.Contains("@password", StringComparison.OrdinalIgnoreCase) != (command.Id == "masterKey")) problems.Add(command.Id == "masterKey" ? "does not read the password" : "reads the password");
-        if (command.Id == "masterKey" && (text.Replace(QuoteEscape, "", StringComparison.Ordinal).Contains("@password", StringComparison.OrdinalIgnoreCase) || !text.Contains(QuoteEscape, StringComparison.Ordinal)))
+        var passwordUses = Regex.Matches(code, @"(?<![@\w])@password\b", RegexOptions.IgnoreCase).Count;
+        if (passwordUses > 0 != (command.Id == "masterKey")) problems.Add(command.Id == "masterKey" ? "does not read the password" : "reads the password");
+        if (command.Id == "masterKey" && (passwordUses != 1 || !Regex.IsMatch(code, @"__escaped\(@password\)", RegexOptions.IgnoreCase)))
             problems.Add("uses the password other than through the server's quoting");
-        var quoted = QuotedAssignment().Matches(code.Replace(QuoteEscape, "''", StringComparison.Ordinal)).Select(match => match.Groups[1].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var quoted = QuotedAssignment().Matches(code).Select(match => match.Groups[1].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         // Only text that runs (EXEC of a string, sp_executesql) matters: elsewhere a + builds a value, such as the setup's paths.
         if (Dynamic().IsMatch(code))
+        {
             foreach (Match match in Concatenated().Matches(code))
             {
                 var variable = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
-                if (command.Parameters.Contains(variable, StringComparer.OrdinalIgnoreCase)) problems.Add("concatenates the parameter " + variable + " into a statement");
+                if (Parameter(variable)) problems.Add("concatenates the parameter " + variable + " into a statement");
                 else if (!quoted.Contains(variable)) problems.Add("concatenates " + variable + ", which the server did not quote");
             }
+            var executed = Executed().Matches(code).Select(match => match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var statement in code.Split(';'))
+            {
+                // From the assignment of a variable the command runs, or from an EXEC of an expression, to the statement's end.
+                var assignment = Assignment().Match(statement);
+                var target = assignment.Success ? (assignment.Groups[1].Success ? assignment.Groups[1].Value : assignment.Groups[2].Value) : null;
+                var start = target is not null && executed.Contains(target) ? assignment.Index : ExecOfText().Match(statement) is { Success: true } exec ? exec.Index : -1;
+                if (start < 0) continue;
+                // The EXEC that runs it (a batch without semicolons is one statement here) is not part of the text.
+                var built = Executed().Replace(SafeForms().Replace(statement[start..], "''"), "");
+                var equals = built.IndexOf('=', StringComparison.Ordinal);
+                foreach (Match use in Variables().Matches(built))
+                {
+                    if (string.Equals(use.Value, target, StringComparison.OrdinalIgnoreCase) && use.Index < equals) continue;
+                    if (Parameter(use.Value)) problems.Add("builds text that runs from the parameter " + use.Value + " other than through QUOTENAME or the server's quoting");
+                    else if (!quoted.Contains(use.Value) && !Regex.IsMatch(built[(use.Index + use.Length)..], @"^\s*(?:=|<>|!=|<|>|IS\b)", RegexOptions.IgnoreCase))
+                        problems.Add("builds text that runs from " + use.Value + ", which the server did not quote");
+                }
+            }
+        }
         if (Regex.IsMatch(code, @"\bWITH\s+REPLACE\b|,\s*REPLACE\s*(,|;|$)", RegexOptions.IgnoreCase | RegexOptions.Multiline)) problems.Add("restores WITH REPLACE");
         if (code.Contains("RESTORE DATABASE", StringComparison.OrdinalIgnoreCase) && command.Id != "restore") problems.Add("restores a database");
         if (code.Contains("ROLLBACK IMMEDIATE", StringComparison.OrdinalIgnoreCase) && command.Id is not ("readWrite" or "dropDatabase")) problems.Add("rolls other sessions back");
         if (code.Contains("DROP DATABASE", StringComparison.OrdinalIgnoreCase) && command.Id != "dropDatabase") problems.Add("drops a database");
         if (code.Contains("xp_cmdshell", StringComparison.OrdinalIgnoreCase)) problems.Add("runs the shell");
-        return problems;
+        return [.. problems.Distinct()];
     }
 }
