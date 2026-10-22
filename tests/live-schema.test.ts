@@ -194,7 +194,7 @@ describe('live event schemas', () => {
       seq: tick([sample()], { seq: 0 }),
       member: tick([sample({ extra: 1 })])
     })) expect(ok(liveEventSchema, value), name).toBe(false)
-    expect(liveErrorCodes).toEqual(expect.arrayContaining(['CATALOG_MISSING', 'NOT_FOUND', 'PERMISSION_DENIED', 'BLOCKED']))
+    expect(liveErrorCodes).toEqual(expect.arrayContaining(['CATALOG_MISSING', 'NOT_FOUND', 'PERMISSION_DENIED', 'BLOCKED', 'LOGIN_FAILED']))
   })
   it('allows four snapshot and four append tables per probe, and eight tables per tick', () => {
     const all = fixtureProbes['one.all'].tables!

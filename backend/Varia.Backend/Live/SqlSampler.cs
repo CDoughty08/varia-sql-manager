@@ -34,10 +34,13 @@ internal static class LiveConnections
 /// <summary>A SQL source's probes (scope server): one connection from the live pool, held while the subscription samples so
 /// its session id is known (the Activity Monitor hides its own session by it) and returned to the pool while nothing is due
 /// for a while. Every command runs with the scope's prologue, under a live gate, within the probe's budget (a cancellation
-/// token: CommandTimeout is 0), and reads one row whose columns LiveSql declares; LiveDeltas turns it into the sample.
-/// Failures are values: a lock wait (BLOCKED), the budget (TIMEOUT), a lost connection (reopened on the next due tick under
+/// token: CommandTimeout is 0), and reads one row whose columns LiveSql declares (checked on every read); LiveDeltas turns
+/// it into the sample. Connecting takes no gate, so a server that stopped answering never holds one that views on other
+/// servers need, and has its own bound (15 s), since a profile's Connect Timeout may be 0 (none). Failures are values: a lock
+/// wait (BLOCKED), the budget or the connect bound (TIMEOUT), a lost connection (reopened on the next due tick under
 /// back-off), a sign-in that fails, a permission error (terminal). The constructor acquires nothing; OpenAsync connects once
-/// to read the session id and the permission, and a failure there is reported by the first tick instead.</summary>
+/// to read the session id and the permission (unless every probe starts paused: no SQL while paused), and a failure there is
+/// reported by the first tick instead.</summary>
 internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connectionId, LiveSourceJson source, Func<string, string, string>? testText) : ILiveSampler
 {
     /// <summary>The session probe's own budget (D-live: 2 s for the permission probe).</summary>
@@ -47,6 +50,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
     private readonly Dictionary<string, LiveQuery> queries = new(StringComparer.Ordinal);
     private readonly string prologue = LiveSql.Prologue(source.Scope, readCommittedSnapshot: false);
     private SqlConnection? connection;
+    /// <summary>The session probe ran on the open connection (it waits for a gate, so a connection can open without it).</summary>
+    private bool sessionRead;
     private string permission = "VIEW SERVER STATE";
     private int band;
     private int? spid;
@@ -54,6 +59,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
     private int? reopenedSpid;
     private bool opened;
 
+    /// <summary>How long a live connect may take before it is a TIMEOUT value (the checks shorten it).</summary>
+    internal int ConnectBudgetMs { get; init; } = 15_000;
     public int? PeriodMs => null;
     public bool Ended => false;
 
@@ -63,10 +70,16 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
         band = LiveConnections.Band(profile);
         permission = LiveConnections.ServerStatePermission(profile);
         bool? permitted = null;
-        // The session probe is a live statement too; with the gates full, the first tick connects instead.
-        using (var lease = await gates.WaitAsync(connectionId, SessionBudgetMs, token).ConfigureAwait(false))
+        // A view subscribed hidden runs no SQL until a probe resumes; its first sample connects and reads the session then.
+        if (!probes.All(probe => probe.Paused))
         {
-            try { if (lease is not null) permitted = await EnsureAsync(token).ConfigureAwait(false); }
+            try
+            {
+                await ConnectAsync(token).ConfigureAwait(false);
+                // The session probe is a live statement too; with the gates full, the first tick reads it instead.
+                using var lease = await gates.WaitAsync(connectionId, SessionBudgetMs, token).ConfigureAwait(false);
+                if (lease is not null) permitted = await SessionAsync(token).ConfigureAwait(false);
+            }
             catch (SqlException) { Drop(); }
             catch (InvalidOperationException) { Drop(); }
             catch (TimeoutException) { Drop(); }
@@ -89,23 +102,34 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
         return new(states, band, spid, LiveSql.Isolation(prologue));
     }
 
-    /// <summary>Opens a connection when none is open, and reads its session id and permission. Returns whether the login may
-    /// read server state, or null when a connection was already open.</summary>
-    private async Task<bool?> EnsureAsync(CancellationToken token)
+    /// <summary>Opens a connection when none is open, within <see cref="ConnectBudgetMs"/> (TimeoutException past it).</summary>
+    private async Task ConnectAsync(CancellationToken token)
     {
-        if (connection is { State: ConnectionState.Open }) return null;
+        if (connection is { State: ConnectionState.Open }) return;
         Drop();
         var (database, suffix) = LiveConnections.Pool(source.Scope);
         var opening = host.PoolConnection(connectionId, database, suffix);
         connection = opening;
-        await host.OpenAsync(opening, token).ConfigureAwait(false);
+        sessionRead = false;
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
+        bound.CancelAfter(ConnectBudgetMs);
+        try { await host.OpenAsync(opening, bound.Token).ConfigureAwait(false); }
+        catch (Exception error) when (bound.IsCancellationRequested && !token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
+        {
+            throw new TimeoutException("The connect took longer than its bound.");
+        }
+    }
+
+    /// <summary>Reads the open connection's session id and whether the login may read server state.</summary>
+    private async Task<bool> SessionAsync(CancellationToken token)
+    {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         budget.CancelAfter(SessionBudgetMs);
         int session;
         bool allowed;
         try
         {
-            await using var command = opening.CreateCommand();
+            await using var command = connection!.CreateCommand();
             command.CommandTimeout = 0;
             command.CommandText = prologue + LiveSql.Session;
             command.Parameters.Add(new SqlParameter("@permission", SqlDbType.NVarChar, 128) { Value = permission });
@@ -122,6 +146,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
         // Every new session after the opened frame is reported, even under the same number: SQL Server reuses a killed one's.
         if (opened) reopenedSpid = session;
         spid = session;
+        sessionRead = true;
         return allowed;
     }
 
@@ -129,6 +154,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
     {
         var samples = new List<LiveSample>();
         var errors = new List<LiveProbeError>();
+        // A connect that failed this tick: the other due probes report it rather than try again at once.
+        LiveProbeError? unconnected = null;
         foreach (var item in due)
         {
             var id = item.Probe.Spec.Id;
@@ -137,17 +164,25 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
                 errors.Add(LiveErrors.Create(id, "NOT_SUPPORTED", LiveErrors.UnsupportedMessage));
                 continue;
             }
-            using var lease = await gates.WaitAsync(connectionId, item.BudgetMs, token).ConfigureAwait(false);
-            if (lease is null)
+            if (unconnected is not null)
             {
-                errors.Add(LiveErrors.Create(id, "BUSY", LiveErrors.BusyMessage));
+                errors.Add(unconnected with { Probe = id });
                 continue;
             }
+            var connected = false;
+            LiveProbeError? failure = null;
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
             try
             {
-                await EnsureAsync(token).ConfigureAwait(false);
-                // The budget covers the statement, not the connect, which its own timeout bounds.
+                await ConnectAsync(token).ConfigureAwait(false);
+                connected = true;
+                using var lease = await gates.WaitAsync(connectionId, item.BudgetMs, token).ConfigureAwait(false);
+                if (lease is null)
+                {
+                    errors.Add(LiveErrors.Create(id, "BUSY", LiveErrors.BusyMessage));
+                    continue;
+                }
+                if (!sessionRead) await SessionAsync(token).ConfigureAwait(false);
                 budget.CancelAfter(item.BudgetMs);
                 var started = Stopwatch.GetTimestamp();
                 var raw = await ReadAsync(query, item, budget.Token).ConfigureAwait(false);
@@ -167,25 +202,27 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
             catch (Exception error) when (error is TimeoutException || budget.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
             {
                 Drop();
-                errors.Add(LiveErrors.Create(id, "TIMEOUT", LiveErrors.TimeoutMessage));
+                failure = LiveErrors.Create(id, "TIMEOUT", LiveErrors.TimeoutMessage);
             }
             catch (SqlException error)
             {
-                var value = LiveErrors.From(id, error);
-                if (LiveErrors.Breaks(value.Code) || connection is not { State: ConnectionState.Open }) Drop(baseline: value.Code == "CONNECTION_LOST");
-                errors.Add(value);
+                failure = LiveErrors.From(id, error);
+                if (LiveErrors.Breaks(failure.Code) || connection is not { State: ConnectionState.Open }) Drop(baseline: failure.Code == "CONNECTION_LOST");
             }
             catch (InvalidOperationException)
             {
                 // SqlClient's own word for a connection that broke between commands.
                 Drop(baseline: true);
-                errors.Add(LiveErrors.Create(id, "CONNECTION_LOST", LiveErrors.LostMessage));
+                failure = LiveErrors.Create(id, "CONNECTION_LOST", LiveErrors.LostMessage);
             }
             catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
             {
                 Drop();
-                errors.Add(LiveErrors.SignIn(id, error));
+                failure = LiveErrors.SignIn(id, error);
             }
+            if (failure is null) continue;
+            errors.Add(failure);
+            if (!connected) unconnected = failure;
         }
         var reopened = reopenedSpid;
         reopenedSpid = null;
@@ -200,6 +237,9 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
         var text = query.Text(prologue);
         command.CommandText = testText?.Invoke(item.Probe.Spec.Id, text) ?? text;
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, token).ConfigureAwait(false);
+        // Values are read by their declared position, so a result shaped otherwise is a bug in LiveSql, never a sample.
+        if (!query.Returns([.. Enumerable.Range(0, reader.FieldCount).Select(index => (reader.GetName(index), reader.GetFieldType(index)))]))
+            throw new RequestException("BACKEND_ERROR", "A live query returned columns other than the ones it declares.");
         // Every live query aggregates to one row; were there none, every series would simply have no value.
         var row = await reader.ReadAsync(token).ConfigureAwait(false);
         double? Value(string? column)

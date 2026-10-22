@@ -196,7 +196,7 @@ runs at once under Object Explorer's own gates (4 statements per connection, 8 i
 for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot. `live` takes no slot either: a
 live subscription samples on its own task, and its statements, like those of any unary method on lane `live` (none yet;
 `LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
-statement's budget, then `BUSY`).
+statement's budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names never pile up).
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -766,7 +766,8 @@ retired?: u32[1] }[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16]
 error is a value, never an exception, so the other probes carry on: `{ probe, code, message ≤ 2,000 (a sentence, never SQL,
 names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
 probe's batch would have filled), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
-DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING or NOT_FOUND.
+DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING, NOT_FOUND or
+LOGIN_FAILED.
 Main checks every frame against `liveEventSchema` (each probe sampled once, metrics aligned with the catalogue's series,
 tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, status ids the
 probe declares, error tables and series the probe has, and `seq` 0 and then one more each time) and against the
@@ -832,20 +833,25 @@ checks drive it on a fake clock):
 - **Phase.** A subscription starts, and resumes after a pause, at a random point within a quarter of its first second,
   one phase for all its probes, so views opened together never wake together while a view's probes share ticks (one round
   of SQL and one frame).
-- **Quick second sample.** After a `baseline` or `resumed` sample the next is due within a second (rates need two),
-  then the probe settles on its interval.
-- **Refresh** makes every unpaused probe due now, but never within its catalogue `minGapMs` of its last sample, and
-  restarts a probe a terminal error stopped (not one the source opened unavailable).
+- **Quick second sample.** After a sample the source marks `baseline` or `resumed` the next is due within a second (rates
+  need two), then the probe settles on its interval. The sample decides, not the schedule: a source also starts again from
+  a baseline after a failed first attempt or a lost connection. A `baseline` sample never carries `skipped`.
+- **Refresh** makes every unpaused probe due now, but never within its catalogue `minGapMs`, nor its minimum interval, of
+  its last attempt, so refreshes in a loop never run a probe more often than its fastest interval would. A probe that is
+  backing off keeps its delay and its failure count (a refresh never hammers a failing server or sign-in); one a terminal
+  error stopped starts again from a clean count (not one the source opened unavailable).
 - **Error back-off.** The first failure retries at the interval; after f failures in a row the next try is
   min(interval × 2^(f−1), cap) × U(0.9, 1.1), where the cap is 60 s or the asked interval when that is longer. A sample
   resets the count. `BUDGET` retries at the interval without backing off (memory may free at any time); a terminal error
-  (`PERMISSION_DENIED`, `NOT_SUPPORTED`) stops its probe (`retryInMs` 0). Every error in a tick carries `retryInMs`.
+  (`PERMISSION_DENIED`, `NOT_SUPPORTED`, `LOGIN_FAILED`) stops its probe (`retryInMs` 0). Every error in a tick carries `retryInMs`.
 - **Load guard.** An EWMA (α 0.3) of each probe's `costMs`: over its catalogue `maxDutyCycle` (0.25 by default, 0.2 for
   `activity.*`) of the interval in force for 3 samples in a row doubles that interval, up to the cap; under 10 % for 10
   samples halves it back toward the asked one. Samples report the interval in force as `effectiveIntervalMs` (so the UI
   can say "slowed to 4 s"), and so does the update answer. A new interval from `live.update` starts the guard again.
-- **Idle.** While every probe is paused, or the next sample is at least 30 s away, the source gives back its connection
-  (to the pool, healthy), and opens one again when a probe comes due.
+- **Idle.** While every probe is paused, when the next sample is at least 30 s away, and between the samples of probes
+  whose intervals in force are all 30 s or longer (the wait after a sample is a little under the interval; never before a
+  quick second sample), the source gives back its connection (to the pool, healthy), and opens one again when a probe comes
+  due. A subscription whose probes all start paused opens none until one resumes.
 
 **SQL sources** (`Live/SqlSampler.cs`; scope `server`, the `activity` source): one pooled connection per subscription
 from the connection's own **" - Activity Monitor"** pool (registered with the connection's pools, so a disconnect clears
@@ -853,9 +859,13 @@ it), held while it samples so its session id is known (`live.opened`'s `spid`; a
 SSISDB sources (later) use the **" - Integration Services"** pool in `SSISDB` with their own prologue
 (`LiveConnections`). Every command starts with its prologue, since a pooled connection can carry another command's SET
 state: `SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW;`
-for server DMVs and SSISDB without READ_COMMITTED_SNAPSHOT, `READ COMMITTED` instead for SSISDB with it. Opening runs one
-session probe (2 s budget): `@@SPID` and `HAS_PERMS_BY_NAME` for VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later)
-or VIEW SERVER STATE (earlier, Managed Instance), the permission name a parameter. A probe whose catalogue gates (version
+for server DMVs and SSISDB without READ_COMMITTED_SNAPSHOT, `READ COMMITTED` instead for SSISDB with it. Connecting takes
+no live gate (a server that stopped answering a login never holds one that views on other servers need) and has its own
+15 s bound, a `TIMEOUT` value past it, since a profile's Connect Timeout may be 0 (none); a connect that failed in a tick
+is reported for that tick's other due probes rather than tried again at once. Opening connects and runs one session
+probe (2 s budget, under a gate; with the gates full, the first tick runs it): `@@SPID` and `HAS_PERMS_BY_NAME` for VIEW
+SERVER PERFORMANCE STATE (SQL Server 2022 and later) or VIEW SERVER STATE (earlier, Managed Instance), the permission name
+a parameter. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
 from its band, where Managed Instance counts as the newest; EngineEdition) exclude the server opens `unavailable`
 `NOT_SUPPORTED`; one that needs server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither ever runs.
 A connection that fails to open there is reported by the first tick instead. Each statement waits for a live gate (at most
@@ -864,14 +874,22 @@ the asked interval within the probe's `budgetMs` (500 ms to 5 s by default; neve
 more than `LOCK_TIMEOUT`. Probe SQL is constant text per probe and band in `Live/LiveSql.cs`: one row whose columns it
 declares, mapped to the catalogue's series; values only as parameters; no metadata built-ins (they ignore
 `LOCK_TIMEOUT` and the isolation level), temporary tables, `SELECT … INTO`, writes, DDL, transactions, `WAITFOR`,
-`EXEC` or `sp_executesql`, and no `TOP` without `ORDER BY`. An offline lint renders every probe at every band and refuses
-all of those; the live checks compare each query's columns with what SQL Server returns.
+`EXEC` or `sp_executesql`, remote reads (`OPENQUERY`, `OPENROWSET`, `OPENDATASOURCE`), comments (they belong in C#), and
+no `TOP`, with or without parentheses, without an `ORDER BY` at its own level (one inside `OVER (…)` or another statement
+orders nothing it takes). An offline lint renders every probe at every band and refuses all of those, reading literals,
+comments and bracketed or quoted names as SQL Server does, so a quote in one hides no code from it and a built-in spaced
+from its parenthesis still counts. Values are read by the column's declared position, so every read first checks the
+result's columns against the declaration (names, order, count, numeric types); a mismatch is a bug, which ends the view
+`failed` with `BACKEND_ERROR` rather than put one series' value in another's. The live checks also run every query at the
+server's band and compare its columns.
 
 **Errors** (`Live/LiveErrors.cs`): 1222 and 1205 are `BLOCKED`; the budget is `TIMEOUT`; 297, 300, 229 and 262
 `PERMISSION_DENIED` and 207 and 208 `NOT_SUPPORTED` (both terminal); 4060, 911, 942, 952 and the other offline,
 restoring and single-user numbers `DATABASE_UNAVAILABLE`; severity 20 and above and transport errors
 `CONNECTION_LOST`; a Kerberos or Entra sign-in failure while reconnecting `AUTH_KERBEROS` or `AUTH_ENTRA` with its own
-advice; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A lost
+advice; a login SQL Server refuses while reconnecting (18456 failed, 18486 locked out, 18487 and 18488 password expired or
+must change, 18452 untrusted domain) `LOGIN_FAILED`, terminal, since retrying alone would only count more failures against
+the login and could lock it out; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A lost
 connection or a budget cancel drops the connection without returning it to the pool (its pool is cleared), and the next
 due tick reopens it under the back-off, for as long as the view runs; only `NOT_CONNECTED` (the connection id is gone)
 ends the view `disconnected`. Nothing is logged.

@@ -110,6 +110,8 @@ internal sealed class LiveSubscription : IDisposable
     private const double CostWeight = 0.3;
     private const int OverSamples = 3, UnderSamples = 10;
     private const double UnderShare = 0.1;
+    /// <summary>The quick second sample's delay after a baseline or resume: rates need two samples.</summary>
+    private const int QuickMs = 1000;
     private readonly CancellationTokenSource stop = new();
     private readonly CancellationTokenSource linked;
     private readonly SemaphoreSlim signal = new(0);
@@ -223,17 +225,23 @@ internal sealed class LiveSubscription : IDisposable
         if (probe.LastSampleAt >= 0) probe.DueAt = Math.Min(probe.DueAt, probe.LastSampleAt + PeriodOf(probe));
     }
 
-    /// <summary>Refresh now: every unpaused probe is due at once, but never within its minimum gap of its last sample; a
-    /// probe stopped by a terminal error starts again (not a gated one).</summary>
+    /// <summary>Refresh now: every unpaused probe is due at once, but never within its minimum gap, nor its minimum interval,
+    /// of its last attempt, so refreshes in a loop run a probe no more often than its fastest interval would. A probe that is
+    /// backing off keeps its delay and its count (a refresh never hammers a failing server or sign-in); one a terminal error
+    /// stopped starts again from a clean count (not one the source opened unavailable).</summary>
     public void Refresh(long now)
     {
         foreach (var probe in Probes)
         {
             if (probe.Paused || probe.Gated) continue;
-            var due = probe.LastSampleAt < 0 ? now : Math.Max(now, probe.LastSampleAt + probe.Spec.MinGapMs);
-            probe.DueAt = probe.Stopped is null ? Math.Min(probe.DueAt, due) : due;
-            probe.Stopped = null;
-            probe.Failures = 0;
+            var due = probe.LastSampleAt < 0 ? now : Math.Max(now, probe.LastSampleAt + Math.Max(probe.Spec.MinGapMs, probe.Spec.IntervalMs.Min));
+            if (probe.Stopped is not null)
+            {
+                probe.Stopped = null;
+                probe.Failures = 0;
+                probe.DueAt = due;
+            }
+            else if (probe.Failures == 0) probe.DueAt = Math.Min(probe.DueAt, due);
         }
     }
 
@@ -241,6 +249,20 @@ internal sealed class LiveSubscription : IDisposable
     public LiveProbeError? AllStopped()
     {
         lock (gate) return Probes.All(probe => probe.Stopped is not null) ? Probes[0].Stopped : null;
+    }
+
+    /// <summary>Whether the source gives back its connection before a wait of <paramref name="waitMs"/> (from WaitMs): while
+    /// nothing is due until an update, when the next sample is at least idleMs away, and between the samples of probes that
+    /// all run every idleMs or less often (the wait after a sample is a little under its interval), except before a quick
+    /// second sample.</summary>
+    public bool IdleFor(int waitMs)
+    {
+        if (waitMs < 0 || waitMs >= limits.IdleMs) return true;
+        lock (gate)
+        {
+            var periods = Probes.Where(probe => !Paused && !probe.Paused && probe.Stopped is null).Select(PeriodOf).ToList();
+            return periods.Count > 0 && periods.Min() >= limits.IdleMs && waitMs > QuickMs;
+        }
     }
 
     /// <summary>How long until a probe is due: 0 when one is, −1 when none will be until an update.</summary>
@@ -299,9 +321,11 @@ internal sealed class LiveSubscription : IDisposable
                 {
                     probe.Failures = 0;
                     Guard(probe, sample.CostMs, item.TakenAt);
-                    // Rates need two samples: the second comes within a second, then the probe settles on its interval.
-                    if (item.Gap is "baseline" or "resumed") probe.DueAt = Math.Min(probe.DueAt, item.TakenAt + Math.Min(PeriodOf(probe), 1000));
-                    samples.Add(sample with { EffectiveIntervalMs = probe.EffectiveIntervalMs });
+                    // Rates need two samples: the second comes within a second, then the probe settles on its interval. The sample
+                    // says whether it has rates: a source also starts again from a baseline after a failed first attempt or a lost
+                    // connection, which the schedule cannot see. A baseline has no earlier slots to have skipped.
+                    if (sample.Gap is "baseline" or "resumed") probe.DueAt = Math.Min(probe.DueAt, item.TakenAt + Math.Min(PeriodOf(probe), QuickMs));
+                    samples.Add(sample with { EffectiveIntervalMs = probe.EffectiveIntervalMs, Skipped = sample.Gap == "baseline" ? null : sample.Skipped });
                 }
                 if (error is null) continue;
                 int retry;
@@ -385,7 +409,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     public int Count => running.Count;
     private LiveLimitsJson Limits => catalog.Limits;
     /// <summary>Live statements at once: per connection id and in the backend.</summary>
-    public LiveGates Gates { get; } = new((catalog ?? LiveCatalog.Current).Limits.StatementsPerConnection, (catalog ?? LiveCatalog.Current).Limits.Statements);
+    public LiveGates Gates { get; } = new((catalog ?? LiveCatalog.Current).Limits.StatementsPerConnection, (catalog ?? LiveCatalog.Current).Limits.Statements, host.IsConnected);
     /// <summary>The schedule's randomness (phases and retry jitter); the checks fix it.</summary>
     internal Func<double> Random { get; set; } = System.Random.Shared.NextDouble;
     /// <summary>Rewrites a SQL probe's command text (probe id, text → text), so the live checks can make a probe wait on a lock
@@ -523,7 +547,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     }
 
     /// <summary>A unary method on lane live (it takes no protocol slot): its SQL runs under the live gates, waiting at most
-    /// <paramref name="waitMs"/> for one, else BUSY.</summary>
+    /// <paramref name="waitMs"/> for one, else BUSY; an id that is not connected is NOT_CONNECTED, and gets no gate.</summary>
     public async Task<T> RunGatedAsync<T>(string connectionId, int waitMs, Func<CancellationToken, Task<T>> work, CancellationToken token)
     {
         using var lease = await Gates.WaitAsync(connectionId, waitMs, token).ConfigureAwait(false)
@@ -581,7 +605,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                 if (waitMs != 0)
                 {
                     // Nothing due for a while: the connection goes back to the pool rather than sit idle on the server.
-                    if (waitMs < 0 || waitMs >= Limits.IdleMs) subscription.Sampler.Idle();
+                    if (subscription.IdleFor(waitMs)) subscription.Sampler.Idle();
                     await subscription.WaitAsync(waitMs, token).ConfigureAwait(false);
                     continue;
                 }

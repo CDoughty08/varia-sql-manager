@@ -21,7 +21,8 @@ catalogue declares, and what each probe emits. Sources marked test only are acce
 A probe's statement budget is 0.8 × its interval within the range shown. The series kinds say how the backend turns
 raw values into samples: `gauge` as read, `rate` and `msPerSecond` as change per second of the server's own clock,
 `ratio` as change over a base counter's change, `cpuPercent` as CPU time over elapsed time across the schedulers; every
-kind but `gauge` is null in a sample marked `baseline`, `resumed` or `reset`.
+kind but `gauge` is null in a sample marked `baseline` or `resumed` and after a restart (`reset`); a single counter
+that went down (cleared) is null alone, also marked `reset`, and the others keep their rates.
 
 | Probe | Interval (default, min, max) | Schedule | Runs on | Emits | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -44,4 +45,4 @@ kind but `gauge` is null in a sample marked `baseline`, `resumed` or `reset`.
 | Live statements | 2 at once per connection and 8 in the backend (shared with unary methods on lane live); a statement waits for its turn at most its budget, then the probe reports BUSY |
 | Statement budget | 0.8 × the probe's interval, within the probe's range and 500 ms to 10 s |
 | Back-off | a failing or costly probe slows to at most 60 s (or its asked interval, when longer) |
-| Idle connection | returned to the pool while every probe is paused, or when the next sample is at least 30 s away |
+| Idle connection | returned to the pool while every probe is paused, when the next sample is at least 30 s away, and between samples when every running probe's interval in force is at least 30 s |

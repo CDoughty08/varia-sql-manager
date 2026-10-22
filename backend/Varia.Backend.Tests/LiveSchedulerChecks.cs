@@ -24,6 +24,7 @@ internal static class LiveSchedulerChecks
         ResumeChecks(check);
         ErrorChecks(check);
         await LoopChecks(check);
+        await SamplerChecks(check);
         await ServiceChecks(check);
     }
 
@@ -68,12 +69,41 @@ internal static class LiveSchedulerChecks
             ["wait"] = LiveSql.UncommittedPrologue + "WAITFOR DELAY '00:00:01';",
             ["dynamic sql"] = LiveSql.UncommittedPrologue + "EXEC sys.sp_executesql N'SELECT 1';",
             ["top without order"] = LiveSql.UncommittedPrologue + "SELECT TOP (@cap) session_id FROM sys.dm_exec_sessions;",
+            ["top without parentheses"] = LiveSql.UncommittedPrologue + "SELECT TOP 5 s.session_id FROM sys.dm_exec_sessions AS s;",
+            ["order by only in a window"] = LiveSql.UncommittedPrologue + "SELECT TOP (@cap) ROW_NUMBER() OVER (ORDER BY s.session_id) AS n FROM sys.dm_exec_sessions AS s;",
+            ["order by only in another statement"] = LiveSql.UncommittedPrologue + "SELECT TOP (@cap) s.session_id FROM sys.dm_exec_sessions AS s;\nSELECT r.session_id FROM sys.dm_exec_requests AS r ORDER BY r.session_id;",
+            ["order by only in a subquery"] = LiveSql.UncommittedPrologue + "SELECT TOP (@cap) x.session_id FROM (SELECT TOP (10) s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id) AS x;",
+            ["apostrophe in a comment hides a write"] = LiveSql.UncommittedPrologue + "SELECT 1 AS a -- don't\n; DELETE FROM dbo.t; SELECT 'x' AS b;",
+            ["block comment"] = LiveSql.UncommittedPrologue + "SELECT 1 AS a /* the server's clock */;",
+            ["unclosed block comment"] = LiveSql.UncommittedPrologue + "SELECT 1 AS a /* open;",
+            ["built-in with a space"] = LiveSql.UncommittedPrologue + "SELECT OBJECT_NAME (p.object_id) FROM sys.dm_exec_procedure_stats AS p;",
+            ["quote in a bracketed name hides a write"] = LiveSql.UncommittedPrologue + "SELECT 1 AS [it's]; DELETE FROM dbo.t; SELECT 'x' AS b;",
+            ["openquery"] = LiveSql.UncommittedPrologue + "SELECT * FROM OPENQUERY(L, N'x');",
+            ["openrowset"] = LiveSql.UncommittedPrologue + "SELECT * FROM OPENROWSET(N'SQLNCLI', N'x', N'SELECT 1');",
+            ["opendatasource"] = LiveSql.UncommittedPrologue + "SELECT * FROM OPENDATASOURCE(N'SQLNCLI', N'x').m.sys.objects;",
             ["spid outside the session probe"] = LiveSql.UncommittedPrologue + "SELECT @@SPID;"
         };
         var missed = bad.Where(item => LiveSql.Lint(item.Value).Count == 0).Select(item => item.Key).ToList();
-        check(missed.Count == 0 && LiveSql.Lint(LiveSql.UncommittedPrologue + "SELECT TOP (@cap) s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id;").Count == 0
-            && LiveSql.Lint(LiveSql.UncommittedPrologue + "SELECT p.cntr_value FROM sys.dm_os_performance_counters AS p WHERE p.counter_name = N'DROP INTO EXEC';").Count == 0,
-            "the live lint refuses metadata functions, temporary tables, writes, DDL, transactions, waits, dynamic SQL, TOP without ORDER BY and a missing prologue, and ignores words inside literals: " + string.Join(", ", missed));
+        var good = new[]
+        {
+            "SELECT TOP (@cap) s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id;",
+            "SELECT TOP 5 s.session_id, ROW_NUMBER() OVER (ORDER BY s.login_time) AS n FROM sys.dm_exec_sessions AS s ORDER BY s.session_id;",
+            "SELECT x.session_id FROM (SELECT TOP (10) s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id) AS x;",
+            "SELECT p.cntr_value FROM sys.dm_os_performance_counters AS p WHERE p.counter_name = N'DROP INTO EXEC -- /*';",
+            "SELECT 1 AS [order -- by];"
+        }.Where(text => LiveSql.Lint(LiveSql.UncommittedPrologue + text).Count != 0).ToList();
+        check(missed.Count == 0 && good.Count == 0,
+            "the live lint refuses metadata functions (however spaced), temporary tables, writes, DDL, transactions, waits, dynamic SQL, remote reads, comments, a TOP without an ORDER BY at its own level and a missing prologue, and reads no code as a literal, comment or name it is not: "
+            + string.Join(", ", missed) + " | " + string.Join(", ", good));
+        // Values are read by declared position, so every read checks what it got against the declaration.
+        var overviewQuery = LiveSql.For(LiveSql.OverviewProbe, LiveSql.MaxBand)!;
+        var declared = overviewQuery.Columns.Select(column => (column, typeof(long))).ToList();
+        var swapped = declared.ToList();
+        (swapped[5], swapped[6]) = (swapped[6], swapped[5]);
+        check(overviewQuery.Returns(declared) && overviewQuery.Returns([.. declared.Select((column, index) => (column.column, index == 3 ? typeof(int) : typeof(decimal)))])
+            && !overviewQuery.Returns(swapped) && !overviewQuery.Returns(declared.Take(8).ToList()) && !overviewQuery.Returns([.. declared, ("extra", typeof(long))])
+            && !overviewQuery.Returns([.. declared.Select((column, index) => (column.column, index == 2 ? typeof(string) : typeof(long)))]),
+            "a live query's result must have the columns it declares, by name, in order and numeric: two swapped, one missing, one extra or a text column are refused");
         check(LiveSql.Prologue("server", readCommittedSnapshot: true) == LiveSql.UncommittedPrologue && LiveSql.Prologue("ssisdb", false) == LiveSql.UncommittedPrologue
             && LiveSql.Prologue("ssisdb", true) == LiveSql.CommittedPrologue && LiveSql.Isolation(LiveSql.UncommittedPrologue) == "readUncommitted" && LiveSql.Isolation(LiveSql.CommittedPrologue) == "readCommitted"
             && LiveSql.UncommittedPrologue.Contains("SET LOCK_TIMEOUT " + LiveSql.LockTimeoutMs + ";", StringComparison.Ordinal) && LiveSql.UncommittedPrologue.Contains("SET DEADLOCK_PRIORITY LOW;", StringComparison.Ordinal),
@@ -148,7 +178,10 @@ internal static class LiveSchedulerChecks
             sampler, context, Fixture.Limits, random);
     }
 
-    private static LiveSampleBatch Sample(string probe, int cost = 0) => new([new LiveSample(probe, cost, 0)], []);
+    /// <summary>One sample, with the gap its source reports (a source with deltas says baseline whenever it has no rates).</summary>
+    private static LiveSampleBatch Sample(string probe, int cost = 0, string? gap = null, int? skipped = null) => new([new LiveSample(probe, cost, 0, Gap: gap, Skipped: skipped)], []);
+    /// <summary>The sample a source with deltas makes of a due item: its gap as the schedule saw it.</summary>
+    private static LiveSampleBatch Echo(IReadOnlyList<LiveDue> due) => new([.. due.Select(item => new LiveSample(item.Probe.Spec.Id, 0, 0, Gap: item.Gap, Skipped: item.Skipped))], []);
     private static LiveSampleBatch Error(string probe, string code, bool terminal = false) => new([], [new LiveProbeError(probe, code, "Failed.", null, 0, terminal)]);
 
     private static void ScheduleChecks(Action<bool, string> check)
@@ -169,7 +202,7 @@ internal static class LiveSchedulerChecks
             var probe = subscription.Probes[0];
             subscription.Opened([], 0);
             var first = subscription.TakeDue(0);
-            subscription.Complete(first, Sample("fx.b"), 5);
+            subscription.Complete(first, Echo(first), 5);
             var quick = probe.DueAt;
             var second = subscription.TakeDue(1000);
             subscription.Complete(second, Sample("fx.b"), 1003);
@@ -264,7 +297,8 @@ internal static class LiveSchedulerChecks
         {
             var (a, b) = (subscription.Probes[0], subscription.Probes[1]);
             subscription.Opened([], 0);
-            subscription.Complete(subscription.TakeDue(0), new([new LiveSample("fx.a", 0, 0), new LiveSample("fx.b", 0, 0)], []), 0);
+            var opening = subscription.TakeDue(0);
+            subscription.Complete(opening, Echo(opening), 0);
             subscription.Complete(subscription.TakeDue(1000), new([new LiveSample("fx.a", 0, 0), new LiveSample("fx.b", 0, 0)], []), 1000);
             var slot = a.DueAt;
             subscription.Refresh(3000);
@@ -273,13 +307,88 @@ internal static class LiveSchedulerChecks
             var paused = subscription.TakeDue(100_000).Count == 0 && subscription.WaitMs(100_000) == -1;
             subscription.SetPaused(false, 100_000);
             var resumed = subscription.TakeDue(100_000);
-            subscription.Complete(resumed, new([new LiveSample("fx.a", 0, 0), new LiveSample("fx.b", 0, 0)], []), 100_000);
+            subscription.Complete(resumed, Echo(resumed), 100_000);
             check(paused && resumed.Count == 2 && resumed.All(item => item.Gap == "resumed") && a.DueAt == 101_000,
                 "a paused subscription has nothing due; resuming samples at once, marked resumed, with the quick second sample after");
             subscription.Complete(subscription.TakeDue(101_000), new([new LiveSample("fx.a", 0, 0), new LiveSample("fx.b", 0, 0)], []), 101_000);
             var before = b.DueAt;
             subscription.SetInterval(b, 5000);
             check(before == 161_000 && b.DueAt == 106_000 && b.BudgetMs == 4000 && a.BudgetMs == 5000, "a shorter interval moves the next sample up; the budget is 0.8 × the interval within 500 ms to 5 s");
+        }
+
+        // The quick second sample follows what the source reports: a baseline after a failed first attempt (the schedule saw
+        // an attempt) or after a lost connection (the source started its rates again), never with slots skipped.
+        using (var subscription = Subscription(sql, () => 0, ("fx.b", 10_000)))
+        {
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            subscription.Complete(subscription.TakeDue(0), Error("fx.b", "TIMEOUT"), 800);
+            var retry = subscription.TakeDue(probe.DueAt);
+            var afterFailure = subscription.Complete(retry, Sample("fx.b", gap: "baseline"), 10_050);
+            var quickAfterFailure = probe.DueAt;
+            subscription.Complete(subscription.TakeDue(probe.DueAt), Sample("fx.b"), 11_020);
+            var steady = probe.DueAt;
+            subscription.Complete(subscription.TakeDue(steady), Error("fx.b", "CONNECTION_LOST"), steady + 20);
+            var late = probe.DueAt + 25_000;
+            var lateDue = subscription.TakeDue(late);
+            var afterLost = subscription.Complete(lateDue, Sample("fx.b", gap: "baseline", skipped: lateDue[0].Skipped), late + 30);
+            check(retry is [{ Gap: null }] && afterFailure.Samples[0].Gap == "baseline" && quickAfterFailure == 11_000 && steady == 21_000
+                && lateDue is [{ Gap: "late", Skipped: 2 }] && afterLost.Samples[0] is { Gap: "baseline", Skipped: null } && probe.DueAt == late + 1000,
+                "a source's baseline after a failed first attempt or a lost connection brings the second sample within a second, and carries no skipped slots: "
+                + quickAfterFailure + ", " + (probe.DueAt - late));
+        }
+
+        // Idle between samples: the wait after a 30 s probe's sample is a little under 30 s, and still gives the connection back;
+        // not before a quick second sample, nor between the samples of a shorter interval.
+        bool IdleAfter(int interval)
+        {
+            using var subscription = Subscription(sql, () => 0, ("fx.b", interval));
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            var first = subscription.TakeDue(0);
+            subscription.Complete(first, Echo(first), 20);
+            var beforeQuick = subscription.IdleFor(subscription.WaitMs(20));
+            subscription.Complete(subscription.TakeDue(probe.DueAt), Sample("fx.b"), 1020);
+            return !beforeQuick && subscription.IdleFor(subscription.WaitMs(1020));
+        }
+        using (var paused = Subscription(sql, () => 0, ("fx.b", 1000)))
+        {
+            paused.Opened([], 0);
+            paused.SetPaused(true, 0);
+            check(IdleAfter(30_000) && IdleAfter(60_000) && !IdleAfter(20_000) && paused.IdleFor(paused.WaitMs(0)),
+                "the source gives back its connection between the samples of probes at 30 s or slower (the wait being a little under 30 s), never before a quick second sample or at 20 s, and while paused");
+        }
+
+        // Refresh never outruns the probe's minimum interval, and never cuts a back-off short or forgets it; a refresh of a
+        // probe a terminal error stopped starts its count again.
+        using (var subscription = Subscription(sql, () => 0.5, ("fx.b", 60_000)))
+        {
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            var first = subscription.TakeDue(0);
+            subscription.Complete(first, Echo(first), 10);
+            subscription.Complete(subscription.TakeDue(1000), Sample("fx.b"), 1010);
+            subscription.Refresh(1500);
+            var floored = probe.DueAt;
+            subscription.Complete(subscription.TakeDue(2000), Sample("fx.b"), 2010);
+            check(floored == 2000, "a refresh runs a probe no sooner than its minimum interval (1 s) after its last attempt, so refreshes in a loop never outrun it: " + floored);
+        }
+        using (var subscription = Subscription(sql, () => 0.5, ("fx.b", 1000)))
+        {
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            for (var i = 0; i < 3; i++) subscription.Complete(subscription.TakeDue(probe.DueAt), Error("fx.b", "BLOCKED"), probe.DueAt);
+            var (dueAt, failures) = (probe.DueAt, probe.Failures);
+            var at = probe.LastSampleAt + 1500;
+            subscription.Refresh(at);
+            var kept = probe.DueAt == dueAt && probe.Failures == failures && failures == 3 && dueAt > at;
+            subscription.Complete(subscription.TakeDue(probe.DueAt), Error("fx.b", "NOT_SUPPORTED", terminal: true), probe.DueAt);
+            var stoppedAt = probe.LastSampleAt;
+            subscription.Refresh(stoppedAt + 5000);
+            var restarted = probe.Stopped is null && probe.Failures == 0 && probe.DueAt == stoppedAt + 5000;
+            var again = subscription.Complete(subscription.TakeDue(probe.DueAt), Error("fx.b", "BLOCKED"), probe.DueAt);
+            check(kept && restarted && again.Errors[0].RetryInMs == 1000 && probe.Failures == 1,
+                "a refresh during back-off keeps the delay and the failure count; one after a terminal error restarts the probe, whose next failure retries at the interval");
         }
     }
 
@@ -310,7 +419,7 @@ internal static class LiveSchedulerChecks
         check(cancelled && gates.Busy == 0, "a cancelled wait holds nothing");
 
         // A unary method on lane live shares the gates: BUSY when they stay full past its wait, else it runs.
-        var service = new LiveService(new FixtureHost([], new ResultStore(1L << 20, 1L << 19)), Fixture);
+        var service = new LiveService(new FixtureHost(new() { ["x"] = "server:X", ["y"] = "server:Y" }, new ResultStore(1L << 20, 1L << 19)), Fixture);
         var held = new List<IDisposable?>();
         for (var i = 0; i < 2; i++) held.Add(await service.Gates.WaitAsync("x", 50, CancellationToken.None));
         string? busy = null;
@@ -321,6 +430,24 @@ internal static class LiveSchedulerChecks
         var freed = await service.RunGatedAsync("x", 50, _ => Task.FromResult(9), CancellationToken.None);
         check(busy == "BUSY" && other == 7 && freed == 9 && service.Gates.Busy == 0 && Fixture.Limits.StatementsPerConnection == 2,
             "a unary request on lane live runs under the live gates: BUSY when its connection's 2 stay taken past its wait, and it runs once one frees");
+
+        // Gates exist only for connected ids: an id a request names never adds one, a cancelled wait adds nothing, and a gate
+        // whose id went away while it was held (a disconnect racing the wait) goes with its last lease.
+        var known = service.Gates.Connections;
+        string? unknown = null;
+        try { await service.RunGatedAsync(Guid.NewGuid().ToString(), 50, _ => Task.FromResult(1), CancellationToken.None); }
+        catch (RequestException error) { unknown = error.Code; }
+        var connected = new HashSet<string> { "z", "w" };
+        var tracked = new LiveGates(2, 8, id => { lock (connected) return connected.Contains(id); });
+        var cancelledWait = false;
+        try { await tracked.WaitAsync("w", 50, new CancellationToken(canceled: true)); }
+        catch (OperationCanceledException) { cancelledWait = true; }
+        var heldZ = await tracked.WaitAsync("z", 50, CancellationToken.None);
+        var whileHeld = tracked.Connections;
+        lock (connected) connected.Remove("z");
+        heldZ!.Dispose();
+        check(unknown == "NOT_CONNECTED" && service.Gates.Connections == known && cancelledWait && whileHeld == 1 && tracked.Connections == 0 && tracked.Busy == 0,
+            "a live gate exists only for a connected id: an unknown one is NOT_CONNECTED and adds none, a cancelled wait adds none, and one whose id went away goes with its last lease");
     }
 
     private static void ResumeChecks(Action<bool, string> check)
@@ -365,16 +492,17 @@ internal static class LiveSchedulerChecks
         {
             [(1222, 16)] = "BLOCKED", [(1205, 13)] = "BLOCKED", [(297, 16)] = "PERMISSION_DENIED", [(300, 14)] = "PERMISSION_DENIED", [(229, 14)] = "PERMISSION_DENIED",
             [(208, 16)] = "NOT_SUPPORTED", [(207, 16)] = "NOT_SUPPORTED", [(4060, 11)] = "DATABASE_UNAVAILABLE", [(942, 14)] = "DATABASE_UNAVAILABLE",
-            [(-2, 11)] = "TIMEOUT", [(10054, 20)] = "CONNECTION_LOST", [(0, 20)] = "CONNECTION_LOST", [(233, 16)] = "CONNECTION_LOST", [(8134, 16)] = "SQL_ERROR"
+            [(-2, 11)] = "TIMEOUT", [(10054, 20)] = "CONNECTION_LOST", [(0, 20)] = "CONNECTION_LOST", [(233, 16)] = "CONNECTION_LOST", [(8134, 16)] = "SQL_ERROR",
+            [(18456, 14)] = "LOGIN_FAILED", [(18486, 14)] = "LOGIN_FAILED", [(18487, 14)] = "LOGIN_FAILED", [(18488, 14)] = "LOGIN_FAILED", [(18452, 14)] = "LOGIN_FAILED"
         };
         var wrong = expected.Where(item => LiveErrors.Classify(item.Key.Item1, item.Key.Item2) != item.Value).Select(item => item.Key.Item1 + "/" + item.Key.Item2).ToList();
-        check(wrong.Count == 0 && LiveErrors.IsTerminal("PERMISSION_DENIED") && LiveErrors.IsTerminal("NOT_SUPPORTED") && !LiveErrors.IsTerminal("BLOCKED") && !LiveErrors.IsTerminal("DATABASE_UNAVAILABLE")
+        check(wrong.Count == 0 && LiveErrors.IsTerminal("PERMISSION_DENIED") && LiveErrors.IsTerminal("NOT_SUPPORTED") && LiveErrors.IsTerminal("LOGIN_FAILED") && !LiveErrors.IsTerminal("BLOCKED") && !LiveErrors.IsTerminal("DATABASE_UNAVAILABLE")
             && LiveErrors.Breaks("CONNECTION_LOST") && LiveErrors.Breaks("TIMEOUT") && !LiveErrors.Breaks("BLOCKED"),
-            "SQL errors map to live codes: lock timeouts and deadlocks BLOCKED, permission errors PERMISSION_DENIED (terminal), unknown objects NOT_SUPPORTED (terminal), offline databases DATABASE_UNAVAILABLE, transport errors CONNECTION_LOST: " + string.Join(", ", wrong));
+            "SQL errors map to live codes: lock timeouts and deadlocks BLOCKED, permission errors PERMISSION_DENIED (terminal), unknown objects NOT_SUPPORTED (terminal), offline databases DATABASE_UNAVAILABLE, transport errors CONNECTION_LOST, a refused sign-in (failed, locked out, expired, untrusted) LOGIN_FAILED (terminal, so a reconnect never repeats it alone): " + string.Join(", ", wrong));
         var long_ = LiveErrors.Create("activity.overview", "SQL_ERROR", new string('x', 5000));
         var signIn = LiveErrors.SignIn("activity.overview", new RequestException("AUTH_UNSUPPORTED", "Install the GSSAPI library."));
         check(long_.Message.Length == 2000 && !long_.Terminal && signIn is { Code: "AUTH_KERBEROS", Terminal: false } && signIn.Message == "Install the GSSAPI library."
-            && new[] { LiveErrors.BlockedMessage, LiveErrors.TimeoutMessage, LiveErrors.PermissionMessage, LiveErrors.UnsupportedMessage, LiveErrors.UnavailableMessage, LiveErrors.LostMessage, LiveErrors.BusyMessage }.All(message => message.EndsWith('.')),
+            && new[] { LiveErrors.BlockedMessage, LiveErrors.TimeoutMessage, LiveErrors.PermissionMessage, LiveErrors.UnsupportedMessage, LiveErrors.UnavailableMessage, LiveErrors.LostMessage, LiveErrors.BusyMessage, LiveErrors.LoginFailedMessage }.All(message => message.EndsWith('.')),
             "probe error messages are complete sentences of at most 2,000 characters, and a sign-in failure keeps its own advice");
     }
 
@@ -442,6 +570,13 @@ internal static class LiveSchedulerChecks
             Thread.Sleep(200);
         });
         check(idle.Sampler.Idles >= 1, "while every probe is paused the source gives back its connection (Idle)");
+        var slowPeriod = await Start(periodMs: 30_000, until: r => r.Ticks.Count >= 1, during: (_, _) => Thread.Sleep(200));
+        check(slowPeriod.Sampler.Idles >= 1 && slowPeriod.Sampler.Calls == 1, "between the samples of a 30 s probe the source gives back its connection (Idle) without a pause");
+
+        // A refused sign-in on reconnect stops the probe: no attempt follows on its own, and the view ends failed.
+        var signIn = await Start(sampler => sampler.Next = due => new([], [.. due.Select(item => LiveErrors.Create(item.Probe.Spec.Id, LiveErrors.Classify(18456, 14), LiveErrors.LoginFailedMessage))]));
+        check(signIn.End is { Ended: "failed", Code: "LOGIN_FAILED", Ticks: 1 } && signIn.Sampler.Calls == 1 && signIn.Recorder.Ticks[0].Errors is [{ Terminal: true, RetryInMs: 0 }],
+            "a login the server refuses while the view reconnects (18456) stops the probe with no further attempt, and the view ends failed LOGIN_FAILED");
 
         // Resume: a moved cursor puts a token in the tick and the end; subscribing with it hands the source its cursors.
         var cursors = await Start(sampler => sampler.Next = due => new([.. due.Select(item => new LiveSample(item.Probe.Spec.Id, 0, 0))], [], Cursors: [new LiveCursor("fx.app", 1, 42)]),
@@ -466,6 +601,38 @@ internal static class LiveSchedulerChecks
         // The connection id went away under the source: the subscription ends disconnected.
         var gone = await Start(sampler => sampler.Next = _ => throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first."));
         check(gone.End is { Ended: "disconnected" }, "a source whose connection id is gone ends its subscription disconnected");
+    }
+
+    /// <summary>SqlSampler against a host whose server never finishes a login: no SQL for a view subscribed paused, and a
+    /// connect that holds no live gate and ends at its own bound as a TIMEOUT value.</summary>
+    private static async Task SamplerChecks(Action<bool, string> check)
+    {
+        var id = Guid.NewGuid().ToString();
+        var activity = LiveCatalog.Current.Sources["activity"];
+        var overview = LiveCatalog.Current.Probes[LiveSql.OverviewProbe];
+        {
+            var host = new HangingHost(id);
+            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), id, activity, null) { ConnectBudgetMs = 200 };
+            var opening = await sampler.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            check(host.Pooled == 0 && host.Opens == 0 && opening is { Spid: null, Probes: [{ State: "ok" }] },
+                "a view subscribed with every probe paused opens no connection and runs no SQL (the session is read when a probe first runs)");
+        }
+        {
+            var host = new HangingHost(id);
+            // One gate in the backend: were the connect holding it, the other connection could not have it.
+            var gates = new LiveGates(2, 1, other => other == id || other == "other");
+            using var sampler = new SqlSampler(host, gates, id, activity, null) { ConnectBudgetMs = 400 };
+            var probe = new LiveProbeState(overview, 2000);
+            var opening = await sampler.OpenAsync([probe], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            var sampling = sampler.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), probe.BudgetMs, 2000)], CancellationToken.None);
+            await Task.Delay(100);
+            var busyWhileConnecting = gates.Busy;
+            using (var lease = await gates.WaitAsync("other", 50, CancellationToken.None)) check(lease is not null && busyWhileConnecting == 0 && !sampling.IsCompleted,
+                "a live connect holds no gate: while one server does not answer a login, a view on another connection still gets the backend's only gate");
+            var batch = await sampling.WaitAsync(TimeSpan.FromSeconds(5));
+            check(opening is { Spid: null, Probes: [{ State: "ok" }] } && batch is { Samples: [], Errors: [{ Code: "TIMEOUT", Number: null, Terminal: false }] } && host.Opens == 2 && gates.Busy == 0,
+                "a connect that never finishes ends at its own bound: the opened frame still goes (state ok, session unknown) and the next sample is a TIMEOUT value, holding nothing");
+        }
     }
 
     /// <summary>The activity source through SqlService, with no SQL Server: refused as values before any connection.</summary>

@@ -136,3 +136,28 @@ internal sealed class LiveRecorder : IDisposable
 
     public void Dispose() => Context.Dispose();
 }
+
+/// <summary>A live host whose one connection id reaches a server that never finishes a login: OpenAsync waits until its
+/// token is cancelled. It counts the pool connections handed out and the opens started.</summary>
+internal sealed class HangingHost(string connectionId) : ILiveHost
+{
+    public int Pooled;
+    public int Opens;
+    public bool TestHooks => false;
+    public bool IsConnected(string id) => id == connectionId;
+    public string? ServerOf(string id) => id == connectionId ? "server:H" : null;
+    public ResultStore Store { get; } = new(1L << 20, 1L << 19);
+    public ServerProfile? Profile(string id) => id == connectionId ? new(16, null, 3, null, false, true, false) : null;
+
+    public SqlConnection PoolConnection(string id, string? database, string suffix)
+    {
+        Interlocked.Increment(ref Pooled);
+        return new SqlConnection("Data Source=varia-fixture.invalid;Integrated Security=true;Pooling=false");
+    }
+
+    public async Task OpenAsync(SqlConnection connection, CancellationToken token)
+    {
+        Interlocked.Increment(ref Opens);
+        await Task.Delay(Timeout.Infinite, token);
+    }
+}

@@ -58,7 +58,7 @@ export interface LiveUpdateParams {
 /** Why one probe has no fresh sample: a value, never an exception, so the other probes carry on. */
 export const liveErrorCodes = [
   'BLOCKED', 'TIMEOUT', 'PERMISSION_DENIED', 'NOT_SUPPORTED', 'DATABASE_UNAVAILABLE', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_ENTRA',
-  'BUDGET', 'BUSY', 'CATALOG_MISSING', 'NOT_FOUND'
+  'BUDGET', 'BUSY', 'CATALOG_MISSING', 'NOT_FOUND', 'LOGIN_FAILED'
 ] as const
 export type LiveErrorCode = typeof liveErrorCodes[number]
 export interface LiveProbeError {
