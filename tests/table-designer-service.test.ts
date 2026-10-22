@@ -36,12 +36,12 @@ function designer() {
   cleanups.push(() => fixture.dispose())
   fixture.connect(connectionInfo('c1'))
   fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: params.dialog === 'tableDesigner' ? { tableDesigner: { ...model, database: params.target.name ?? '' }, elapsedMs: 1 } : { elapsedMs: 1 } }))
-  const refresh = vi.spyOn(fixture.explorer, 'refreshAndSelect').mockImplementation(() => {})
+  const reconcile = vi.spyOn(fixture.explorer, 'reconcile').mockImplementation(() => {})
   const { designers, documents } = fixture
   const id = designers.open(tables('c1'))
   const state = () => designers.get(id)!
   const requests = () => fixture.api.executeObjectAction.mock.calls.map(([request]) => request as ActionRequest)
-  return { ...fixture, designers, documents, id, state, refresh, requests }
+  return { ...fixture, designers, documents, id, state, reconcile, requests }
 }
 
 describe('table designer', () => {
@@ -145,8 +145,8 @@ describe('table designer', () => {
     }])
     expect(documents.get(id)?.name).toBe('c1.example.AppData - dbo.Orders')
   })
-  it('after a save: clean, read-only with SSMS\'s notice, and Object Explorer reloads Tables with the new table selected', async () => {
-    const { designers, documents, id, state, refresh } = designer()
+  it('after a save: clean, read-only with SSMS\'s notice, and Object Explorer reconciles Tables with the new table selected', async () => {
+    const { designers, documents, id, state, reconcile } = designer()
     await settled()
     designers.setCell(id, 0, 'name', 'Id')
     const saving = designers.save(id)
@@ -157,7 +157,7 @@ describe('table designer', () => {
     expect(designers.canEdit(id)).toBe(false)
     designers.setCell(id, 0, 'name', 'Other')
     expect(state().rows[0].name).toBe('Id')
-    expect(refresh).toHaveBeenCalledWith(5, { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } })
+    expect(reconcile).toHaveBeenCalledWith(5, { select: { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } } })
   })
   it('stays dirty and editable when SQL Server refuses, and the second save keeps the chosen name', async () => {
     const { designers, documents, id, state, api, requests } = designer()

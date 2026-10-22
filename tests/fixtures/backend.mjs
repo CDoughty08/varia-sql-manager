@@ -13,6 +13,7 @@
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
+//   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
 //   silent-<generation> that generation stops answering PING, as a hung backend would
@@ -229,6 +230,11 @@ const explorerRows = {
   audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
   serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')]
 }
+// What extra/<folder> adds: a role or table created since the folder was first listed.
+const explorerExtras = {
+  serverRoles: () => explorerObject({ kind: 'serverRole', name: 'VariaAuditors' }, 'VariaAuditors'),
+  tables: owner => explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Shipments' }, 'dbo.Shipments', { hasChildren: true })
+}
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {
   const owner = node.type === 'object' ? node.object : node.owner
@@ -237,7 +243,8 @@ async function explorerChildren({ node, subtype }) {
   if (node.type === 'folder' && node.folder === 'audits' && !await controlled(join('allow', 'audits'))) {
     return { nodes: statics, elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } }
   }
-  const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : [])]
+  const extra = node.type === 'folder' && explorerExtras[node.folder] && await controlled(join('extra', node.folder)) ? [explorerExtras[node.folder](owner)] : []
+  const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : []), ...extra]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come
