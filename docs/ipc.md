@@ -19,7 +19,7 @@ The code is the reference implementation; this document describes it.
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
 | Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
-| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts` | `Live/LiveService.cs`, `LiveCatalog.cs`, `SyntheticSampler.cs` |
+| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs`, `LiveCatalog.cs`, `SyntheticSampler.cs` |
 
 ## Contents
 
@@ -827,10 +827,50 @@ comes with the SQL sources' snapshot writers. Its scope is `none`, so any connec
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
 
 **Renderer.** The results worker relays live requests and events, and `ResultClient.live` runs a stream ([Results port
-and results worker](#results-port-and-results-worker)).
+and results worker](#results-port-and-results-worker)). Views never call it themselves: they open a `LiveHandle` from
+`LiveService` (`src/renderer/src/live/LiveService.ts`, `workbench.live`), which owns the whole lifecycle.
 
-Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets;
-the renderer's `LiveService` (owners, visibility, pause and resume, history rings).
+- **Open.** `live.open(spec, owner)` subscribes at once with each probe's catalogue default interval unless the view asks
+  for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
+  `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
+  connection, and closes with the tab. At most 16 views are open in a window; another, or one naming probes its source
+  does not have, is a handle that has already ended with `TOO_MANY_REQUESTS` or `INVALID_PARAMS` as a value, never an
+  exception, and runs nothing.
+- **Frames.** Each event is applied synchronously in the port message's own task (states, the probe's history ring, its
+  tables as `ResultHandle`s), then `onTick` listeners run (an exception there is reported and changes nothing), and only
+  then is it acknowledged. Snapshot listeners hear of it once an animation frame, however many frames arrived.
+- **Hidden.** A view whose owner is hidden, or whose window is (`document.visibilityState`; test mode's `setPageHidden`),
+  for `liveData.pauseAfterSeconds` (2 s) sends `live.update { paused: true }`; shown again it sends `paused: false` at once.
+  Hidden for `liveData.stopAfterHiddenMinutes` (5 min) it cancels its subscription (the backend releases what it held) and
+  is `dormant`; shown again it subscribes again with a new subscription id and the last resume token, and its history
+  continues after a gap. With `liveData.pauseWhenHidden` off, hidden views keep running. A source may allow
+  `hidden: 'statusOnly'` (none does yet; the catalogue field is the renderer's alone and stays out of the backend's JSON):
+  a view that asks for it with `whileHidden` keeps its probes without tables at 30 s or slower instead of pausing, never
+  goes dormant, and pauses its table probes; at most 4 such views a window, the rest pause.
+- **Pause, settings, refresh.** The user's Pause is `paused: true` and visibility never undoes it. Probe settings
+  (interval, pause, sort, view, filter) changed within 150 ms go as one update, with `clear` for what a change drops.
+  Updates go one at a time, in order, each computed from what the backend was last told, so a resume never overtakes its
+  pause; a refused one is reported on the view (`error`) and not sent again. A view subscribing while paused pauses every
+  probe in `live.subscribe` (there is no subscription-wide pause there) and unpauses them when it resumes. Refresh sends
+  `refresh: true` (a dormant view subscribes again); `track` sends a keyed table's tracked keys with a new `seq` each time.
+- **Ends.** A backend that went away (`BACKEND_LOST`, `RESULT_UNAVAILABLE`, `BACKEND_UNAVAILABLE`) leaves the view `lost`
+  with its history and its tables' handles (they read `lost`); nothing resubscribes by itself, since the connection went
+  with its backend. When the owner moves to another connection (Reconnect retargets the tab), the view subscribes on it;
+  when the owner loses its connection, the view ends `disconnected`. Every other end is `ended` with the backend's reason.
+  A finished source's kept tables stay readable until the view closes, which releases them.
+- **History.** `MetricRing` (`live/ring.ts`) keeps each metrics probe's samples in typed arrays: a sample's time, its gap
+  and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
+  Its capacity is `liveData.historyMinutes` at the probe's interval, at most 7,200 samples, then fitted to 4 MiB a view and
+  32 MiB in all, keeping the newest samples. It lives in renderer memory only, so it survives a backend restart.
+- **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
+  `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
+  probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment
+  is the one timer a running view keeps; it reads nothing. `liveIndicator` (`live/status.ts`) turns a snapshot into the
+  pill and badge text ("Live · every 2 s", "Slowed to 4 s", "Paused while hidden", "Updated 12 s ago", "Connection lost").
+  `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
+  hidden or stale view reads stale.
+
+Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets.
 
 ## Results port and results worker
 
@@ -1243,11 +1283,17 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`, including
   malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation, the budget, and live
   subscriptions whose every frame must pass main's schemas. `tests/live-protocol.test.ts` runs main's whole live path
-  (supervisor, results port, a worker stand-in) over the fake backend, and then the same path through the real worker
-  core and `ResultClient`.
+  (supervisor, results port, a worker stand-in) over the fake backend, then the same path through the real worker
+  core and `ResultClient`, and a `LiveService` view on it hidden, shown, lost with a restart and back after a Reconnect.
+  `tests/live-service.test.ts` drives `LiveService` against a fake client with fake timers (the hysteresis, user pause,
+  update order, debounce, stale, lost and Reconnect, kept tables, the 16-view cap, status-only views, `peek`, ring
+  memory), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the indicator text.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
   backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
-  `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/results-smoke.mjs` drives the grid on
+  `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
+  runs `LiveService` views in the app on the fake backend through `window.__variaLive`: ticks acknowledged in turn, a
+  hidden window pausing the view within 3 s and its frames stopping, a resume with a gap, a tab switch, the owner tab
+  closing, and a killed backend reported lost and back after Reconnect. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.
@@ -1272,12 +1318,16 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   values of about 4 KB. Both come from `debug.results.synthesize`, so the backend stores them as it would query rows.
 - **The node pipeline** runs main's real classes: `BackendSupervisor` and `BackendConnection` over stdio to the Release
   backend, `ResultsPortHost` over a `MessageChannel`, and `ResultsWorkerCore` in a worker thread reading windows of
-  every row with every cell decoded (four windows in flight).
+  every row with every cell decoded (four windows in flight). Its live round trip subscribes the worker core to the
+  backend's `debug.synthetic` source every 10 ms and has the bench's thread (the page) acknowledge each event 20 ms after
+  it arrived, so the next sample is overdue when its credit reaches the backend: the time from an acknowledgement to the
+  next event is the whole loop (page → worker → main → backend → main → worker → page), not the source's schedule.
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
   1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
   planning, and the shared window cache (full, so every insert evicts).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
-  the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
+  the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
+  source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
   `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
@@ -1301,11 +1351,13 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Main event-loop delay during W1, p99 | ≤ 20 ms | ≤ 100 ms | 12 – 14 ms | 17 ms |
 | Page bytes sent ÷ distinct page bytes, W1 | ≤ 1.05 | reported only | 1.29 | 1.29 |
 | Budget charged ÷ page bytes | ≤ 1.15 | ≤ 1.5 | 1.00 | 1.00 |
+| Live tick round trip, acknowledgement → next tick at the page, p50 | ≤ 2 ms | ≤ 10 ms | 0.7 ms, p99 3.6 ms (Windows, 24 CPUs) | not measured |
 | Grid frame: 64 selection blocks clipped, 1,800 cells tested | ≥ 5,000 ops/s | ≥ 1,000 ops/s | 4,500 – 4,900 ops/s | 5,300 – 5,700 ops/s |
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
+| Live tick round trip in the app, acknowledgement → next tick at the page, p99 | ≤ 10 ms | ≤ 50 ms | 4 ms, p50 0.7 ms (Windows, 24 CPUs) | not measured |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |
 | B1 into the worker | ≥ 200 MB/s | ≥ 40 MB/s | 90 – 143 MB/s | 90 MB/s |
 | First 100-row window of a stored result | ≤ 50 ms | ≤ 250 ms | 17 – 21 ms | 20 ms |

@@ -46,6 +46,10 @@ export interface LiveSourceSpec {
   /** Only main's test schemas (unpackaged smoke runs) and a backend with VARIA_BACKEND_TEST_HOOKS=1 accept it. */
   readonly testOnly: boolean
   readonly probes: readonly string[]
+  /** What a hidden view of this source does (the renderer's LiveService; the backend never reads it): pause every probe
+   *  (the default), or, for a view that asks for it, keep its probes without tables at 30 s or slower so a completion is
+   *  still seen (at most 4 such views a window). */
+  readonly hidden?: 'pause' | 'statusOnly'
 }
 
 const column = (id: string, dataType: string): LiveColumnSpec => ({ id, name: id, dataType })
@@ -101,7 +105,7 @@ export function liveCatalogJson(): string {
     '{',
     `  "limits": ${line({ ...limits.live, eventBody: limits.eventBody })},`,
     `  "probes": ${block(probes)},`,
-    `  "sources": ${block(liveSourceIds.map(id => liveSources[id]))},`,
+    `  "sources": ${block(liveSourceIds.map(id => { const { hidden: _renderer, ...source } = liveSources[id]; return source }))},`,
     '  "version": 1',
     '}',
     ''

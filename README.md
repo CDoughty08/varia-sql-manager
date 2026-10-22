@@ -15,7 +15,7 @@ The dev command builds the backend and launches Electron with renderer hot reloa
 
 ```powershell
 npm run check           # Type check, Release backend/parser tests, bridge tests, production UI build
-npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/backend-restart/menu/Object Explorer/Script As/object actions/results grid/Options/Table Designer tests (after check)
+npm run test:smoke      # Hidden Electron workbench/layout/connection-dialog/theme/palette/backend-restart/live-view/menu/Object Explorer/Script As/object actions/results grid/Options/Table Designer tests (after check)
 npm run test:electron   # Both of the above
 npm run bench           # IPC benchmarks against the Release backend (after check); npm run bench:e2e and bench:grid measure the app
 npm run build
@@ -360,6 +360,12 @@ Interface labels, menus, tabs, and status text disable browser text selection. T
 
 Custom themes are JSON files in the `themes` folder there (**View → Theme → Open Themes Folder**). A theme overrides any of 61 named palette slots, 196 color keys (VS Code names where the meaning matches), and the SQL token colors, on top of Varia Dark or Varia Light; one file can provide both variants. **Create Custom Theme…** writes a starter seeded with the current accent colors; edit it, then choose **Reload Themes**. Theme files are validated strictly and never modified. Problems are listed in a banner with their JSON path, a bad entry keeps its default, and a theme that cannot be used falls back to the built-in theme of its type while keeping your choice. See the [theme guide](docs/themes/README.md), the [token reference](docs/themes/tokens.md), and the [JSON Schema](docs/themes/varia-theme.schema.json).
 
+## Live data
+
+Live views (the Activity Monitor and SSIS monitoring, which later releases add; none ships yet) show data the SQL backend samples on its own schedule, one sample at a time: the next one is taken only after the window has shown the last, so a busy or hung window never piles work up on the server. Each view says what it is doing ("Live · every 2 s", "Slowed to 4 s", "Paused", "Updated 12 s ago", "Connection lost") and keeps showing its last good data while a sample is late or fails.
+
+Tools › Options › Environment › **Live Data** (not in SSMS) sets what hidden views do. With **Pause live views that are hidden** on (the default), a view whose tab is not showing, or whose window is minimized or hidden, stops querying the server after **Pause after hidden for** **2** seconds (1 to 60) and starts again the moment it shows, its charts marking the gap; after **Stop after hidden for** **5** minutes (1 to 60) it also ends its subscription, freeing what the backend held for it, and subscribes again when it shows. A view you pause stays paused whatever its visibility. Charts keep **Keep chart history for** **60** minutes (5 to 120) in memory only, never on disk: at most 7,200 samples a chart, 4 MB a view and 32 MB for all views, keeping the newest. History survives a SQL backend restart; the view then says its connection was lost, and Reconnect brings it back on the new connection. At most 16 live views can be open in a window.
+
 ## Architecture
 
 ```text
@@ -390,6 +396,7 @@ This is a Monaco-based workbench, not a fork of VS Code. No HTTP server, listeni
 - `src/renderer/src/scripting/`: `ScriptingService` (requests, destinations, cancellation, and the status bar).
 - `src/shared/settings/`: the settings catalogue: Tools › Options' page tree (`pages.ts`), one file of definitions per area aggregated by `catalog.ts`, the zod schemas built from them, and the generator for `docs/settings.md`. `src/main/settings-store.ts` stores them in `settings.json`.
 - `src/renderer/src/settings/`: `SettingsService` (the values the workbench applies, updates, and the dialog's state) and the Tools › Options dialog: the DOM-free form and search rules, the property grid, and the dialog.
+- `src/shared/live/` / `src/renderer/src/live/` / `backend/Varia.Backend/Live/`: live data: the catalogue of sources and probes (which writes `docs/live.md` and the JSON the backend embeds) and the zod schemas built from it; the renderer's `LiveService` (each view's subscription, pause while hidden, dormancy, Reconnect, settings updates in order), its history rings and the pill text; and the backend's subscriptions and test source.
 - `src/renderer/src/results/` / `src/renderer/src/grid/`: the results worker, which reads, decodes, and sanitises result pages and formats values; `ResultClient` with its shared window cache; `ResultsService` (each tab's result sets, messages, jobs, and view state outside React); the output pane, Messages, and the memory indicator; and the grid: DOM-free layout, scroll, tile, selection, and key models, and `GridView`, which renders each grid's cells from reused DOM nodes.
 - `src/main/layout-store.ts` / `src/shared/layouts.ts`: atomic preferences, layout files, and bounded layout validation.
 - `src/preload/index.ts`: explicit public methods; no generic IPC or shell API exposed. `src/preload/drop.ts`, bundled into the same file (a sandboxed preload can load no other), sends the paths of files dropped on the window to main.
