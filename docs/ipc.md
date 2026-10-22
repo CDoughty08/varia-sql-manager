@@ -782,9 +782,13 @@ backend ends the subscription `failed` with `BACKEND_ERROR`, a bug rather than a
 - **Main's rule** (`BackendConnection.route`): an EVENT of such a request is accepted only when granted − received ≥ the
   initial credit and the body is at most 256 KiB; it then counts as received. Anything else, and any DATA frame on such a
   request, is a contained violation (`STREAM_PROTOCOL`, CANCEL reason 3), as an over-credit DATA frame is.
-- **Acknowledgement.** Main posts `{ t: 'live', rid, bytes, event }` to the worker; the page applies the event and the
-  worker sends the existing `{ t: 'credit', rid, bytes }`. `ResultsPortHost` and `BackendConnection.credit` both clamp an
-  acknowledgement to the bytes outstanding, so no acknowledgement, however large, lets two frames be in flight.
+- **Acknowledgement.** Main posts `{ t: 'live', rid, bytes, event }` to the worker, which relays it to the page without
+  decoding anything; `ResultClient` applies the event's tables and forgets what it retired, the page applies the event
+  and calls the stream's `ack(bytes)`, and only then does the worker send the existing `{ t: 'credit', rid, bytes }`. The
+  worker grants back at most the bytes the stream's events took and the page has not acknowledged yet (more, twice, or
+  for a stream that ended is dropped), and `ResultsPortHost` and `BackendConnection.credit` both clamp an acknowledgement
+  to the bytes outstanding, so no acknowledgement, however large, lets two frames be in flight. A page that never
+  acknowledges an event (hung, or applying it failed) stops the source after that event.
 - **Schedule.** Fixed rate per probe: a probe due while a frame is unacknowledged, or late for any reason, is sampled once
   when it can be, with `gap: 'late'` and the slots it missed in `skipped`, never replayed in a burst. The first sample is
   `baseline`, the first after a pause `resumed`; `refresh` makes every unpaused probe due now.
@@ -822,7 +826,11 @@ probe stores again once memory is free. The per-subscription cap (64 MiB, all li
 comes with the SQL sources' snapshot writers. Its scope is `none`, so any connection id is accepted;
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
 
-Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets.
+**Renderer.** The results worker relays live requests and events, and `ResultClient.live` runs a stream ([Results port
+and results worker](#results-port-and-results-worker)).
+
+Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets;
+the renderer's `LiveService` (owners, visibility, pause and resume, history rings).
 
 ## Results port and results worker
 
@@ -866,6 +874,20 @@ caching each page (a page that arrives twice, the boundary page of two adjacent 
 decoded again). A page that fails `decodePage` ends its read with `PAGE_INVALID` and is not cached. A new generation
 fails pending work with `RESULT_UNAVAILABLE` and drops older pages.
 
+The worker also relays live subscriptions. The page sends `live { id, params }`, `liveUpdate { id, live, params }` (`live`
+names the stream by the page's id), `liveAck { id, bytes }`, `cancel { id }` and `forget { generation, resultIds }`; the
+worker answers `live { id, bytes, event }`, `liveEnd { id, result }`, `liveUpdated { id, result }` or `error`. It takes a
+port rid for each from the counter reads use, skipping rids still in use (a live stream can outlive 2^31 reads), and
+sends a stream to the generation main last announced on the port; requests that come before main's first `backend`
+message wait for it, and with no backend running (generation 0) a stream fails `BACKEND_UNAVAILABLE`. An update goes to
+its stream's generation; one for a stream that ended or is being cancelled fails `NOT_FOUND` at once. A stream cancelled
+before it was sent ends `cancelled` with no ticks. Events are relayed as main validated them, never decoded; `liveAck`
+becomes `credit` only within the bytes outstanding. When a new generation is announced the worker ends the older
+generation's streams and updates with `RESULT_UNAVAILABLE` ("This live view ended because the SQL backend restarted."),
+in case main's own `BACKEND_LOST` never arrives, and a replaced port ends them with `PORT_CLOSED`; later answers for them
+are dropped. `forget` drops the pages of results the backend already released and ends reads still bringing rows of
+them with `RESULT_RELEASED`, without sending `close`.
+
 **`ResultClient`** (`ResultClient.ts`) is the renderer's API, the contract the PR7 grid builds on: `open(descriptor)`
 returns a `ResultHandle` with `getSnapshot`, `subscribe` (coalesced per animation frame), `getWindow(first, count, o)`
 (at most 4,096 rows, 262,144 cells and 4,000,000 characters; 1,024 characters per cell by default, at most 2,097,152;
@@ -882,6 +904,19 @@ down, and ones main refused as busy (`TOO_MANY_REQUESTS`) are sent again 250 ms 
 and reattached at most 3 times a minute; after that, results show "Results cannot be displayed; reload the
 workbench."
 
+`live(params, onEvent)` runs a live subscription and returns a `LiveStream`: `done` (settles once with the `LiveEnd`, or
+with the failure as a value: never a rejection), `update(patch)` (live.update with the stream's subscription id and
+source; failures are values, and a stream that ended answers `NOT_FOUND`), `cancel()` and `ack(bytes)`. Before
+`onEvent(event, bytes)` runs, each table the event carries is applied (`applyLive`) and the results it retires are
+forgotten, but only those this stream delivered (a retired list can never release a query's results). The caller applies
+the event synchronously and then acknowledges it with `ack(bytes)`; nothing more arrives until it does. A cancelled
+stream's events still count its results but no longer reach `onEvent`. When the stream ends, its results are forgotten
+too, except those a finished source kept, which stay readable until `release` closes them. A failed worker ends streams
+with `RESULT_DECODER_FAILED` (main cancels them when the new worker's port opens) and `dispose` with `PORT_CLOSED`.
+`applyLive(descriptor)` creates or updates a result as query events do, so an append table's handle notifies its
+listeners as it grows. `forget(keys)` marks results the backend already released as released, drops their windows, and
+tells the worker to drop their pages, without `results.close`.
+
 
 ## Malformed input
 
@@ -895,6 +930,7 @@ workbench."
 | backend ← main | An oversized REQUEST | Body skipped; RESPONSE `TOO_LARGE` with its id |
 | backend ← main | Invalid params | `INVALID_PARAMS` |
 | worker ← main | A page failing `decodePage` | That read ends with `PAGE_INVALID`; the worker keeps going |
+| worker ← page | A live acknowledgement for more bytes than the stream's unacknowledged events took, not a positive integer, repeated, or for a stream that ended | Dropped: no credit is sent |
 | backend | Unhandled exception, out of memory | Best-effort GOAWAY `BACKEND_CRASH` (exception type only), exit 70 |
 
 Error details carry only a kind, an offset and a code: never bytes, SQL or server names.
@@ -1203,9 +1239,11 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`, including
   malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation, the budget, and live
   subscriptions whose every frame must pass main's schemas. `tests/live-protocol.test.ts` runs main's whole live path
-  (supervisor, results port, a worker stand-in) over the fake backend.
+  (supervisor, results port, a worker stand-in) over the fake backend, and then the same path through the real worker
+  core and `ResultClient`.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
-  backend, and UI responsiveness while a million stored rows are read. `scripts/results-smoke.mjs` drives the grid on
+  backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
+  `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.

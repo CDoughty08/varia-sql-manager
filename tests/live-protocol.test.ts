@@ -2,11 +2,16 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
 import { BackendSupervisor } from '../src/main/backend/supervisor'
 import { ResultsPortHost, supervisorResults, type PortMainLike } from '../src/main/backend/results-port'
+import { ResultClient, type PortMessageEvent, type ResultHandle, type WorkerLike } from '../src/renderer/src/results/ResultClient'
+import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
+import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
 import type { PortMessage } from '../src/shared/ipc/port-messages'
-import type { LiveTick } from '../src/shared/live/schema'
+import type { LiveProbeId } from '../src/shared/live/catalog'
+import type { LiveSubscribeParams, LiveTick } from '../src/shared/live/schema'
 
 // Main's whole live path over the fake backend's debug.synthetic source: the supervisor, the results port, and a worker
-// stand-in that acknowledges each event as the page will once it has applied it.
+// stand-in that acknowledges each event as the page will once it has applied it; then the same path through the real
+// worker core and ResultClient.
 
 const supervisors: BackendSupervisor[] = []
 afterEach(async () => { await Promise.all(supervisors.splice(0).map(value => value.stop())) })
@@ -32,19 +37,21 @@ class WorkerPort implements PortMainLike {
   end(rid: number) { return this.posted.find((message): message is Extract<PortMessage, { t: 'end' }> => message.t === 'end' && message.rid === rid) }
 }
 
-async function workbench() {
+/** The fake backend's workbench mode behind main's supervisor and results port; with `custom`, the port is the caller's and
+ *  opening it is left to the caller (a ResultClient asks for it). */
+async function workbench<P extends PortMainLike = WorkerPort>(custom?: P) {
   const supervisor = new BackendSupervisor({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', resolve('tests/fixtures/backend.mjs'), 'workbench'], cwd: process.cwd(), packaged: false })
   supervisors.push(supervisor)
-  const port = new WorkerPort()
+  const port = custom ?? new WorkerPort()
   const host = new ResultsPortHost({ backend: supervisorResults(supervisor), createChannel: () => ({ port1: port, port2: {} }), testSources: true })
   supervisor.onState(state => host.backendState(state))
   supervisor.start()
   await expect.poll(() => supervisor.state.status).toBe('ready')
-  host.open({ postMessage: () => {} })
-  return { supervisor, host, port }
+  if (!custom) host.open({ postMessage: () => {} })
+  return { supervisor, host, port: port as P }
 }
-const params = (args: Record<string, number>, probes = ['debug.synthetic.table', 'debug.synthetic.metrics', 'debug.synthetic.status']) => ({
-  subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000 })), args
+const params = (args: Record<string, number>, probes = ['debug.synthetic.table', 'debug.synthetic.metrics', 'debug.synthetic.status']): LiveSubscribeParams => ({
+  subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: probes.map(probe => ({ probe: probe as LiveProbeId, intervalMs: 1000 })), args
 })
 const latestTable = (port: WorkerPort, rid: number) => port.ticks(rid).flatMap(tick => tick.samples.flatMap(sample => sample.tables ?? [])).at(-1)!
 
@@ -102,5 +109,93 @@ describe('live subscriptions through main', () => {
     port.send({ t: 'close', rid: 2, generation: 1, resultIds: kept })
     await expect.poll(() => port.end(2)).toMatchObject({ ok: true, result: { closed: 1 } })
     expect(host.ownedCount).toBe(0)
+  })
+})
+
+/** Main's end of the port, delivering to the worker core in order, a task later, as structured clones (like a MessagePort). */
+class LoopPort implements PortMainLike {
+  core: ResultsWorkerCore | undefined
+  private listener: ((event: { data: unknown }) => void) | undefined
+  postMessage(message: unknown): void { const copy = structuredClone(message) as PortMessage; setTimeout(() => this.core?.receive(copy), 0) }
+  on(event: 'message' | 'close', listener: never): unknown { if (event === 'message') this.listener = listener; return this }
+  start(): void {}
+  close(): void {}
+  fromWorker(data: unknown): void { const copy = structuredClone(data); setTimeout(() => this.listener?.({ data: copy }), 0) }
+}
+/** The results worker in this thread: the real core between ResultClient and main's port. */
+class LoopWorker implements WorkerLike {
+  private readonly listeners: ((event: { data: WorkerResponse }) => void)[] = []
+  readonly core = new ResultsWorkerCore({ post: message => { const copy = structuredClone(message); setTimeout(() => { for (const listener of this.listeners) listener({ data: copy }) }, 0) } })
+  constructor(private readonly main: LoopPort) { main.core = this.core }
+  postMessage(message: WorkerRequest): void {
+    if (message.type === 'attach') this.core.attach({ postMessage: request => this.main.fromWorker(request) })
+    else this.core.handle(message)
+  }
+  addEventListener(type: 'message' | 'error' | 'messageerror', listener: never): void { if (type === 'message') this.listeners.push(listener) }
+  terminate(): void {}
+}
+
+describe('live subscriptions through the results worker and ResultClient', () => {
+  it('opens each table as a handle, paces the stream by the page\'s acknowledgements, and releases its results when it ends', async () => {
+    const port = new LoopPort()
+    const { host: host } = await workbench(port)
+    const ports: MessagePort[] = []
+    const window = { listener: undefined as ((event: PortMessageEvent) => void) | undefined, addEventListener(_type: 'message', listener: (event: PortMessageEvent) => void) { this.listener = listener }, removeEventListener() { this.listener = undefined } }
+    let worker: LoopWorker | undefined
+    const client = new ResultClient({
+      // As the preload hands the port over: a message from the page's own window carrying one port.
+      api: { openResultsPort: async () => {
+        host.open({ postMessage: () => {} })
+        const { port1 } = new MessageChannel()
+        ports.push(port1)
+        window.listener?.({ source: window, data: { type: 'varia:results-port' }, ports: [port1] })
+        return { ok: true, value: undefined }
+      } },
+      window, createWorker: () => (worker = new LoopWorker(port)), schedule: callback => queueMicrotask(callback)
+    })
+    try {
+      await client.ready()
+      await expect.poll(() => client.backendGeneration).toBe(1)
+      const handles: ResultHandle[] = [], held: number[] = []
+      let acking = true, ticks = 0
+      const stream = client.live(params({ tickMs: 30 }, ['debug.synthetic.table']), (event, bytes) => {
+        if (event.type === 'live.tick') {
+          ticks++
+          for (const sample of event.samples) for (const table of sample.tables ?? []) handles.push(client.open(table.descriptor))
+        }
+        if (acking) stream.ack(bytes)
+        else held.push(bytes)
+      })
+      await expect.poll(() => ticks).toBeGreaterThanOrEqual(4)
+      // Retired revisions are released here as main takes them back, without a close.
+      expect(handles[0].getSnapshot().state).toBe('released')
+      expect(host.owns(1, handles[0].key.resultId)).toBe(false)
+
+      // Stop-and-wait through the worker: an event the page has not acknowledged holds the stream, so the newest table stays.
+      acking = false
+      await expect.poll(() => held.length).toBe(1)
+      const count = ticks
+      await new Promise(done => setTimeout(done, 300))
+      expect(ticks).toBe(count)
+      const newest = handles.at(-1)!
+      expect(newest.getSnapshot()).toMatchObject({ rowsAvailable: 3, state: 'complete' })
+      const window_ = await newest.getWindow(0, 10)
+      expect(window_.count).toBe(3)
+      expect(window_.text.filter((_, index) => index % 3 === 0)).toEqual([0, 1, 2].map(offset => String(count + offset)))
+      acking = true
+      stream.ack(held.shift()!)
+      await expect.poll(() => ticks).toBeGreaterThan(count + 1)
+
+      const update = await stream.update({ paused: true })
+      expect(update).toMatchObject({ ok: true, value: { applied: true, probes: [{ probe: 'debug.synthetic.table', paused: true }] } })
+      stream.cancel()
+      expect(await stream.done).toMatchObject({ ok: true, value: { ended: 'cancelled' } })
+      expect(handles.every(handle => handle.getSnapshot().state === 'released')).toBe(true)
+      expect([host.liveCount, host.ownedCount, client.liveStreams, worker!.core.liveStreams]).toEqual([0, 0, 0, 0])
+    } finally {
+      client.dispose()
+      host.close()
+      for (const item of ports) item.close()
+    }
   })
 })

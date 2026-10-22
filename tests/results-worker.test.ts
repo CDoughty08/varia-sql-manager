@@ -303,3 +303,166 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toEqual({ type: 'stats', id: 8, bytes: core.cachedBytes, pages: 1 })
   })
 })
+
+describe('results worker core: live relay', () => {
+  const subscription = { subscriptionId: '0b6f6c1e-8f61-4d7a-9a51-1d2b3c4d5e6f', connectionId: '6a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5b', source: 'debug.synthetic' as const, probes: [{ probe: 'debug.synthetic.table' as const, intervalMs: 1000 }] }
+  const opened = { type: 'live.opened' as const, seq: 0 as const, source: 'debug.synthetic' as const, probes: [{ probe: 'debug.synthetic.table' as const, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' as const }] }
+  const descriptor = (resultId: number, generation = 1) => ({
+    generation, resultId, index: 0, batchNumber: 0, iteration: 0, kind: 'rows' as const, columns: ['id', 'label', 'value'].map(name => ({ name, dataType: 'int', wire: 'text' as const, nullable: false })),
+    rowsRead: 3, rowsStored: 3, rowsAvailable: 3, bytesStored: 30, truncatedCells: 0, state: 'complete' as const, incomplete: false
+  })
+  const tick = (seq: number, resultId: number, retired?: number[]) => ({
+    type: 'live.tick' as const, seq, sampledAt: 1000 + seq, samples: [{ probe: 'debug.synthetic.table' as const, costMs: 0, effectiveIntervalMs: 1000, tables: [{ table: 0, descriptor: descriptor(resultId), revision: seq, ...(retired ? { retired } : {}) }] }]
+  })
+  function live(o: { backend?: boolean } = {}) {
+    const posted: WorkerResponse[] = []
+    const sent: PortRequest[] = []
+    const core = new ResultsWorkerCore({ post: message => { posted.push(message) } })
+    core.attach({ postMessage: message => { sent.push(message as PortRequest) } })
+    if (o.backend !== false) core.receive({ t: 'backend', generation: 1, status: 'ready' })
+    const credits = () => sent.filter(request => request.t === 'credit')
+    const of = (id: number) => posted.filter(message => 'id' in message && message.id === id)
+    return { core, posted, sent, credits, of }
+  }
+
+  it('relays events without decoding them and grants their bytes back only once the page acknowledges them', () => {
+    const { core, sent, credits, of } = live()
+    core.handle({ type: 'live', id: 7, params: subscription })
+    expect(sent).toEqual([{ t: 'live', rid: 1, generation: 1, params: subscription }])
+    core.receive({ t: 'live', rid: 1, bytes: 120, event: opened })
+    const [relayed] = of(7)
+    expect(relayed).toEqual({ type: 'live', id: 7, bytes: 120, event: opened })
+    // The very object main sent: nothing is parsed or rebuilt on the way.
+    expect(relayed.type === 'live' && relayed.event).toBe(opened)
+    expect(credits()).toEqual([])
+    // More than the events took, a fraction, nothing, or another stream's id: dropped.
+    for (const [id, bytes] of [[7, 121], [7, 0.5], [7, 0], [7, -5], [8, 120]]) core.handle({ type: 'liveAck', id, bytes })
+    expect(credits()).toEqual([])
+    core.handle({ type: 'liveAck', id: 7, bytes: 120 })
+    expect(credits()).toEqual([{ t: 'credit', rid: 1, bytes: 120 }])
+    // Acknowledging the same event twice grants nothing more.
+    core.handle({ type: 'liveAck', id: 7, bytes: 120 })
+    expect(credits()).toHaveLength(1)
+    // An acknowledgement may come in parts, never past what is outstanding.
+    core.receive({ t: 'live', rid: 1, bytes: 300, event: tick(1, 40) })
+    core.handle({ type: 'liveAck', id: 7, bytes: 100 })
+    core.handle({ type: 'liveAck', id: 7, bytes: 250 })
+    core.handle({ type: 'liveAck', id: 7, bytes: 200 })
+    expect(credits().slice(1)).toEqual([{ t: 'credit', rid: 1, bytes: 100 }, { t: 'credit', rid: 1, bytes: 200 }])
+    expect(core.cachedPages).toBe(0)
+  })
+
+  it('sends updates to the stream\'s generation, answers them, and refuses updates of a stream that ended', () => {
+    const { core, sent, of } = live()
+    core.handle({ type: 'live', id: 7, params: subscription })
+    const params = { subscriptionId: subscription.subscriptionId, source: 'debug.synthetic' as const, paused: true }
+    core.handle({ type: 'liveUpdate', id: 8, live: 7, params })
+    expect(sent.at(-1)).toEqual({ t: 'liveUpdate', rid: 2, generation: 1, params })
+    const result = { applied: true as const, probes: [{ probe: 'debug.synthetic.table' as const, intervalMs: 1000, effectiveIntervalMs: 1000, paused: true }] }
+    core.receive({ t: 'end', rid: 2, ok: true, result })
+    expect(of(8)).toEqual([{ type: 'liveUpdated', id: 8, result }])
+    core.handle({ type: 'liveUpdate', id: 9, live: 7, params })
+    core.receive({ t: 'end', rid: 3, ok: false, code: 'NOT_FOUND', message: 'This live view has ended.' })
+    expect(of(9)).toEqual([{ type: 'error', id: 9, code: 'NOT_FOUND', message: 'This live view has ended.' }])
+    core.handle({ type: 'liveUpdate', id: 10, live: 99, params })
+    expect(of(10)).toEqual([{ type: 'error', id: 10, code: 'NOT_FOUND', message: 'This live view has ended.' }])
+    expect(sent).toHaveLength(3)
+  })
+
+  it('cancels a stream once, relays its end, and drops what main sends for it afterwards', () => {
+    const { core, sent, posted, of } = live()
+    core.handle({ type: 'live', id: 7, params: subscription })
+    core.handle({ type: 'cancel', id: 7 })
+    core.handle({ type: 'cancel', id: 7 })
+    expect(sent.filter(request => request.t === 'cancel')).toEqual([{ t: 'cancel', rid: 1 }])
+    // An update of a stream being cancelled is refused here; main would refuse it once the end arrives.
+    core.handle({ type: 'liveUpdate', id: 8, live: 7, params: { subscriptionId: subscription.subscriptionId, source: 'debug.synthetic', refresh: true } })
+    expect(of(8)).toMatchObject([{ type: 'error', code: 'NOT_FOUND' }])
+    const end = { ended: 'cancelled' as const, ticks: 0, elapsedMs: 5 }
+    core.receive({ t: 'end', rid: 1, ok: true, result: end })
+    expect(of(7)).toEqual([{ type: 'liveEnd', id: 7, result: end }])
+    const count = posted.length
+    core.receive({ t: 'live', rid: 1, bytes: 10, event: tick(1, 40) })
+    core.handle({ type: 'liveAck', id: 7, bytes: 10 })
+    expect(posted).toHaveLength(count)
+    expect(sent.filter(request => request.t === 'credit')).toEqual([])
+    expect(core.liveStreams).toBe(0)
+  })
+
+  it('holds live requests until main says which backend runs, and refuses them when none does', () => {
+    const { core, sent, of } = live({ backend: false })
+    core.handle({ type: 'live', id: 7, params: subscription })
+    core.handle({ type: 'liveUpdate', id: 8, live: 7, params: { subscriptionId: subscription.subscriptionId, source: 'debug.synthetic', paused: true } })
+    core.handle({ type: 'live', id: 9, params: { ...subscription, subscriptionId: '1b6f6c1e-8f61-4d7a-9a51-1d2b3c4d5e6f' } })
+    core.handle({ type: 'cancel', id: 9 })
+    expect(sent).toEqual([])
+    // Cancelled before it was sent: it ends at once, having run nothing.
+    expect(of(9)).toEqual([{ type: 'liveEnd', id: 9, result: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } }])
+    core.receive({ t: 'backend', generation: 2, status: 'ready' })
+    expect(sent.map(request => [request.t, 'generation' in request && request.generation])).toEqual([['live', 2], ['liveUpdate', 2]])
+
+    const idle = live({ backend: false })
+    idle.core.handle({ type: 'live', id: 7, params: subscription })
+    idle.core.receive({ t: 'backend', generation: 0, status: 'stopped' })
+    expect(idle.of(7)).toEqual([{ type: 'error', id: 7, code: 'BACKEND_UNAVAILABLE', message: 'The SQL backend is not running. Use Restart SQL Backend from the command palette.' }])
+    expect(idle.sent).toEqual([])
+  })
+
+  it('ends streams and updates of an earlier generation when a new backend runs, and when the port is replaced', () => {
+    const { core, sent, of } = live()
+    core.handle({ type: 'live', id: 7, params: subscription })
+    core.handle({ type: 'liveUpdate', id: 8, live: 7, params: { subscriptionId: subscription.subscriptionId, source: 'debug.synthetic', refresh: true } })
+    core.receive({ t: 'backend', generation: 2, status: 'starting' })
+    const lost = { code: 'RESULT_UNAVAILABLE', message: 'This live view ended because the SQL backend restarted.' }
+    expect(of(7)).toEqual([{ type: 'error', id: 7, ...lost }])
+    expect(of(8)).toEqual([{ type: 'error', id: 8, ...lost }])
+    // Main's own answer (BACKEND_LOST) arrives later and finds nothing.
+    core.receive({ t: 'end', rid: 1, ok: false, code: 'BACKEND_LOST', message: 'The SQL backend stopped before answering. The request was not retried.' })
+    expect(of(7)).toHaveLength(1)
+
+    core.receive({ t: 'backend', generation: 2, status: 'ready' })
+    core.handle({ type: 'live', id: 9, params: subscription })
+    expect(sent.at(-1)).toMatchObject({ t: 'live', generation: 2 })
+    const next: PortRequest[] = []
+    core.attach({ postMessage: message => { next.push(message as PortRequest) } })
+    expect(of(9)).toEqual([{ type: 'error', id: 9, code: 'PORT_CLOSED', message: 'The results connection is not open. Reload the workbench.' }])
+    // The new port's live requests wait for its first backend message.
+    core.handle({ type: 'live', id: 10, params: subscription })
+    expect(next).toEqual([])
+    core.receive({ t: 'backend', generation: 2, status: 'ready' })
+    expect(next).toMatchObject([{ t: 'live', generation: 2 }])
+  })
+
+  it('never gives a read the rid of a live stream that is still running', () => {
+    const { core, sent } = live()
+    core.handle({ type: 'live', id: 7, params: subscription })
+    expect(sent[0]).toMatchObject({ t: 'live', rid: 1 })
+    // The counter wraps after 2^31 - 1 rids: the next read would be rid 1 again.
+    ;(core as unknown as { nextRid: number }).nextRid = 1
+    core.handle({ type: 'window', id: 8, key, wires, first: 0, count: 4, colStart: 0, colEnd: 3, maxCellChars: 100, textBudget: 1000 })
+    expect(sent[1]).toMatchObject({ t: 'read', rid: 2 })
+  })
+
+  it('forgets released results: their pages go and their reads end, and no close is sent', () => {
+    const { core, sent, of } = live()
+    const id = 3
+    core.handle({ type: 'window', id, key, wires, first: 0, count: 64, colStart: 0, colEnd: 3, maxCellChars: 100, textBudget: 100_000 })
+    core.receive({ t: 'page', rid: 1, seq: 1, body: page(0, 64) })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 64, rowsAvailable: 64, complete: true, pages: 1, rows: 64 } })
+    expect(core.cachedPages).toBe(1)
+    // A window still waiting for rows of the result, and another result's page that stays.
+    core.handle({ type: 'window', id: 4, key, wires, first: 64, count: 64, colStart: 0, colEnd: 3, maxCellChars: 100, textBudget: 100_000 })
+    core.handle({ type: 'window', id: 5, key: { generation: 1, resultId: 6 }, wires, first: 0, count: 64, colStart: 0, colEnd: 3, maxCellChars: 100, textBudget: 100_000 })
+    core.receive({ t: 'page', rid: 3, seq: 1, body: page(0, 64, 6) })
+    core.receive({ t: 'end', rid: 3, ok: true, result: { nextRow: 64, rowsAvailable: 64, complete: true, pages: 1, rows: 64 } })
+    expect(core.cachedPages).toBe(2)
+    core.handle({ type: 'forget', generation: 1, resultIds: [5] })
+    expect(core.cachedPages).toBe(1)
+    expect(of(4)).toEqual([{ type: 'error', id: 4, code: 'RESULT_RELEASED', message: 'These results were closed. Execute the query again to see them.' }])
+    expect(sent.filter(request => request.t === 'close')).toEqual([])
+    expect(sent.filter(request => request.t === 'cancel')).toEqual([{ t: 'cancel', rid: 2 }])
+    // A page the ended read still brings is not cached.
+    core.receive({ t: 'page', rid: 2, seq: 1, body: page(64, 64) })
+    expect(core.cachedPages).toBe(1)
+  })
+})
