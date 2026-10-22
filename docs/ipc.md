@@ -991,10 +991,12 @@ baseline (`gap: 'reset'`); a counter that went down rebaselines alone (null, `re
 pause and the first after a lost connection (which may have reached another server) have no rates (`baseline`,
 `resumed`); a sample over 3 intervals after the previous one is `late`. Reopening a connection that went back to the pool
 while idle keeps the baselines. `LiveKeyedDeltas` keeps per-row baselines for snapshot rates (L2b's tables): keyed by an
-identity column (a session's login time), bounded by the row cap, dropped after two samples absent. The Activity Monitor's
-per-session CPU and reads use their own rule (`SessionRates` in `Activity/ActivityRows.cs`): a session's counters take in a
-request's work only when it ends, on a smaller scale than the request reported, so a running request counts by its own
-change, a new one whole, and an ended one only beyond what it had counted (never negative, nothing twice).
+identity column (a request's start time), bounded by the row cap, dropped after two samples absent, and each with the time
+it was read at on the probe's sample clock, so a row missing from a sample gets a rate over its own span when it returns.
+The Activity Monitor's per-session CPU and reads use their own rule (`SessionRates` in `Activity/ActivityRows.cs`): a
+session's counters take in a request's work only when it ends, on a smaller scale than the request reported, so each
+running request (by id and start time; a MARS session has several) counts by its own change, a new one whole, and the ended
+ones only beyond what they had counted (never negative, nothing twice).
 
 **Resume tokens** (`Live/LiveResume.cs`): base64url of `{"v":1,"source":…,"cursors":[[probe,table,settledId],…]}`, at
 most 256 characters (a set of cursors that would not fit makes no token), parsed strictly against the subscription's

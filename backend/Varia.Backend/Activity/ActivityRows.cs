@@ -33,37 +33,48 @@ internal sealed class ActivityResult
 /// sessions (ALTER ANY CONNECTION) and sees every file's name (VIEW ANY DEFINITION), and whether the query statistics have spills.</summary>
 internal sealed record ActivityCapabilities(int Spid, bool ServerState, bool AlterAnyConnection, bool ViewAnyDefinition, bool TotalSpills);
 
-/// <summary>Which sessions are Varia's own (D-am §6.8): this backend's process (host_process_id) under one of its connections'
-/// program names plus a known suffix. Pool sessions (Object Explorer, Scripting, Object Actions, the Activity Monitor, the
-/// SSIS pools) are hidden unless the filter shows them; plain-name sessions are this window's query tabs, which the renderer
-/// names. The monitor's own session is always one of its pool's.</summary>
+/// <summary>Which sessions are Varia's own (D-am §6.8): a session this backend's process (host_process_id) opened from this
+/// machine (host_name, the workstation id its connections send) under one of its connections' program names plus a known
+/// suffix. Those values are the client's own claims at login, so a pool session (Object Explorer, Scripting, Object Actions,
+/// the Activity Monitor, the SSIS pools), which the default filter hides, must also be a session id Varia's own connections
+/// were given when they opened (SqlConnection.ServerProcessId): a client that claims Varia's process, machine and program
+/// name under any other session id is shown as itself. Plain-name sessions are labelled "Query tab", a plain-name session of
+/// this process (a query tab, or a pooled connection of the Connect dialog's database list), which the renderer names by the
+/// tab that holds the session id; they are never hidden. The monitor's own session is always one of its pool's.</summary>
 internal sealed class VariaSessions
 {
     private readonly int processId;
+    private readonly IReadOnlySet<int> own;
     private readonly Dictionary<string, (string Label, bool Pool)> programs = new(StringComparer.Ordinal);
     private readonly (string Label, bool Pool) monitor;
 
-    public VariaSessions(ActivityCatalog catalog, int processId, IEnumerable<string> applicationNames)
+    /// <param name="ownSessions">The session ids Varia's pooled and Object Actions connections to this server were given.</param>
+    public VariaSessions(ActivityCatalog catalog, int processId, IEnumerable<VariaClient> clients, IReadOnlySet<int> ownSessions)
     {
         this.processId = processId;
-        foreach (var name in applicationNames)
+        own = ownSessions;
+        foreach (var client in clients)
             foreach (var (suffix, kind) in catalog.VariaSuffixes)
             {
                 // SQL Server keeps 128 characters of a program name, as SqlService cuts it.
-                var program = name + suffix;
+                var program = client.ApplicationName + suffix;
                 if (program.Length > 128) program = program[..128];
+                var key = Key(program, client.Workstation);
                 // A pool's name wins over a query tab's when an application name itself ends with a pool's suffix.
-                if (!programs.TryGetValue(program, out var known) || !known.Pool) programs[program] = (catalog.VariaLabels[suffix], kind == "pool");
+                if (!programs.TryGetValue(key, out var known) || !known.Pool) programs[key] = (catalog.VariaLabels[suffix], kind == "pool");
             }
         monitor = (catalog.VariaLabels[catalog.PoolSuffix], true);
     }
 
+    // Workstation names compare without case, as Windows names machines.
+    private static string Key(string program, string host) => program + "\u001f" + host.ToUpperInvariant();
+
     /// <summary>The Varia column's text and whether the session is one of Varia's pools; (null, false) for any other session.</summary>
-    public (string? Label, bool Pool) Classify(int sessionId, int? hostProcessId, string? programName, int monitorSpid)
+    public (string? Label, bool Pool) Classify(int sessionId, int? hostProcessId, string? hostName, string? programName, int monitorSpid)
     {
         if (sessionId == monitorSpid) return monitor;
-        if (hostProcessId != processId || programName is null || !programs.TryGetValue(programName, out var found)) return (null, false);
-        return found;
+        if (hostProcessId != processId || programName is null || hostName is null || !programs.TryGetValue(Key(programName, hostName), out var found)) return (null, false);
+        return found.Pool && !own.Contains(sessionId) ? (null, false) : found;
     }
 }
 
@@ -186,10 +197,12 @@ internal sealed class ActivityRowWriter
 internal sealed record ActivitySessionsSample(List<LiveRow> Sessions, long SessionsMore, Dictionary<LiveRow, SessionFacts> Facts, List<LiveRow> Blocking, long BlockingMore,
     List<LiveRow>? Active, long ActiveMore, double? FocusCpuRate, double? FocusReadsRate, int BlockedSessions);
 
-/// <summary>The sessions probe's rows (D-am §6.1-6.3), built from its statements' results: Processes (one row per session),
-/// the blocking chains (BlockingGraph) and Active Expensive Queries, with per-session and per-request rates between samples.
-/// Rates are keyed by the session's login time or the request's start time, so a reused id never yields a rate across two
-/// sessions, and they need two samples of the same key. Pure apart from those baselines, so the offline checks feed it rows.</summary>
+/// <summary>The sessions probe's rows (D-am §6.1-6.3), built from its statements' results: Processes (one row per session,
+/// from the statement's row per request), the blocking chains (BlockingGraph) and Active Expensive Queries, with per-session
+/// and per-request rates between samples. Rates are keyed by the session's login time or the request's start time, so a reused
+/// id never yields a rate across two sessions, and they need two samples of the same key; each baseline keeps the time it was
+/// read at, so a row missing from a sample never makes a rate over two intervals. Pure apart from those baselines, so the
+/// offline checks feed it rows.</summary>
 internal sealed class ActivitySessionRows(ActivityCatalog catalog)
 {
     private static readonly string[] Isolation = ["Unspecified", "Read Uncommitted", "Read Committed", "Repeatable Read", "Serializable", "Snapshot"];
@@ -212,10 +225,11 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
 
     private sealed record SessionInfo(string? Status, string? Login, string? Host, string? Application, string? Database, int? OpenTransactions);
 
-    /// <param name="elapsedMs">The time since the previous sample (the server's own when the clock was read); null: no rates.</param>
+    /// <param name="at">This sample's time in milliseconds on the probe's sample clock (the server's own between samples that
+    /// read it), which per-row rates measure their span with.</param>
     /// <param name="hideMonitor">False without server state: the monitor's own session is then the only one SQL Server shows, so
     /// it is never hidden as one of Varia's pools.</param>
-    public ActivitySessionsSample Build(IReadOnlyDictionary<string, ActivityResult> results, long? elapsedMs, VariaSessions varia, int monitorSpid, int focusSession, bool hideMonitor = true)
+    public ActivitySessionsSample Build(IReadOnlyDictionary<string, ActivityResult> results, long at, VariaSessions varia, int monitorSpid, int focusSession, bool hideMonitor = true)
     {
         var sessionsCap = (int)catalog.Limit("sessions");
         var rows = results.GetValueOrDefault("sessions");
@@ -228,8 +242,16 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             foreach (var edge in edges.Rows.Take((int)catalog.Limit("blockingEdges")))
                 if (edges.Int(edge, "session_id") is { } waiter && edges.Int(edge, "blocking_session_id") is { } blocker)
                     waits.Add(new(waiter, blocker, edges.Text(edge, "wait_type"), edges.Long(edge, "wait_duration_ms") ?? 0, edges.Text(edge, "resource_description")));
-        var sessionRows = rows?.Rows.Take(sessionsCap).ToList() ?? [];
-        foreach (var row in sessionRows)
+        // The statement returns a row per request, a session's rows together and its first-ranked request first.
+        var grouped = new List<(object?[] Head, List<object?[]> Requests)>();
+        if (rows is not null)
+            foreach (var row in rows.Rows)
+            {
+                if (grouped.Count == 0 || rows.Int(grouped[^1].Head, "session_id") != rows.Int(row, "session_id")) grouped.Add((row, []));
+                if (rows.Get(row, "request_id") is not null) grouped[^1].Requests.Add(row);
+            }
+        var sessionRows = grouped.Take(sessionsCap).ToList();
+        foreach (var (row, _) in sessionRows)
             if (rows!.Int(row, "blocking_session_id") is { } blocker and not 0 && rows.Int(row, "session_id") is { } waiter)
                 waits.Add(new(waiter, blocker, rows.Text(row, "wait_type"), rows.Long(row, "wait_time") ?? 0, rows.Text(row, "wait_resource"), FromTask: false));
         var graph = BlockingGraph.Build(waits, (int)catalog.Limit("blockingDepth"), (int)catalog.Limit("blockingRows"));
@@ -238,7 +260,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
         var facts = new Dictionary<LiveRow, SessionFacts>(ReferenceEqualityComparer.Instance);
         var infos = new Dictionary<int, SessionInfo>();
         double? focusCpu = null, focusReads = null;
-        foreach (var row in sessionRows)
+        foreach (var (row, requests) in sessionRows)
         {
             var id = rows!.Int(row, "session_id") ?? 0;
             var cells = sessions.New();
@@ -248,7 +270,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             var openTransactions = rows.Int(row, "open_transaction_count");
             var rollingBack = command == "KILLED/ROLLBACK";
             var status = Status(rows.Text(row, "request_status"), rows.Text(row, "status"), rollingBack, rows.Double(row, "percent_complete"), openTransactions);
-            var (label, pool) = varia.Classify(id, rows.Int(row, "host_process_id"), rows.Text(row, "program_name"), monitorSpid);
+            var (label, pool) = varia.Classify(id, rows.Int(row, "host_process_id"), rows.Text(row, "host_name"), rows.Text(row, "program_name"), monitorSpid);
             if (id == monitorSpid && !hideMonitor) pool = false;
             var database = rows.Text(row, "database_name");
 
@@ -261,8 +283,9 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             waitResource ??= node?.WaitResource;
 
             var loginTime = rows.Time(row, "login_time");
-            var rates = sessionRates.Apply(id, loginTime, new(rows.Double(row, "cpu_time") ?? 0, rows.Double(row, "request_cpu_ms"), rows.Double(row, "logical_reads") ?? 0,
-                rows.Double(row, "request_logical_reads"), hasRequest ? (rows.Int(row, "request_id"), rows.Time(row, "start_time")) : null), elapsedMs);
+            var rates = sessionRates.Apply(id, loginTime, new(rows.Double(row, "cpu_time") ?? 0, rows.Double(row, "logical_reads") ?? 0,
+                [.. requests.Select(request => new RequestCounters(rows.Int(request, "request_id") ?? 0, rows.Time(request, "start_time"), rows.Double(request, "request_cpu_time") ?? 0,
+                    rows.Double(request, "request_logical_reads") ?? 0))]), at);
             if (id == focusSession) (focusCpu, focusReads) = (rates[0], rates[1]);
             var requestCount = rows.Int(row, "request_count") ?? 0;
             var lowest = rows.Int(row, "lowest_request_id");
@@ -337,14 +360,18 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             chain.Add(new LiveRow(cells));
         }
 
-        var (activeRows, activeMore) = Active(results.GetValueOrDefault("activeQueries"), elapsedMs);
-        return new(built, Math.Max(0, (rows?.Rows.Count ?? 0) - sessionsCap), facts, chain, graph.Truncated ? 1 : 0, activeRows, activeMore,
+        var (activeRows, activeMore) = Active(results.GetValueOrDefault("activeQueries"), at);
+        return new(built, Math.Max(0, grouped.Count - sessionsCap), facts, chain, graph.Truncated ? 1 : 0, activeRows, activeMore,
             focusCpu, focusReads, graph.BlockedSessions);
     }
 
-    private (List<LiveRow>? Rows, long More) Active(ActivityResult? requests, long? elapsedMs)
+    private (List<LiveRow>? Rows, long More) Active(ActivityResult? requests, long at)
     {
-        if (requests is null) return (null, 0);
+        if (requests is null)
+        {
+            requestRates.EndSample();
+            return (null, 0);
+        }
         var cap = (int)catalog.Limit("activeQueries");
         var rows = new List<LiveRow>(Math.Min(cap, requests.Rows.Count));
         foreach (var row in requests.Rows.Take(cap))
@@ -354,7 +381,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             var request = requests.Int(row, "request_id") ?? 0;
             var start = requests.Time(row, "start_time");
             var rate = requestRates.Apply(string.Join('\u001f', session.ToString(CultureInfo.InvariantCulture), request.ToString(CultureInfo.InvariantCulture), start?.Ticks.ToString(CultureInfo.InvariantCulture)),
-                [requests.Double(row, "cpu_time") ?? 0], elapsedMs);
+                [requests.Double(row, "cpu_time") ?? 0], at);
             active.Set(cells, "query", LiveCell.Of(ActivityRowWriter.OneLine(requests.Text(row, "statement_text"), catalog.Limit("statementChars"))));
             active.Set(cells, "sessionId", LiveCell.Of(session));
             active.Set(cells, "requestId", LiveCell.Of(request));
@@ -395,51 +422,69 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
     }
 }
 
-/// <summary>A session's counters in one sample: its own CPU and logical reads (since login), its requests' (null without one),
-/// and which request runs (id and start time).</summary>
-internal readonly record struct SessionCounters(double Cpu, double? RequestCpu, double Reads, double? RequestReads, (int? Id, DateTime? Start)? Request);
+/// <summary>A session's counters in one sample: its own CPU and logical reads (since login) and each running request's.</summary>
+internal sealed record SessionCounters(double Cpu, double Reads, IReadOnlyList<RequestCounters> Requests);
+
+/// <summary>One request's CPU and logical reads so far, by its id and start time (a MARS session runs several).</summary>
+internal readonly record struct RequestCounters(int Id, DateTime? Start, double Cpu, double Reads);
 
 /// <summary>Per-session CPU and logical reads per second (D-am §6.1). A session's own counters take in a request's work only
 /// when the request ends, and on SQL Server 2025 on a smaller scale than the request reported (a 1.2 s CPU loop: 813 ms
-/// against 1,096 ms; the live checks measure it), so session plus request dips at every batch end. Here a request still
-/// running counts by its own change; one that ended adds only what the session took in beyond what the request had already
-/// counted; one that started since the last sample counts whole. A rate is never negative and nothing counts twice; the tail
-/// of a request between the last sample and its end may be missed. Keyed by session id and login time, so a reused id
-/// starts again; at most <paramref name="capacity"/> sessions, each dropped after two samples absent.</summary>
+/// against 1,096 ms; the live checks measure it), so session plus request dips at every batch end. Each request is followed
+/// by its id and start time: one still running counts by its own change, one that started since the session's last sample
+/// counts whole, and the requests that ended add only what the session took in beyond what they had already counted. So a
+/// MARS session whose first-ranked request changes, or whose requests end one by one, never counts a request twice, and a
+/// rate is never negative; the tail of a request between the last sample and its end may be missed. Keyed by session id and
+/// login time, so a reused id starts again; each baseline keeps its sample time, so a session missing from a sample (its
+/// statement failed) gets a rate over its own span. At most <paramref name="capacity"/> sessions, each dropped after two
+/// samples absent.</summary>
 internal sealed class SessionRates(int capacity)
 {
-    private sealed class Baseline(DateTime? login, SessionCounters counters)
+    private sealed class Baseline(DateTime? login, SessionCounters counters, long at)
     {
         public DateTime? Login = login;
         public SessionCounters Counters = counters;
+        public long At = at;
         public int Absent;
     }
     private readonly Dictionary<int, Baseline> baselines = [];
     private readonly HashSet<int> seen = [];
 
-    /// <summary>CPU (ms/s) and logical reads per second since this session's previous sample; nulls for a new session or no elapsed time.</summary>
-    public double?[] Apply(int session, DateTime? login, SessionCounters counters, long? elapsedMs)
+    /// <summary>CPU (ms/s) and logical reads per second since this session's previous sample; nulls for a new session or no
+    /// time between the two.</summary>
+    /// <param name="at">This sample's time in milliseconds on the probe's sample clock.</param>
+    public double?[] Apply(int session, DateTime? login, SessionCounters counters, long at)
     {
         seen.Add(session);
         if (!baselines.TryGetValue(session, out var baseline) || baseline.Login != login)
         {
-            if (baseline is not null) (baseline.Login, baseline.Counters, baseline.Absent) = (login, counters, 0);
-            else if (baselines.Count < capacity) baselines[session] = new(login, counters);
+            if (baseline is not null) (baseline.Login, baseline.Counters, baseline.At, baseline.Absent) = (login, counters, at, 0);
+            else if (baselines.Count < capacity) baselines[session] = new(login, counters, at);
             return [null, null];
         }
-        var before = baseline.Counters;
-        baseline.Counters = counters;
-        baseline.Absent = 0;
-        if (elapsedMs is not > 0) return [null, null];
-        var same = before.Request is { } was && counters.Request is { } now && was == now;
-        double Part(double session1, double? request1, double session2, double? request2)
+        var (before, elapsed) = (baseline.Counters, at - baseline.At);
+        (baseline.Counters, baseline.At, baseline.Absent) = (counters, at, 0);
+        if (elapsed <= 0) return [null, null];
+        var earlier = new Dictionary<(int, DateTime?), RequestCounters>();
+        foreach (var request in before.Requests) earlier.TryAdd((request.Id, request.Start), request);
+        double cpu = 0, reads = 0;
+        foreach (var request in counters.Requests)
         {
-            var own = Math.Max(0, session2 - session1);
-            if (same) return own + Math.Max(0, (request2 ?? 0) - (request1 ?? 0));
-            return (request1 is { } ended ? Math.Max(0, own - ended) : own) + (request2 ?? 0);
+            if (earlier.Remove((request.Id, request.Start), out var was))
+            {
+                cpu += Math.Max(0, request.Cpu - was.Cpu);
+                reads += Math.Max(0, request.Reads - was.Reads);
+            }
+            else
+            {
+                cpu += request.Cpu;
+                reads += request.Reads;
+            }
         }
-        return [Part(before.Cpu, before.RequestCpu, counters.Cpu, counters.RequestCpu) * 1000 / elapsedMs.Value,
-            Part(before.Reads, before.RequestReads, counters.Reads, counters.RequestReads) * 1000 / elapsedMs.Value];
+        // What is left in earlier ended since: the session took it in, so only what it took in beyond what was counted is new.
+        cpu += Math.Max(0, Math.Max(0, counters.Cpu - before.Cpu) - earlier.Values.Sum(request => request.Cpu));
+        reads += Math.Max(0, Math.Max(0, counters.Reads - before.Reads) - earlier.Values.Sum(request => request.Reads));
+        return [cpu * 1000 / elapsed, reads * 1000 / elapsed];
     }
 
     /// <summary>Ends a sample: sessions it did not see age, and go after two.</summary>

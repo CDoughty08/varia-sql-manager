@@ -11,12 +11,20 @@ internal static class ActivitySourceChecks
 {
     private static readonly ActivityCatalog Catalog = ActivityCatalog.Current;
     private static readonly DateTime Login = new(2026, 10, 22, 9, 0, 0, DateTimeKind.Unspecified);
+    /// <summary>The workstation this backend's connections send (Session's host_name).</summary>
+    private const string Host = "WEB01";
+
+    /// <summary>Varia's sessions as this backend (process 4242 on <see cref="Host"/>) knows them: its connections' Application
+    /// Names and the session ids its pooled connections were given.</summary>
+    private static VariaSessions Own(string[] applications, params int[] own) => new(Catalog, 4242, [.. applications.Select(name => new VariaClient(name, Host))], own.ToHashSet());
 
     public static void Run(Action<bool, string> check)
     {
         Statements(check);
         Overview(check);
         Sessions(check);
+        Mars(check);
+        SampleTimes(check);
         Blocking(check);
         Varia(check);
         Filters(check);
@@ -84,7 +92,7 @@ internal static class ActivitySourceChecks
         DateTime? login = null) => new()
     {
         ["session_id"] = id, ["login_time"] = login ?? Login, ["host_process_id"] = pid, ["is_user_process"] = user, ["login_name"] = "app_user", ["original_login_name"] = "app_user",
-        ["host_name"] = "WEB01", ["program_name"] = program, ["client_interface_name"] = ".Net SqlClient Data Provider", ["status"] = status, ["database_id"] = 5, ["database_name"] = "Sales",
+        ["host_name"] = Host, ["program_name"] = program, ["client_interface_name"] = ".Net SqlClient Data Provider", ["status"] = status, ["database_id"] = 5, ["database_name"] = "Sales",
         ["cpu_time"] = cpu, ["reads"] = 64L, ["writes"] = 64L, ["logical_reads"] = reads, ["memory_usage"] = 3, ["open_transaction_count"] = openTransactions,
         ["last_request_start_time"] = Login.AddMinutes(1), ["last_request_end_time"] = Login.AddMinutes(1), ["transaction_isolation_level"] = (short)2, ["workload_group"] = "default",
         ["client_net_address"] = "10.0.0.5", ["net_transport"] = "TCP", ["encrypt_option"] = "TRUE", ["auth_scheme"] = "NTLM"
@@ -95,8 +103,8 @@ internal static class ActivitySourceChecks
     {
         var row = new Dictionary<string, object?>(session)
         {
-            ["request_id"] = 0, ["request_count"] = count, ["lowest_request_id"] = 0, ["request_status"] = status, ["command"] = command, ["start_time"] = Login.AddMinutes(2),
-            ["total_elapsed_time"] = 1_500, ["request_cpu_ms"] = cpu, ["request_logical_reads"] = reads, ["request_reads"] = 0L, ["request_writes"] = 0L, ["blocking_session_id"] = (short)blocker,
+            ["request_id"] = 0, ["request_rank"] = 1L, ["request_count"] = count, ["lowest_request_id"] = 0, ["request_status"] = status, ["command"] = command, ["start_time"] = Login.AddMinutes(2),
+            ["total_elapsed_time"] = 1_500, ["request_cpu_time"] = (int)cpu, ["request_logical_reads"] = reads, ["blocking_session_id"] = (short)blocker,
             ["wait_type"] = waitType, ["wait_time"] = (int)waitTime, ["wait_resource"] = waitType is null ? "" : "KEY: 5:72057594043236352 (8194443284a0)", ["percent_complete"] = percent,
             ["granted_query_memory"] = 0, ["dop"] = (int)dop, ["query_hash"] = new byte[] { 0x0A, 0xB1, 0, 0, 0, 0, 0, 0xFF }, ["request_database_id"] = 5
         };
@@ -118,14 +126,14 @@ internal static class ActivitySourceChecks
     private static void Sessions(Action<bool, string> check)
     {
         var builder = new ActivitySessionRows(Catalog);
-        var varia = new VariaSessions(Catalog, 4242, ["Varia SQL Manager"]);
+        var varia = Own(["Varia SQL Manager"]);
         var first = SessionResults([
             WithRequest(Session(51, cpu: 1_000, reads: 100), cpu: 200, reads: 50, count: 2),
             Session(52, status: "sleeping", openTransactions: 1),
             WithRequest(Session(53), command: "KILLED/ROLLBACK", status: "suspended", percent: 41.6f),
             Session(54, cpu: 70)
         ]);
-        var sample = builder.Build(first, null, varia, 99, focusSession: 51);
+        var sample = builder.Build(first, 10_000, varia, 99, focusSession: 51);
         var writer = builder.SessionsWriter;
         LiveRow Row(ActivitySessionsSample built, int id) => built.Sessions.Single(row => Cell(writer, row, "sessionId") == id.ToString());
         var r51 = Row(sample, 51);
@@ -143,37 +151,117 @@ internal static class ActivitySourceChecks
             WithRequest(Session(51, cpu: 1_300, reads: 100), cpu: 400, reads: 250, count: 2),
             Session(54, cpu: 10, login: Login.AddHours(1))
         ], ticks: 11_000);
-        var next = builder.Build(second, 1_000, varia, 99, focusSession: 51);
+        var next = builder.Build(second, 11_000, varia, 99, focusSession: 51);
         check(Cell(writer, Row(next, 51), "cpuRate") == "500.0" && Cell(writer, Row(next, 51), "logicalReadsRate") == "200.0" && next.FocusCpuRate == 500 && next.FocusReadsRate == 200
             && Cell(writer, Row(next, 54), "cpuRate") is null,
             "per-session rates add the session's CPU and its running requests', follow the Details flyout's session, and never span a reused session id (another login time)");
         // The sequence a 1.2 s CPU loop gave on SQL Server 2025, two batches then idle: the session takes in less than its
         // requests reported (813 against 1,096 ms), so session plus request would fall at each batch end.
         var cpu = new SessionRates(10);
-        (int?, DateTime?) A = (0, Login), B = (0, Login.AddSeconds(2));
-        double?[] Rate(double session, double? request, (int?, DateTime?)? running) => cpu.Apply(70, Login, new(session, request, 0, null, running), 1_000);
+        var clock = 0L;
+        DateTime A = Login, B = Login.AddSeconds(2);
+        double?[] Rate(double session, double? request, DateTime? running) =>
+            cpu.Apply(70, Login, new(session, 0, running is { } start ? [new RequestCounters(0, start, request ?? 0, 0)] : []), clock += 1_000);
         var observed = new[] { Rate(0, 3, A), Rate(0, 1_096, A), Rate(813, 5, B), Rate(813, 1_096, B), Rate(1_813, null, null), Rate(1_813, null, null) }.Select(rate => rate[0]).ToList();
         var once = new SessionRates(10);
-        once.Apply(71, Login, new(0, 500, 0, 40, A), 1_000);
-        var ended = once.Apply(71, Login, new(800, null, 90, null, null), 1_000);
+        once.Apply(71, Login, new(0, 0, [new RequestCounters(0, A, 500, 40)]), 1_000);
+        var ended = once.Apply(71, Login, new(800, 90, []), 2_000);
         check(observed.SequenceEqual([null, 1_093, 5, 1_091, 0, 0]) && ended is [300, 50],
             "a session's CPU rate counts a running request by its own change, a new request whole, and an ended one only beyond what it had counted: never negative where session plus request falls, never twice");
         var many = SessionResults(Enumerable.Range(1, (int)Catalog.Limit("sessions") + 1).Select(id => Session(id)));
-        var capped = new ActivitySessionRows(Catalog).Build(many, null, varia, 99, 0);
+        var capped = new ActivitySessionRows(Catalog).Build(many, 0, varia, 99, 0);
         check(capped.Sessions.Count == Catalog.Limit("sessions") && capped.SessionsMore == 1, "Processes keeps the catalogue's 10,000 sessions and counts the one read past them as cut");
         // A full row: every column has a value, so no column of the live table is left unwritten.
         var everything = WithRequest(Session(60, cpu: 10, reads: 10), cpu: 1, reads: 1, blocker: 61, waitType: "LCK_M_S", waitTime: 900, percent: 5);
         var filled = new ActivitySessionRows(Catalog);
-        filled.Build(SessionResults([everything, Session(61)]), null, new VariaSessions(Catalog, 4242, ["App"]), 99, 0);
-        var row = filled.Build(SessionResults([everything, Session(61)], ticks: 11_000), 1_000, new VariaSessions(Catalog, 4242, ["App"]), 99, 0).Sessions[0];
+        filled.Build(SessionResults([everything, Session(61)]), 10_000, Own(["App"]), 99, 0);
+        var row = filled.Build(SessionResults([everything, Session(61)], ticks: 11_000), 11_000, Own(["App"]), 99, 0).Sessions[0];
         var empty = Catalog.Table("sessions").Columns.Where(column => Cell(writer, row, column.Id) is null).Select(column => column.Id).ToList();
         check(empty.Count == 0, "a session with a request, a blocker and a Varia label fills every Processes column: " + string.Join(", ", empty));
+    }
+
+    /// <summary>A MARS session's requests: one row each, ranked as the statement ranks them.</summary>
+    private static Dictionary<string, object?> Mars(Dictionary<string, object?> session, int request, long rank, int count, long cpu, DateTime start, int blocker = 0) =>
+        new(WithRequest(session, cpu: cpu, count: count, blocker: blocker)) { ["request_id"] = request, ["request_rank"] = rank, ["start_time"] = start };
+
+    private static void Mars(Action<bool, string> check)
+    {
+        var builder = new ActivitySessionRows(Catalog);
+        DateTime first = Login.AddMinutes(2), second = Login.AddMinutes(3);
+        var clock = 9_000L;
+        string? Rate(int session, params Dictionary<string, object?>[] rows)
+        {
+            var built = builder.Build(SessionResults(rows), clock += 1_000, Own([]), 99, 0);
+            return Cell(builder.SessionsWriter, built.Sessions.Single(row => Cell(builder.SessionsWriter, row, "sessionId") == session.ToString()), "cpuRate");
+        }
+        // Session 60's request 0 has used 30 s; request 1 starts blocked, so it ranks first; then request 0 ends, and the
+        // session takes in less than it reported.
+        var blocked = new[]
+        {
+            Rate(60, Mars(Session(60), 0, 1, 1, 30_000, first)),
+            Rate(60, Mars(Session(60), 0, 1, 1, 30_500, first)),
+            Rate(60, Mars(Session(60), 1, 1, 2, 0, second, blocker: 61), Mars(Session(60), 0, 2, 2, 31_000, first)),
+            Rate(60, Mars(Session(60, cpu: 20_000), 1, 1, 1, 300, second))
+        };
+        // Session 70's requests both run; the lowest ends while the other goes on.
+        var switched = new[]
+        {
+            Rate(70, Mars(Session(70), 0, 1, 2, 5_000, first), Mars(Session(70), 1, 2, 2, 2_000, second)),
+            Rate(70, Mars(Session(70), 0, 1, 2, 5_100, first), Mars(Session(70), 1, 2, 2, 2_050, second)),
+            Rate(70, Mars(Session(70, cpu: 4_000), 1, 1, 1, 2_500, second))
+        };
+        check(blocked.SequenceEqual([null, "500.0", "500.0", "300.0"]) && switched.SequenceEqual([null, "150.0", "450.0"]),
+            "a MARS session's CPU rate follows each request: a blocked request ranked first or the lowest one ending neither adds a request's whole CPU again nor hides the others' ("
+            + string.Join(",", blocked) + " | " + string.Join(",", switched) + ")");
+        var many = new ActivitySessionRows(Catalog).Build(SessionResults([Mars(Session(1), 0, 1, 2, 0, first), Mars(Session(1), 1, 2, 2, 0, second), .. Enumerable.Range(2, (int)Catalog.Limit("sessions")).Select(id => Session(id))]),
+            0, Own([]), 99, 0);
+        check(many.Sessions.Count == Catalog.Limit("sessions") && many.SessionsMore == 1 && Cell(builder.SessionsWriter, many.Sessions[0], "requestId") == "0 +1",
+            "Processes counts sessions, not request rows: a MARS session is one row, and the cap cuts the one session read past it");
+    }
+
+    /// <summary>A live host the sample clock never calls.</summary>
+    private sealed class NoHost : ILiveHost
+    {
+        public bool TestHooks => false;
+        public bool IsConnected(string connectionId) => false;
+        public string? ServerOf(string connectionId) => null;
+        public Varia.Backend.Results.ResultStore Store => throw new NotSupportedException();
+        public Varia.Backend.Explorer.ServerProfile? Profile(string connectionId) => null;
+        public Microsoft.Data.SqlClient.SqlConnection PoolConnection(string connectionId, string? database, string suffix) => throw new NotSupportedException();
+        public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => throw new NotSupportedException();
+    }
+
+    private static void SampleTimes(Action<bool, string> check)
+    {
+        // A sample whose sessions statement failed after the clock read: the next rate spans both intervals.
+        var builder = new ActivitySessionRows(Catalog);
+        string? Rate(ActivitySessionsSample built) => Cell(builder.SessionsWriter, built.Sessions.Single(), "cpuRate");
+        builder.Build(SessionResults([WithRequest(Session(51), cpu: 1_000)]), 10_000, Own([]), 99, 0);
+        var steady = Rate(builder.Build(SessionResults([WithRequest(Session(51), cpu: 2_000)], ticks: 12_000), 12_000, Own([]), 99, 0));
+        var clockOnly = new Dictionary<string, ActivityResult> { ["clock"] = SessionResults([], ticks: 14_000)["clock"] };
+        var missed = builder.Build(clockOnly, 14_000, Own([]), 99, 0);
+        var after = Rate(builder.Build(SessionResults([WithRequest(Session(51), cpu: 4_000)], ticks: 16_000), 16_000, Own([]), 99, 0));
+        check(steady == "500.0" && missed.Sessions.Count == 0 && after == "500.0",
+            "a session missing from a sample (its statement failed after the clock read) gets a rate over its own four seconds when it returns, never two intervals over one: " + steady + ", " + after);
+
+        // The sessions probe's clock: the server's between samples that read it, else the schedule's; a restart starts again.
+        var reader = new ActivityReader(new NoHost(), "c");
+        var spec = LiveCatalog.Current.Probes[ActivityReader.SessionsProbe];
+        long Time(string? gap, long takenAt, long? ticks, long start = 1)
+        {
+            var results = ticks is { } now ? new Dictionary<string, ActivityResult> { ["clock"] = Result(Statement("activity.sessions", "clock"), new Dictionary<string, object?> { ["ms_ticks"] = now, ["sqlserver_start_time_ms_ticks"] = start }) } : [];
+            return reader.SampleTime(spec.Id, results, new LiveDue(new LiveProbeState(spec, 2_000), gap, null, null, null, new Dictionary<int, LiveTrackArgs>(), TakenAt: takenAt));
+        }
+        var times = new[] { Time("baseline", 100_000, 10_000), Time(null, 102_050, 12_000), Time(null, 104_100, null), Time(null, 106_000, 16_000), Time(null, 108_000, 18_000),
+            Time(null, 110_000, 20_000, start: 2), Time("resumed", 200_000, 99_000, start: 2), Time(null, 202_000, 101_000, start: 2) };
+        check(times.SequenceEqual([0, 2_000, 4_050, 5_950, 7_950, 7_950, 7_950, 9_950]),
+            "the sessions probe's sample clock moves by the server's ms_ticks between samples that read it and by the schedule's otherwise, and stands still at a restart or a resume: " + string.Join(",", times));
     }
 
     private static void Blocking(Action<bool, string> check)
     {
         var builder = new ActivitySessionRows(Catalog);
-        var varia = new VariaSessions(Catalog, 4242, []);
+        var varia = Own([]);
         Dictionary<string, object?> Edge(int waiter, int blocker, long ms, string type = "LCK_M_X", short context = 0) => new()
         {
             ["session_id"] = waiter, ["exec_context_id"] = (int)context, ["blocking_session_id"] = blocker, ["blocking_exec_context_id"] = 0, ["wait_type"] = type, ["wait_duration_ms"] = ms,
@@ -186,7 +274,7 @@ internal static class ActivitySourceChecks
             [new Dictionary<string, object?> { ["session_id"] = 60, ["event_type"] = "Language Event", ["event_info"] = "BEGIN TRAN;\n\tUPDATE dbo.t\n   SET x = 1 " + new string('y', 400) }],
             [new Dictionary<string, object?> { ["session_id"] = 69, ["request_id"] = 0, ["start_time"] = Login, ["status"] = "suspended", ["cpu_time"] = 5, ["statement_text"] = "SELECT *\nFROM   dbo.t", ["blocking_session_id"] = (short)60,
                 ["query_hash"] = new byte[] { 1, 2 } }]);
-        var sample = builder.Build(results, null, varia, 99, 0);
+        var sample = builder.Build(results, 0, varia, 99, 0);
         var sessions = builder.SessionsWriter;
         string? P(int id, string column) => Cell(sessions, sample.Sessions.Single(row => Cell(sessions, row, "sessionId") == id.ToString()), column);
         check(P(60, "headBlocker") == "1" && P(60, "blocking") == "2" && P(60, "blockedBy") is null && P(69, "blockedBy") == "60" && P(69, "headBlocker") == "0" && P(70, "blockedBy") == "69"
@@ -209,23 +297,34 @@ internal static class ActivitySourceChecks
 
     private static void Varia(Action<bool, string> check)
     {
-        var varia = new VariaSessions(Catalog, 4242, ["Varia SQL Manager", "Reports - Scripting"]);
-        check(varia.Classify(1, 4242, "Varia SQL Manager - Object Explorer", 99) == ("Varia Object Explorer", true) && varia.Classify(2, 4242, "Varia SQL Manager", 99) == ("Query tab", false)
-            && varia.Classify(3, 4242, "Varia SQL Manager - Activity Monitor", 99) == ("Varia Activity Monitor", true) && varia.Classify(4, 7, "Varia SQL Manager - Object Explorer", 99) == (null, false)
-            && varia.Classify(5, 4242, "Reports - Scripting", 99) == ("Query tab", false)
-            && new VariaSessions(Catalog, 4242, ["Reports - Scripting", "Reports"]).Classify(5, 4242, "Reports - Scripting", 99) == ("Varia Scripting", true) && varia.Classify(6, 4242, "SSMS", 99) == (null, false)
-            && varia.Classify(99, null, null, 99) == ("Varia Activity Monitor", true) && varia.Classify(7, 4242, "Varia SQL Manager - Integration Services Actions", 99) == ("Varia Integration Services Actions", true),
-            "Varia's own sessions are this process's under a connection's program name: its pools by suffix, its query tabs by the plain name (a pool wins when names collide), and the monitor's own session always");
+        // Sessions 1, 3, 5 and 7 are ones this backend's pooled connections were given.
+        var varia = Own(["Varia SQL Manager", "Reports - Scripting"], 1, 3, 5, 7);
+        (string?, bool) C(int id, int? pid, string? program, string? host = Host) => varia.Classify(id, pid, host, program, 99);
+        check(C(1, 4242, "Varia SQL Manager - Object Explorer") == ("Varia Object Explorer", true) && C(2, 4242, "Varia SQL Manager") == ("Query tab", false)
+            && C(3, 4242, "Varia SQL Manager - Activity Monitor") == ("Varia Activity Monitor", true) && C(4, 7, "Varia SQL Manager - Object Explorer") == (null, false)
+            && C(5, 4242, "Reports - Scripting") == ("Query tab", false)
+            && Own(["Reports - Scripting", "Reports"], 5).Classify(5, 4242, Host, "Reports - Scripting", 99) == ("Varia Scripting", true) && C(6, 4242, "SSMS") == (null, false)
+            && varia.Classify(99, null, null, null, 99) == ("Varia Activity Monitor", true) && C(7, 4242, "Varia SQL Manager - Integration Services Actions") == ("Varia Integration Services Actions", true)
+            && C(2, 4242, "Varia SQL Manager", "web01") == ("Query tab", false),
+            "Varia's own sessions are this process's from this machine under a connection's program name: its pools by suffix, its query tabs by the plain name (a pool wins when names collide), and the monitor's own session always");
+        // What a client claims at login (process id, machine, program name) is not enough for a pool, which the default filter hides.
+        check(C(1, 4242, "Varia SQL Manager - Object Explorer", "OTHER-PC") == (null, false) && C(2, 4242, "Varia SQL Manager", "OTHER-PC") == (null, false)
+            && C(8, 4242, "Varia SQL Manager - Object Explorer") == (null, false) && C(8, 4242, "Varia SQL Manager - Scripting", null) == (null, false),
+            "a session from another machine under this backend's process id and program name is not Varia's, nor is a pool session under an id none of Varia's connections were given");
+        // SQL Server keeps 128 characters of a program name, as SqlService cuts the pool's.
+        var longName = new string('V', 120);
+        check(Own([longName], 9).Classify(9, 4242, Host, (longName + " - Object Explorer")[..128], 99) == ("Varia Object Explorer", true),
+            "a 120-character Application Name's pool session, its program name cut to 128 characters, is still Varia's Object Explorer");
         var builder = new ActivitySessionRows(Catalog);
         var results = SessionResults([Session(99, "Varia SQL Manager - Activity Monitor"), Session(100, "Varia SQL Manager"), Session(101, "Varia SQL Manager - Object Explorer"), Session(1, "", null, user: false)]);
-        var sample = builder.Build(results, null, new VariaSessions(Catalog, 4242, ["Varia SQL Manager"]), 99, 0);
+        var sample = builder.Build(results, 0, Own(["Varia SQL Manager"], 101), 99, 0);
         var defaults = ActivityFilter.Compile(Catalog, new("sessions"));
         string Shown(ActivitySessionsSample built, ActivityFilter filter) => string.Join(",", built.Sessions.Where(row => filter.Matches(builder.SessionsWriter.Reader(row), built.Facts[row]))
             .Select(row => Cell(builder.SessionsWriter, row, "sessionId")));
         check(Shown(sample, defaults) == "100" && Shown(sample, ActivityFilter.Compile(Catalog, new("sessions", ShowSystem: true, ShowVaria: true))) == "99,100,101,1"
             && Cell(builder.SessionsWriter, sample.Sessions[1], "varia") == "Query tab" && Cell(builder.SessionsWriter, sample.Sessions[0], "varia") == "Varia Activity Monitor",
             "by default Processes hides SQL Server's sessions and Varia's pools, the monitor's own included, and always shows this window's query tabs, labelled");
-        var limited = new ActivitySessionRows(Catalog).Build(SessionResults([Session(99, "Varia SQL Manager - Activity Monitor")]), null, new VariaSessions(Catalog, 4242, ["Varia SQL Manager"]), 99, 0, hideMonitor: false);
+        var limited = new ActivitySessionRows(Catalog).Build(SessionResults([Session(99, "Varia SQL Manager - Activity Monitor")]), 0, Own(["Varia SQL Manager"]), 99, 0, hideMonitor: false);
         check(Shown(limited, defaults) == "99", "without server state the monitor's own session, the only one SQL Server shows, is not hidden as a pool");
     }
 
@@ -234,7 +333,7 @@ internal static class ActivitySourceChecks
         var builder = new ActivitySessionRows(Catalog);
         var results = SessionResults([WithRequest(Session(51), status: "running"), Session(52, openTransactions: 2), WithRequest(Session(53), status: "suspended", blocker: 51, waitType: "LCK_M_S", waitTime: 50)],
             [new Dictionary<string, object?> { ["session_id"] = 53, ["exec_context_id"] = 0, ["blocking_session_id"] = 51, ["blocking_exec_context_id"] = 0, ["wait_type"] = "LCK_M_S", ["wait_duration_ms"] = 50L, ["resource_description"] = "x" }]);
-        var sample = builder.Build(results, null, new VariaSessions(Catalog, 4242, []), 99, 0);
+        var sample = builder.Build(results, 0, Own([]), 99, 0);
         string Shown(string? view, string? text = null)
         {
             var filter = ActivityFilter.Compile(Catalog, new("sessions", view, Text: text));

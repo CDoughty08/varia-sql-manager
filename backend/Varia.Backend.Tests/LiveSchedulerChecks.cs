@@ -171,15 +171,23 @@ internal static class LiveSchedulerChecks
         var keyed = new LiveKeyedDeltas(capacity: 2);
         var firstRates = keyed.Apply("51\u001f2026-10-22T10:00:00", [100], 1000);
         keyed.EndSample();
-        var secondRates = keyed.Apply("51\u001f2026-10-22T10:00:00", [400], 1000);
-        var reused = keyed.Apply("51\u001f2026-10-22T10:05:00", [500], 1000);
+        var secondRates = keyed.Apply("51\u001f2026-10-22T10:00:00", [400], 2000);
+        var reused = keyed.Apply("51\u001f2026-10-22T10:05:00", [500], 2000);
         keyed.EndSample();
-        var third = keyed.Apply("52\u001f2026-10-22T10:06:00", [1], 1000);
+        var third = keyed.Apply("52\u001f2026-10-22T10:06:00", [1], 3000);
         check(firstRates[0] is null && secondRates[0] == 300 && reused[0] is null && third[0] is null && keyed.Count == 2,
             "per-row rates key on an identity column: a reused session id with a new login time gets no delta from the old session, and baselines stop at the row cap");
         keyed.EndSample();
         keyed.EndSample();
         check(keyed.Count == 0, "a key absent from two samples in a row is dropped");
+        // A row cut from one sample (a TOP it fell out of, or its statement failed) and back in the next: its rate spans both.
+        var back = new LiveKeyedDeltas(capacity: 4);
+        back.Apply("61", [1_000], 10_000);
+        back.EndSample();
+        back.Apply("62", [0], 12_000);
+        back.EndSample();
+        var returned = back.Apply("61", [2_000], 14_000);
+        check(returned[0] == 250, "a row absent from one sample gets a rate over its own four seconds when it returns, never two intervals over one (" + returned[0] + ")");
     }
 
     private static readonly LiveIntervalJson AnyInterval = new(1000, 1000, 3_600_000);
@@ -651,12 +659,12 @@ internal static class LiveSchedulerChecks
         var overview = LiveCatalog.Current.Probes[ActivityReader.OverviewProbe];
         {
             var host = new HangingHost(id);
-            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host)) { ConnectBudgetMs = 200 };
+            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id)) { ConnectBudgetMs = 200 };
             var opening = await sampler.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             check(host.Pooled == 0 && host.Opens == 0 && opening is { Spid: null, Probes: [{ State: "ok" }] },
                 "a view subscribed with every probe paused opens no connection and runs no SQL (the session is read when a probe first runs)");
             var pending = LiveCatalog.Current.Probes["activity.resources"];
-            using var stub = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host));
+            using var stub = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id));
             var declared = await stub.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }, new LiveProbeState(pending, 5000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             check(declared.Probes is [{ State: "ok" }, { State: "unavailable", Reason: "NOT_SUPPORTED" } resources] && resources.Note == ActivityCatalog.Current.Pending["activity.resources"] && host.Opens == 0,
                 "a probe the live catalogue declares before its sampling arrives (Resource Waits) opens unavailable with its note, and never runs");
@@ -665,7 +673,7 @@ internal static class LiveSchedulerChecks
             var host = new HangingHost(id);
             // One gate in the backend: were the connect holding it, the other connection could not have it.
             var gates = new LiveGates(2, 1, other => other == id || other == "other");
-            using var sampler = new SqlSampler(host, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host)) { ConnectBudgetMs = 400 };
+            using var sampler = new SqlSampler(host, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id)) { ConnectBudgetMs = 400 };
             var probe = new LiveProbeState(overview, 2000);
             var opening = await sampler.OpenAsync([probe], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             var sampling = sampler.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), probe.BudgetMs, 2000)], CancellationToken.None);

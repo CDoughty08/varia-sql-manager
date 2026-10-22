@@ -69,12 +69,21 @@ Filters travel as the source's args: one per table (the view chip, the toggles, 
 benign waits), each replacing that table's, and a table without one shows the defaults. Facets count every row the probe
 read, before filters. The two `focus.*` series follow the Details flyout's session (`focusSession`, 0 for none).
 
-Per-session rates key a session by its login time and a request by its start time, so a reused id never yields a rate
-across two sessions. A session's own CPU and reads take in a request's work only when the request ends, and SQL Server
-takes it in on a smaller scale than the request reported (a 1.2 s CPU loop on SQL Server 2025: 813 ms against 1,096 ms),
-so session plus request falls at every batch end. CPU (ms/s) therefore counts a running request by its own change, a new
-one whole, and an ended one only beyond what it had counted: never negative, nothing counted twice; the last moments of a
-request that ended between two samples may be missed.
+Per-session rates key a session by its login time and a request by its id and start time, so a reused id never yields a
+rate across two sessions. The sessions statement returns each of a session's requests as its own row (MARS sessions run
+several), ranked as Processes shows them, and its cap counts sessions. A session's own CPU and reads take in a request's
+work only when the request ends, and SQL Server takes it in on a smaller scale than the request reported (a 1.2 s CPU loop
+on SQL Server 2025: 813 ms against 1,096 ms), so session plus request falls at every batch end. CPU (ms/s) therefore
+counts each running request by its own change, a new one whole, and the ones that ended only beyond what they had
+counted: never negative, nothing counted twice, whichever request ranks first; the last moments of a request that ended
+between two samples may be missed. Every baseline keeps the time it was read at on the probe's own clock (the server's
+`ms_ticks` between samples that read it, else the schedule's), so a row missing from a sample (cut by a TOP, or its
+statement failed) gets a rate over its own span when it returns, never two intervals divided by one.
+
+Catalog views joined for names (`sys.databases`) do not wait on a database's `ALTER DATABASE`: under READ UNCOMMITTED
+with LOCK_TIMEOUT 1000, reads of `sys.databases` and `sys.master_files` returned at once (80 to 150 ms) while SET
+READ_COMMITTED_SNAPSHOT ON, SET SINGLE_USER, SET OFFLINE, MODIFY NAME and MODIFY FILE waited on a scratch database's
+exclusive database lock (SQL Server 2025). A wait that does happen is a BLOCKED value for that statement, as above.
 
 ## Panes
 
@@ -457,8 +466,13 @@ Varia's benign list:
 
 ## Varia's own sessions
 
-A session whose host process is the backend and whose program name is the connection's Application Name plus one of
-these suffixes is Varia's. Query tabs always show, labelled with the tab's name; pool sessions show only with Varia's own on.
+A session whose host process is the backend, whose host name is the workstation its connections send (the Workstation ID,
+else this machine's name) and whose program name is a connection's Application Name plus one of these suffixes may be
+Varia's: a client sets all three at login, so a pool session must also be one whose session id Varia's own pooled or
+Object Actions connection to that server was given when it opened. A session that only claims them shows as itself.
+Pool sessions show only with Varia's own on. "Query tab" marks a plain-name session of this process, never hidden: a
+query tab, which the document names by the tab that holds its session id, or a pooled connection of the Connect
+dialog's database list or a column list, which no tab holds and which shows as "Query tab".
 
 | Suffix | Kind | Label |
 | --- | --- | --- |

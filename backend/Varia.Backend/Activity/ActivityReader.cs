@@ -20,19 +20,23 @@ internal sealed class ActivityReader : ILiveSqlReader
     public const string SessionsProbe = "activity.sessions";
     private readonly ActivityCatalog catalog;
     private readonly ILiveHost host;
+    private readonly string connectionId;
     private readonly Lock gate = new();
     private readonly Dictionary<string, ActivityFilter> filters = new(StringComparer.Ordinal);
     private readonly ActivitySessionRows sessions;
     /// <summary>Statements that failed for good on this subscription: reported each sample, never run again.</summary>
     private readonly Dictionary<string, LiveProbeError> skipped = new(StringComparer.Ordinal);
     private readonly HashSet<string> statusSent = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, (long Ticks, long? Start)> clocks = new(StringComparer.Ordinal);
+    /// <summary>Per probe: the server's ms_ticks and start time at its last sample (null when not read), the schedule's time it
+    /// was taken at, and the probe's sample clock then.</summary>
+    private readonly Dictionary<string, (long? Ticks, long? Start, long TakenAt, long Clock)> clocks = new(StringComparer.Ordinal);
     private int focus;
     private ServerProfile? profile;
 
-    public ActivityReader(ILiveHost host, ActivityLiveArgs? args = null, ActivityCatalog? catalog = null)
+    public ActivityReader(ILiveHost host, string connectionId, ActivityLiveArgs? args = null, ActivityCatalog? catalog = null)
     {
         this.host = host;
+        this.connectionId = connectionId;
         this.catalog = catalog ?? ActivityCatalog.Current;
         sessions = new(this.catalog);
         if (args is not null) Apply(args);
@@ -132,15 +136,17 @@ internal sealed class ActivityReader : ILiveSqlReader
                 break;
             }
         }
+        // The sessions probe's clock moves with every read, even one that read nothing, so each row's rate spans its own time.
+        var sampleTime = spec.Id == SessionsProbe ? SampleTime(spec.Id, results, item) : 0;
         if (results.Count == 0)
             return new(null, [], [errors.Count > 0 ? errors[0] with { Tables = null, Series = null } : LiveErrors.Create(spec.Id, "SQL_ERROR", "The probe read nothing.")], Sampled: false);
 
         if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog), [], errors);
         if (spec.Id != SessionsProbe) throw new InvalidOperationException("No reader for this Activity Monitor probe.");
-        return Sessions(spec, item, results, errors, capabilities);
+        return Sessions(spec, sampleTime, results, errors, capabilities);
     }
 
-    private LiveReaderSample Sessions(LiveProbeJson spec, LiveDue item, Dictionary<string, ActivityResult> results, List<LiveProbeError> errors, ActivityCapabilities capabilities)
+    private LiveReaderSample Sessions(LiveProbeJson spec, long at, Dictionary<string, ActivityResult> results, List<LiveProbeError> errors, ActivityCapabilities capabilities)
     {
         Dictionary<string, ActivityFilter> current;
         int focusSession;
@@ -152,9 +158,8 @@ internal sealed class ActivityReader : ILiveSqlReader
             sendStatus = statusSent.Add(spec.Id);
         }
         var (msTicks, startTicks) = ActivityOverview.Clock(results);
-        var elapsed = Elapsed(spec.Id, msTicks, startTicks, item);
-        var varia = new VariaSessions(catalog, Environment.ProcessId, host.ApplicationNames);
-        var built = sessions.Build(results, elapsed, varia, capabilities.Spid, focusSession, hideMonitor: capabilities.ServerState);
+        var varia = new VariaSessions(catalog, Environment.ProcessId, host.Clients, host.OwnSessions(connectionId));
+        var built = sessions.Build(results, at, varia, capabilities.Spid, focusSession, hideMonitor: capabilities.ServerState);
         ActivityFilter Filter(string table) => current.GetValueOrDefault(table) ?? ActivityFilter.Compile(catalog, new(table));
         var tables = new List<LiveReaderTable>();
         if (results.ContainsKey("sessions"))
@@ -177,19 +182,24 @@ internal sealed class ActivityReader : ILiveSqlReader
         return new(new LiveRawSample(msTicks, startTicks, [built.FocusCpuRate, built.FocusReadsRate], [null, null]), tables, errors, Status: status);
     }
 
-    /// <summary>The time per-row rates cover: the server's own clock between this probe's samples when it was read on both, else
-    /// the schedule's; none after a baseline, a pause or a restart, when every row starts again.</summary>
-    private long? Elapsed(string probe, long? msTicks, long? startTicks, LiveDue item)
+    /// <summary>The sample's time on the probe's own clock, in milliseconds: it moves by the server's clock (ms_ticks) between
+    /// samples that both read it, else by the schedule's, so a slow round trip never skews a rate. Per-row baselines keep the
+    /// time they were read at, so a row (or a statement) missing from a sample yields a rate over its own span when it comes
+    /// back. After a baseline, a pause or a restart every row starts again.</summary>
+    internal long SampleTime(string probe, IReadOnlyDictionary<string, ActivityResult> results, LiveDue item)
     {
-        var previous = clocks.TryGetValue(probe, out var known) ? known : ((long Ticks, long? Start)?)null;
-        if (msTicks is { } ticks) clocks[probe] = (ticks, startTicks);
-        else clocks.Remove(probe);
-        if (item.Gap is "baseline" or "resumed" || previous is { } before && startTicks is { } start && before.Start is { } started && start != started)
+        var (msTicks, startTicks) = ActivityOverview.Clock(results);
+        var previous = clocks.TryGetValue(probe, out var known) ? known : ((long? Ticks, long? Start, long TakenAt, long Clock)?)null;
+        var restarted = previous is { Start: { } started } && startTicks is { } start && start != started;
+        long? step = previous is not { } before ? null : msTicks is { } now && before.Ticks is { } then ? now - then : item.TakenAt - before.TakenAt;
+        if (item.Gap is "baseline" or "resumed" || restarted || step is not >= 0)
         {
             sessions.Reset();
-            return null;
+            step = 0;
         }
-        return msTicks is { } now && previous is { } then ? now - then.Ticks : item.ElapsedMs;
+        var clock = (previous?.Clock ?? 0) + step.Value;
+        clocks[probe] = (msTicks, startTicks ?? previous?.Start, item.TakenAt, clock);
+        return clock;
     }
 
     private static int Index(LiveProbeJson spec, string table) => spec.Tables.FindIndex(entry => entry.Id == table) is >= 0 and var at ? at : throw new InvalidOperationException("Unknown live table " + table);

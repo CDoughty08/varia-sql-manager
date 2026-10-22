@@ -27,10 +27,17 @@ internal interface ILiveHost
     SqlConnection PoolConnection(string connectionId, string? database, string suffix);
     /// <summary>Opens it; a Kerberos or Entra sign-in failure throws AUTH_KERBEROS, AUTH_UNSUPPORTED or AUTH_ENTRA.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
-    /// <summary>The Application Name of every open connection: this backend's sessions run under them plus a pool suffix,
-    /// which tells the Activity Monitor which sessions are Varia's own.</summary>
-    IReadOnlyCollection<string> ApplicationNames => [];
+    /// <summary>What every open connection says it is at login (its Application Name and workstation id): this backend's
+    /// sessions run under them plus a pool suffix, which tells the Activity Monitor which sessions may be Varia's own.</summary>
+    IReadOnlyCollection<VariaClient> Clients => [];
+    /// <summary>The session ids this backend's pooled and Object Actions connections to the connection's server were given when
+    /// they opened: what Varia knows of its own sessions without trusting what a client claims at login.</summary>
+    IReadOnlySet<int> OwnSessions(string connectionId) => new HashSet<int>();
 }
+
+/// <summary>A connection's Application Name and the workstation id SqlClient sends with it (its Workstation ID, else this
+/// machine's name), as sys.dm_exec_sessions shows them in program_name and host_name.</summary>
+internal readonly record struct VariaClient(string ApplicationName, string Workstation);
 
 /// <summary>One probe of a subscription: its settings, its schedule and its back-off.</summary>
 internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
@@ -683,7 +690,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
         _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
-            source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, (ActivityLiveArgs?)args) : null),
+            source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
     };
 

@@ -74,13 +74,39 @@ internal static class ActivitySourceLiveChecks
             return;
         }
         await SourceAsync(check, service, info, json);
+        await StatementErrorsAsync(check, service, info, json);
+        await ReconnectAsync(check, service, info, json);
         await BlockingAsync(check, service, info, json);
         await CpuAsync(check, service, info);
         await PermissionAsync(check, service, info, live, json);
     }
 
+    /// <summary>Runs a script in a query tab session (a new one, closed after, unless <paramref name="session"/> names one).</summary>
+    private static async Task<SqlRun> Sql(SqlService service, ConnectionInfo info, JsonSerializerOptions json, string text, string? session = null)
+    {
+        var id = session ?? Guid.NewGuid().ToString();
+        try
+        {
+            var result = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
+                new QueryArgs(info.Id, id, "master", text, Guid.NewGuid().ToString(), 1000, 60, StopOnError: true), json), json);
+            return new(result.Status, result.Error?.Message, [.. result.ResultSets.Select(set => LiveResultChecks.RowsOf(service.Results, set))]);
+        }
+        finally { if (session is null) await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(id), json), json); }
+    }
+
+    private static async Task CloseSession(SqlService service, JsonSerializerOptions json, string session) =>
+        await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json);
+
     private static async Task SourceAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
     {
+        // An Object Explorer pool session and a query tab of this backend, held while the view samples: SQL Server shows them
+        // with this process's id, this machine's name and the program names Varia gave them.
+        var explorer = (Varia.Backend.Explorer.IExplorerHost)service;
+        await using var pool = explorer.Connection(info.Id, null);
+        await explorer.OpenAsync(pool, CancellationToken.None);
+        var poolSpid = pool.ServerProcessId.ToString(CultureInfo.InvariantCulture);
+        var tab = Guid.NewGuid().ToString();
+        var tabSpid = (await Sql(service, info, json, "SELECT @@SPID;", tab)).Scalar;
         var view = Subscribe(service, info.Id, json, new { filters = new[] { new { table = "sessions", showVaria = true } } }, ActivityReader.OverviewProbe, ActivityReader.SessionsProbe);
         try
         {
@@ -100,20 +126,111 @@ internal static class ActivitySourceLiveChecks
             var monitor = rows.FirstOrDefault(row => row["sessionId"] == opened?.Spid?.ToString(CultureInfo.InvariantCulture));
             check(rows.Count >= 2 && monitor is { } own && own["varia"] == "Varia Activity Monitor" && own["application"]!.EndsWith(" - Activity Monitor", StringComparison.Ordinal) && own["login"] is { Length: > 0 },
                 "Processes holds the server's sessions, the monitor's own marked as Varia's Activity Monitor when Varia's own sessions are shown");
-            // The catalogue's defaults hide Varia's pools again, the monitor's own included.
+            string? Varia(List<Dictionary<string, string?>> table, string? spid) => table.FirstOrDefault(row => row["sessionId"] == spid) is { } row ? row["varia"] ?? "(none)" : null;
+            check(Varia(rows, poolSpid) == "Varia Object Explorer" && Varia(rows, tabSpid) == "Query tab",
+                "Processes labels this backend's Object Explorer pool session and its query tab as SQL Server shows them (process id, machine, program name), the pool also by the session id it was given: "
+                + Varia(rows, poolSpid) + ", " + Varia(rows, tabSpid));
+            // The catalogue's defaults hide Varia's pools again, the monitor's own included, and keep its query tabs.
             var before = sessions.Count;
             service.Live.Update(new LiveUpdateArgs(view.Id, "activity", Args: JsonSerializer.SerializeToElement(new { filters = new[] { new { table = "sessions" } } }, json)), json);
             Resume(view);
             var after = await Freeze(view, _ => SamplesOf(view.Recorder, ActivityReader.SessionsProbe).Count > before + 1);
             var hidden = after is null ? [] : Rows(service, after.Tables!.Single(table => table.Table == 0));
-            check(after is not null && hidden.Count > 0 && hidden.All(row => row["varia"] is null or "Query tab") && hidden.All(row => row["sessionId"] != opened?.Spid?.ToString(CultureInfo.InvariantCulture)),
-                "an update back to the default filter hides Varia's pool sessions, the monitor's own among them, from the next sample");
+            check(after is not null && hidden.Count > 0 && hidden.All(row => row["varia"] is null or "Query tab") && hidden.All(row => row["sessionId"] != opened?.Spid?.ToString(CultureInfo.InvariantCulture))
+                && Varia(hidden, poolSpid) is null && Varia(hidden, tabSpid) == "Query tab",
+                "an update back to the default filter hides Varia's pool sessions (the Object Explorer pool's and the monitor's own) from the next sample, and keeps its query tab");
         }
         finally
         {
             var end = await Stop(view);
             check(end.Ended == "cancelled" && service.Live.Gates.Busy == 0, "the Activity Monitor view ends cancelled and holds no live gate");
+            await CloseSession(service, json, tab);
         }
+    }
+
+    /// <summary>D-am amendment 5: a statement fails alone. One the server lacks (a view it does not have, 208) is reported beside
+    /// every sample and never run again; a lock wait stops the statements after it, and what was read arrives. The test hook
+    /// rewrites one statement's text; nothing else changes.</summary>
+    private static async Task StatementErrorsAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    {
+        string Tables(LiveSample sample) => string.Join(",", (sample.Tables ?? []).Select(table => table.Table).Order());
+        string Errors(LiveTickEvent tick) => string.Join(";", (tick.Errors ?? []).Select(error => error.Code + " " + error.Number + " [" + string.Join(",", error.Tables ?? []) + "]"));
+        var edgesRuns = 0;
+        service.Live.TestText = (_, text) =>
+        {
+            if (!text.Contains("SELECT TOP (@edgeCap)", StringComparison.Ordinal)) return text;
+            Interlocked.Increment(ref edgesRuns);
+            return text.Replace("FROM sys.dm_os_waiting_tasks AS w\n", "FROM sys.dm_os_waiting_tasks_x AS w\n", StringComparison.Ordinal);
+        };
+        var view = Subscribe(service, info.Id, json, null, ActivityReader.SessionsProbe);
+        try
+        {
+            var sampled = await view.Recorder.WaitAsync(recorder => SamplesOf(recorder, ActivityReader.SessionsProbe).Count >= 3, 30_000);
+            var ticks = view.Recorder.Ticks.Where(tick => tick.Samples.Count > 0).ToList();
+            check(sampled && ticks.All(tick => tick.Errors?.Any(error => error is { Code: "NOT_SUPPORTED", Number: 208, Tables: [0, 1] }) == true)
+                && SamplesOf(view.Recorder, ActivityReader.SessionsProbe).All(sample => Tables(sample) == "0,2") && Volatile.Read(ref edgesRuns) == 1,
+                "a statement the server cannot run (a missing view) fails alone: every sample still carries Processes and Active Expensive Queries, an error beside each names the tables it feeds, and it ran once ("
+                + Volatile.Read(ref edgesRuns) + " runs; " + string.Join(" | ", ticks.Take(3).Select(tick => string.Join("/", tick.Samples.Select(Tables)) + " " + Errors(tick))) + ")");
+        }
+        finally
+        {
+            service.Live.TestText = null;
+            await Stop(view);
+        }
+
+        // An open transaction holding an X lock on a global temporary table that Active Expensive Queries' statement is made to read first.
+        var holder = Guid.NewGuid().ToString();
+        var table = "##VariaScratch_live_" + Guid.NewGuid().ToString("N");
+        var locked = await Sql(service, info, json, "CREATE TABLE " + table + " (id int); INSERT " + table + " VALUES (1);\nBEGIN TRANSACTION; UPDATE " + table + " SET id = 2;", holder);
+        service.Live.TestText = (_, text) => text.Replace("SELECT TOP (@take)", "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;\nDECLARE @varia_rows int = (SELECT COUNT(*) FROM " + table + ");\nSELECT TOP (@take)",
+            StringComparison.Ordinal);
+        view = Subscribe(service, info.Id, json, null, ActivityReader.SessionsProbe);
+        try
+        {
+            var sampled = await view.Recorder.WaitAsync(recorder => SamplesOf(recorder, ActivityReader.SessionsProbe).Count >= 2, 30_000);
+            var ticks = view.Recorder.Ticks.Where(tick => tick.Samples.Count > 0).ToList();
+            check(locked.Status == "completed" && sampled && ticks.All(tick => tick.Errors?.Any(error => error is { Code: "BLOCKED", Number: 1222, Tables: [2] }) == true)
+                && SamplesOf(view.Recorder, ActivityReader.SessionsProbe).All(sample => Tables(sample) == "0,1"),
+                "a lock wait in the last statement stops only it: each sample keeps Processes and Blocking, and a BLOCKED value beside it names Active Expensive Queries ("
+                + string.Join(" | ", ticks.Take(3).Select(tick => string.Join("/", tick.Samples.Select(Tables)) + " " + Errors(tick))) + ")");
+        }
+        finally
+        {
+            service.Live.TestText = null;
+            await Stop(view);
+            await Sql(service, info, json, "IF @@TRANCOUNT > 0 ROLLBACK;\nDROP TABLE IF EXISTS " + table + ";", holder);
+            await CloseSession(service, json, holder);
+        }
+    }
+
+    /// <summary>The statuses (server state, Kill) come with the first sample on each new connection: the view's own session is
+    /// killed (this test's own view's, proved in the same batch), and the first sample on the session it reopens reports them again.</summary>
+    private static async Task ReconnectAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    {
+        var view = Subscribe(service, info.Id, json, null, ActivityReader.SessionsProbe);
+        try
+        {
+            await view.Recorder.WaitAsync(recorder => SamplesOf(recorder, ActivityReader.SessionsProbe).Count >= 2, 20_000);
+            int Latest() => view.Recorder.Ticks.LastOrDefault(tick => tick.Spid is not null)?.Spid ?? view.Recorder.Opened?.Spid ?? 0;
+            var before = view.Recorder.Ticks.Count;
+            string? killed = null;
+            for (var attempt = 0; attempt < 3 && killed != "1"; attempt++)
+            {
+                if (attempt > 0) await Task.Delay(500);
+                killed = (await Sql(service, info, json, "DECLARE @spid int = " + Latest().ToString(CultureInfo.InvariantCulture) + ", @pid int = " + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ";\n"
+                    + "IF EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @spid AND s.session_id <> @@SPID AND s.host_process_id = @pid AND s.program_name LIKE N'% - Activity Monitor')\n"
+                    + "BEGIN\n    DECLARE @kill nvarchar(40) = N'KILL ' + CONVERT(nvarchar(11), @spid) + N';';\n    EXEC (@kill);\n    SELECT 1 AS killed;\nEND\nELSE SELECT 0 AS killed;")).Scalar;
+            }
+            List<LiveSample> Reopened(LiveRecorder recorder) =>
+                [.. recorder.Ticks.Skip(before).SkipWhile(tick => tick.Spid is null).SelectMany(tick => tick.Samples).Where(sample => sample.Probe == ActivityReader.SessionsProbe)];
+            var recovered = await view.Recorder.WaitAsync(recorder => Reopened(recorder).Count >= 2, 20_000);
+            var first = SamplesOf(view.Recorder, ActivityReader.SessionsProbe);
+            var again = Reopened(view.Recorder);
+            check(killed == "1" && recovered && first[0].Status is { Count: 2 } && first[1].Status is null && again[0].Status is [{ Id: "serverState", Value: 1 }, { Id: "canKill" }] && again[1].Status is null,
+                "after the view's session is lost, the first sample on the session it reopens reports server state and Kill again, and the next does not ("
+                + killed + ", " + string.Join(",", again.Take(2).Select(sample => sample.Status?.Count ?? 0)) + ")");
+        }
+        finally { await Stop(view); }
     }
 
     private static async Task<object?> Scalar(SqlConnection connection, string text)
@@ -214,6 +331,9 @@ internal static class ActivitySourceLiveChecks
         var spid = Convert.ToInt32(await Scalar(busy, "SELECT @@SPID;"), CultureInfo.InvariantCulture);
         var totals = new List<long>();
         var counters = new List<(long At, SessionCounters Counters)>();
+        // Each request's CPU over its own elapsed time, as the server measured both: what the loop got of a scheduler on this
+        // run, which the rates are held to rather than a fixed bound (the server is shared and loaded).
+        var loop = new Dictionary<DateTime, double>();
         using var stop = new CancellationTokenSource();
         async Task Sample()
         {
@@ -221,17 +341,25 @@ internal static class ActivitySourceLiveChecks
             {
                 await using var command = new SqlCommand(statement.Batch, monitor) { CommandTimeout = 30 };
                 command.Parameters.Add(new SqlParameter("@rowCap", SqlDbType.Int) { Value = 10_001 });
+                double? session = null, reads = null;
+                var requests = new List<RequestCounters>();
                 await using (var reader = await command.ExecuteReaderAsync())
                 {
                     while (await reader.ReadAsync())
                         if (Convert.ToInt32(reader["session_id"], CultureInfo.InvariantCulture) == spid)
-                            {
-                            double? Optional(string column) => reader[column] is DBNull ? null : Convert.ToDouble(reader[column], CultureInfo.InvariantCulture);
-                            var session = Convert.ToDouble(reader["cpu_time"], CultureInfo.InvariantCulture);
-                            totals.Add((long)(session + (Optional("request_cpu_ms") ?? 0)));
-                            (int?, DateTime?)? request = reader["request_id"] is DBNull ? null : (Convert.ToInt32(reader["request_id"], CultureInfo.InvariantCulture), (DateTime)reader["start_time"]);
-                            counters.Add((Environment.TickCount64, new(session, Optional("request_cpu_ms"), Convert.ToDouble(reader["logical_reads"], CultureInfo.InvariantCulture), Optional("request_logical_reads"), request)));
+                        {
+                            double Number(string column) => Convert.ToDouble(reader[column], CultureInfo.InvariantCulture);
+                            (session, reads) = (Number("cpu_time"), Number("logical_reads"));
+                            if (reader["request_id"] is DBNull) continue;
+                            var start = (DateTime)reader["start_time"];
+                            requests.Add(new(Convert.ToInt32(reader["request_id"], CultureInfo.InvariantCulture), start, Number("request_cpu_time"), Number("request_logical_reads")));
+                            if (Number("total_elapsed_time") is var elapsed and >= 500) loop[start] = Number("request_cpu_time") * 1000 / elapsed;
                         }
+                }
+                if (session is { } cpu)
+                {
+                    totals.Add((long)(cpu + requests.Sum(request => request.Cpu)));
+                    counters.Add((Environment.TickCount64, new(cpu, reads ?? 0, requests)));
                 }
                 try { await Task.Delay(100, stop.Token); } catch (OperationCanceledException) { }
             }
@@ -248,10 +376,13 @@ internal static class ActivitySourceLiveChecks
         var drops = totals.Zip(totals.Skip(1)).Count(pair => pair.Second < pair.First);
         Console.WriteLine($"Activity Monitor: session plus request CPU fell {drops} times in {totals.Count} samples across two batches ({string.Join(",", totals)}).");
         var rates = new SessionRates(10);
-        var measured = counters.Select((sample, at) => rates.Apply(spid, Login, sample.Counters, at == 0 ? null : sample.At - counters[at - 1].At)[0]).Skip(1).ToList();
-        var busyRates = counters.Skip(1).Zip(measured).Where(pair => pair.First.Counters.Request is not null && counters.Count > 0).Select(pair => pair.Second).ToList();
-        check(counters.Count >= 10 && measured.All(rate => rate is >= 0) && busyRates.Count >= 4 && busyRates.Count(rate => rate >= 400) >= busyRates.Count / 2,
-            $"a busy session's CPU rate is never negative or blank across its batches, and reads near a full CPU while a loop runs ({string.Join(",", measured.Select(rate => rate is { } value ? Math.Round(value).ToString(CultureInfo.InvariantCulture) : "-"))})");
+        // Every sample is applied in order (the first only sets the baseline), then the first's empty rate is left out.
+        var measured = counters.Select(sample => rates.Apply(spid, Login, sample.Counters, sample.At)[0]).ToList().Skip(1).ToList();
+        var busyRates = counters.Skip(1).Zip(measured).Where(pair => pair.First.Counters.Requests.Count > 0).Select(pair => pair.Second).ToList();
+        var reference = loop.Count > 0 ? loop.Values.Max() : 0;
+        check(counters.Count >= 10 && measured.All(rate => rate is >= 0) && busyRates.Count >= 4 && reference > 0 && busyRates.Count(rate => rate >= reference / 2) >= busyRates.Count / 2,
+            $"a busy session's CPU rate is never negative or blank across its batches, and reads at least half of what the loop got of a scheduler ({Math.Round(reference)} ms/s) while it runs ("
+            + string.Join(",", measured.Select(rate => rate is { } value ? Math.Round(value).ToString(CultureInfo.InvariantCulture) : "-")) + ")");
     }
 
     /// <summary>A login without server state (scratch only): the overview opens unavailable, while the sessions probe runs and

@@ -173,7 +173,9 @@ pages, limits, error codes, display formats, benchmarks).
   `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do); the offline
   lint renders and checks every variant. Its live probes are built from this catalogue (`src/shared/live/catalog.ts`), and
   their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
-  sent as the source's args), never in SQL.
+  sent as the source's args), never in SQL. A session is one of Varia's pools only when its id is one Varia's own pooled
+  or Object Actions connections were given as they opened (`ILiveHost.OwnSessions`), never by the process id, host name
+  and program name a client claims at login alone.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

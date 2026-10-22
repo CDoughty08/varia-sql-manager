@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
@@ -47,6 +48,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
+    /// <summary>The connection id each pooled or Object Actions connection was made for, so opening it records its session.</summary>
+    private readonly ConditionalWeakTable<SqlConnection, string> owners = [];
+    /// <summary>Per connection id, the session ids its pooled and Object Actions connections were given when they opened (at
+    /// most one per session id, so bounded by the server's), until it disconnects.</summary>
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<int, byte>> ownSessions = new();
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
@@ -159,8 +165,36 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>The live views' pools: idle connection resiliency is off, so a session that was killed or dropped is a
     /// CONNECTION_LOST value and a new session id in the next tick, never a silent reconnect under the old one.</summary>
     SqlConnection ILiveHost.PoolConnection(string connectionId, string? database, string suffix) => PoolConnection(connectionId, database, suffix, reconnect: false);
-    Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
-    IReadOnlyCollection<string> ILiveHost.ApplicationNames => [.. connections.Values.Select(text => new SqlConnectionStringBuilder(text).ApplicationName).Distinct(StringComparer.Ordinal)];
+    Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
+    IReadOnlyCollection<VariaClient> ILiveHost.Clients => [.. connections.Values.Select(text => new SqlConnectionStringBuilder(text)).Select(builder => new VariaClient(builder.ApplicationName, Workstation(builder))).Distinct()];
+
+    /// <summary>The host name SqlClient sends at login: the Workstation ID when one is set, else this machine's name.</summary>
+    internal static string Workstation(SqlConnectionStringBuilder builder) => builder.WorkstationID is { Length: > 0 } id ? id : Environment.MachineName;
+
+    IReadOnlySet<int> ILiveHost.OwnSessions(string connectionId)
+    {
+        var own = new HashSet<int>();
+        if (ServerOf(connectionId) is not { } server) return own;
+        foreach (var (id, held) in ownSessions)
+            if (ServerOf(id) == server) own.UnionWith(held.Keys);
+        return own;
+    }
+
+    private SqlConnection Owned(SqlConnection connection, string connectionId)
+    {
+        owners.AddOrUpdate(connection, connectionId);
+        return connection;
+    }
+
+    /// <summary>Opens a pooled or Object Actions connection and records the session id the server gave it (a pooled connection
+    /// keeps its physical session's), so the Activity Monitor knows Varia's own sessions by what Varia holds, not by what a
+    /// client may claim at login.</summary>
+    private async Task OpenOwnedAsync(SqlConnection connection, CancellationToken token)
+    {
+        await Open(connection, token);
+        if (owners.TryGetValue(connection, out var id) && connection.State == System.Data.ConnectionState.Open && connections.ContainsKey(id))
+            ownSessions.GetOrAdd(id, _ => new())[connection.ServerProcessId] = 0;
+    }
 
     /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
     /// connections to one server count as one whatever name, login or database they used; the connection's data source when
@@ -403,6 +437,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
         profiles.TryRemove(args.ConnectionId, out _);
+        ownSessions.TryRemove(args.ConnectionId, out _);
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
@@ -452,10 +487,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = "master" };
         var name = builder.ApplicationName + " - Object Actions";
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
-        return new SqlConnection(builder.ConnectionString);
+        return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
 
-    Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
 
     /// <summary>Idle pooled connections whose initial catalog is the database (Object Explorer's and scripting's per-database
     /// pools, and before PR17 tables.columns) keep it in use: DROP DATABASE and MODIFY NAME would fail while the server
@@ -500,8 +535,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// reach the other pools, and each job restores its database before the connection returns to the pool.</summary>
     SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Scripting");
 
-    Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
-    Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
+    Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
 
     private SqlConnection PoolConnection(string connectionId, string? database, string suffix, bool reconnect = true)
     {
@@ -512,7 +547,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
         if (database is not null) builder.InitialCatalog = database;
         if (pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
-        return new SqlConnection(builder.ConnectionString);
+        return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
 
     private async Task<List<DatabaseInfo>> DatabasesAsync(ConnectionArgs args, CancellationToken token)

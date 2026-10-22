@@ -133,11 +133,11 @@ internal static class ActivityChecks
             ("EXEC", sessions with { Text = sessions.Text + "\nEXEC (N'x');" }, render),
             ("DDL", sessions with { Text = "DROP TABLE t;\n" + sessions.Text }, render),
             ("WAITFOR", sessions with { Text = "WAITFOR DELAY '00:00:01';\n" + sessions.Text }, render),
-            ("SELECT *", With(sessions, "SELECT TOP (@rowCap) s.session_id,", "SELECT TOP (@rowCap) *, s.session_id,"), render),
-            // The window's ORDER BY that remains orders no TOP.
-            ("a TOP without ORDER BY", With(sessions, "\nORDER BY CASE WHEN e.session_id", "\n, CASE WHEN e.session_id"), render),
-            ("a TOP literal above 20", With(sessions, "TOP (@rowCap)", "TOP (21)") with { Parameters = [] }, render),
-            ("a bare TOP", With(sessions, "TOP (@rowCap)", "TOP 5") with { Parameters = [] }, render),
+            ("SELECT *", With(sessions, "SELECT x.session_id,", "SELECT *, x.session_id,"), render),
+            // The windows' ORDER BYs that remain order no TOP.
+            ("a TOP without ORDER BY", With(With(sessions, "SELECT x.session_id", "SELECT TOP (@rowCap) x.session_id"), "\nORDER BY x.session_order, x.request_rank;", ";"), render),
+            ("a TOP literal above 20", With(sessions, "SELECT x.session_id", "SELECT TOP (21) x.session_id"), render),
+            ("a bare TOP", With(sessions, "SELECT x.session_id", "SELECT TOP 5 x.session_id"), render),
             ("an undeclared parameter", With(sessions, "@rowCap", "@cap"), render),
             ("an unused parameter", sessions with { Parameters = [.. sessions.Parameters, new("@unused", System.Data.SqlDbType.Int)] }, render),
             ("an unlisted literal", With(counters, "N'Logins/sec'", "N'Logouts/sec'"), render),
@@ -169,11 +169,12 @@ internal static class ActivityChecks
             && Text("activity.queries", "text").Contains($"END), {Catalog.Limit("statementChars")}) AS statement_text", StringComparison.Ordinal)
             && Catalog.Limit("textBatch") == ActivitySql.TextSlots,
             "the SQL reads the text sizes and lead blocker batches the catalogue's limits (and docs/activity-monitor.md) state");
-        // One row per session: requests come only from the ranked derived table, joined on rank 1.
-        check(sessions.Split("sys.dm_exec_requests").Length == 2 && sessions.Contains(") AS r ON r.session_id = s.session_id AND r.request_rank = 1\n", StringComparison.Ordinal)
+        // One row per request from one read of the requests DMV, ranked within the session; the cap counts sessions.
+        check(sessions.Split("sys.dm_exec_requests").Length == 2 && sessions.Contains(") AS r ON r.session_id = s.session_id\n", StringComparison.Ordinal)
             && sessions.Contains("COUNT(*) OVER (PARTITION BY q.session_id) AS request_count", StringComparison.Ordinal)
-            && sessions.Contains("ORDER BY CASE WHEN e.session_id IS NOT NULL OR r.blocking_session_id <> 0 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END, s.session_id;", StringComparison.Ordinal),
-            "the sessions statement returns one row per session with MARS requests folded, so its TOP counts sessions and keeps blocking sessions first");
+            && sessions.Contains("DENSE_RANK() OVER (ORDER BY CASE WHEN e.session_id IS NOT NULL OR r.session_blocked = 1 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END, s.session_id) AS session_order", StringComparison.Ordinal)
+            && sessions.EndsWith("WHERE x.session_order <= @rowCap\nORDER BY x.session_order, x.request_rank;", StringComparison.Ordinal),
+            "the sessions statement returns each MARS request as its own row, its cap counts sessions (never cutting a session's requests apart), and blocking sessions come first");
     }
 
     private static void Bands(Action<bool, string> check)

@@ -100,41 +100,53 @@ internal static partial class ActivitySql
     [
         "session_id", "login_time", "host_process_id", "is_user_process", "login_name", "original_login_name", "host_name", "program_name", "client_interface_name", "status",
         "database_id", "database_name", "cpu_time", "reads", "writes", "logical_reads", "memory_usage", "open_transaction_count", "last_request_start_time", "last_request_end_time",
-        "transaction_isolation_level", "workload_group", "client_net_address", "net_transport", "encrypt_option", "auth_scheme", "request_id", "request_count", "lowest_request_id",
-        "request_status", "command", "start_time", "total_elapsed_time", "request_cpu_ms", "request_logical_reads", "request_reads", "request_writes", "blocking_session_id", "wait_type",
+        "transaction_isolation_level", "workload_group", "client_net_address", "net_transport", "encrypt_option", "auth_scheme", "request_id", "request_rank", "request_count",
+        "lowest_request_id", "request_status", "command", "start_time", "total_elapsed_time", "request_cpu_time", "request_logical_reads", "blocking_session_id", "wait_type",
         "wait_time", "wait_resource", "last_wait_type", "request_open_transactions", "percent_complete", "granted_query_memory", "dop", "query_hash", "request_database_id"
     ];
+
+    // A session's requests, each its own row, ranked within the session (a blocked one first, else the lowest id): the first
+    // row gives Processes its request columns, and each row's own CPU and reads let per-session rates follow every request by
+    // its id and start time, so one MARS request never stands in for another. The session's request count, lowest id and
+    // whether any of its requests waits on another session ride on every row.
+    private const string Requests =
+        "LEFT JOIN (SELECT q.session_id, q.request_id, q.status, q.command, q.start_time, q.total_elapsed_time, q.cpu_time, q.logical_reads, q.blocking_session_id,\n"
+        + "                  q.wait_type, q.wait_time, q.wait_resource, q.last_wait_type, q.open_transaction_count, q.percent_complete, q.granted_query_memory, q.dop, q.query_hash,\n"
+        + "                  q.database_id, ROW_NUMBER() OVER (PARTITION BY q.session_id ORDER BY CASE WHEN q.blocking_session_id > 0 THEN 0 ELSE 1 END, q.request_id) AS request_rank,\n"
+        + "                  COUNT(*) OVER (PARTITION BY q.session_id) AS request_count, MIN(q.request_id) OVER (PARTITION BY q.session_id) AS lowest_request_id,\n"
+        + "                  MAX(CASE WHEN q.blocking_session_id <> 0 THEN 1 ELSE 0 END) OVER (PARTITION BY q.session_id) AS session_blocked\n"
+        + "           FROM sys.dm_exec_requests AS q) AS r ON r.session_id = s.session_id\n";
+
+    private const string RequestColumns =
+        "       r.request_id, r.request_rank, r.request_count, r.lowest_request_id, r.status AS request_status, r.command, r.start_time, r.total_elapsed_time,\n"
+        + "       r.cpu_time AS request_cpu_time, r.logical_reads AS request_logical_reads, r.blocking_session_id, r.wait_type, r.wait_time, r.wait_resource, r.last_wait_type,\n"
+        + "       r.open_transaction_count AS request_open_transactions, r.percent_complete, r.granted_query_memory, r.dop, r.query_hash, r.database_id AS request_database_id,\n";
+
+    /// <summary>One row per request (one for a session without any) of the first @rowCap sessions in <paramref name="order"/>,
+    /// then session id: @rowCap (the cap plus one, to see truncation) counts sessions, so a session's requests are never cut apart.</summary>
+    private static string SessionRows(string sessionColumns, string from, string order) =>
+        "SELECT " + string.Join(",\n       ", SessionColumns.Chunk(10).Select(chunk => string.Join(", ", chunk.Select(column => "x." + column)))) + "\n"
+        + "FROM (" + sessionColumns + RequestColumns + "       DENSE_RANK() OVER (ORDER BY " + order + ", s.session_id) AS session_order\n" + from + ") AS x\n"
+        + "WHERE x.session_order <= @rowCap\nORDER BY x.session_order, x.request_rank;";
 
     private static IReadOnlyList<ActivityStatement> Sessions(bool serverState) => !serverState ? [LimitedSessions] :
     [
         Clock("activity.sessions"),
-        // One row per session, so @rowCap (the cap plus one, to see truncation) counts sessions. MARS requests fold here: a
-        // blocked request (else the lowest) gives the request columns, and the request count, CPU and reads cover them all.
         // Sessions in a blocking wait, as waiter or blocker, come first and then sessions with a request, so truncation drops
         // idle sessions and never a session the edges name.
         new("activity.sessions", "sessions",
-            "SELECT TOP (@rowCap) s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
-            + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
-            + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
-            + "       g.name AS workload_group, c.client_net_address, c.net_transport, c.encrypt_option, c.auth_scheme,\n"
-            + "       r.request_id, r.request_count, r.lowest_request_id, r.status AS request_status, r.command, r.start_time, r.total_elapsed_time, r.request_cpu_ms,\n"
-            + "       r.request_logical_reads, r.request_reads, r.request_writes, r.blocking_session_id, r.wait_type, r.wait_time,\n"
-            + "       r.wait_resource, r.last_wait_type, r.open_transaction_count AS request_open_transactions, r.percent_complete, r.granted_query_memory,\n"
-            + "       r.dop, r.query_hash, r.database_id AS request_database_id\n"
-            + "FROM sys.dm_exec_sessions AS s\n"
-            + "LEFT JOIN sys.dm_exec_connections AS c ON c.session_id = s.session_id AND c.parent_connection_id IS NULL\n"
-            + "LEFT JOIN (SELECT q.session_id, q.request_id, q.status, q.command, q.start_time, q.total_elapsed_time, q.blocking_session_id, q.wait_type, q.wait_time,\n"
-            + "                  q.wait_resource, q.last_wait_type, q.open_transaction_count, q.percent_complete, q.granted_query_memory, q.dop, q.query_hash, q.database_id,\n"
-            + "                  ROW_NUMBER() OVER (PARTITION BY q.session_id ORDER BY CASE WHEN q.blocking_session_id > 0 THEN 0 ELSE 1 END, q.request_id) AS request_rank,\n"
-            + "                  COUNT(*) OVER (PARTITION BY q.session_id) AS request_count, MIN(q.request_id) OVER (PARTITION BY q.session_id) AS lowest_request_id,\n"
-            + "                  SUM(q.cpu_time) OVER (PARTITION BY q.session_id) AS request_cpu_ms, SUM(q.logical_reads) OVER (PARTITION BY q.session_id) AS request_logical_reads,\n"
-            + "                  SUM(q.reads) OVER (PARTITION BY q.session_id) AS request_reads, SUM(q.writes) OVER (PARTITION BY q.session_id) AS request_writes\n"
-            + "           FROM sys.dm_exec_requests AS q) AS r ON r.session_id = s.session_id AND r.request_rank = 1\n"
-            + "LEFT JOIN (SELECT DISTINCT v.session_id FROM sys.dm_os_waiting_tasks AS w CROSS APPLY (VALUES (w.session_id), (w.blocking_session_id)) AS v(session_id)\n"
-            + "           WHERE w.session_id IS NOT NULL AND w.blocking_session_id IS NOT NULL AND w.blocking_session_id <> w.session_id) AS e ON e.session_id = s.session_id\n"
-            + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n"
-            + "LEFT JOIN sys.dm_resource_governor_workload_groups AS g ON g.group_id = s.group_id\n"
-            + "ORDER BY CASE WHEN e.session_id IS NOT NULL OR r.blocking_session_id <> 0 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END, s.session_id;",
+            SessionRows("SELECT s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
+                + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
+                + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
+                + "       g.name AS workload_group, c.client_net_address, c.net_transport, c.encrypt_option, c.auth_scheme,\n",
+                "FROM sys.dm_exec_sessions AS s\n"
+                + "LEFT JOIN sys.dm_exec_connections AS c ON c.session_id = s.session_id AND c.parent_connection_id IS NULL\n"
+                + Requests
+                + "LEFT JOIN (SELECT DISTINCT v.session_id FROM sys.dm_os_waiting_tasks AS w CROSS APPLY (VALUES (w.session_id), (w.blocking_session_id)) AS v(session_id)\n"
+                + "           WHERE w.session_id IS NOT NULL AND w.blocking_session_id IS NOT NULL AND w.blocking_session_id <> w.session_id) AS e ON e.session_id = s.session_id\n"
+                + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n"
+                + "LEFT JOIN sys.dm_resource_governor_workload_groups AS g ON g.group_id = s.group_id\n",
+                "CASE WHEN e.session_id IS NOT NULL OR r.session_blocked = 1 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END"),
             SessionColumns, [Int("@rowCap")], ["sessions", "blocking", "activeQueries", "focus.cpuRate", "focus.logicalReadsRate"], NoLiterals),
         // Task-level blocking waits; a parallel query's waits on itself are left out.
         new("activity.sessions", "edges",
@@ -178,25 +190,13 @@ internal static partial class ActivitySql
     // Without server state SQL Server shows only the caller's own session in sys.dm_exec_sessions and sys.dm_exec_requests,
     // and refuses the clock, connections, waiting tasks and workload groups (300, 297): the same columns, those as NULL.
     private static readonly ActivityStatement LimitedSessions = new("activity.sessions", "sessions",
-        "SELECT TOP (@rowCap) s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
-        + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
-        + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
-        + "       CONVERT(sysname, NULL) AS workload_group, CONVERT(varchar(48), NULL) AS client_net_address, CONVERT(nvarchar(40), NULL) AS net_transport,\n"
-        + "       CONVERT(nvarchar(40), NULL) AS encrypt_option, CONVERT(nvarchar(40), NULL) AS auth_scheme,\n"
-        + "       r.request_id, r.request_count, r.lowest_request_id, r.status AS request_status, r.command, r.start_time, r.total_elapsed_time, r.request_cpu_ms,\n"
-        + "       r.request_logical_reads, r.request_reads, r.request_writes, r.blocking_session_id, r.wait_type, r.wait_time,\n"
-        + "       r.wait_resource, r.last_wait_type, r.open_transaction_count AS request_open_transactions, r.percent_complete, r.granted_query_memory,\n"
-        + "       r.dop, r.query_hash, r.database_id AS request_database_id\n"
-        + "FROM sys.dm_exec_sessions AS s\n"
-        + "LEFT JOIN (SELECT q.session_id, q.request_id, q.status, q.command, q.start_time, q.total_elapsed_time, q.blocking_session_id, q.wait_type, q.wait_time,\n"
-        + "                  q.wait_resource, q.last_wait_type, q.open_transaction_count, q.percent_complete, q.granted_query_memory, q.dop, q.query_hash, q.database_id,\n"
-        + "                  ROW_NUMBER() OVER (PARTITION BY q.session_id ORDER BY CASE WHEN q.blocking_session_id > 0 THEN 0 ELSE 1 END, q.request_id) AS request_rank,\n"
-        + "                  COUNT(*) OVER (PARTITION BY q.session_id) AS request_count, MIN(q.request_id) OVER (PARTITION BY q.session_id) AS lowest_request_id,\n"
-        + "                  SUM(q.cpu_time) OVER (PARTITION BY q.session_id) AS request_cpu_ms, SUM(q.logical_reads) OVER (PARTITION BY q.session_id) AS request_logical_reads,\n"
-        + "                  SUM(q.reads) OVER (PARTITION BY q.session_id) AS request_reads, SUM(q.writes) OVER (PARTITION BY q.session_id) AS request_writes\n"
-        + "           FROM sys.dm_exec_requests AS q) AS r ON r.session_id = s.session_id AND r.request_rank = 1\n"
-        + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n"
-        + "ORDER BY CASE WHEN r.blocking_session_id <> 0 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END, s.session_id;",
+        SessionRows("SELECT s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
+            + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
+            + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
+            + "       CONVERT(sysname, NULL) AS workload_group, CONVERT(varchar(48), NULL) AS client_net_address, CONVERT(nvarchar(40), NULL) AS net_transport,\n"
+            + "       CONVERT(nvarchar(40), NULL) AS encrypt_option, CONVERT(nvarchar(40), NULL) AS auth_scheme,\n",
+            "FROM sys.dm_exec_sessions AS s\n" + Requests + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n",
+            "CASE WHEN r.session_blocked = 1 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END"),
         SessionColumns, [Int("@rowCap")], ["sessions", "focus.cpuRate", "focus.logicalReadsRate"], NoLiterals);
 
     /// <summary>The capability probe: once per opened connection, before any sample, the session's id and what the login may
@@ -313,9 +313,9 @@ internal static partial class ActivitySql
         .. CatalogSql.Builtins, "DB_NAME(", "FILE_NAME(", "OBJECT_ID(", "INDEXPROPERTY(", "SERVERPROPERTY(", "HAS_PERMS_BY_NAME(", "COL_LENGTH(", "sys.sysprocesses", "sys.sysperfinfo",
         "fn_varbintohexstr", "dm_tran_locks", "sp_executesql", "tempdb"
     ];
-    /// <summary>Columns and views that appear only from a version band, or with a capability, or on one kind of server.</summary>
     /// <summary>What the capability probe alone may call.</summary>
     private static readonly string[] CapabilityTokens = ["HAS_PERMS_BY_NAME(", "COL_LENGTH("];
+    /// <summary>Columns and views that appear only from a version band, or with a capability, or on one kind of server.</summary>
     private static readonly (string Token, int Since)[] Gates = [("total_cpu_usage_ms", 13), ("total_scheduler_delay_ms", 13), ("r.dop", 13), ("total_grant_kb", 13), ("dm_exec_input_buffer", 13)];
     private static readonly string[] SpillTokens = ["total_spills", "last_spills"];
     private static readonly string[] AzureOnly = ["dm_db_resource_stats", "sys.database_files", "dm_db_wait_stats"];
