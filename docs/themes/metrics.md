@@ -66,6 +66,7 @@ Only `:hover` rules carry the fast transition, and rules that mark a state (a se
 | `--varia-motion-base` | 120 | Menus, popovers and dialogs appearing. |
 | `--varia-motion-spin` | 1500 | One turn of a loading spinner (a loop). |
 | `--varia-motion-pulse` | 2000 | One beat of the live dot, 0.5 Hz (a loop). |
+| `--varia-motion-delay` | 300 | The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it. |
 
 ## Icon sizes
 
@@ -76,7 +77,7 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | `--varia-glyph-badge` | 9 | The status mark at a tree icon's corner. | `.oe-icon .oe-badge` |
 | `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.memory-indicator .codicon`, `.editor-status .codicon` |
 | `--varia-glyph-md` | 16 | Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs. | `.icon` |
-| `--varia-glyph-lg` | 24 | Empty states. | `.explorer-empty > .icon` |
+| `--varia-glyph-lg` | 24 | Large glyphs; none yet, as empty states draw theirs at md (16 px). |  |
 
 ## Bars and rows
 
@@ -87,5 +88,5 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 | `--varia-header` | 40 | 44 | The title bar. | Not yet |
 | `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs` |
 | `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button` |
-| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row` |
+| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.skeleton-row` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |

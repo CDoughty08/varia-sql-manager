@@ -372,11 +372,11 @@ try {
   await expect(dialog).toHaveCount(0)
   await expect(page.locator('.query-context')).toContainText('Development')
   // The query status bar sits below the query by default, so the connection's colour is its top edge, facing the query.
-  expect(await page.locator('.query-context').evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 107, 115)')
+  expect(await page.locator('.query-context').evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 103, 103)')
   // Object Explorer shows the server by its name and color, expanded to its folders.
   const serverRow = await explorerRow(page, 'Development')
   await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
-  expect(await serverRow.locator('.oe-accent').evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(230, 107, 115)')
+  expect(await serverRow.locator('.oe-accent').evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(230, 103, 103)')
   await expect(await explorerRow(page, 'Development', 'Server Objects')).toBeVisible()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')

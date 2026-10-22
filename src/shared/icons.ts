@@ -34,8 +34,8 @@ export const iconStroke = 1
 /** The codicons Varia draws; tests/icons.test.ts checks each exists in the bundled font. */
 export const codiconIcons = [
   'add', 'archive', 'arrow-left', 'arrow-small-down', 'book', 'bookmark', 'case-sensitive', 'check', 'chevron-down', 'chevron-right', 'circle-filled',
-  'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'code', 'collapse-all', 'comment', 'copy', 'debug-disconnect',
-  'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'error', 'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-opened',
+  'circle-outline', 'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'code', 'collapse-all', 'comment', 'copy', 'debug-disconnect',
+  'debug-pause', 'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'error', 'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-opened',
   'git-compare', 'go-to-file', 'graph', 'history', 'info', 'insert', 'json', 'law', 'layers', 'layout', 'link', 'list-flat', 'list-ordered', 'list-tree',
   'loading', 'lock', 'milestone', 'multiple-windows', 'new-file', 'output', 'package', 'pass', 'person', 'play', 'plug', 'redo', 'references', 'refresh',
   'remote', 'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty', 'star-full',
