@@ -30,7 +30,8 @@ that went down (cleared) is null alone, also marked `reset`, and the others keep
 A snapshot table is a new stored result each sample (two revisions alive), sorted as asked with its key breaking ties,
 cut at its row cap; one that keeps departed rows keeps a tracked row that left for one more revision. An append table
 grows one stored result (a segment) by the rows above the highest id it has settled, rolling to a new segment at
-200,000 rows or 32 MiB (2 kept). A probe whose filter mode is memory filters the stored cell text;
+200,000 rows or 32 MiB (2 segments' worth kept, in at most 8 results).
+A probe whose filter mode is memory filters the stored cell text;
 restart starts its append tables again under the new predicate.
 
 | Probe | Interval (default, min, max) | Schedule | Runs on | Emits | Description |
@@ -54,7 +55,7 @@ restart starts its append tables again under the new predicate.
 | Series, status values, errors | 64 series per probe; 16 status values of 128 characters; 8 probe errors of 2,000 characters per tick |
 | Sort, filter, tracking | 4 sort columns; filter text 400 characters on 8 columns; 64 tracked keys of 512 characters per table |
 | Resume token, kept results | 256 base64url characters; 64 results kept when a source ends |
-| Tables | a snapshot revision at most 10,000 rows (a table's own cap may be lower); an append segment 200,000 rows or 32 MiB, 2 kept; at most 10,000 new append rows a tick |
+| Tables | a snapshot revision at most 10,000 rows (a table's own cap may be lower); an append segment 200,000 rows or 32 MiB, 2 segments' worth kept in at most 8 results a table; at most 10,000 new append rows a tick |
 | Table memory | 64 MiB per subscription, all live tables at most 25 % of the result budget; past either, a sample stores what fits and reports BUDGET |
 | Facets, departed rows | 7 columns of 100 values of 128 characters, at most 32 KiB of text a tick; 64 departed rows per table |
 | Live statements | 2 at once per connection and 8 in the backend (shared with unary methods on lane live); a statement waits for its turn at most its budget, then the probe reports BUSY |

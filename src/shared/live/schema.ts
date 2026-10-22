@@ -281,7 +281,7 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     descriptor: backendDescriptorSchema,
     segment: nonNegative31,
     rolledFrom: u32.optional(),
-    retired: z.array(u32).min(1).max(L.segments).optional(),
+    retired: z.array(u32).min(1).max(L.segmentResults).optional(),
     restarted: z.literal(true).optional()
   }).strict()
   const sample = z.object({

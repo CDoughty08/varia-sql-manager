@@ -280,11 +280,12 @@ describe('live table samples', () => {
     expect(ok(fixture.event, allTick({ facets: [facet('v0', wide(Math.floor(L.facetBytes / perValue)))] }))).toBe(true)
     expect(ok(fixture.event, allTick({ facets: [facet('v0', wide(Math.floor(L.facetBytes / perValue) + 1))] }))).toBe(false)
   })
-  it('marks a restarted append table, which may retire both of its segments', () => {
-    const value = allTick({}, { restarted: true, retired: [7, 8] })
+  it('marks a restarted append table, which may retire every result it held', () => {
+    const all = Array.from({ length: L.segmentResults }, (_, at) => 7 + at)
+    const value = allTick({}, { restarted: true, retired: all })
     expect(ok(fixture.event, value)).toBe(true)
-    expect(liveRetired(value as BackendLiveEvent)).toEqual([7, 8])
-    for (const [name, patch] of Object.entries({ three: { retired: [7, 8, 9] }, restartedFalse: { restarted: false }, none: { retired: [] } }))
+    expect(liveRetired(value as BackendLiveEvent)).toEqual(all)
+    for (const [name, patch] of Object.entries({ more: { retired: [...all, 99] }, restartedFalse: { restarted: false }, none: { retired: [] } }))
       expect(ok(fixture.event, allTick({}, patch)), name).toBe(false)
   })
   it('takes start positions for a source\'s append tables: beginning, the last rows, or the rows before an id', () => {
@@ -329,7 +330,7 @@ describe('live frame budget', () => {
             ...(table.departed ? { departed: Array.from({ length: L.trackedKeys }, (_, at) => 2 ** 31 - 1 - at) } : {}),
             ...(table.facets?.length ? { facets: table.facets.map(column => ({ column, values: facetValues(), more: true })) } : {})
           })) } : {}),
-          ...(appends.length ? { append: appends.slice(0, L.appendPerProbe).map(({ table, index }) => ({ table: index, descriptor: columnsOf(table), segment: 2 ** 31 - 1, rolledFrom: 0xffffffff, retired: [0xffffffff, 0xffffffff], restarted: true })) } : {}),
+          ...(appends.length ? { append: appends.slice(0, L.appendPerProbe).map(({ table, index }) => ({ table: index, descriptor: columnsOf(table), segment: 2 ** 31 - 1, rolledFrom: 0xffffffff, retired: Array.from({ length: L.segmentResults }, () => 0xffffffff), restarted: true })) } : {}),
           ...(probe.status?.length ? { status: probe.status.map(id => ({ id, value: wideText(L.statusCharacters) })) } : {})
         }
       })

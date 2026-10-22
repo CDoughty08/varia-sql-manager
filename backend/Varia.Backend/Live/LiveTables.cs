@@ -521,7 +521,8 @@ internal sealed class LiveSnapshotTable
 /// appended are skipped by id. An id settles once first seen the catalogue's ticks and milliseconds ago; the remembered ids
 /// stay within twice the rows a tick reads (the lowest settle early past that). A late row is appended in arrival order.
 /// Each write seals what it appended, so the rows are readable at once. A segment rolls to a new one at its row or byte cap,
-/// keeping the newest two; a new start (another filter or args) retires every segment and starts again. A row that was not
+/// keeping two segments' worth (one that stopped early for memory counts what it holds) in at most limits.live.segmentResults
+/// stored results; a new start (another filter or args) retires every segment and starts again. A row that was not
 /// stored (out of budget, or past a second segment in one read) is never seen and nothing above it settles before it, so a
 /// later read stores it once.</summary>
 internal sealed class LiveAppendTable
@@ -613,13 +614,6 @@ internal sealed class LiveAppendTable
     {
         if (!Started) throw new InvalidOperationException("Start the table first.");
         ticks++;
-        // A start's first read has arrived: the segments it supersedes go now, named by this sample (or the next one stored).
-        foreach (var set in superseded)
-        {
-            retiring.Add(set.ResultId);
-            owner.Store.Release(set.ResultId);
-        }
-        superseded.Clear();
         var budget = false;
         var opened = false;
         // The lowest new id left unstored: nothing at or above it settles this time.
@@ -679,11 +673,21 @@ internal sealed class LiveAppendTable
         return new(sample, budget);
     }
 
-    /// <summary>Opens the first segment of a start, with its note row.</summary>
+    /// <summary>Opens the first segment of a start, with its note row. The segments the start supersedes are released only
+    /// together with an open that succeeds, so the sample that names them retired is always sent: when the budget refuses the
+    /// open, they go first and their bytes pay for the new segment's metadata (they have the same columns), which nothing
+    /// else can take in between.</summary>
     private bool Open()
     {
-        if (OpenSet() is not { } opened) return false;
-        (current, currentBudget) = opened;
+        var opened = OpenSet(false);
+        if (opened is null && superseded.Count > 0)
+        {
+            Supersede();
+            opened = OpenSet(true);
+        }
+        if (opened is null) return false;
+        Supersede();
+        (current, currentBudget) = opened.Value;
         segment++;
         segmentRows = 0;
         changed = true;
@@ -693,21 +697,33 @@ internal sealed class LiveAppendTable
         return true;
     }
 
-    private (ResultSetBuffer Set, QueryBudget Budget)? OpenSet()
+    /// <summary>A start's first segment is open: the segments it supersedes go now, named by its sample.</summary>
+    private void Supersede()
+    {
+        foreach (var set in superseded)
+        {
+            retiring.Add(set.ResultId);
+            owner.Store.Release(set.ResultId);
+        }
+        superseded.Clear();
+    }
+
+    private (ResultSetBuffer Set, QueryBudget Budget)? OpenSet(bool transfer)
     {
         var budget = owner.NewBudget();
         var (columns, wires) = LiveTableSet.Shape(spec);
-        return owner.Store.Open(budget, 0, 1, 1, "rows", columns, wires) is { } set ? (set, budget) : null;
+        return owner.Store.Open(budget, 0, 1, 1, "rows", columns, wires, transfer) is { } set ? (set, budget) : null;
     }
 
     /// <summary>Moves on to a new segment whose first row is <paramref name="first"/>: only once that row is stored does the
-    /// current segment complete (rolledFrom) and the oldest beyond the kept segments (limits.live.segments) go, named retired.
+    /// current segment complete (rolledFrom) and the oldest go, named retired, while the completed ones hold more than the
+    /// kept segments' worth (<see cref="OverKept"/>) or the table would hold more than limits.live.segmentResults results.
     /// When the row does not fit, the new segment is dropped unseen and nothing is retired (<paramref name="refused"/>); false
     /// when not even a segment opens.</summary>
     private bool Roll(LiveRow first, out bool refused)
     {
         refused = false;
-        if (OpenSet() is not { } next) return false;
+        if (OpenSet(false) is not { } next) return false;
         if (!LiveTableSet.Write(next.Set, first))
         {
             owner.Store.Release(next.Set.ResultId);
@@ -720,7 +736,7 @@ internal sealed class LiveAppendTable
             rolledFrom = current.ResultId;
             segments.Add(current);
         }
-        while (segments.Count >= owner.Limits.Segments)
+        while (segments.Count >= owner.Limits.SegmentResults || segments.Count >= owner.Limits.Segments && OverKept())
         {
             retiring.Add(segments[0].ResultId);
             owner.Store.Release(segments[0].ResultId);
@@ -730,6 +746,15 @@ internal sealed class LiveAppendTable
         segment++;
         segmentRows = 0;
         return true;
+    }
+
+    /// <summary>Whether the completed segments hold more than the kept segments' worth (limits.live.segments less the current
+    /// one, at segmentRows or segmentBytes each). A segment that stopped early for memory counts only what it holds, so the
+    /// rolls that follow a budget stop never cost a segment while the table stays under its caps.</summary>
+    private bool OverKept()
+    {
+        var worth = owner.Limits.Segments - 1;
+        return segments.Sum(set => set.RowsAvailable) > (long)owner.Limits.SegmentRows * worth || segments.Sum(set => set.Budget.UsedBytes) > owner.Limits.SegmentBytes * worth;
     }
 
     /// <summary>Settles the highest id first seen at least the settle window ago, then the lowest ids past the dedupe bound,

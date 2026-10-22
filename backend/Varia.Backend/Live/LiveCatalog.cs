@@ -35,7 +35,7 @@ internal sealed record LiveSourceJson(string Id, string Label, string Descriptio
 internal sealed record LiveLimitsJson(int PortStreams, int BackendSubscriptions, int PerServer, int Probes, int TablesPerProbe, int AppendPerProbe, int TablesPerTick,
     int Series, int Statuses, int StatusCharacters, int Errors, int MessageCharacters, int NoteCharacters, int Columns, LiveIntervalBoundsJson IntervalMs, int InitialCredit,
     int FrameBudget, int SortColumns, int FilterCharacters, int FilterColumns, int TrackedKeys, int KeyCharacters, int ResumeCharacters, int Kept, int EventBody,
-    int StatementsPerConnection, int Statements, LiveIntervalBoundsJson BudgetMs, int BackoffMs, int IdleMs, int SnapshotRows, int SegmentRows, long SegmentBytes, int Segments,
+    int StatementsPerConnection, int Statements, LiveIntervalBoundsJson BudgetMs, int BackoffMs, int IdleMs, int SnapshotRows, int SegmentRows, long SegmentBytes, int Segments, int SegmentResults,
     int BatchRows, long SubscriptionBytes, double BudgetShare, int FacetColumns, int FacetValues, int FacetCharacters, int FacetBytes, int HiddenIntervalMs);
 
 /// <summary>The live catalogue, embedded as live-catalog.json (a vitest file snapshot keeps the copy in sync with

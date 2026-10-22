@@ -48,7 +48,7 @@ internal static class LiveTableChecks
         var catalog = LiveCatalog.Current;
         var grid = catalog.Probes[SyntheticSampler.GridProbe];
         var log = catalog.Probes[SyntheticSampler.LogProbe];
-        check(catalog.Limits is { SnapshotRows: 10_000, SegmentRows: 200_000, SegmentBytes: 32L << 20, Segments: 2, BatchRows: 10_000, SubscriptionBytes: 64L << 20, BudgetShare: 0.25,
+        check(catalog.Limits is { SnapshotRows: 10_000, SegmentRows: 200_000, SegmentBytes: 32L << 20, Segments: 2, SegmentResults: 8, BatchRows: 10_000, SubscriptionBytes: 64L << 20, BudgetShare: 0.25,
                 FacetColumns: 7, FacetValues: 100, FacetCharacters: 128, FacetBytes: 32 * 1024, HiddenIntervalMs: 30_000 }
             && grid.Tables is [{ Mode: "snapshot", RowCap: 10_000, Departed: true, Facets: ["group"] }, { Mode: "snapshot", RowCap: 10, Departed: false, Facets: [] }]
             && grid.Views is ["even"] && grid.FilterMode == "memory"
@@ -434,6 +434,83 @@ internal static class LiveTableChecks
         var arrived = restarting.Append([Long(2)], 0).Sample!;
         check(stillReadable && arrived is { Restarted: true, Retired: [var gone] } && gone == shown.Descriptor.ResultId && restartStore.Find(gone) is null,
             "a restart keeps the segments it supersedes readable until its first read arrives (a failed read leaves the renderer's view whole), and that read retires them");
+
+        // The first read after a restart with no memory free, while a page read leases the old segment (its release frees
+        // nothing yet): the old segment's release and the new one's open go together, so the sample naming it is still sent.
+        var leaseStore = new ResultStore(1L << 20, 1L << 20);
+        leaseStore.ShareWithLive(1);
+        var leaseHog = leaseStore.BeginQuery("hog");
+        var leasing = new LiveTableSet(leaseStore, Guid.NewGuid().ToString(), Limits).Append(Probe(Log()), 0);
+        leasing.Start(0, null, null, "a");
+        var leasedShown = leasing.Append([Long(1), Long(2)], 0).Sample!;
+        leasing.Start(0, null, null, "b");
+        var leasedSet = leaseStore.Find(leasedShown.Descriptor.ResultId)!;
+        var leased = leasedSet.TryLease();
+        leaseStore.TryReserve(leaseHog, leaseStore.GlobalBytes - leaseStore.UsedBytes, false, out _);
+        var squeezedRestart = leasing.Append([Long(3)], 0);
+        if (leased) leasedSet.ReleaseLease();
+        var settledBack = leaseStore.UsedBytes <= leaseStore.GlobalBytes;
+        check(leased && squeezedRestart is { Budget: true, Sample: { Restarted: true, Retired: [var leasedGone], Descriptor.RowsAvailable: 0 } } && leasedGone == leasedShown.Descriptor.ResultId
+            && leaseStore.Find(leasedGone) is null && settledBack,
+            "a restart whose first read finds no memory free still opens its segment with the bytes the old segments free, so the sample naming them retired is sent: "
+            + (squeezedRestart.Sample is null ? "no sample" : "sample") + ", budget " + squeezedRestart.Budget);
+
+        AppendPressureChecks(check);
+    }
+
+    /// <summary>Memory that frees and fills again tick after tick: each budget stop completes a segment early, and the rolls
+    /// that follow never cost a kept segment while the table stays under its caps; the stored results stay bounded.</summary>
+    private static void AppendPressureChecks(Action<bool, string> check)
+    {
+        static (List<LiveTableWrite<LiveAppendSample>> Writes, uint First, ResultStore Store) Alternate(LiveLimitsJson limits, int ticks)
+        {
+            var store = new ResultStore(1L << 20, 1L << 20);
+            store.ShareWithLive(1);
+            var hog = store.BeginQuery("hog");
+            void Free(long free)
+            {
+                store.Return(hog, hog.UsedBytes);
+                store.TryReserve(hog, Math.Max(0, store.GlobalBytes - store.UsedBytes - free), false, out _);
+            }
+            Free(300 * 1024);
+            var table = new LiveTableSet(store, Guid.NewGuid().ToString(), limits).Append(Probe(Log()), 0);
+            table.Start(0, null, null, "");
+            var first = table.Append([.. Enumerable.Range(1, 100).Select(id => Long(id))], 0).Sample!;
+            var writes = new List<LiveTableWrite<LiveAppendSample>>();
+            var top = 100L;
+            for (var tick = 0; tick < ticks; tick++)
+            {
+                Free(tick % 2 == 0 ? 1024 : 400 * 1024);
+                top += 40;
+                writes.Add(table.Append([.. Enumerable.Range((int)table.SettledId + 1, (int)(top - table.SettledId)).Select(id => Long(id))], 0));
+            }
+            return (writes, first.Descriptor.ResultId, store);
+        }
+
+        var (writes, first, store) = Alternate(Limits, 10);
+        var named = writes.Select(write => write.Sample).OfType<LiveAppendSample>().ToList();
+        var stored = named.Select(sample => sample.Descriptor.ResultId).Append(first).Distinct().Sum(id => store.Find(id)?.RowsAvailable ?? 0);
+        check(writes.Count(write => write.Budget) >= 5 && named.Count(sample => sample.RolledFrom is not null) >= 3 && named.All(sample => sample.Retired is null)
+            && store.Find(first) is { RowsAvailable: 100 } && stored < Limits.SegmentRows,
+            "an append table whose memory frees and fills again each tick keeps every segment while it stays under its caps (no roll after a budget stop retires one): "
+            + string.Join(",", writes.Select(write => (write.Budget ? "B" : "") + write.Sample?.Segment + (write.Sample?.Retired is { } gone ? "r" + gone.Length : ""))) + " stored " + stored);
+
+        // Past limits.live.segmentResults the oldest goes whatever it holds, named retired, so the results stay bounded.
+        var bounded = Limits with { SegmentResults = 3 };
+        var (boundWrites, boundFirst, boundStore) = Alternate(bounded, 16);
+        var held = new List<uint> { boundFirst };
+        var consistent = true;
+        var maxHeld = 1;
+        foreach (var sample in boundWrites.Select(write => write.Sample).OfType<LiveAppendSample>())
+        {
+            foreach (var id in sample.Retired ?? []) consistent &= held.Remove(id) && boundStore.Find(id) is null;
+            if (!held.Contains(sample.Descriptor.ResultId)) held.Add(sample.Descriptor.ResultId);
+            maxHeld = Math.Max(maxHeld, held.Count);
+        }
+        consistent &= held.All(id => boundStore.Find(id) is not null);
+        var firstGone = boundWrites.Select(write => write.Sample?.Retired).OfType<uint[]>().FirstOrDefault();
+        check(consistent && maxHeld == 3 && firstGone is [var oldest] && oldest == boundFirst,
+            "an append table holds at most segmentResults stored results: past them the oldest is retired and named, and every result it holds stays readable: held " + maxHeld + " " + string.Join(",", boundWrites.Select(write => write.Sample?.Retired?.Length ?? 0)));
     }
 
     /// <summary>One read that crosses a segment's cap twice opens one segment, so every stored row is in a segment a sample named.</summary>
@@ -452,6 +529,26 @@ internal static class LiveTableChecks
             && firstIds.SequenceEqual(["1", "2"]) && nextIds.SequenceEqual(["3", "4"]) && settled < 5
             && rest is { Segment: 2, Retired: [var retired] } && retired == first.Descriptor.ResultId && rest.RolledFrom == next.Descriptor.ResultId && Ids(store, rest.Descriptor).SequenceEqual(["5", "6"]),
             "a read that would fill two segments opens one (a sample names only the newest) and leaves the rest for the next read, which rolls again: every stored row is in a segment main was told of");
+
+        // A roll the budget refuses (the new segment opens, its first row does not fit) with a completed segment already kept:
+        // the new segment is dropped and nothing is retired; the roll that later succeeds retires as a roll at the cap does.
+        var refuseStore = new ResultStore(1L << 20, 1L << 20);
+        refuseStore.ShareWithLive(1);
+        var refuseHog = refuseStore.BeginQuery("hog");
+        var capped = new LiveTableSet(refuseStore, Guid.NewGuid().ToString(), Limits with { SegmentRows = 3 }).Append(Probe(Log()), 0);
+        capped.Start(0, null, null, "");
+        var s0 = capped.Append([Long(1), Long(2), Long(3)], 0).Sample!;
+        var s1 = capped.Append([Long(1), Long(2), Long(3), Long(4), Long(5), Long(6)], 0).Sample!;
+        refuseStore.TryReserve(refuseHog, Math.Max(0, refuseStore.GlobalBytes - refuseStore.UsedBytes - 1024), false, out _);
+        var countBefore = refuseStore.Count;
+        var refusedRoll = capped.Append([Long(4), Long(5), Long(6), Long(7)], 0);
+        var bothKept = refuseStore.Find(s0.Descriptor.ResultId) is { RowsAvailable: 3 } && refuseStore.Find(s1.Descriptor.ResultId) is { RowsAvailable: 3 } && refuseStore.Count == countBefore;
+        refuseStore.Return(refuseHog, refuseHog.UsedBytes);
+        var rolledLater = capped.Append([Long(4), Long(5), Long(6), Long(7)], 0).Sample;
+        check(s1 is { Segment: 1, RolledFrom: { } s1From, Retired: null } && s1From == s0.Descriptor.ResultId && refusedRoll is { Budget: true, Sample: null } && bothKept
+            && rolledLater is { Segment: 2, Retired: [var capRetired] } && capRetired == s0.Descriptor.ResultId && rolledLater.RolledFrom == s1.Descriptor.ResultId
+            && Ids(refuseStore, rolledLater.Descriptor).SequenceEqual(["7"]),
+            "a roll whose first row does not fit drops its new segment and retires nothing, even with a completed segment kept; the roll that later fits retires the oldest at the cap");
     }
 
     private static (Task<LiveEnd> Task, LiveRecorder Recorder, string Id) Subscribe(SqlService service, string[] probes, object args, string? resume = null, uint id = 1)

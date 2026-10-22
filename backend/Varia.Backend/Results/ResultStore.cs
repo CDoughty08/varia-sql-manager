@@ -99,13 +99,17 @@ internal sealed class ResultStore
     /// <summary>Opens a result set, reserving its column metadata (512 bytes plus 2 per name character and 64 per column)
     /// like any other storage. Returns null, so the set is not kept, once the query has stopped storing or when the
     /// metadata does not fit; the query then stops with that reason.</summary>
-    public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires)
+    /// <param name="transfer">The caller has just released a set with the same columns, whose bytes pay for this one's
+    /// metadata, so it is charged without a check (an append table's restart, LiveAppendTable): no one else can take those
+    /// bytes in between, and while a lease holds the released set the store is over by one set's metadata at most.</param>
+    public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
         var sealBytes = query.Live is null ? PageBuilder.SealBytes : LiveSealBytes;
         if (query.Stopped != TruncationReason.None) return null;
         var metadata = 512 + columns.Sum(column => 2L * column.Name.Length + 64);
-        if (!TryReserve(query, metadata, false, out var reason))
+        if (transfer) Force(query, metadata);
+        else if (!TryReserve(query, metadata, false, out var reason))
         {
             query.Stop(reason);
             return null;
