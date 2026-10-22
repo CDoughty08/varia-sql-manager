@@ -717,7 +717,7 @@ try {
   await expandExplorerPath(page, 'server-a', 'Databases')
   const appData = await row('server-a', 'Databases', 'AppData')
   await appData.click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
+  expect(await labels()).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[AppData]')
   await expect(tree).toBeFocused()

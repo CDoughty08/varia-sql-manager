@@ -37,7 +37,7 @@ internal static class ActionChecks
     {
         var rows = Catalog.Rows.ToList();
         check(rows.Count == 32 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
-            "the embedded actions catalogue loads at version 1 and every row names an Object Explorer kind and subtype");
+            "the embedded actions catalogue loads at version 2 and every row names an Object Explorer kind and subtype");
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
             && !Catalog.Allows("database", "snapshot", "rename") && Catalog.Allows("function", "aggregate", "rename") && !Catalog.Allows("function", "aggregate", "delete")
@@ -49,21 +49,23 @@ internal static class ActionChecks
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
         check(Catalog.ErrorCodes.Count() == 15 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
-            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject"]),
-            "the catalogue lists the action error codes and the Delete Object dialog");
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"]),
+            "the catalogue lists the action error codes and the Delete Object and Database Properties dialogs");
     }
 
     private static void Lint(Action<bool, string> check)
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == 9 * 2 + 6 * 5 + 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == 9 * 2 + 6 * 5 + 2 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("EXEC @rename @objname = @undeclared;", ActionTemplate.RenameObject).Count > 0
+            && ActionSql.LintExecutable(ActionSql.Executable(ActionTemplate.DropTable).Replace("QUOTENAME(@db) + N'.sys.sp_executesql'", "@db + N'.sys.sp_executesql'", StringComparison.Ordinal), ActionTemplate.DropTable).Count > 0
+            && ActionSql.LintExecutable(ActionSql.Executable(ActionTemplate.RenameObject).Replace("QUOTENAME(@db) + N'.sys.sp_rename'", "@db + N'.sys.sp_rename'", StringComparison.Ordinal), ActionTemplate.RenameObject).Count > 0
             && ActionSql.LintCatalog("SELECT OBJECT_ID(@name);", 16, database: true).Count > 0 && ActionSql.LintCatalog("SELECT USER_NAME(o.principal_id) FROM sys.objects AS o WHERE o.name = @name;", 16, database: true).Count > 0
-            && ActionSql.LintCatalog("SELECT t.ledger_type FROM sys.tables AS t WHERE t.name = @name;", 15, database: true).Count > 0, "the lint refuses spliced names, bare name parameters, undeclared variables, metadata functions and band gates");
+            && ActionSql.LintCatalog("SELECT t.ledger_type FROM sys.tables AS t WHERE t.name = @name;", 15, database: true).Count > 0, "the lint refuses spliced names, bare name parameters, the database outside QUOTENAME, undeclared variables, metadata functions and band gates");
         // Every executable batch is constant text: no name ever reaches it.
         check(Enum.GetValues<ActionTemplate>().All(template => ActionSql.Executable(template) == ActionSql.Executable(template) && !InjectionMatrix.Fragments.Any(fragment => ActionSql.Executable(template).Contains(fragment[1..4], StringComparison.Ordinal))),
             "executable batches are constant text per template");
@@ -129,15 +131,17 @@ internal static class ActionChecks
         {
             [1222] = "BLOCKED", [3702] = "IN_USE", [5030] = "IN_USE", [5061] = "IN_USE", [5070] = "IN_USE", [3726] = "DEPENDENTS", [3729] = "DEPENDENTS",
             [2714] = "NAME_IN_USE", [1801] = "NAME_IN_USE", [15335] = "NAME_IN_USE", [15225] = "NOT_FOUND", [229] = "PERMISSION_DENIED", [262] = "PERMISSION_DENIED",
-            [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR"
+            [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR",
+            // Database Properties (PR-B), and the file and filegroup numbers PR-B2's DDL will meet.
+            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),
             "SQL Server's error numbers map onto the action error codes: " + string.Join(", ", wrong));
-        var inUse = ActionErrors.FromSql(Catalog, Sql(3702), null, ddl: true, inUseAdvice: true);
+        var inUse = ActionErrors.FromSql(Catalog, Sql(3702), null, ddl: true, inUseAdvice: ActionErrors.CloseConnectionsAdvice);
         check(inUse is { Code: "IN_USE", Retryable: true } && inUse.Message.EndsWith("Close its connections, or check Close existing connections.", StringComparison.Ordinal)
-            && ActionErrors.FromSql(Catalog, Sql(1222), null, ddl: false, inUseAdvice: false).Message == "Another session holds a lock on the object; try again when it finishes."
-            && ActionErrors.FromSql(Catalog, Sql(50000, 16, new string('m', 5000)), null, ddl: true, inUseAdvice: false).Message.Length == ActionErrors.MaxMessage,
+            && ActionErrors.FromSql(Catalog, Sql(1222), null, ddl: false, inUseAdvice: null).Message == "Another session holds a lock on the object; try again when it finishes."
+            && ActionErrors.FromSql(Catalog, Sql(50000, 16, new string('m', 5000)), null, ddl: true, inUseAdvice: null).Message.Length == ActionErrors.MaxMessage,
             "error values carry SQL Server's message (clipped to 2,048 characters) with advice for IN_USE");
     }
 
@@ -195,7 +199,7 @@ internal static class ActionChecks
             return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
-        public void ClearPoolsFor(string connectionId, string database) => Cleared.Add(database);
+        public bool ClearPoolsFor(string connectionId, string database) { Cleared.Add(database); return true; }
         public void DatabaseChanged(string connectionId, string database, string? newName) => Cleared.Add(database + " -> " + newName);
     }
 

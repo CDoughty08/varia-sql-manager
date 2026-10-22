@@ -40,6 +40,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Actions => Name + "_act";
     /// <summary>The name the object-action checks rename <see cref="Actions"/> to and back.</summary>
     public string ActionsRenamed => Name + "_actr";
+    /// <summary>Where the Database Properties checks change options, scoped configurations and the owner (created on demand).</summary>
+    public string Properties => Name + "_dbp";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
     /// <summary>Held in memory only, never printed.</summary>
@@ -48,8 +50,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public int Major { get; private set; }
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
-    // mid-rename leaves nothing the sweep cannot find.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr)?$")]
+    // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database and _tbd the table designer's.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -175,6 +177,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked injection-matrix database with the scratch database's collation.</summary>
     public Task<string> CreateInjectionAsync() => CreateMarkedAsync(Injection);
+
+    /// <summary>Creates the empty, marked Database Properties database.</summary>
+    public Task<string> CreatePropertiesAsync() => CreateMarkedAsync(Properties);
 
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()

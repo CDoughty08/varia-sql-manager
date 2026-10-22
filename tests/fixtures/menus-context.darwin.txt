@@ -135,6 +135,8 @@ explorer.context, for a database
   D&elete  ⌘⌫  -+++
   ---
   Re&fresh  F5  -+++
+  ---
+  &Properties  ⌘I  -+++
 explorer.context, for a Tables folder
   F&ilter Settings…  -+++
   ---

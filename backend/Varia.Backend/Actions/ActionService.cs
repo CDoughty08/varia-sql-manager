@@ -20,8 +20,9 @@ internal interface IActionHost
     /// <summary>Opens it; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), answered as a value.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
     /// <summary>Clears every pool of the connection whose initial catalog is the database, so none of the backend's idle
-    /// connections blocks DROP DATABASE or MODIFY NAME.</summary>
-    void ClearPoolsFor(string connectionId, string database);
+    /// connections blocks DROP DATABASE or MODIFY NAME. True when it cleared a pool: the server can still list the closed
+    /// connections' sessions for a few milliseconds.</summary>
+    bool ClearPoolsFor(string connectionId, string database);
     /// <summary>A database was renamed (to <paramref name="newName"/>) or dropped (null): a connection whose initial catalog
     /// it was moves to the new name, or to master, so its later connections can still open.</summary>
     void DatabaseChanged(string connectionId, string database, string? newName);
@@ -95,6 +96,7 @@ internal sealed class ActionService : IDisposable
         try { ExplorerRefs.Object(target, explorer); }
         catch (RequestException) { throw Invalid("target."); }
         if (!catalog.Offered(target.Kind, action)) throw Invalid("this object does not offer " + action + ".");
+        if (catalog.ServesSystemObjects(action)) return target;
         if (target.Kind == "database" ? SystemDatabases.Contains(target.Name!) : target.Schema is { } schema && SystemSchemas.Contains(schema)) throw Invalid("system objects cannot be changed.");
         return target;
     }
@@ -105,37 +107,49 @@ internal sealed class ActionService : IDisposable
         if (!Guid.TryParse(requestId, out _)) throw Invalid("requestId.");
     }
 
-    /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe.</summary>
+    /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe: a known
+    /// dialog and a target its action serves.</summary>
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
-        if (args.Dialog != "deleteObject" || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
-        return Target(args.Target, "delete");
+        if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
+        return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
 
     /// <summary>Re-validates actionRequestSchema: the action, ids, a target whose kind offers it, a new name of 1–128 UTF-16
-    /// units without U+0000 that differs from the old one, and the delete flags only for databases.</summary>
+    /// units without U+0000 that differs from the old one, the delete flags only for databases, and Database Properties'
+    /// changes (DatabaseAlter.Validate).</summary>
     public ObjectRefDto Validate(ActionArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
         switch (args.Action)
         {
             case "rename":
-                if (args.CloseConnections is not null || args.DeleteHistory is not null) throw Invalid("rename takes no delete options.");
+                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null) throw Invalid("rename takes no delete options or changes.");
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
                 return renamed;
             case "delete":
-                if (args.NewName is not null) throw Invalid("delete takes no new name.");
+                if (args.NewName is not null || args.Changes is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
                 return deleted;
+            case "properties":
+                var target = Target(args.Target, "properties");
+                DatabaseAlter.Validate(catalog, args);
+                return target;
             default:
                 throw Invalid("action.");
         }
     }
+
+    /// <summary>The longest script an action may return.</summary>
+    private long ScriptLimit(string action) => action switch
+    {
+        _ => catalog.Limit("scriptChars")
+    };
 
     // --- Requests ---------------------------------------------------------------------------------------------------------
 
@@ -144,7 +158,11 @@ internal sealed class ActionService : IDisposable
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
         return RunAsync(args.ConnectionId, args.RequestId, read: true, Options.DescribeBudget, token,
-            async (connection, profile, band, job) => await DescribeJobAsync(connection, target, band, job) with { ElapsedMs = watch.ElapsedMilliseconds },
+            async (connection, profile, band, job) => await (args.Dialog switch
+            {
+                "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
+                _ => DescribeJobAsync(connection, target, band, job)
+            }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
     }
 
@@ -153,7 +171,11 @@ internal sealed class ActionService : IDisposable
         var target = Validate(args);
         var database = target.Kind == "database" ? "master" : target.Database!;
         return RunAsync(args.ConnectionId, args.RequestId, read: true, Options.ScriptBudget, token,
-            (connection, profile, band, job) => ScriptJobAsync(connection, args, target, band, job),
+            (connection, profile, band, job) => args.Action switch
+            {
+                "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
+                _ => ScriptJobAsync(connection, args, target, band, job)
+            },
             error => new ActionScriptResult(null, database, [], error));
     }
 
@@ -162,7 +184,11 @@ internal sealed class ActionService : IDisposable
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
         return RunAsync(args.ConnectionId, args.RequestId, read: false, null, token,
-            async (connection, profile, band, job) => await ExecuteJobAsync(connection, args, target, band, job) with { ElapsedMs = watch.ElapsedMilliseconds },
+            async (connection, profile, band, job) => await (args.Action switch
+            {
+                "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
+                _ => ExecuteJobAsync(connection, args, target, band, job)
+            }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
     }
 
@@ -229,7 +255,7 @@ internal sealed class ActionService : IDisposable
                         await RunAsync(connection, read ? ActionSql.ReadPrologue : ActionSql.ExecutePrologue, token);
                         return await work(connection, profile, band, token);
                     }
-                    catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.FromSql(catalog, error, connection, ddl: !read, inUseAdvice: false)); }
+                    catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.FromSql(catalog, error, connection, ddl: !read, inUseAdvice: null)); }
                 }
                 finally { total.Release(); }
             }
@@ -421,62 +447,203 @@ internal sealed class ActionService : IDisposable
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
         var text = string.Concat(Plan(args, target).Select(ActionSql.ScriptText));
-        if (text.Length > catalog.Limit("scriptChars")) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
+        if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
         return new(text, database, [.. subject.Warnings.Take(8).Select(warning => warning.Text)]);
     }
 
     private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
-        var messages = new List<string>();
-        var maxMessages = (int)catalog.Limit("infoMessages");
-        var maxChars = (int)catalog.Limit("infoMessageChars");
-        // sp_rename's caution and other informational messages (severity 10 and below) reach the user as a warning.
-        connection.InfoMessage += (_, e) =>
-        {
-            lock (messages)
-                foreach (SqlError item in e.Errors)
-                    if (item.Class <= 10 && messages.Count < maxMessages) messages.Add(ScriptingErrors.Clip(item.Message, maxChars));
-        };
+        var messages = CollectMessages(connection);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
         if (Refusal(subject, args) is { } refused) return new([], [], 0, refused);
         var plan = Plan(args, target);
         // The backend's own idle pooled connections in the database must not keep it in use.
         if (target.Kind == "database") host.ClearPoolsFor(args.ConnectionId, target.Name!);
+        var (steps, failure, done) = await RunStepsAsync(connection, [.. plan.Select(statement => (StepTitle(statement.Template), (Func<Task>)(() => RunStatementAsync(connection, statement, dryRun: false, token))))],
+            target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token);
+        // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
+        if (plan.Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase))
+            host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
+        return new(steps, messages.Collected(), 0, failure);
+    }
+
+    /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>
+    private sealed class MessageLog(int max, int chars)
+    {
+        private readonly List<string> messages = [];
+        public void Add(SqlError item) { lock (messages) if (item.Class <= 10 && messages.Count < max) messages.Add(ScriptingErrors.Clip(item.Message, chars)); }
+        public List<string> Collected() { lock (messages) return [.. messages]; }
+    }
+
+    private MessageLog CollectMessages(SqlConnection connection)
+    {
+        var log = new MessageLog((int)catalog.Limit("infoMessages"), (int)catalog.Limit("infoMessageChars"));
+        connection.InfoMessage += (_, e) => { foreach (SqlError item in e.Errors) log.Add(item); };
+        return log;
+    }
+
+    /// <summary>Runs the steps in order, one statement each: the first failure stops the rest, which are 'skipped'; Stop
+    /// cancels the running statement, and earlier steps stay 'done'. Returns the steps, the failure, and how many completed.</summary>
+    private async Task<(List<ActionStepDto> Steps, ActionError? Failure, int Done)> RunStepsAsync(SqlConnection connection, List<(string Title, Func<Task> Run)> plan, string? inUseAdvice,
+        CancellationToken token)
+    {
         var steps = new List<ActionStepDto>();
         ActionError? failure = null;
-        var renamedOrDropped = false;
-        for (var index = 0; index < plan.Count; index++)
+        var completed = 0;
+        foreach (var (title, run) in plan)
         {
-            var statement = plan[index];
-            if (failure is not null) { steps.Add(new("skipped", StepTitle(statement.Template))); continue; }
+            if (failure is not null) { steps.Add(new("skipped", title)); continue; }
             try
             {
                 token.ThrowIfCancellationRequested();
-                await RunStatementAsync(connection, statement, dryRun: false, token);
-                steps.Add(new("done", StepTitle(statement.Template)));
-                renamedOrDropped |= statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase;
+                await run();
+                steps.Add(new("done", title));
+                completed++;
             }
             catch (Exception exception) when (token.IsCancellationRequested && exception is SqlException or OperationCanceledException)
             {
-                steps.Add(new("cancelled", StepTitle(statement.Template)));
+                steps.Add(new("cancelled", title));
                 var done = steps.Where(step => step.Status == "done").Select(step => step.Message!).ToList();
-                failure = Error("CANCELLED", "The action was stopped at \"" + StepTitle(statement.Template) + "\"; SQL Server cancelled that statement."
+                failure = Error("CANCELLED", "The action was stopped at \"" + title + "\"; SQL Server cancelled that statement."
                     + (done.Count == 0 ? "" : " Completed before Stop: " + string.Join(", ", done) + "."));
             }
             catch (SqlException sql)
             {
-                var value = ActionErrors.FromSql(catalog, sql, connection, ddl: true, inUseAdvice: target.Kind == "database" && args.Action == "delete");
+                var value = ActionErrors.FromSql(catalog, sql, connection, ddl: true, inUseAdvice);
                 steps.Add(new("failed", value.Message));
                 var done = steps.Where(step => step.Status == "done").Select(step => step.Message!).ToList();
                 failure = done.Count == 0 ? value : value with { Message = ScriptingErrors.Clip(value.Message + " Completed before the failure: " + string.Join(", ", done) + ".", ActionErrors.MaxMessage) };
             }
         }
-        // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
-        if (renamedOrDropped) host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
-        List<string> collected;
-        lock (messages) collected = [.. messages];
-        return new(steps, collected, 0, failure);
+        return (steps, failure, completed);
+    }
+
+    // --- Database Properties ----------------------------------------------------------------------------------------------
+
+    private async Task<ActionDescribeResult> DescribePropertiesJobAsync(SqlConnection connection, ObjectRefDto target, int band, CancellationToken token)
+    {
+        var (model, missing) = await DatabaseProperties.DescribeAsync(connection, catalog, target.Name!, band, token);
+        return model is null ? new(null, 0, Error("NOT_FOUND", missing!)) : new(null, 0, DatabaseProperties: model);
+    }
+
+    /// <summary>The database as the properties preflight finds it in this connection, the plan, or the refusal. Script and
+    /// execute share it; only execute checks access, permission and the new owner's login.</summary>
+    private async Task<(List<AlterStatement>? Plan, ActionError? Error)> PlanPropertiesAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, bool execute, CancellationToken token,
+        bool clearedPools = false)
+    {
+        var display = ScriptingErrors.Display(target.Name!);
+        async Task<ScriptPreflight.Row?> Preflight()
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = DatabasePropertiesPreflight;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, target.Name);
+            Add(command, "@owner", SqlDbType.NVarChar, 128, args.Changes!.Owner);
+            await using var reader = await command.ExecuteReaderAsync(token);
+            return await reader.ReadAsync(token) ? ReadRow(reader) : null;
+        }
+        var row = await Preflight();
+        if (row is null) return (null, Error("NOT_FOUND", "The database " + display + " no longer exists. Refresh Object Explorer."));
+        if (row.Int("engine_edition") == 8) return (null, Error("NOT_SUPPORTED", "Database Properties on Azure SQL Managed Instance is not supported yet."));
+        if (row.Bool("is_snapshot")) return (null, Error("NOT_SUPPORTED", "A database snapshot is read-only."));
+        if (row.Int("state") != 0) return (null, Error("DATABASE_UNAVAILABLE", "The database " + display + " is " + (row.Text("state_desc") ?? "unavailable").Replace('_', ' ').ToLowerInvariant() + "."));
+        if (execute)
+        {
+            if (!row.Bool("has_access")) return (null, Error("DATABASE_UNAVAILABLE", "The database " + display + " is not accessible to this login."));
+            if (!row.Bool("can_alter")) return (null, Error("PERMISSION_DENIED", "You do not have permission to change " + display + " (ALTER on it)."));
+            if (!row.Bool("owner_exists")) return (null, Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Changes!.Owner!) + " does not exist."));
+        }
+        // SSMS counts the database's connections when OK is pressed. The dialog asks Open Connections from the count it opened
+        // with; sessions that joined since would make WITH NO_WAIT wait about 20 s and fail, so the change is refused before
+        // anything runs, and the dialog asks.
+        if (execute && args.CloseConnections != true && Exclusive(args.Changes!))
+        {
+            // The pooled connections ClearPoolsFor just closed stay listed until the server ends their sessions (measured on SQL
+            // Server 2025: up to one count in ten right after the clear sees one, gone within 25 ms), so a count that may include them is
+            // taken again for up to a second rather than answered as other connections.
+            for (var wait = 0; clearedPools && row.Long("sessions") > 0 && wait < 20; wait++)
+            {
+                await Task.Delay(50, token);
+                if ((row = await Preflight()) is null) return (null, Error("NOT_FOUND", "The database " + display + " no longer exists. Refresh Object Explorer."));
+            }
+            if (row.Long("sessions") > 0) return (null, Error("IN_USE", ActionErrors.OpenConnectionsAdvice));
+        }
+        var facts = new DatabaseAlter.Facts(band, Math.Min(row.Int("major") * 10, catalog.CompatibilityLevels.Max()), row.Bool("auto_create"));
+        // Script always writes WITH NO_WAIT: SSMS never closes connections while scripting.
+        var (plan, refusal) = DatabaseAlter.Plan(catalog, target.Name!, args.Changes!, execute && args.CloseConnections == true, facts);
+        if (refusal is not null) return (null, Error("NOT_SUPPORTED", refusal));
+        if (plan!.Count == 0) return (null, Error("NOT_SUPPORTED", "Auto Create Incremental Statistics applies only while Auto Create Statistics is True."));
+        return (plan, null);
+    }
+
+    /// <summary>Whether the changes include an option SSMS closes other connections for.</summary>
+    private bool Exclusive(DatabaseChangesDto changes) => (changes.Options ?? []).Keys.Any(key => catalog.DatabaseOptions.TryGetValue(key, out var option) && option.Exclusive == true);
+
+    /// <summary>The properties preflight, in master: the database's state and kind, the login's access and ALTER permission,
+    /// Auto Create Statistics now, the server's edition and version, whether a new owner's login exists, and the sessions in
+    /// the database (with VIEW SERVER STATE; this connection is in master).</summary>
+    public const string DatabasePropertiesPreflight = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, "
+        + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
+        + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
+        + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, d.is_auto_create_stats_on AS auto_create, "
+        + "CONVERT(int, SERVERPROPERTY('EngineEdition')) AS engine_edition, CONVERT(int, SERVERPROPERTY('ProductMajorVersion')) AS major, "
+        + "CONVERT(bit, CASE WHEN @owner IS NULL OR EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = @owner) THEN 1 ELSE 0 END) AS owner_exists, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions "
+        + "FROM sys.databases AS d WHERE d.name = @name;";
+
+    private async Task<ActionScriptResult> ScriptPropertiesJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
+    {
+        var (plan, error) = await PlanPropertiesAsync(connection, args, target, band, execute: false, token);
+        if (plan is null) return new(null, "master", [], error);
+        var text = DatabaseAlter.ScriptText(catalog, plan);
+        if (text.Length > ScriptLimit(args.Action)) return new(null, "master", [], Error("SQL_ERROR", "The script is too large."));
+        return new(text, "master", []);
+    }
+
+    private async Task<ActionExecuteResult> ExecutePropertiesJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
+    {
+        var messages = CollectMessages(connection);
+        // The backend's own idle pooled connections in the database must not hold it (SET options WITH NO_WAIT, COLLATE), nor
+        // count as other connections in the preflight.
+        var cleared = host.ClearPoolsFor(args.ConnectionId, target.Name!);
+        var (plan, error) = await PlanPropertiesAsync(connection, args, target, band, execute: true, token, cleared);
+        if (plan is null) return new([], [], 0, error);
+        // Choosing Yes helps only where the dialog asks: an exclusive change made without closing connections. Other
+        // changes that need the database to themselves (Broker Enabled, Containment type, COLLATE) are never asked about.
+        var advice = args.CloseConnections != true && Exclusive(args.Changes!) ? ActionErrors.OpenConnectionsAdvice : ActionErrors.OtherConnectionsAdvice;
+        var (steps, failure, _) = await RunStepsAsync(connection, [.. plan.Select(statement => (statement.Title, (Func<Task>)(() => RunAlterAsync(connection, statement, dryRun: false, token))))],
+            advice, token);
+        return new(steps, messages.Collected(), 0, failure);
+    }
+
+    private async Task<List<string?>> RunAlterAsync(SqlConnection connection, AlterStatement statement, bool dryRun, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = DatabaseAlter.Executable(catalog, statement, dryRun);
+        command.CommandTimeout = 0;
+        Add(command, "@db", SqlDbType.NVarChar, 128, statement.InDatabase ? statement.Database : "master");
+        Add(command, "@p1", SqlDbType.NVarChar, 128, statement.Database);
+        Add(command, "@p2", SqlDbType.NVarChar, 128, statement.Name);
+        Add(command, "@n1", SqlDbType.BigInt, 0, statement.Number);
+        var values = new List<string?>();
+        await using var reader = await command.ExecuteReaderAsync(token);
+        do
+        {
+            while (await reader.ReadAsync(token))
+                for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
+        } while (await reader.NextResultAsync(token));
+        return values;
+    }
+
+    /// <summary>The live checks' only way to see what Database Properties batches would run (see the other DryRunAsync), on one connection.</summary>
+    internal async Task<List<List<string?>>> DryRunAsync(string connectionId, IReadOnlyList<AlterStatement> statements, CancellationToken token)
+    {
+        await using var connection = host.Connection(connectionId);
+        await host.OpenAsync(connection, token);
+        var results = new List<List<string?>>();
+        foreach (var statement in statements) results.Add(await RunAlterAsync(connection, statement, dryRun: true, token));
+        return results;
     }
 
     private static async Task<List<string?>> RunStatementAsync(SqlConnection connection, PlannedStatement statement, bool dryRun, CancellationToken token)

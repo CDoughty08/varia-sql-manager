@@ -94,13 +94,18 @@ describe('IPC validation', () => {
     const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }
     const rename = { action: 'rename', ...ids, target, newName: "q]'); DROP TABLE x; --" }, remove = { action: 'delete', ...ids, target, closeConnections: false, deleteHistory: false }
     const describe = { ...ids, dialog: 'deleteObject', target }
+    const properties = { action: 'properties', ...ids, target: { kind: 'database', name: 'master' }, closeConnections: false, changes: { options: { autoUpdateStatistics: 'false' }, owner: ' o]1 ' } }
+    expect(validateRequest('actions.execute', properties)).toEqual(properties)
+    expect(validateRequest('actions.describe', { ...describe, dialog: 'databaseProperties', target: { kind: 'database', name: 'master' } })).toMatchObject({ dialog: 'databaseProperties' })
     expect(validateRequest('actions.execute', rename)).toEqual(rename)
     expect(validateRequest('actions.script', remove)).toEqual(remove)
     expect(validateRequest('actions.describe', describe)).toEqual(describe)
     for (const [method, value] of [
       ['actions.execute', { ...rename, newName: ' o]1 ' }], ['actions.execute', { ...rename, newName: 'x'.repeat(129) }], ['actions.execute', { ...rename, closeConnections: false }],
       ['actions.execute', { ...remove, closeConnections: true }], ['actions.execute', { ...remove, target: { kind: 'login', name: 'sa' } }], ['actions.execute', { ...remove, action: 'drop' }],
-      ['actions.script', { ...rename, target: { kind: 'database', name: 'master' } }], ['actions.describe', { ...describe, dialog: 'databaseProperties' }], ['actions.describe', { ...describe, extra: 1 }]
+      ['actions.script', { ...rename, target: { kind: 'database', name: 'master' } }], ['actions.describe', { ...describe, dialog: 'loginProperties' }], ['actions.describe', { ...describe, dialog: 'databaseProperties' }],
+      ['actions.describe', { ...describe, extra: 1 }], ['actions.execute', { ...properties, changes: {} }], ['actions.execute', { ...properties, changes: { options: { autoClose: 'yes' } } }],
+      ['actions.execute', { ...properties, closeConnections: true }], ['actions.script', { ...properties, target }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // DDL runs on its own lane, without a deadline (Stop ends a lock wait); reads keep metadata deadlines around their budgets.
     expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0 })

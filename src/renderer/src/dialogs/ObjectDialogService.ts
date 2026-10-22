@@ -1,4 +1,5 @@
-import { actionLimits, dialogSpecs, unknownOutcomeMessage, type DialogId, type PageId } from '../../../shared/actions/catalog.ts'
+import { actionLimits, dialogSpecs, dialogTitle, unknownOutcomeMessage, type DialogId, type PageId } from '../../../shared/actions/catalog.ts'
+import { noScriptNotice } from '../../../shared/actions/database.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -10,10 +11,10 @@ import type { ExplorerMenuNode } from '../menus/targets'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
-import { dialogDefinitions, type DialogDraft, type DialogModel } from './definitions'
+import { definitionOf, type DialogDraft, type DialogModel } from './definitions'
 
-/** loading → ready, or loadFailed; OK → executing → closed, or failed (or stopped); a lost server → disconnected. */
-export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'scripting' | 'executing' | 'failed' | 'stopped' | 'disconnected'
+/** loading → ready, or loadFailed; OK → (confirming →) executing → closed, or failed (or stopped); a lost server → disconnected. */
+export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 'scripting' | 'executing' | 'failed' | 'stopped' | 'disconnected'
 export interface OpenObjectDialog {
   /** Changes with every dialog, so the frame remounts. */
   readonly id: number
@@ -24,6 +25,8 @@ export interface OpenObjectDialog {
   readonly target: ObjectRef
   /** The object as Object Explorer shows it. */
   readonly label: string
+  /** The title bar: "Delete Object", "Database Properties - AppData". */
+  readonly title: string
   /** The Connection box: the server as connected to and the login. */
   readonly server: string
   readonly login?: string
@@ -38,7 +41,7 @@ export interface OpenObjectDialog {
 }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
-  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
+  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: { listingFolderOf(nodeId: number): number | undefined; refresh(id?: number): void }
   readonly documents: DeliverScriptDeps['documents']
@@ -84,8 +87,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const target = node.ref.type === 'object' ? node.ref.object : undefined
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
     if (!target || !connection) throw new Error('Connect to the server first.')
+    const label = scriptObjectLabel(target)
     const open: OpenObjectDialog = {
-      id: ++this.dialogs, dialog, connectionId: node.connectionId, nodeId: node.id, target, label: scriptObjectLabel(target), server: connection.server,
+      id: ++this.dialogs, dialog, connectionId: node.connectionId, nodeId: node.id, target, label, title: dialogTitle(dialog, label), server: connection.server,
       ...(connection.login ? { login: connection.login } : {}), page: dialogSpecs[dialog].pages[0].id, phase: 'loading'
     }
     this.publish({ open })
@@ -104,8 +108,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   async script(destination: ScriptDestination): Promise<void> {
     const open = this.current
     if (!open || !open.model || !open.draft || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped')) return
-    const built = dialogDefinitions[open.dialog].request(open.target, open.model, open.draft)
-    if (!built || 'problem' in built) { if (built) this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
+    const built = definitionOf(open.dialog).request(open.target, open.model, open.draft)
+    // As SSMS says when nothing changed in a properties dialog.
+    if (!built) { this.update(open, { error: undefined, notice: noScriptNotice }); return }
+    if ('problem' in built) { this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
     const requestId = this.begin(open)
     this.update(open, { phase: 'scripting', error: undefined, notice: undefined })
     const result = await this.call(() => this.options.api.scriptObjectAction({ ...built, connectionId: open.connectionId, requestId } as ActionRequest))
@@ -121,12 +127,22 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   /** OK: nothing to do closes; otherwise the action runs, and success closes and runs the definition's afterSuccess. */
   async ok(): Promise<void> {
     const open = this.current
-    if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading') return
+    if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
     if (open.phase === 'disconnected' || open.phase === 'loadFailed' || !open.model || !open.draft) { this.close(); return }
-    const definition = dialogDefinitions[open.dialog]
-    const built = definition.request(open.target, open.model, open.draft)
+    const definition = definitionOf(open.dialog)
+    let built = definition.request(open.target, open.model, open.draft)
     if (!built) { this.close(); return }
     if ('problem' in built) { this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
+    const confirmation = definition.confirm?.(open.model, built)
+    if (confirmation) {
+      // Main's message box; a failure or a dialog that closed meanwhile counts as No, and No sends nothing.
+      this.update(open, { phase: 'confirming', error: undefined, notice: undefined })
+      const answer = await this.call(() => this.options.api.confirmOpenConnections())
+      // Cancel, a lost server or a disposed service while the box was up: nothing runs.
+      if (this.disposed || this.current?.id !== open.id || this.current.phase !== 'confirming') return
+      if (!answer.ok || !answer.value) { this.update(open, { phase: 'ready' }); return }
+      built = definition.withConfirmation?.(built, confirmation) ?? built
+    }
     const requestId = this.begin(open)
     this.update(open, { phase: 'executing', error: undefined, notice: undefined, steps: undefined })
     const result = await this.call(() => this.options.api.executeObjectAction({ ...built, connectionId: open.connectionId, requestId } as ActionRequest))
@@ -144,7 +160,11 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
-    this.update(open, { phase: 'failed', error: failure, ...(value ? { steps: value.steps } : {}) })
+    const model = definition.afterFailure?.(open.model, failure) ?? open.model
+    this.update(open, { phase: 'failed', error: failure, model, ...(value ? { steps: value.steps } : {}) })
+    // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
+    // did not ask, it is asked at once rather than on the next OK.
+    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built)) await this.ok()
   }
 
   /** Stop: cancels the running action in SQL Server; the dialog reports Stopped, with what completed, when its answer comes. */
@@ -178,9 +198,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
     if (!this.end(open, requestId)) return
     const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error
-    const model = result.ok ? result.value.deleteTarget : undefined
+    const definition = definitionOf(open.dialog)
+    const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
-    this.update(open, { phase: 'ready', model, draft: dialogDefinitions[open.dialog].initialDraft(model, open.target) })
+    this.update(open, { phase: 'ready', model, draft: definition.initialDraft(model, open.target) })
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

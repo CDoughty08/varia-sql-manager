@@ -6,8 +6,9 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   actionCommandEntries, actionContextKey, actionContextValues, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenuState, actionOffered, actionRow,
-  actionsCatalogJson, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
+  actionsCatalogJson, dialogIds, dialogSpecs, dialogTitle, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
 } from '../src/shared/actions/catalog'
+import { maxScriptCharacters } from '../src/main/validation'
 import { renderObjectActionsDocs } from '../src/shared/actions/docs'
 import { codicons, commandDescriptor, commandIds, isCommandId } from '../src/shared/commands/catalog'
 import { whenProblems } from '../src/shared/commands/context-keys'
@@ -29,31 +30,33 @@ describe('object action catalogue', () => {
     }
     expect(Object.keys(actionKindSpecs).sort()).toEqual(['database', 'function', 'procedure', 'table', 'view'])
     expect(actionRow('table', 'clr' as NodeSubtype)).toBeUndefined()
-    expect(actionMenuState({ kind: 'folder' })).toEqual({ selectTop: '', rename: '', delete: '' })
-    expect(actionMenuState({ kind: 'login' })).toEqual({ selectTop: '', rename: '', delete: '' })
+    expect(actionMenuState({ kind: 'folder' })).toEqual({ selectTop: '', rename: '', delete: '', properties: '' })
+    expect(actionMenuState({ kind: 'login' })).toEqual({ selectTop: '', rename: '', delete: '', properties: '' })
   })
   it('offers SSMS\'s actions per kind, greying SQL Server\'s own objects and the subtypes that need more handling', () => {
-    expect(states('table')).toBe('enabled enabled enabled')
-    for (const subtype of ['graphNode', 'graphEdge'] as const) expect(states('table', subtype), subtype).toBe('enabled enabled enabled')
+    expect(states('table')).toBe('enabled enabled enabled -')
+    for (const subtype of ['graphNode', 'graphEdge'] as const) expect(states('table', subtype), subtype).toBe('enabled enabled enabled -')
     for (const subtype of ['system', 'systemVersioned', 'history', 'updatableLedger', 'appendOnlyLedger', 'ledgerHistory', 'fileTable', 'external'] as const) {
-      expect(states('table', subtype), subtype).toBe('enabled disabled disabled')
+      expect(states('table', subtype), subtype).toBe('enabled disabled disabled -')
     }
-    expect(states('table', 'droppedLedger')).toBe('- disabled disabled')
-    expect(states('view')).toBe('enabled enabled enabled')
-    for (const subtype of ['system', 'ledger'] as const) expect(states('view', subtype), subtype).toBe('enabled disabled disabled')
-    expect(states('view', 'droppedLedger')).toBe('- disabled disabled')
-    for (const subtype of [undefined, 'sql', 'clr'] as const) expect(states('procedure', subtype), String(subtype)).toBe('- enabled enabled')
-    for (const subtype of ['system', 'extended', 'replicationFilter'] as const) expect(states('procedure', subtype), subtype).toBe('- disabled disabled')
-    for (const subtype of every('function').filter(subtype => subtype !== 'aggregate')) expect(states('function', subtype), String(subtype)).toBe('- enabled enabled')
-    expect(states('function', 'aggregate')).toBe('- enabled disabled')
-    expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled', '- disabled disabled', '- disabled enabled'])
+    expect(states('table', 'droppedLedger')).toBe('- disabled disabled -')
+    expect(states('view')).toBe('enabled enabled enabled -')
+    for (const subtype of ['system', 'ledger'] as const) expect(states('view', subtype), subtype).toBe('enabled disabled disabled -')
+    expect(states('view', 'droppedLedger')).toBe('- disabled disabled -')
+    for (const subtype of [undefined, 'sql', 'clr'] as const) expect(states('procedure', subtype), String(subtype)).toBe('- enabled enabled -')
+    for (const subtype of ['system', 'extended', 'replicationFilter'] as const) expect(states('procedure', subtype), subtype).toBe('- disabled disabled -')
+    for (const subtype of every('function').filter(subtype => subtype !== 'aggregate')) expect(states('function', subtype), String(subtype)).toBe('- enabled enabled -')
+    expect(states('function', 'aggregate')).toBe('- enabled disabled -')
+    // Properties opens for every database, SQL Server's own and snapshots included, as in SSMS.
+    expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled enabled', '- disabled disabled enabled', '- disabled enabled enabled'])
+    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['database'])
     expect(actionOffered('database', 'rename') && actionOffered('function', 'delete') && !actionOffered('login', 'delete') && !actionOffered('procedure', 'selectTop')).toBe(true)
   })
   it('publishes one context key per action', () => {
-    expect(objectActions.map(actionContextKey)).toEqual(['explorerActionSelectTop', 'explorerActionRename', 'explorerActionDelete'])
-    expect(actionContextValues(actionMenuState({ kind: 'database', subtype: 'snapshot' }))).toEqual({ explorerActionSelectTop: '', explorerActionRename: 'disabled', explorerActionDelete: 'enabled' })
+    expect(objectActions.map(actionContextKey)).toEqual(['explorerActionSelectTop', 'explorerActionRename', 'explorerActionDelete', 'explorerActionProperties'])
+    expect(actionContextValues(actionMenuState({ kind: 'database', subtype: 'snapshot' }))).toEqual({ explorerActionSelectTop: '', explorerActionRename: 'disabled', explorerActionDelete: 'enabled', explorerActionProperties: 'enabled' })
   })
-  it('generates the three commands, keeping explorer.selectTopRows, with valid keys, preconditions and placements', () => {
+  it('generates the four commands, keeping explorer.selectTopRows, with valid keys, preconditions and placements', () => {
     const entries = actionCommandEntries()
     expect(Object.keys(entries)).toEqual(objectActions.map(action => objectActionSpecs[action].command))
     expect(Object.keys(entries)).toContain('explorer.selectTopRows')
@@ -69,6 +72,16 @@ describe('object action catalogue', () => {
     expect(entries['explorer.selectTopRows']).toMatchObject({ title: 'Select Top 1000 Rows', titleSetting: { setting: 'objectExplorer.selectTopRows', template: 'Select Top {n} Rows' },
       precondition: "backendReady && explorerActionSelectTop == 'enabled' && !documentBusy" })
     expect(entries['explorer.rename'].precondition).toBe("backendReady && explorerActionRename == 'enabled'")
+    expect(entries['explorer.properties']).toMatchObject({ title: 'Properties', icon: 'settings-gear', unavailableHint: 'Select a database in Object Explorer.',
+      precondition: "backendReady && explorerActionProperties == 'enabled'", menus: [{ menu: 'explorer.context', group: '9_properties', order: 1, mnemonic: 'p' }] })
+  })
+  it('binds Properties to ⌘I on macOS only: Alt+Enter stays reserved on Windows and Linux, where it has no key', () => {
+    for (const platform of platforms) {
+      const rules = defaultRules(platform).filter(rule => rule.command === 'explorer.properties')
+      expect(rules.map(rule => rule.chords.join(' ')), platform).toEqual(platform === 'darwin' ? ['meta+i'] : [])
+      for (const rule of rules) expect([rule.whenSource, reservedReason(rule.chords[0], platform)]).toEqual(["activePanel == 'explorer' && !textInputFocus", undefined])
+      expect(reservedReason('alt+enter', platform) !== undefined, platform).toBe(platform !== 'darwin')
+    }
   })
   it('binds F2 and Delete (⌘⌫ and Delete on macOS) only in Object Explorer, without conflicts, and no Alt+Enter', () => {
     for (const platform of platforms) {
@@ -90,15 +103,25 @@ describe('object action catalogue', () => {
     const at = (id: string) => ids.indexOf(id)
     expect(at('explorer.copyName') < at('explorer.rename') && at('explorer.rename') + 1 === at('explorer.delete') && ids[at('explorer.delete') + 1] === '---' && at('explorer.delete') < at('explorer.refresh')).toBe(true)
     expect(ids[at('explorer.newQuery') + 1]).toBe('explorer.selectTopRows')
+    // Properties is the last item, after Refresh in its own group, as in SSMS.
+    expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties'])
   })
-  it('declares the Delete Object dialog with SSMS\'s page and Script button wording', () => {
-    expect(dialogIds).toEqual(['deleteObject'])
-    expect(dialogSpecs.deleteObject).toEqual({ title: 'Delete Object', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
+  it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
+    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties'])
+    expect(dialogSpecs.deleteObject).toEqual({ title: 'Delete Object', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
+    expect(dialogSpecs.databaseProperties).toMatchObject({ title: 'Database Properties', titleFormat: 'withName', size: 'large', action: 'properties' })
+    expect(dialogSpecs.databaseProperties.pages.map(page => [page.id, page.title, page.icon])).toEqual([['general', 'General', 'settings-gear'], ['files', 'Files', 'settings-gear'],
+      ['filegroups', 'Filegroups', 'settings-gear'], ['options', 'Options', 'settings-gear']])
+    expect([dialogTitle('databaseProperties', 'AppData'), dialogTitle('deleteObject', 'dbo.Orders')]).toEqual(['Database Properties - AppData', 'Delete Object'])
+    for (const dialog of dialogIds) expect(objectActionSpecs[dialogSpecs[dialog].action].dialog).toBe(dialog)
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
     expect(unknownOutcomeMessage).toBe('The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.')
   })
   it('keeps the limits and error codes', () => {
-    expect(actionLimits).toMatchObject({ describeMs: 40_000, scriptMs: 25_000, readPerConnection: 2, readTotal: 4, executePerConnection: 1, executeTotal: 2, registered: 128, cancelIds: 16, newName: 128 })
+    expect(actionLimits).toMatchObject({ describeMs: 40_000, scriptMs: 25_000, readPerConnection: 2, readTotal: 4, executePerConnection: 1, executeTotal: 2, registered: 128, cancelIds: 16, newName: 128,
+      files: 1_024, filegroups: 256, logins: 1_024, collations: 8_192, statements: 512, scriptChars: 1_000_000 })
+    // A scripted action always fits a query window, so Script Action to New Query Window can always run it.
+    expect(actionLimits.scriptChars).toBeLessThanOrEqual(maxScriptCharacters)
     expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE'])
   })
   it('lists only error codes the backend produces, so a renderer branch on one can be reached', () => {
@@ -107,7 +130,7 @@ describe('object action catalogue', () => {
     expect(actionErrorCodes.filter(code => !backend.includes(`"${code}"`))).toEqual([])
   })
   it('loads in plain Node 24, as the fake backend and scripts load the other catalogues', () => {
-    const files = ['catalog.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'actions', name))
+    const files = ['catalog.ts', 'database.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'actions', name))
     for (const file of files) expect(() => stripTypeScriptTypes(readFileSync(file, 'utf8'), { mode: 'strip' }), file).not.toThrow()
     const script = files.map(file => `await import(${JSON.stringify(pathToFileURL(file).href)})`).join(';')
     const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })

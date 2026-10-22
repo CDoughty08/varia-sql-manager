@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ancestorIds, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowDisabled, rowNotes, setDraftValue, treeRows, validateDraft, type OptionsDraft, type SettingRow
+  ancestorIds, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowDisabled, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type SettingRow
 } from '../src/renderer/src/settings/options-form'
 import { highlightParts, normalizeQuery, searchPages } from '../src/renderer/src/settings/search'
 import { scriptingOptionKeys } from '../src/shared/scripting/options'
@@ -138,5 +138,21 @@ describe('Options OK', () => {
     expect(rowNotes(settingDef('queryExecution.executionTimeout'))).toEqual(['Applies to the next execution.'])
     expect(rowNotes(settingDef('queryExecution.stopOnError'))).toEqual(['Applies to the next execution.', 'Not in SSMS.'])
     expect(rowNotes(settingDef('textEditor.sql.wordWrap'))).toEqual([])
+  })
+})
+
+describe('Options property grid rows', () => {
+  it('maps every setting row onto the shared property grid row, so Tools › Options renders as before', () => {
+    const rows = pageForm('objectExplorer.scripting', draft, 'win32').groups.flatMap(group => group.rows)
+    for (const item of rows) {
+      expect(settingGridRow(item), item.key).toEqual({
+        key: item.key, label: item.def.label, description: item.def.description, control: item.def.type === 'integer' ? 'integer' : 'choice', value: item.value,
+        ...item.choices ? { choices: item.choices } : {}, ...item.def.type === 'integer' ? { min: item.def.min, max: item.def.max } : {}, changed: item.changed, disabled: item.disabled
+      })
+    }
+    const timeout = pageForm('queryExecution.sqlServer.general', set(draft, 'queryExecution.executionTimeout', '30'), 'win32').groups.flatMap(group => group.rows).find(item => item.key === 'queryExecution.executionTimeout')!
+    expect(settingGridRow(timeout)).toMatchObject({ control: 'integer', value: '30', min: 0, changed: true, disabled: false })
+    expect(settingGridRow(row(draft, 'targetServerVersion'))).toMatchObject({ control: 'choice', changed: false })
+    expect(settingGridRow(row(draft, 'targetServerVersion')).choices?.length).toBeGreaterThan(1)
   })
 })

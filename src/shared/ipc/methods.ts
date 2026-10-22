@@ -61,7 +61,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The backend answers its own 55 s budget as a TIMEOUT value, inside this deadline; main cancels it from the renderer (varia:scripting-cancel).
   'scripting.script': { kind: 'unary', lane: 'metadata', deadlineMs: 60_000 },
   // Object actions: describe and script answer their own 40 s and 25 s budgets as TIMEOUT values. DDL waits for locks as
-  // SSMS does, without a deadline; Stop (varia:actions-cancel) always ends it.
+  // SSMS does, without a deadline; Stop (varia:actions-cancel) always ends it. Database Properties uses the same three
+  // methods (describe 'databaseProperties', action 'properties'), so its reads and DDL keep these deadlines and lanes.
   'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },

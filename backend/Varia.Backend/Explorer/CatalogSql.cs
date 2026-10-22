@@ -108,7 +108,9 @@ internal static partial class CatalogSql
         ("temporal_type", 13), ("history_table_id", 13), ("is_external", 13), ("generated_always_type", 13), ("is_hidden", 13), ("is_masked", 13), ("encryption_type", 13),
         ("sys.external_data_sources", 13), ("sys.external_file_formats", 13), ("sys.security_policies", 13), ("sys.column_master_keys", 13), ("sys.column_encryption_keys", 13),
         ("is_node", 14), ("is_edge", 14), ("graph_type", 14), ("sys.edge_constraints", 15),
-        ("ledger_type", 16), ("is_dropped_ledger_table", 16), ("ledger_view_type", 16), ("is_dropped_ledger_view", 16), ("is_dropped_ledger_column", 16)
+        ("ledger_type", 16), ("is_dropped_ledger_table", 16), ("ledger_view_type", 16), ("is_dropped_ledger_view", 16), ("is_dropped_ledger_column", 16),
+        // Database Properties (Actions/DatabaseProperties.cs).
+        ("is_ledger_on", 16), ("sys.database_scoped_configurations", 13), ("is_autogrow_all_files", 13)
     ];
     private static readonly HashSet<string> Literals = ["N'microsoft_database_tools_support'", "N'%'", "N'\\'", "N'.sys.sp_executesql'"];
 

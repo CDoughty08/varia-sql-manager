@@ -5,16 +5,24 @@ import { scriptDestinations, type ScriptDestination } from '../../../shared/scri
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { trapFocus } from '../trap-focus'
+import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
+import FilegroupsPage from './pages/database/FilegroupsPage'
+import FilesPage from './pages/database/FilesPage'
+import GeneralPage from './pages/database/GeneralPage'
+import OptionsPage from './pages/database/OptionsPage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
 /** Each dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). */
-export const dialogPages: { readonly [D in DialogId]: Readonly<Record<string, ComponentType<PageProps>>> } = { deleteObject: { general: DeleteObjectPage } }
+export const dialogPages: { readonly [D in DialogId]: Readonly<Record<string, ComponentType<PageProps>>> } = {
+  deleteObject: { general: DeleteObjectPage },
+  databaseProperties: { general: GeneralPage, files: FilesPage, filegroups: FilegroupsPage, options: OptionsPage }
+}
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
-  loading: 'Loading', ready: 'Ready', loadFailed: 'Error', scripting: 'Scripting', executing: 'Executing', failed: 'Error', stopped: 'Stopped', disconnected: 'Error'
+  loading: 'Loading', ready: 'Ready', confirming: 'Ready', loadFailed: 'Error', scripting: 'Scripting', executing: 'Executing', failed: 'Error', stopped: 'Stopped', disconnected: 'Error'
 }
 
 /** The Script split button: the main part scripts to a new query window; the arrow lists the three destinations. */
@@ -81,7 +89,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const { dialogs } = useWorkbench()
   const spec = dialogSpecs[open.dialog]
   const Page = dialogPages[open.dialog][open.page]
-  const executing = open.phase === 'executing', busy = executing || open.phase === 'loading' || open.phase === 'scripting'
+  const executing = open.phase === 'executing', busy = executing || open.phase === 'loading' || open.phase === 'scripting' || open.phase === 'confirming'
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
   // The dialog takes focus as it opens, so Enter is OK and Escape is Cancel, as in SSMS.
@@ -98,14 +106,16 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!executing) close() }
-    else if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement) && !(event.target instanceof HTMLSelectElement) && !(event.target as Element).closest?.('[role="grid"], [role="listbox"]')) {
+    else if (event.key === 'Enter') {
+      const enter = dialogEnter(event.target as Element)
+      if (enter === 'native') return
       event.preventDefault()
-      void dialogs.ok()
+      if (enter === 'ok') void dialogs.ok()
     }
   }
-  const title = spec.title
+  const title = open.title
   const progress = progressText[open.phase]
-  return <div className="modal-backdrop"><form ref={form} className="connection-modal object-dialog" role="dialog" aria-modal="true" aria-labelledby="object-dialog-title" noValidate tabIndex={-1}
+  return <div className="modal-backdrop"><form ref={form} className={'connection-modal object-dialog' + (spec.size === 'large' ? ' large' : '')} role="dialog" aria-modal="true" aria-labelledby="object-dialog-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void dialogs.ok() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id="object-dialog-title">{title}</h2>
       <button type="button" className="icon-button" aria-label={'Close ' + title} disabled={executing} onClick={close}><Icon name="close" /></button></div>

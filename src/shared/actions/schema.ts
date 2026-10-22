@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionLimits, actionOffered, dialogIds, objectActionSpecs, type ActionErrorCode, type DialogId, type ObjectAction } from './catalog.ts'
+import { actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type DialogId, type ObjectAction } from './catalog.ts'
+import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 
 export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DialogId; readonly target: ObjectRef }
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
@@ -12,8 +13,18 @@ export interface RenameRequest { readonly action: 'rename'; readonly connectionI
 export interface DeleteRequest {
   readonly action: 'delete'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly deleteHistory: boolean
 }
+/** Database Properties' changes, only what differs from the describe: options and scoped configurations by key, as tokens. */
+export interface DatabaseChanges {
+  readonly owner?: string
+  readonly options?: Readonly<Record<string, string>>
+  readonly scoped?: Readonly<Record<string, string>>
+}
+/** Database Properties' OK and Script. `closeConnections` (WITH ROLLBACK IMMEDIATE) only with a change SSMS closes connections for. */
+export interface PropertiesRequest {
+  readonly action: 'properties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly changes: DatabaseChanges
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -31,7 +42,72 @@ export interface DeleteTarget {
   /** Sessions in the database; absent without VIEW SERVER STATE. */
   readonly sessions?: number
 }
-export interface ActionDescribeResult { readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError }
+/** Database Properties' General page. Sizes in MB; dates in ISO 8601. A backup date of 'None' means no history; absent is unknown. */
+export interface DatabaseGeneral {
+  readonly name: string
+  /** sys.databases state_desc (ONLINE, RESTORING, …); databaseStatusText words it as SMO does. */
+  readonly status: string
+  readonly standby?: boolean
+  readonly owner?: string
+  readonly created: string
+  readonly sizeMb: number
+  readonly spaceAvailableMb?: number
+  readonly users?: number
+  readonly lastBackup?: string
+  readonly lastLogBackup?: string
+  readonly collation?: string
+  readonly memoryAllocatedMb?: number
+  readonly memoryUsedMb?: number
+}
+export interface DatabaseFile {
+  readonly name: string
+  readonly type: FileType
+  readonly filegroup?: string
+  readonly sizeMb: number
+  readonly growth: Growth
+  readonly path: string
+  readonly fileName: string
+  readonly isPrimary: boolean
+}
+export interface DatabaseFilegroup {
+  readonly name: string
+  readonly type: 'rows' | 'filestream' | 'memoryOptimized'
+  readonly files: number
+  readonly readOnly: boolean
+  readonly isDefault: boolean
+  /** Band 13 and later. */
+  readonly autogrowAllFiles?: boolean
+}
+export interface DatabaseServerFacts {
+  /** The version band (13 = SQL Server 2016 … 17 = 2025). */
+  readonly level: number
+  readonly sysadmin: boolean
+  /** SERVERPROPERTY('FilestreamEffectiveLevel'): 0 off … 3. */
+  readonly filestreamLevel: number
+  readonly pathSeparator: '\\' | '/'
+  readonly edition: number
+  /** sp_configure 'contained database authentication': Partial containment needs it. */
+  readonly containedAuthentication: boolean
+}
+/** What Database Properties shows: the facts, every option as a token, and the choices its lists offer. */
+export interface DatabasePropertiesModel {
+  readonly general: DatabaseGeneral
+  readonly options: Readonly<Record<string, string>>
+  readonly scoped: Readonly<Record<string, string>>
+  readonly compatibilityLevels: readonly number[]
+  readonly collations: readonly string[]
+  readonly logins: readonly string[]
+  readonly files: readonly DatabaseFile[]
+  readonly filesTruncated: boolean
+  readonly filegroups: readonly DatabaseFilegroup[]
+  readonly filegroupsTruncated: boolean
+  readonly server: DatabaseServerFacts
+  /** Sessions in the database; absent without VIEW SERVER STATE. */
+  readonly sessions?: number
+  /** Why nothing can change: a snapshot, a database that is not online or not accessible, or Managed Instance. */
+  readonly readOnlyReason?: string
+}
+export interface ActionDescribeResult { readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
   readonly text?: string
@@ -55,9 +131,12 @@ export interface ActionExecuteResult {
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-/** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects. */
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties' }
+/** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
+ *  (unless the action serves them, as Properties does). */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
-  if (!actionOffered(ref.kind, action)) return [`A ${ref.kind} cannot be ${action === 'rename' ? 'renamed' : action === 'delete' ? 'deleted' : 'selected from'}.`]
+  if (!actionOffered(ref.kind, action)) return [`A ${ref.kind} cannot be ${verbs[action]}.`]
+  if (objectActionSpecs[action].systemObjects) return []
   if (ref.kind === 'database' ? systemDatabases.has(ref.name ?? '') : ref.schema !== undefined && systemSchemas.has(ref.schema)) return ['System objects cannot be changed.']
   return []
 }
@@ -66,18 +145,45 @@ const issue = (context: z.RefinementCtx, path: string, message: string) => conte
 const targetIssues = (context: z.RefinementCtx, target: ObjectRef, action: ObjectAction) => { for (const message of actionTargetProblems(target, action)) issue(context, 'target', message) }
 
 export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(dialogIds), target: objectRefSchema }).strict()
-  .superRefine((request, context) => {
-    const action = (Object.keys(objectActionSpecs) as ObjectAction[]).find(item => objectActionSpecs[item].dialog === request.dialog)!
-    targetIssues(context, request.target, action)
-  }) satisfies z.ZodType<ActionDescribeRequest>
+  .superRefine((request, context) => targetIssues(context, request.target, dialogSpecs[request.dialog].action)) satisfies z.ZodType<ActionDescribeRequest>
 
+/** Option and scoped-configuration changes: known settable keys, each with a token of that option. */
+const tokens = (keys: readonly string[]) => z.record(z.string().max(64), z.string().min(1).max(128)).superRefine((record, context) => {
+  for (const [key, token] of Object.entries(record)) {
+    const def = keys.includes(key) ? optionDef(key) : undefined
+    const problem = def ? tokenProblem(def, token) : 'Unknown option.'
+    if (problem) context.addIssue({ code: 'custom', path: [key], message: problem })
+  }
+})
+const changesSchema = z.object({ owner: ident.optional(), options: tokens(settableOptionKeys).optional(), scoped: tokens(settableScopedKeys).optional() }).strict()
+const exclusiveChange = (changes: DatabaseChanges) => Object.keys(changes.options ?? {}).some(key => optionDef(key)?.exclusive)
+/** How many statements a change set plans at most: one per option (incremental statistics shares one) and scoped configuration, and the owner. */
+export const plannedStatements = (changes: DatabaseChanges) => Object.keys(changes.options ?? {}).length + Object.keys(changes.scoped ?? {}).length + (changes.owner === undefined ? 0 : 1)
+
+// One schema per action, one per line, so later actions append cleanly.
 const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident }).strict()
 const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
-export const actionRequestSchema = z.discriminatedUnion('action', [renameSchema, deleteSchema]).superRefine((request, context) => {
+const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema }).strict()
+export const actionRequestSchema = z.discriminatedUnion('action', [
+  renameSchema,
+  deleteSchema,
+  propertiesSchema
+]).superRefine((request, context) => {
   targetIssues(context, request.target, request.action)
-  if (request.action === 'rename' && request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
-  if (request.action === 'delete' && kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) {
-    issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
+  switch (request.action) {
+    case 'rename':
+      if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
+      break
+    case 'delete':
+      if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
+      break
+    case 'properties': {
+      const count = plannedStatements(request.changes)
+      if (count === 0) issue(context, 'changes', 'There is nothing to change.')
+      if (count > actionLimits.statements) issue(context, 'changes', 'Too many changes.')
+      if (request.closeConnections && !exclusiveChange(request.changes)) issue(context, 'closeConnections', 'No change needs other connections closed.')
+      break
+    }
   }
 }) satisfies z.ZodType<ActionRequest>
 
