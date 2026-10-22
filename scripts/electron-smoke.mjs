@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { activeDocument, anyResultGrid, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindBadge, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -53,7 +54,7 @@ async function chooseMenu(page, name, label) {
   const button = page.getByRole('menubar', { name: 'Application menu' }).getByRole('menuitem', { name, exact: true })
   await button.click()
   await page.getByRole('menu', { name, exact: true }).getByRole('menuitem', { name: label, exact: true }).click()
-  await expect(page.locator('.menu')).toHaveCount(0)
+  await expect(openMenus(page)).toHaveCount(0)
   await expect(button).toHaveAttribute('aria-expanded', 'false')
 }
 try {
@@ -91,10 +92,10 @@ try {
     const window = new BrowserWindow({ show: false, webPreferences: { partition: 'varia-policy-probe', sandbox: true, contextIsolation: true } })
     try {
       await window.loadFile(join(app.getAppPath(), 'out/renderer/index.html'))
-      const heading = "document.querySelector('.shell-failure h1')?.textContent ?? null"
+      const heading = "document.getElementById('shell-failure-title')?.textContent ?? null"
       let failure = null
       for (let tries = 0; tries < 100 && !failure; tries++) failure = await window.webContents.executeJavaScript(heading) ?? await new Promise(resolve => setTimeout(resolve, 100, null))
-      return { ...await window.webContents.executeJavaScript(code), failure, buttons: await window.webContents.executeJavaScript("[...document.querySelectorAll('.shell-failure button')].map(button => button.textContent)") }
+      return { ...await window.webContents.executeJavaScript(code), failure, buttons: await window.webContents.executeJavaScript("[...document.querySelectorAll('main button')].map(button => button.textContent)") }
     } finally { window.destroy() }
   }, policyProbe)
   expect(metaOnly).toMatchObject({ ...refused, meta: workbenchPolicy.meta, failure: 'Varia SQL Manager could not start.', buttons: ['Reload', 'Copy details'] })
@@ -111,13 +112,13 @@ try {
     const window = new BrowserWindow({ show: false, webPreferences: { session: probe, sandbox: true, contextIsolation: true } })
     try {
       await window.loadFile(join(app.getAppPath(), 'out/renderer/index.html'))
-      const heading = "document.querySelector('.shell-failure h1')?.textContent ?? null"
+      const heading = "document.getElementById('shell-failure-title')?.textContent ?? null"
       let failure = null
       for (let tries = 0; tries < 100 && !failure; tries++) failure = await window.webContents.executeJavaScript(heading) ?? await new Promise(resolve => setTimeout(resolve, 100, null))
       return { failure, blocked: blocked.length, ...await window.webContents.executeJavaScript(`({
-        buttons: [...document.querySelectorAll('.shell-failure button')].map(button => button.textContent),
-        headingSize: document.querySelector('.shell-failure h1') && getComputedStyle(document.querySelector('.shell-failure h1')).fontSize,
-        details: document.querySelector('.shell-failure-details')?.textContent ?? ''
+        buttons: [...document.querySelectorAll('main button')].map(button => button.textContent),
+        headingSize: document.getElementById('shell-failure-title') && getComputedStyle(document.getElementById('shell-failure-title')).fontSize,
+        details: document.querySelector('main [aria-label="Details"]')?.textContent ?? ''
       })`) }
     } finally { window.destroy(); probe.protocol.unhandle('file') }
   })
@@ -147,13 +148,13 @@ try {
     return { menuVisible: window.isMenuBarVisible(), menuAutoHide: window.isMenuBarAutoHide(), resizable: window.isResizable() }
   })
   expect(chrome).toEqual({ menuVisible: false, menuAutoHide: false, resizable: true })
-  const titleBar = await page.evaluate(() => {
+  const titleBar = await page.evaluate(part => {
     const overlay = navigator.windowControlsOverlay
     const safe = overlay.getTitlebarAreaRect()
-    const content = document.querySelector('.title-bar-content')
+    const content = document.querySelector(part.titleBarContent)
     const rect = content.getBoundingClientRect()
-    return { nativeControls: overlay.visible, top: rect.top, right: rect.right, safeRight: safe.x + safe.width, drag: getComputedStyle(content).webkitAppRegion, menus: getComputedStyle(document.querySelector('.title-bar-menus')).webkitAppRegion, toolbarTop: document.querySelector('.toolbar').getBoundingClientRect().top, height: document.querySelector('.title-bar').getBoundingClientRect().height }
-  })
+    return { nativeControls: overlay.visible, top: rect.top, right: rect.right, safeRight: safe.x + safe.width, drag: getComputedStyle(content).webkitAppRegion, menus: getComputedStyle(document.querySelector(part.menubar)).webkitAppRegion, toolbarTop: document.querySelector(part.toolbar).getBoundingClientRect().top, height: document.querySelector(part.titleBar).getBoundingClientRect().height }
+  }, part)
   expect(titleBar.nativeControls).toBe(true)
   expect(titleBar.top).toBe(0)
   expect(titleBar.right).toBeLessThanOrEqual(titleBar.safeRight + 1)
@@ -163,7 +164,7 @@ try {
   expect(titleBar.height).toBeLessThanOrEqual(34)
   // The renderer draws the title-bar menus: no native popup or menu-focus channel is left to call.
   expect(await page.evaluate(() => ({ showMenu: typeof window.varia.showMenu, onMenuFocus: typeof window.varia.onMenuFocus }))).toEqual({ showMenu: 'undefined', onMenuFocus: 'undefined' })
-  const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
+  const editorText = () => editorTextOf(page)
   async function typeSql(sql) {
     await page.locator('.monaco-editor [role="textbox"]').focus()
     await page.keyboard.press('Control+A')
@@ -171,8 +172,8 @@ try {
     await expect.poll(editorText).toContain(sql.replaceAll(' ', '\u00a0'))
   }
   async function undoToClean() {
-    for (let step = 0; step < 20 && await page.locator('.query-tab.active .dirty-dot').count(); step++) await page.keyboard.press('Control+Z')
-    await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+    for (let step = 0; step < 20 && await unsavedMark(activeDocument(page)).count(); step++) await page.keyboard.press('Control+Z')
+    await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   }
   async function redoToText(expected) {
     for (let step = 0; step < 20 && await editorText() !== expected; step++) await page.keyboard.press('Control+Y')
@@ -182,7 +183,7 @@ try {
   // Real menu callbacks, native-dialog IPC, and filesystem services; no database required.
   await dialogs({ savePath: null, openPaths: [], closeResponse: 2 })
   await chooseMenu(page, 'File', 'New Query')
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   await typeSql('SELECT 42 AS answer;')
   const typed = await editorText()
   await chooseMenu(page, 'Edit', 'Undo')
@@ -193,15 +194,16 @@ try {
   await expect.poll(editorText).not.toBe(typed)
   await page.keyboard.press('Control+Y')
   await expect.poll(editorText).toBe(typed)
-  const historyTab = await page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label')
-  await page.locator('.query-tabs').getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
-  await page.locator('.query-tabs').getByRole('tab', { name: historyTab, exact: true }).click()
+  const historyTab = await activeDocument(page).getAttribute('aria-label')
+  await documentTabs(page).getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
+  await documentTabs(page).getByRole('tab', { name: historyTab, exact: true }).click()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+Z')
   await expect.poll(editorText).not.toBe(typed)
   await undoToClean()
   await redoToText(typed)
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
+  await expect(kindBadge(activeDocument(page), 'SQL')).toHaveText('SQL')
   await page.keyboard.press('F10')
   await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
   await page.keyboard.press('ArrowRight')
@@ -228,22 +230,22 @@ try {
   expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMenuBarVisible())).toBe(false)
   await page.keyboard.press('Escape')
   await expect(page.locator('.monaco-editor [role="textbox"]')).toBeFocused()
-  await page.locator('.query-tabs').getByRole('tab', { selected: true }).focus()
+  await activeDocument(page).focus()
   await page.keyboard.press('Space')
   // The keyboard focus ring is a 1px inset outline: the strip would clip the default ring, and forced colors drop box shadows.
-  expect(await page.locator('.query-tabs').getByRole('tab', { selected: true }).evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineOffset, style.boxShadow] })).toEqual(['solid', '1px', '-1px', 'none'])
+  expect(await activeDocument(page).evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineOffset, style.boxShadow] })).toEqual(['solid', '1px', '-1px', 'none'])
   await menu('file.save')
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
-  const originalName = await page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label')
-  await page.getByRole('button', { name: 'Close ' + originalName, exact: true }).click()
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
+  const originalName = await activeDocument(page).getAttribute('aria-label')
+  await closeDocumentButton(page, originalName).click()
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   const savedPath = artifact('saved-query.sql')
   await dialogs({ savePath: savedPath })
   await menu('file.save')
-  await expect(page.locator('.query-tabs').getByRole('tab', { name: 'saved-query.sql', exact: true })).toBeVisible()
-  await expect(page.locator('.title-bar-caption')).toContainText('saved-query.sql')
+  await expect(documentTabs(page).getByRole('tab', { name: 'saved-query.sql', exact: true })).toBeVisible()
+  await expect(page.locator(part.titleBarCaption)).toContainText('saved-query.sql')
   expect(await readFile(savedPath, 'utf8')).toBe('SELECT 42 AS answer;')
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   // Delay Save As while typing; the revision written stays the saved undo boundary.
   await dialogs({ holdSave: true })
   await menu('file.saveAs')
@@ -251,80 +253,80 @@ try {
   await typeSql('SELECT 99 AS later;')
   const laterTyped = await editorText()
   await application.evaluate(() => { globalThis.variaDialogs.holdSave = false; globalThis.variaReleaseSave(); delete globalThis.variaReleaseSave })
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
+  await expect(toolbarButton(page, 'Save')).toBeEnabled()
   expect(await readFile(savedPath, 'utf8')).toBe('SELECT 42 AS answer;')
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
   await undoToClean()
   await expect.poll(editorText).toBe(typed)
   await redoToText(laterTyped)
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
   await typeSql('SELECT 43 AS answer;')
   await menu('file.save')
   await expect.poll(() => readFile(savedPath, 'utf8')).toBe('SELECT 43 AS answer;')
   // The file is in place before the save finishes, and Save As is disabled until it has (a slow disk widens the gap).
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
+  await expect(toolbarButton(page, 'Save')).toBeEnabled()
   const copyPath = artifact('saved-as.sql')
   await dialogs({ savePath: copyPath })
   // Save As has no key on Windows and Linux, as in SSMS: Ctrl+Shift+S is Save All there, and nothing is unsaved.
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+Shift+S')
-  await expect(page.locator('.query-tabs').getByRole('tab', { name: 'saved-as.sql', exact: true })).toHaveCount(0)
+  await expect(documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true })).toHaveCount(0)
   await chooseMenu(page, 'File', 'Save As…')
-  await expect(page.locator('.query-tabs').getByRole('tab', { name: 'saved-as.sql', exact: true })).toBeVisible()
+  await expect(documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true })).toBeVisible()
   expect(await readFile(copyPath, 'utf8')).toBe('SELECT 43 AS answer;')
   // Close an inactive document, then change activation while its confirmation is pending.
-  await page.getByRole('button', { name: 'New query', exact: true }).click()
+  await toolbarButton(page, 'New query').click()
   await typeSql('SELECT 88 AS close_me;')
-  const closeTarget = await page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label')
-  await page.locator('.query-tabs').getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
+  const closeTarget = await activeDocument(page).getAttribute('aria-label')
+  await documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
   await dialogs({ holdConfirm: true, closeResponse: 1 })
-  await page.getByRole('button', { name: 'Close ' + closeTarget, exact: true }).click()
+  await closeDocumentButton(page, closeTarget).click()
   await expect.poll(() => application.evaluate(() => typeof globalThis.variaReleaseConfirm)).toBe('function')
   expect(await application.evaluate(() => globalThis.variaDialogs.prompts.at(-1))).toContain(closeTarget)
-  await page.locator('.query-tabs').getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
+  await documentTabs(page).getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
   await application.evaluate(() => { globalThis.variaDialogs.holdConfirm = false; globalThis.variaReleaseConfirm(); delete globalThis.variaReleaseConfirm })
-  await expect(page.locator('.query-tabs').getByRole('tab', { name: closeTarget, exact: true })).toHaveCount(0)
-  await expect(page.locator('.query-tabs').getByRole('tab', { selected: true })).toHaveAttribute('aria-label', 'SQLQuery1.sql')
-  await expect(page.locator('.query-tabs').getByRole('tab', { name: 'saved-as.sql', exact: true })).toBeVisible()
+  await expect(documentTabs(page).getByRole('tab', { name: closeTarget, exact: true })).toHaveCount(0)
+  await expect(activeDocument(page)).toHaveAttribute('aria-label', 'SQLQuery1.sql')
+  await expect(documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true })).toBeVisible()
   await dialogs({ closeResponse: 2 })
-  await page.locator('.query-tabs').getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
+  await documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
   await menu('file.close')
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(1)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   const unicodePath = artifact('unicode-query.sql')
   await writeFile(unicodePath, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("SELECT N'日本語';", 'utf16le')]))
   await dialogs({ openPaths: [savedPath, unicodePath] })
   await page.keyboard.press('Control+O')
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(3)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(3)
   await expect.poll(editorText).toContain('日本語')
   await typeSql("SELECT N'Français';")
   await application.evaluate(({ app }) => app.quit())
   await expect.poll(() => application.evaluate(() => globalThis.variaDialogs.prompts.length)).toBeGreaterThan(1)
   expect((await page.evaluate(() => window.varia.health())).ok).toBe(true)
-  await expect(page.locator('.query-tabs').getByRole('tab', { name: 'unicode-query.sql', exact: true })).toBeVisible()
+  await expect(documentTabs(page).getByRole('tab', { name: 'unicode-query.sql', exact: true })).toBeVisible()
   await dialogs({ closeResponse: 0 })
   await menu('file.close')
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   const unicodeSaved = await readFile(unicodePath)
   expect([...unicodeSaved.subarray(0, 2)]).toEqual([0xff, 0xfe])
   expect(unicodeSaved.subarray(2).toString('utf16le')).toBe("SELECT N'Français';")
   await dialogs({ openPaths: [savedPath] })
   await menu('file.open')
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   await dialogs({ closeResponse: 1 })
-  for (const name of await page.locator('.query-tabs').getByRole('tab').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))) {
-    await page.getByRole('button', { name: 'Close ' + name, exact: true }).click()
-    await expect(page.locator('.query-tabs').getByRole('tab', { name, exact: true })).toHaveCount(0)
+  for (const name of await documentTabs(page).getByRole('tab').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))) {
+    await closeDocumentButton(page, name).click()
+    await expect(documentTabs(page).getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
   await nativeKey('N', ['control'])
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(1)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   await expect(page.locator('.monaco-editor')).toBeVisible()
 
   // Multi-server routing against the fake backend's fixtures, without external credentials.
   const executions = async () => (await calls()).filter(call => call.method === 'query.execute')
   async function connect(server) {
-    await page.getByRole('button', { name: 'Connect', exact: true }).click()
+    await toolbarButton(page, 'Connect').click()
     await page.getByLabel('Server Name', { exact: true }).fill(server)
     await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
@@ -332,24 +334,24 @@ try {
     await expect(await explorerRow(page, server)).toBeVisible()
   }
   await connect('server-a')
-  const tabA = await page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label')
-  const idA = await page.getByLabel('Query server', { exact: true }).inputValue()
-  await page.getByLabel('Query database', { exact: true }).selectOption('AppData')
+  const tabA = await activeDocument(page).getAttribute('aria-label')
+  const idA = await queryServer(page).inputValue()
+  await queryDatabase(page).selectOption('AppData')
   await typeSql('SELECT 1;')
   await connect('server-b')
-  const tabB = await page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label')
-  const idB = await page.getByLabel('Query server', { exact: true }).inputValue()
+  const tabB = await activeDocument(page).getAttribute('aria-label')
+  const idB = await queryServer(page).inputValue()
   expect(idA).not.toBe(idB)
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   await typeSql('SELECT 2;')
-  await page.getByRole('button', { name: /Execute/ }).click()
-  await expect(page.locator('.results-grid')).toContainText('server-b')
-  await page.locator('.query-tabs').getByRole('tab', { name: tabA, exact: true }).click()
-  await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idA)
-  await expect(page.getByLabel('Query database', { exact: true })).toHaveValue('AppData')
-  await page.getByRole('button', { name: /Execute/ }).click()
-  await expect(page.locator('.results-grid')).toContainText('server-a')
-  await expect(page.locator('.results-grid')).toContainText('AppData')
+  await toolbarButton(page, /Execute/).click()
+  await expect(anyResultGrid(page)).toContainText('server-b')
+  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await expect(queryServer(page)).toHaveValue(idA)
+  await expect(queryDatabase(page)).toHaveValue('AppData')
+  await toolbarButton(page, /Execute/).click()
+  await expect(anyResultGrid(page)).toContainText('server-a')
+  await expect(anyResultGrid(page)).toContainText('AppData')
   const executed = (await executions()).map(call => call.params)
   expect(executed.map(call => [call.connectionId, call.database])).toEqual([[idB, 'master'], [idA, 'AppData']])
   expect(executed.every(call => !!call.sessionId && call.startLine === 1)).toBe(true)
@@ -359,13 +361,13 @@ try {
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Shift+End')
-  await page.locator('.query-tabs').getByRole('tab', { name: tabB, exact: true }).click()
-  await page.locator('.query-tabs').getByRole('tab', { name: tabA, exact: true }).click()
+  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
+  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
   expect((await executions()).at(-1).params.startLine).toBe(3)
-  await expect(page.getByRole('button', { name: /Execute/ })).toBeEnabled()
+  await expect(toolbarButton(page, /Execute/)).toBeEnabled()
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Control+Enter')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql.replaceAll('\r\n', '\n')).toBe('-- heading\nSELECT 10;\nSELECT 20;')
@@ -373,37 +375,37 @@ try {
   const sessionCloses = async () => (await calls()).filter(call => call.method === 'query.session.close').length
   const closesBefore = await sessionCloses()
   await writeFile(join(control, 'hold', 'query.session.close'), '')
-  await page.getByLabel('Query server', { exact: true }).selectOption(idB)
+  await queryServer(page).selectOption(idB)
   await expect.poll(sessionCloses).toBe(closesBefore + 1)
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('F5')
   expect((await executions()).length).toBe(beforeRetarget)
   await rm(join(control, 'hold', 'query.session.close'))
-  await expect(page.getByLabel('Query server', { exact: true })).toBeEnabled()
-  await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idB)
-  await page.getByLabel('Query server', { exact: true }).selectOption(idA)
-  await expect(page.getByLabel('Query server', { exact: true })).toBeEnabled()
-  await page.getByLabel('Query database', { exact: true }).selectOption('AppData')
+  await expect(queryServer(page)).toBeEnabled()
+  await expect(queryServer(page)).toHaveValue(idB)
+  await queryServer(page).selectOption(idA)
+  await expect(queryServer(page)).toBeEnabled()
+  await queryDatabase(page).selectOption('AppData')
   await typeSql('BATCH_STATS_FIXTURE')
-  await page.getByRole('button', { name: /Execute/ }).click()
-  await expect(page.locator('.messages')).toContainText('logical reads 2')
-  await expect(page.locator('.messages')).toContainText('CPU time = 1 ms')
+  await toolbarButton(page, /Execute/).click()
+  await expect(messages(page)).toContainText('logical reads 2')
+  await expect(messages(page)).toContainText('CPU time = 1 ms')
   // A run with errors shows Messages, its error inline in red in SSMS's two-line form, then the line saying the next batch
   // still ran, as in SSMS; its results stay a tab away.
-  await expect(page.locator('.messages .msg.error')).toContainText('Msg 137, Level 15, State 2, Line 8')
-  await expect(page.locator('.messages .msg.error + .msg')).toHaveText('Batch 2 raised an error; execution continued with the next batch.')
-  await expect(page.locator('.messages')).toContainText('third batch')
-  await expect(page.locator('.output-status')).toContainText('Query completed with errors.')
-  await expect(page.locator('.output-status')).toContainText('3/3 batches')
-  await page.locator('.output-toolbar').getByRole('tab', { name: /^Results/ }).click()
-  await expect(page.locator('.results-grid')).toContainText('42')
+  await expect(errorMessages(page)).toContainText('Msg 137, Level 15, State 2, Line 8')
+  await expect(errorMessages(page).locator('xpath=following-sibling::pre[1]')).toHaveText('Batch 2 raised an error; execution continued with the next batch.')
+  await expect(messages(page)).toContainText('third batch')
+  await expect(outputStatus(page)).toContainText('Query completed with errors.')
+  await expect(outputStatus(page)).toContainText('3/3 batches')
+  await outputView(page, /^Results/).click()
+  await expect(anyResultGrid(page)).toContainText('42')
   // A plan's XML is a grid cell's text, never markup.
   await typeSql('XML_PLAN_FIXTURE')
-  await page.getByRole('button', { name: /Execute/ }).click()
-  await expect(page.locator('.results-grid[data-result-index="1"]')).toContainText('<ShowPlanXML>')
+  await toolbarButton(page, /Execute/).click()
+  await expect(resultGrid(page, 1)).toContainText('<ShowPlanXML>')
   await expect(page.locator('ShowPlanXML')).toHaveCount(0)
   await typeSql('SELECT 1;')
-  await page.getByRole('button', { name: /Execute/ }).click()
+  await toolbarButton(page, /Execute/).click()
 
   // Object Explorer: one keyboard tree over both servers. Connecting expanded each server without loading below its
   // folders; folders load when expanded, keep their rows when collapsed, and fail on their own.
@@ -413,7 +415,7 @@ try {
   await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '1 server-b [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]'])
   // The keyboard: one tab stop whose active descendant is the selected row; arrows, Home and End move, Right and Left
   // expand and step in and out, Enter toggles, Numpad minus and plus collapse and expand, and typing selects by name.
-  const selectedLabel = () => tree.evaluate(element => element.querySelector('#' + CSS.escape(element.getAttribute('aria-activedescendant') ?? ''))?.querySelector('.oe-label')?.textContent ?? null)
+  const selectedLabel = () => tree.evaluate((element, label) => element.querySelector('#' + CSS.escape(element.getAttribute('aria-activedescendant') ?? ''))?.querySelector(label)?.textContent ?? null, part.explorerLabel)
   await tree.focus()
   await page.keyboard.press('Home')
   await expect.poll(selectedLabel).toBe('server-a')
@@ -438,7 +440,7 @@ try {
   await expect(await explorerRow(page, 'server-a')).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('NumpadAdd')
   await expect(await explorerRow(page, 'server-a')).toHaveAttribute('aria-expanded', 'true')
-  const toggle = async (...path) => (await explorerRow(page, ...path)).locator('.oe-twistie').click()
+  const toggle = async (...path) => (await explorerRow(page, ...path)).locator(part.explorerTwistie).click()
   await toggle('server-a', 'Databases')
   await toggle('server-a', 'Databases', 'System Databases')
   await expect(await explorerRow(page, 'server-a', 'Databases', 'System Databases', 'tempdb')).toBeVisible()
@@ -484,8 +486,8 @@ try {
   // Clicking only selects: the query keeps its server and database.
   await (await explorerRow(page, 'server-a', 'Security', 'Logins', 'sa')).click()
   await expect(await explorerRow(page, 'server-a', 'Security', 'Logins', 'sa')).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idA)
-  await expect(page.getByLabel('Query database', { exact: true })).toHaveValue('AppData')
+  await expect(queryServer(page)).toHaveValue(idA)
+  await expect(queryDatabase(page)).toHaveValue('AppData')
   // Enter on the error row retries it.
   await writeFile(join(control, 'allow', 'audits'), '')
   await denied.click()
@@ -510,43 +512,43 @@ try {
 
   // Independent running state and cancellation for queries on two servers.
   await typeSql('WAIT_FOR_CANCEL')
-  await page.getByRole('button', { name: /Execute/ }).click()
-  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled()
-  await page.locator('.query-tabs').getByRole('tab', { name: tabB, exact: true }).click()
+  await toolbarButton(page, /Execute/).click()
+  await expect(toolbarButton(page, 'Cancel')).toBeEnabled()
+  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
   await typeSql('WAIT_FOR_CANCEL')
-  await page.getByRole('button', { name: /Execute/ }).click()
-  await expect(page.locator('.query-tabs .online')).toHaveCount(2)
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(page.locator('.query-tabs .online')).toHaveCount(1)
-  await page.locator('.query-tabs').getByRole('tab', { name: tabA, exact: true }).click()
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(page.locator('.query-tabs .online')).toHaveCount(0)
+  await toolbarButton(page, /Execute/).click()
+  await expect(executingMark(documentTabs(page))).toHaveCount(2)
+  await toolbarButton(page, 'Cancel').click()
+  await expect(executingMark(documentTabs(page))).toHaveCount(1)
+  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await toolbarButton(page, 'Cancel').click()
+  await expect(executingMark(documentTabs(page))).toHaveCount(0)
   await typeSql('SELECT 1;')
-  await page.getByRole('button', { name: /Execute/ }).click()
-  await expect(page.locator('.results-grid')).toContainText('server-a')
-  await page.locator('.query-tabs').getByRole('tab', { selected: true }).focus()
+  await toolbarButton(page, /Execute/).click()
+  await expect(anyResultGrid(page)).toContainText('server-a')
+  await activeDocument(page).focus()
   await page.keyboard.press('Space')
   await page.screenshot({ path: artifact('workbench.png') })
   // The toolbar's Disconnect acts on the selected node's server.
   await (await explorerRow(page, 'server-b', 'Security')).click()
-  await page.locator('.explorer-toolbar').getByRole('button', { name: 'Disconnect', exact: true }).click()
+  await explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true }).click()
   await expect.poll(async () => (await explorerLines(page)).some(line => line.startsWith('1 server-b'))).toBe(false)
-  await expect(page.getByLabel('Query server', { exact: true })).toHaveValue(idA)
-  await page.locator('.query-tabs').getByRole('tab', { name: tabB, exact: true }).click()
-  await expect(page.getByLabel('Query server', { exact: true })).toHaveValue('')
+  await expect(queryServer(page)).toHaveValue(idA)
+  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
+  await expect(queryServer(page)).toHaveValue('')
   // A disconnected query's Execute connects it first.
-  await expect(page.getByRole('button', { name: /Execute/ })).toBeEnabled()
+  await expect(toolbarButton(page, /Execute/)).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
-  const alignment = await page.evaluate(() => {
+  const alignment = await page.evaluate(part => {
     const center = element => { const box = element.getBoundingClientRect(); return box.y + box.height / 2 }
     const label = document.querySelector('label[for="query-database"]')
     const select = document.querySelector('#query-database')
-    const headings = [...document.querySelectorAll('.explorer-row')].filter(element => element.getBoundingClientRect().height > 0)
-    const distances = headings.flatMap(element => [element.querySelector('.oe-label'), element.querySelector('.oe-sublabel'), element.querySelector('.oe-twistie')].filter(Boolean).map(part => Math.abs(center(element.querySelector('.oe-icon')) - center(part))))
+    const headings = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].filter(element => element.getBoundingClientRect().height > 0)
+    const distances = headings.flatMap(element => [element.querySelector(part.explorerLabel), element.querySelector(part.explorerSublabel), element.querySelector(part.explorerTwistie)].filter(Boolean).map(item => Math.abs(center(element.querySelector(part.explorerIcon)) - center(item))))
     const safe = navigator.windowControlsOverlay.getTitlebarAreaRect()
-    return { field: Math.abs(center(label) - center(select)), tree: Math.max(...distances), headingCount: headings.length, titleBarFits: document.querySelector('.title-bar-content').getBoundingClientRect().right <= safe.x + safe.width + 1, overflow: document.documentElement.scrollWidth > window.innerWidth }
-  })
+    return { field: Math.abs(center(label) - center(select)), tree: Math.max(...distances), headingCount: headings.length, titleBarFits: document.querySelector(part.titleBarContent).getBoundingClientRect().right <= safe.x + safe.width + 1, overflow: document.documentElement.scrollWidth > window.innerWidth }
+  }, part)
   expect(alignment.field).toBeLessThan(1)
   expect(alignment.headingCount).toBeGreaterThan(6)
   expect(alignment.tree).toBeLessThan(1)
@@ -561,7 +563,7 @@ try {
   // CI keeps screenshots only as artifacts, so the log also names the open query tabs, dialogs, and alerts.
   console.log(await page.evaluate(() => {
     const describe = element => ({ label: element.getAttribute('aria-label') ?? document.getElementById(element.getAttribute('aria-labelledby') ?? '')?.textContent ?? null, className: String(element.className), hidden: !element.getClientRects().length, text: element.textContent.slice(0, 200), html: element.outerHTML.slice(0, 300) })
-    return { title: document.title, focused: document.activeElement?.outerHTML.slice(0, 500), hasFocus: document.hasFocus(), tabs: [...document.querySelectorAll('.query-tabs [role="tab"]')].map(tab => tab.getAttribute('aria-label')), dialogs: [...document.querySelectorAll('[role="dialog"], dialog')].map(describe), alerts: [...document.querySelectorAll('[role="alert"]')].map(describe) }
+    return { title: document.title, focused: document.activeElement?.outerHTML.slice(0, 500), hasFocus: document.hasFocus(), tabs: [...document.querySelectorAll('[role="tablist"][aria-label="Query documents"] [role="tab"]')].map(tab => tab.getAttribute('aria-label')), dialogs: [...document.querySelectorAll('[role="dialog"], dialog')].map(describe), alerts: [...document.querySelectorAll('[role="alert"]')].map(describe) }
   }))
   throw error
 } finally {
@@ -569,7 +571,7 @@ try {
   await application.evaluate(() => { globalThis.variaReleaseSave?.(); globalThis.variaReleaseConfirm?.() }).catch(() => {})
   await rm(join(control, 'hold'), { recursive: true, force: true })
   const cleanupPage = await application.firstWindow().catch(() => undefined)
-  if (cleanupPage) await expect(cleanupPage.getByRole('button', { name: 'Open', exact: true })).toBeEnabled().catch(() => {})
+  if (cleanupPage) await expect(toolbarButton(cleanupPage, 'Open')).toBeEnabled().catch(() => {})
   await application.close()
   await rm(profile, { recursive: true, force: true })
   await rm(control, { recursive: true, force: true })
