@@ -34,7 +34,23 @@ export const limits = {
   registries: { lostConnections: 1024, abandonedRequests: 4096, ownedResults: 100_000, stderrLines: 32, stderrCharacters: 512 },
   /** Copy and Save Results As (one of each per window). Copy text is capped before any work; progress is pushed at most
    *  4 times a second. */
-  jobs: { copyBytes: 64 * MiB, chunkBytes: MiB, copyCredit: 16 * MiB, copyDeadlineMs: 120_000, progressPerSecond: 4, suggestedName: 128, path: 32_767 }
+  jobs: { copyBytes: 64 * MiB, chunkBytes: MiB, copyCredit: 16 * MiB, copyDeadlineMs: 120_000, progressPerSecond: 4, suggestedName: 128, path: 32_767 },
+  /** Live subscriptions (docs/ipc.md, Live subscriptions): each has at most one unacknowledged EVENT. Its initial credit
+   *  is 64 KiB, and the backend sends an EVENT only while all of it is back. An EVENT is at most `eventBody`; the
+   *  catalogue's worst case stays within `frameBudget`. `perServer` counts subscriptions by the server a connection reaches,
+   *  whatever its login or database. They reach C# through the embedded Live/live-catalog.json (LiveCatalog.Limits).
+   *  The scheduler's own: live statements run under gates (`statementsPerConnection` per connection id, `statements` in the
+   *  backend, shared with unary methods on lane live); a statement's budget is 0.8 × its probe's interval within the
+   *  probe's `budgetMs`, itself within `budgetMs` here; a failing or costly probe backs off up to `backoffMs` (or its asked
+   *  interval when that is longer); and a subscription returns its connection to the pool while every probe is
+   *  paused or its next probe is at least `idleMs` away. */
+  live: {
+    portStreams: 16, backendSubscriptions: 32, perServer: 8, probes: 8, tablesPerProbe: 4, appendPerProbe: 4, tablesPerTick: 8,
+    series: 64, statuses: 16, statusCharacters: 128, errors: 8, messageCharacters: 2000, noteCharacters: 400, columns: 64,
+    intervalMs: { min: 1000, max: 3_600_000 }, initialCredit: 64 * KiB, frameBudget: 192 * KiB,
+    sortColumns: 4, filterCharacters: 400, filterColumns: 8, trackedKeys: 64, keyCharacters: 512, resumeCharacters: 256, kept: 64,
+    statementsPerConnection: 2, statements: 8, budgetMs: { min: 500, max: 10_000 }, backoffMs: 60_000, idleMs: 30_000
+  }
 } as const
 
 /** CANCEL frame reasons (the frame's arg). */

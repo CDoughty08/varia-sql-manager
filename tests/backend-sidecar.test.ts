@@ -14,6 +14,7 @@ import { decodePage } from '../src/shared/ipc/wire/pages'
 import { cellText } from '../src/shared/ipc/wire/cells'
 import { fuzzSeed, mulberry32 } from './fuzz/prng'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
+import { liveEndSchema, liveEventSchema, liveUpdateResultSchema, type BackendLiveEvent } from '../src/shared/live/schema'
 
 // The Release build, as CI checks it: npm run check builds it before vitest runs.
 const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
@@ -563,5 +564,88 @@ describe('real .NET sidecar results (test hooks)', () => {
       await vi.waitUntil(async () => (await readdir(folder)).every(name => !name.endsWith('.tmp')), { timeout: 10_000, interval: 50 })
       expect((await readdir(folder)).sort()).toEqual(['n1.json'])
     } finally { await rm(folder, { recursive: true, force: true }) }
+  }, 60_000)
+})
+
+describe('real .NET sidecar live subscriptions (test hooks)', () => {
+  const hooks = { VARIA_BACKEND_TEST_HOOKS: '1' }
+  const params = (args: Record<string, number> = { tickMs: 20 }, probes = ['debug.synthetic.table', 'debug.synthetic.metrics', 'debug.synthetic.status']) => ({
+    subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000 })), args
+  }) as BackendMethods['live.subscribe']['params']
+  /** A live subscription whose events main's schema must accept; `ack` acknowledges the last one, as the worker will. */
+  function subscribe(connection: BackendConnection, value: BackendMethods['live.subscribe']['params']) {
+    const events: { event: BackendLiveEvent; bytes: number }[] = []
+    const invalid: unknown[] = []
+    const sent = connection.send('live.subscribe', value, { deadlineMs: 0, onEvent: (event, bytes) => {
+      const parsed = liveEventSchema.safeParse(event)
+      if (!parsed.success) { invalid.push(parsed.error.issues); return false }
+      events.push({ event: parsed.data, bytes })
+    } })
+    sent.done.catch(() => {})
+    return { ...sent, events, invalid, ack: () => connection.credit(sent.id, events.at(-1)!.bytes) }
+  }
+  const tableOf = (event: BackendLiveEvent) => event.type === 'live.tick' ? event.samples.find(sample => sample.probe === 'debug.synthetic.table')?.tables?.[0] : undefined
+
+  it('sends main-valid frames one acknowledged tick at a time, and its tables are readable results', async () => {
+    const connection = backend(hooks)
+    expect((await connection.ready).methods).toEqual(expect.arrayContaining(['live.subscribe', 'live.update']))
+    const value = params()
+    const live = subscribe(connection, value)
+    await expect.poll(() => live.events.length).toBe(1)
+    await new Promise(done => setTimeout(done, 300))
+    expect(live.events.map(item => item.event.type)).toEqual(['live.opened'])
+    for (let tick = 1; tick <= 3; tick++) {
+      live.ack()
+      await expect.poll(() => live.events.length).toBe(tick + 1)
+    }
+    expect(live.invalid).toEqual([])
+    const tables = live.events.map(item => tableOf(item.event)).filter(table => table !== undefined)
+    expect(tables.map(table => [table.revision, table.retired])).toEqual([[1, undefined], [2, undefined], [3, [tables[0].descriptor.resultId]]])
+    const read = connection.send('results.read', { resultId: tables[2].descriptor.resultId, firstRow: 0, maxRows: 10 }, { deadlineMs: 60_000, credit: 65_536, stream: { data: () => {} } })
+    expect(await read.done).toMatchObject({ rows: 3, complete: true })
+    const released = connection.send('results.read', { resultId: tables[0].descriptor.resultId, firstRow: 0, maxRows: 10 }, { deadlineMs: 60_000, credit: 65_536, stream: { data: () => {} } })
+    await expect(released.done).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+
+    const update = (patch: Record<string, unknown>) => call(connection, 'live.update', { subscriptionId: value.subscriptionId, source: 'debug.synthetic', ...patch } as BackendMethods['live.update']['params'])
+    expect(liveUpdateResultSchema.safeParse(await update({ paused: true })).success).toBe(true)
+    live.ack()
+    await new Promise(done => setTimeout(done, 300))
+    const held = live.events.length
+    expect(await update({ paused: false })).toMatchObject({ applied: true, probes: [{ paused: false }, { paused: false }, { paused: false }] })
+    await expect.poll(() => live.events.length).toBe(held + 1)
+    const resumed = live.events.at(-1)!.event
+    expect(resumed.type === 'live.tick' && resumed.samples.every(sample => sample.gap === 'resumed')).toBe(true)
+    await expect(update({ paused: true, extra: 1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    connection.cancel(live.id, 1)
+    const end = await live.done
+    expect(liveEndSchema.safeParse(end).success).toBe(true)
+    expect(end).toMatchObject({ ended: 'cancelled' })
+    const gone = connection.send('results.read', { resultId: tables[2].descriptor.resultId, firstRow: 0, maxRows: 10 }, { deadlineMs: 60_000, credit: 65_536, stream: { data: () => {} } })
+    await expect(gone.done).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+    await expect(update({ paused: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  }, 60_000)
+
+  it('ends a subscription whose source ended, keeping its last table, and one whose connection is disconnected', async () => {
+    const connection = backend(hooks)
+    const ended = subscribe(connection, params({ tickMs: 20, endAfterTicks: 2 }, ['debug.synthetic.table']))
+    await expect.poll(() => ended.events.length).toBe(1)
+    ended.ack()
+    await expect.poll(() => ended.events.length).toBe(2)
+    ended.ack()
+    const end = await ended.done as { kept?: number[] }
+    expect(end).toMatchObject({ ended: 'sourceEnded', ticks: 2, kept: [tableOf(ended.events[2].event)!.descriptor.resultId] })
+    expect(await call(connection, 'results.close', { resultIds: end.kept! })).toMatchObject({ closed: 1 })
+
+    const value = params()
+    const disconnected = subscribe(connection, value)
+    await expect.poll(() => disconnected.events.length).toBe(1)
+    await call(connection, 'connections.disconnect', { connectionId: value.connectionId })
+    expect(await disconnected.done).toMatchObject({ ended: 'disconnected' })
+  }, 60_000)
+
+  it('has no synthetic source without its test hooks', async () => {
+    const connection = backend()
+    const live = subscribe(connection, params())
+    await expect(live.done).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   }, 60_000)
 })
