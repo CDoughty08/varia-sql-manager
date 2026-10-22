@@ -5,7 +5,7 @@ namespace Varia.Backend.Explorer;
 internal sealed record CatalogFolder(string Id, string Label, string Owner, string? Parent, int Order, int? Since, IReadOnlyList<string> Engines, string? List,
     IReadOnlyList<string> Rows, IReadOnlyList<string> Filter);
 /// <summary>A node kind. List and Rows: the query whose rows follow the kind's static folders, and their kinds. MaxName: the
-/// longest name its refs may carry (128 unless the kind declares more).</summary>
+/// longest name its refs may carry (128 unless the kind declares more, and then it owns no folders or rows).</summary>
 internal sealed record CatalogKind(string Kind, string Title, string Scope, string Icon, IReadOnlyList<string> Subtypes, IReadOnlyDictionary<string, string> SubtypeIcons,
     IReadOnlyDictionary<string, string> VariantIcons, IReadOnlyList<string> Folders, IReadOnlyDictionary<string, IReadOnlyList<string>> SubtypeFolders,
     IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents, string? List, IReadOnlyList<string> Rows, int MaxName);
@@ -52,6 +52,10 @@ internal sealed class ExplorerCatalog
             kind.Folders, kind.SubtypeFolders.ToDictionary(item => item.Key, item => (IReadOnlyList<string>)item.Value), kind.HistoryLookup, kind.Parents, kind.List, kind.Rows,
             kind.MaxName is >= ExplorerRefs.MaxIdentifier and <= ExplorerRefs.MaxName ? kind.MaxName : throw new InvalidOperationException("A kind's name bound is out of range.")),
             StringComparer.Ordinal);
+        // Folders, history rows and listings name their owner through @object_name, a sysname: a longer owner name would
+        // reach them cut to 128 code units, and resolve another object.
+        if (kinds.Values.FirstOrDefault(kind => kind.MaxName > ExplorerRefs.MaxIdentifier && OwnsChildren(kind)) is { } longNamed)
+            throw new InvalidOperationException("A kind whose names exceed 128 code units cannot own folders or rows: " + longNamed.Kind + ".");
         Queries = [.. json.Queries];
         Scopes = json.Scopes;
         FolderIds = [.. json.Folders.Select(folder => folder.Id)];
@@ -62,6 +66,8 @@ internal sealed class ExplorerCatalog
             return (IReadOnlyList<string>)[.. kinds.Values.Where(kind => kind.Folders.Contains(root) || kind.SubtypeFolders.Values.Any(set => set.Contains(root))).Select(kind => kind.Kind)];
         }, StringComparer.Ordinal);
     }
+
+    private static bool OwnsChildren(CatalogKind kind) => kind.Folders.Count > 0 || kind.SubtypeFolders.Count > 0 || kind.HistoryLookup.Count > 0 || kind.List is not null;
 
     public static ExplorerCatalog Current => Embedded.Value;
 

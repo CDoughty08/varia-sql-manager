@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   bandOf, childParentKinds, cloudEngineEditions, engineOf, explorerCatalogJson, explorerIcons, explorerLimits, filterProperties, folderGates, folderIds, folderOwnerKinds,
   folderServed, folderSpecs, foldersFor, kindScopes, kindSpecs, laterFolders, maxBand, maxNameOf, minBand, nodeKinds, nodeSubtypes, parentKinds, queryIds, refFields,
-  rootFolder, scopeFields, staticChildren, statusBadges, subfolders, svgIcons, type ExplorerProfile, type FolderId, type NodeKind
+  rootFolder, scopeFields, staticChildren, statusBadges, subfolders, svgIcons, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
 } from '../src/shared/explorer/catalog'
 import { renderExplorerDocs } from '../src/shared/explorer/docs'
 import { svgPaths } from '../src/renderer/src/Icon'
@@ -208,6 +208,13 @@ describe('Object Explorer catalogue', () => {
     expect(nodeKinds.filter(kind => kindSpecs[kind].maxName !== undefined)).toEqual([])
     expect(maxNameOf(kindSpecs.table)).toBe(128)
     expect(maxNameOf({ maxName: 260 })).toBe(260)
+  })
+  it('gives a kind with names past 128 no folders, history row or rows, which bind their owner\'s name as a sysname', () => {
+    const ownsChildren = (spec: KindSpec) => spec.folders.length > 0 || Object.keys(spec.subtypeFolders ?? {}).length > 0 || (spec.historyLookup?.length ?? 0) > 0 || spec.list !== undefined
+    for (const kind of nodeKinds) if (maxNameOf(kindSpecs[kind]) > 128) expect(ownsChildren(kindSpecs[kind]), kind).toBe(false)
+    expect(ownsChildren(kindSpecs.synonym)).toBe(false)
+    expect([{ list: 'logins' as const }, { folders: ['columns'] as const }, { historyLookup: ['history'] as const }, { subtypeFolders: { history: ['columns'] as const } }]
+      .map(change => ownsChildren({ ...kindSpecs.synonym, ...change }))).toEqual([true, true, true, true])
   })
   it('uses icons that exist: codicons in the bundled font, svg icons in Icon.tsx', async () => {
     // Untyped Monaco internals, as in command-catalog.test.ts.

@@ -162,8 +162,11 @@ describe('explorer request schemas', () => {
       expect(scopeFields[kindScope(kind)].forbidden, kind).toContain(field)
       rejects(objectRefSchema, { ...minimal(kind), [field]: 'Finance' })
     }
-    for (const value of ['', 'x'.repeat(129), 'a\u0000', 1]) {
-      expect(objectRefSchema.safeParse({ kind: 'server', ssisFolder: value }).error?.issues.some(issue => issue.path[0] === 'ssisFolder'), String(value)).toBe(true)
+    for (const field of ['ssisFolder', 'ssisProject'] as const) {
+      for (const value of ['', 'x'.repeat(129), '𝒜'.repeat(64) + 'a', 'a\u0000', 1]) {
+        expect(objectRefSchema.safeParse({ kind: 'server', [field]: value }).error?.issues.some(issue => issue.path[0] === field), `${field} ${String(value)}`).toBe(true)
+      }
+      expect(objectRefSchema.safeParse({ kind: 'server', [field]: 'x'.repeat(128) }).error?.issues.some(issue => issue.path[0] === field), field).toBe(false)
     }
   })
   it('bounds names by kind: 128 unless the kind declares a longer one, never past the catalogue\'s maximum', () => {
@@ -258,6 +261,11 @@ describe('explorer request schemas', () => {
     expect(childrenParamsProblems(children(object({ kind: 'server' }), { cursor: 'v1.schemas.AQ' }), listing)).toEqual(wrong)
     // A folder's cursor still names the folder's own query, whatever its owner lists.
     expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'database', name: 'db' }, folder: 'tables' }, { cursor: 'v1.schemas.AQ' }), listing)).toEqual(wrong)
+    // A folder without a query of its own takes no cursor, not even its owner's.
+    expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'database', name: 'db' }, folder: 'programmability' }, { cursor: 'v1.schemas.AQ' }), listing)).toEqual(wrong)
+    const logins = variant('server', { list: 'logins', rows: ['login'] })
+    expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'server' }, folder: 'serverSecurity' }, { cursor: 'v1.logins.AQ' }), logins)).toEqual(wrong)
+    expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'server' }, folder: 'logins' }, { cursor: 'v1.logins.AQ' }), logins)).toEqual([])
     expect(childrenParamsProblems(children(database, { filter: { name: { op: 'contains', value: 'x' } } }), listing)).toEqual([['filter', 'This folder cannot be filtered by name.']])
     rejects(explorerChildrenParamsSchema, params(database, { cursor: 'v1.schemas.AQ' }))
   })

@@ -188,6 +188,27 @@ internal static class ExplorerLiveChecks
                 "a bigint keyset (Keyset.Id) pages master's " + keys.Count + " objects past int's range without gaps or duplicates" + (perDatabase ? " on a pool per database" : " through the scope wrapper")
                 + " (" + listed.Pages + " pages, " + labels.Count + " rows; " + listed.Error?.Message + "; first difference at " + Enumerable.Range(0, Math.Min(labels.Count, keys.Count)).FirstOrDefault(i => labels[i] != keys[i], -1) + ")");
         }
+
+        // The server receives each owner field in its own parameter, verbatim: an SSIS ref's name, folder and project at
+        // server scope, and a database's name through both scope strategies.
+        var (serverEcho, databaseEcho) = (ExplorerChecks.Echo(QueryScope.Server), ExplorerChecks.Echo(QueryScope.Database));
+        var echoes = ExplorerQueries.All.Append(new(serverEcho.Id, serverEcho)).Append(new(databaseEcho.Id, databaseEcho)).ToDictionary(StringComparer.Ordinal);
+        var ssis = ExplorerChecks.Variant(json =>
+        {
+            ExplorerChecks.SetKind(json, "login", ("scope", "ssisProjectObject"), ("list", serverEcho.Id), ("rows", new JsonArray("credential")));
+            ExplorerChecks.SetKind(json, "database", ("list", databaseEcho.Id), ("rows", new JsonArray("credential")));
+        });
+        var package = new ObjectRefDto("login", Name: "Daily ]' 😀", SsisFolder: "Finance [x]", SsisProject: "Loads; --");
+        foreach (var perDatabase in new[] { false, true })
+        {
+            using var service = new ExplorerService(host, new ExplorerOptions { ForcePerDatabaseScope = perDatabase }, ssis, echoes);
+            var owned = await service.ChildrenAsync(new(connectionId, Guid.NewGuid().ToString(), Object(package)), CancellationToken.None);
+            var master = await service.ChildrenAsync(new(connectionId, Guid.NewGuid().ToString(), Object(Database("master"))), CancellationToken.None);
+            var labels = owned.Nodes.Select(node => node.Label).Append(master.Nodes.LastOrDefault()?.Label).ToList();
+            check(owned.Error is null && master.Error is null && labels.SequenceEqual(["Daily ]' 😀|-|Finance [x]|Loads; --", "master|-|-|-"]),
+                "a listing receives its owner's name, schema, SSIS folder and project in their own parameters" + (perDatabase ? " on a pool per database" : " through the scope wrapper")
+                + ": " + string.Join(" / ", labels) + " " + owned.Error?.Message + master.Error?.Message);
+        }
     }
 
     /// <summary>The children a walk expands: those that have children, except temp tables (tempdb's # names, including the

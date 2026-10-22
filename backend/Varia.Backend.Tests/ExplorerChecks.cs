@@ -71,10 +71,10 @@ internal static class ExplorerChecks
     {
         var catalog = ExplorerCatalog.Current;
         check(catalog.FolderIds.Count == 72 && catalog.Kinds.Count() == 51 && catalog.CloudEditions.SetEquals([5, 6, 9, 11, 12]), "the embedded Object Explorer catalogue loads");
-        var lists = catalog.FolderIds.Select(id => catalog.Folder(id)!.List).OfType<string>().ToHashSet();
+        var lists = Listings(catalog).Select(listing => listing.Query).ToHashSet();
         var queries = ExplorerQueries.All.Keys.Append("historyTable").ToHashSet();
         check(queries.SetEquals(catalog.Queries) && lists.All(ExplorerQueries.All.ContainsKey) && ExplorerQueries.All.Keys.All(lists.Contains),
-            "every catalogue query is implemented and every implemented query is listed by a folder");
+            "every catalogue query is implemented and every implemented query is listed by a folder or a kind");
         check(catalog.Kinds.Any(kind => kind.HistoryLookup.Count > 0), "the history row's query is referenced through historyLookup");
         foreach (var cloud in new[] { false, true })
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
@@ -104,25 +104,32 @@ internal static class ExplorerChecks
             "folder owners come from the kinds' folder sets");
     }
 
-    private static void Sql(Action<bool, string> check)
+    /// <summary>Every node that lists rows: a folder with a query (its filters, gate and owner kinds), or a kind that lists rows
+    /// after its static folders (no filters, its own kind as the owner).</summary>
+    private static IEnumerable<(string Node, string Query, IReadOnlyList<string> Filter, int? Since, IReadOnlyList<string> Owners)> Listings(ExplorerCatalog catalog) =>
+        catalog.FolderIds.Select(id => catalog.Folder(id)!).Where(folder => folder.List is not null)
+            .Select(folder => (folder.Id, folder.List!, folder.Filter, folder.Since, catalog.FolderOwnerKinds(folder.Id)))
+            .Concat(catalog.Kinds.Where(kind => kind.List is not null).Select(kind => (kind.Kind, kind.List!, (IReadOnlyList<string>)[], (int?)null, (IReadOnlyList<string>)[kind.Kind])));
+
+    /// <summary>Renders every listed query for bands 12-17, both probe flags, every filter shape of its node and parent kind,
+    /// and lints each rendering.</summary>
+    internal static (int Renders, List<string> Problems) LintListings(ExplorerCatalog catalog, IReadOnlyDictionary<string, ExplorerQuery> queries)
     {
-        var catalog = ExplorerCatalog.Current;
-        var folders = catalog.FolderIds.Select(id => catalog.Folder(id)!).Where(folder => folder.List is not null).ToList();
         var renders = 0;
         var problems = new List<string>();
-        foreach (var folder in folders)
+        foreach (var listing in Listings(catalog))
         {
-            var query = ExplorerQueries.All[folder.List!];
-            string?[] parents = query.ChildFolder ? [.. catalog.FolderOwnerKinds(folder.Id)] : [null];
+            var query = queries[listing.Query];
+            string?[] parents = query.ChildFolder ? [.. listing.Owners] : [null];
             var shapes = new List<FilterShape> { default };
-            foreach (var property in folder.Filter)
+            foreach (var property in listing.Filter)
                 foreach (var op in property == "created" ? new[] { "equals", "lessThan", "lessOrEqual", "greaterThan", "greaterOrEqual", "between", "notBetween" } : ["contains", "equals", "notContains"])
                     shapes.Add(property switch { "name" => new(Name: op), "schema" => new(Schema: op), "owner" => new(Owner: op), _ => new(Created: op) });
-            if (folder.Filter.Count > 1) shapes.Add(new(folder.Filter.Contains("name") ? "contains" : null, folder.Filter.Contains("schema") ? "equals" : null,
-                folder.Filter.Contains("owner") ? "notContains" : null, folder.Filter.Contains("created") ? "between" : null));
+            if (listing.Filter.Count > 1) shapes.Add(new(listing.Filter.Contains("name") ? "contains" : null, listing.Filter.Contains("schema") ? "equals" : null,
+                listing.Filter.Contains("owner") ? "notContains" : null, listing.Filter.Contains("created") ? "between" : null));
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
             {
-                if ((folder.Since ?? 0) > band) continue;
+                if ((listing.Since ?? 0) > band) continue;
                 foreach (var vector in new[] { false, true })
                     foreach (var parent in parents)
                         foreach (var shape in shapes)
@@ -130,12 +137,18 @@ internal static class ExplorerChecks
                             var render = new SqlRender(band, vector, shape, parent);
                             string text;
                             try { text = query.Render(render); }
-                            catch (Exception error) { problems.Add(folder.Id + " band " + band + ": " + error.Message); continue; }
+                            catch (Exception error) { problems.Add(listing.Node + " band " + band + ": " + error.Message); continue; }
                             renders++;
-                            problems.AddRange(CatalogSql.Lint(text, render, list: true, query.ChecksAccess).Select(problem => folder.Id + " band " + band + " " + parent + " " + shape + ": " + problem));
+                            problems.AddRange(CatalogSql.Lint(text, render, list: true, query.ChecksAccess).Select(problem => listing.Node + " band " + band + " " + parent + " " + shape + ": " + problem));
                         }
             }
         }
+        return (renders, problems);
+    }
+
+    private static void Sql(Action<bool, string> check)
+    {
+        var (renders, problems) = LintListings(ExplorerCatalog.Current, ExplorerQueries.All);
         for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
         {
             problems.AddRange(CatalogSql.Lint(ExplorerQueries.HistoryTable(new SqlRender(band)), new SqlRender(band), list: false, mayCheckAccess: false).Select(problem => "historyTable " + band + ": " + problem));
@@ -400,6 +413,15 @@ internal static class ExplorerChecks
         Map = row => ExplorerQueries.Node(row.Context, new ObjectRefDto("schema", row.Context.Database, Name: row.S(0)), row.Id.ToString(CultureInfo.InvariantCulture))
     };
 
+    /// <summary>One row whose label is the owner parameters the listing received: @object_name, @object_schema, @ssis_folder
+    /// and @ssis_project, joined by '|' with '-' for NULL.</summary>
+    internal static ExplorerQuery Echo(QueryScope scope) => new()
+    {
+        Id = "testEcho" + scope, Scope = scope, Keyset = Keyset.Id, From = _ => "(SELECT CONVERT(bigint, 1) AS id) AS e", Keys = ["e.id"],
+        Select = _ => "@object_name, @object_schema, @ssis_folder, @ssis_project",
+        Map = row => ExplorerQueries.Node(row.Context, new ObjectRefDto("credential", Name: "echo"), string.Join("|", Enumerable.Range(0, 4).Select(index => row.S(index) ?? "-")))
+    };
+
     /// <summary>SSIS identity (S1a): ref fields and scopes, per-kind name bounds, kinds that list rows after their folders,
     /// and the bigint keyset, checked through catalogue variants before any shipped kind uses them.</summary>
     private static void Identity(Action<bool, string> check)
@@ -431,9 +453,9 @@ internal static class ExplorerChecks
             SetKind(json, "server", ("scope", "ssisCatalog"));
             SetKind(json, "login", ("scope", "ssisFolder"));
             SetKind(json, "user", ("scope", "ssisFolderObject"));
-            SetKind(json, "table", ("scope", "ssisProjectObject"), ("maxName", 260));
+            SetKind(json, "synonym", ("scope", "ssisProjectObject"), ("maxName", 260));
         });
-        var scoped = new[] { "server", "login", "user", "table" }.Select(ssis.KindOf).ToList();
+        var scoped = new[] { "server", "login", "user", "synonym" }.Select(ssis.KindOf).ToList();
         var problems = new List<string>();
         foreach (var kind in scoped)
         {
@@ -452,17 +474,27 @@ internal static class ExplorerChecks
             problems.AddRange(scope.Required.Where(field => Valid(ssis, Without(field))).Select(field => kind.Scope + " without " + field));
             problems.AddRange(scope.Forbidden.Where(field => Valid(ssis, With(field))).Select(field => kind.Scope + " with " + field));
         }
-        var package = Minimal(ssis, ssis.KindOf("table"));
+        var package = Minimal(ssis, ssis.KindOf("synonym"));
         check(problems.Count == 0 && Valid(ssis, package with { Name = new string('x', 260) }) && !Valid(ssis, package with { Name = new string('x', 261) })
             && !Valid(ssis, package with { SsisFolder = new string('f', 129) }) && !Valid(ssis, package with { SsisProject = "a\0b" }) && !Valid(ssis, package with { SsisFolder = "" })
+            && Valid(ssis, package with { SsisFolder = new string('f', 128), SsisProject = new string('p', 128) }) && !Valid(ssis, package with { SsisProject = new string('p', 129) })
+            && !Valid(ssis, package with { SsisProject = "" }) && !Valid(ssis, package with { SsisFolder = "a\0b" })
             && Valid(ssis, Minimal(ssis, ssis.KindOf("user")) with { Name = new string('x', 128) }) && !Valid(ssis, Minimal(ssis, ssis.KindOf("user")) with { Name = new string('x', 129) }),
             "SSIS scopes require and forbid their fields, folder and project names are sysnames, and a kind's own name bound (260) applies to it alone: " + string.Join(", ", problems));
-        bool Refused(int maxName)
+        bool Refused(string kind, params (string Field, JsonNode? Value)[] fields)
         {
-            try { Variant(json => SetKind(json, "table", ("maxName", maxName))); return false; }
+            try { Variant(json => SetKind(json, kind, fields)); return false; }
             catch (InvalidOperationException) { return true; }
         }
-        check(Refused(127) && Refused(261) && !Refused(260), "a catalogue whose kind declares a name bound outside 128-260 does not load");
+        check(Refused("synonym", ("maxName", 127)) && Refused("synonym", ("maxName", 261)) && !Refused("synonym", ("maxName", 260)) && !Refused("table", ("maxName", 128)),
+            "a catalogue whose kind declares a name bound outside 128-260 does not load");
+        // Folders, history rows and listings bind their owner's name as a sysname, which would cut a longer one.
+        check(Refused("table", ("maxName", 129)) && Refused("synonym", ("maxName", 260), ("folders", new JsonArray("columns")))
+            && Refused("synonym", ("maxName", 260), ("list", "logins"), ("rows", new JsonArray("login")))
+            && Refused("synonym", ("maxName", 260), ("historyLookup", new JsonArray("history")))
+            && Refused("synonym", ("maxName", 260), ("subtypeFolders", new JsonObject { ["history"] = new JsonArray("columns") }))
+            && !Refused("synonym", ("list", "logins"), ("rows", new JsonArray("login"))),
+            "a catalogue whose kind has names past 128 code units and owns folders, a history row or rows does not load");
 
         // A kind may list rows after its static folders: the cursor names that query, and the node can expand.
         var listing = Variant(json =>
@@ -479,8 +511,33 @@ internal static class ExplorerChecks
         check(Accepted(listing, Args(Object(server), cursor: ExplorerCursor.Encode("logins", new("sa", null, null)))) && Accepted(listing, Args(Object(server)))
             && !Accepted(listing, Args(Object(server), cursor: ExplorerCursor.Encode("credentials", new("c", null, null))))
             && !Accepted(catalog, Args(Object(server), cursor: ExplorerCursor.Encode("logins", new("sa", null, null)))) && !Accepted(catalog, Args(Object(server)))
-            && ExplorerRefs.Validate(Args(Folder(server, "logins")), listing).List == "logins" && !Accepted(listing, Args(Object(server), filter: new(Name: new("equals", "sa")))),
-            "an object whose kind lists rows takes cursors of that query only; filters stay a folder's");
+            && ExplorerRefs.Validate(Args(Folder(server, "logins")), listing).List == "logins" && !Accepted(listing, Args(Object(server), filter: new(Name: new("equals", "sa"))))
+            && ExplorerRefs.Validate(Args(Folder(server, "serverSecurity")), listing).List is null
+            && !Accepted(listing, Args(Folder(server, "serverSecurity"), cursor: ExplorerCursor.Encode("logins", new("sa", null, null)))),
+            "an object whose kind lists rows takes cursors of that query only; a folder's cursor names the folder's own query, never its owner's; filters stay a folder's");
+
+        // Listings read their owner from its own fields: an object node's rows and a folder's alike, SSIS folder and project too.
+        var owned = Variant(json => SetKind(json, "login", ("scope", "ssisProjectObject"), ("list", "credentials"), ("rows", new JsonArray("credential"))));
+        var daily = new ObjectRefDto("login", Name: "Daily", SsisFolder: "Finance", SsisProject: "Loads");
+        var own = ExplorerService.Parameters(ExplorerRefs.Validate(Args(Object(daily)), owned), null, true);
+        var orders = new ObjectRefDto("table", "db", "Sales", "Orders");
+        var columns = ExplorerService.Parameters(ExplorerRefs.Validate(Args(Folder(orders, "columns")), catalog), null, true);
+        var state = ExplorerService.Parameters(ExplorerRefs.Validate(Args(Object(new ObjectRefDto("database", Name: "AppData"))), catalog), null, false, "Other");
+        check(own is { ObjectName: "Daily", ObjectSchema: null, SsisFolder: "Finance", SsisProject: "Loads" } && columns is { ObjectName: "Orders", ObjectSchema: "Sales", SsisFolder: null, SsisProject: null }
+            && state.ObjectName == "Other", "listings take @object_name, @object_schema, @ssis_folder and @ssis_project from their owner's matching fields");
+        static object? Bound(SqlParameter[] bound, string name) => bound.Single(parameter => parameter.ParameterName == name).Value;
+        var bound = ExplorerService.Bind(own with { Key = new CursorKey("k", "l", 3, 9) });
+        check(bound.Select(parameter => parameter.ParameterName).SequenceEqual(CatalogSql.Declarations.Split(", ").Select(item => item.Split(' ')[0]))
+            && Bound(bound, "@ssis_folder") is "Finance" && Bound(bound, "@ssis_project") is "Loads" && Bound(bound, "@object_name") is "Daily" && Bound(bound, "@object_schema") == DBNull.Value
+            && Bound(bound, "@k1") is "k" && Bound(bound, "@k2") is "l" && Bound(bound, "@kn") is 3 && Bound(bound, "@kb") is 9L && Bound(bound, "@first") is true,
+            "the bound parameters follow the declarations, each carrying its own value");
+        static bool Cut(ExplorerService.Values values)
+        {
+            try { ExplorerService.Bind(values); return false; }
+            catch (InvalidOperationException) { return true; }
+        }
+        check(Cut(own with { ObjectName = new string('x', 129) }) && Cut(own with { SsisProject = new string('p', 129) }) && !Cut(own with { ObjectName = new string('x', 128) }),
+            "a value longer than its parameter's declaration is refused rather than cut by SqlClient");
         var box = new ExplorerProfile(16, false);
         check(listing.HasChildren("login", null, box) && !catalog.HasChildren("login", null, box), "a kind that lists rows of its own can expand without static folders");
 
@@ -488,6 +545,18 @@ internal static class ExplorerChecks
         var lint = Enumerable.Range(ExplorerCatalog.MinBand, ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1).SelectMany(band => CatalogSql.Lint(Ids.Render(new SqlRender(band)), new SqlRender(band), true, false)).ToList();
         check(lint.Count == 0 && Ids.Render(new SqlRender(16)).EndsWith("WHERE (@kb IS NULL OR CONVERT(bigint, o.object_id) + 4294967296 > @kb) ORDER BY CONVERT(bigint, o.object_id) + 4294967296;", StringComparison.Ordinal),
             "a Keyset.Id listing pages by @kb and passes the lint: " + string.Join("; ", lint));
+        // The lint renders queries that only a kind lists, as it does a folder's.
+        var bad = new ExplorerQuery
+        {
+            Id = "testBad", Scope = QueryScope.Database, From = _ => "sys.objects AS o", Keys = ["o.name"], Select = _ => "OBJECT_NAME(o.object_id)",
+            Map = row => ExplorerQueries.Node(row.Context, new ObjectRefDto("schema", row.Context.Database, Name: row.Key(0)), row.Key(0))
+        };
+        var withBad = ExplorerQueries.All.Append(new(bad.Id, bad)).ToDictionary(StringComparer.Ordinal);
+        var (_, kindProblems) = LintListings(Variant(json => SetKind(json, "database", ("list", bad.Id), ("rows", new JsonArray("schema")))), withBad);
+        var (baseRenders, _) = LintListings(catalog, ExplorerQueries.All);
+        var (kindRenders, goodProblems) = LintListings(Variant(json => SetKind(json, "database", ("list", "schemas"), ("rows", new JsonArray("schema")))), ExplorerQueries.All);
+        check(kindProblems.Any(problem => problem.StartsWith("database band ", StringComparison.Ordinal)) && goodProblems.Count == 0 && kindRenders > baseRenders,
+            "the SQL lint renders and checks the queries kinds list: " + kindProblems.Count + " problems in a kind's bad query");
         var declared = CatalogSql.Declarations.Split(", ").Select(item => item.Split(' ')[0]).ToList();
         check(declared.Count == 15 && declared.Contains("@ssis_folder") && declared.Contains("@ssis_project") && declared.Contains("@kb")
             && declared.All(name => CatalogSql.ModuleCall.Contains(name + " = " + name, StringComparison.Ordinal)) && CatalogSql.ModuleCall.Split(" = @").Length - 1 == declared.Count,

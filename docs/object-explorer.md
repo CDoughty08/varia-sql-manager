@@ -195,7 +195,8 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 
 A node is an object ref, or a folder below its nearest object (the server, a database, or a parent object). Refs carry
 names, never paths or object ids, and each scope fixes which fields a ref has. Names are 1 to 128 UTF-16 code units,
-used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to 260.
+used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to 260, if it
+owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).
 SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.
 
 | Scope | Requires | Forbids | Kinds |

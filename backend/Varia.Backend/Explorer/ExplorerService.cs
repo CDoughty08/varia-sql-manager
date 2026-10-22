@@ -229,10 +229,10 @@ internal sealed class ExplorerService : IDisposable
             + (value.SsisProject?.Length ?? 0));
     }
 
-    private sealed record Values(string? ObjectSchema, string? ObjectName, CursorKey? Key, bool First, int Take, string? Name, string? Schema, string? Owner, DateTime? D1, DateTime? D2,
+    internal sealed record Values(string? ObjectSchema, string? ObjectName, CursorKey? Key, bool First, int Take, string? Name, string? Schema, string? Owner, DateTime? D1, DateTime? D2,
         string? SsisFolder, string? SsisProject);
 
-    private static Values Parameters(ExplorerRequest request, CursorKey? key, bool first, string? objectName = null, string? objectSchema = null)
+    internal static Values Parameters(ExplorerRequest request, CursorKey? key, bool first, string? objectName = null, string? objectSchema = null)
     {
         var filter = request.Filter;
         string? Text(TextFilterDto? value) => value is null ? null : value.Op == "equals" ? value.Value : CatalogSql.EscapeLike(value.Value);
@@ -270,21 +270,7 @@ internal sealed class ExplorerService : IDisposable
                     Add(command, "@decl", SqlDbType.NVarChar, -1, CatalogSql.Declarations);
                 }
                 else command.CommandText = prologue + statement;
-                Add(command, "@object_schema", SqlDbType.NVarChar, 128, values.ObjectSchema);
-                Add(command, "@object_name", SqlDbType.NVarChar, 128, values.ObjectName);
-                Add(command, "@k1", SqlDbType.NVarChar, 128, values.Key?.K1);
-                Add(command, "@k2", SqlDbType.NVarChar, 128, values.Key?.K2);
-                Add(command, "@kn", SqlDbType.Int, 0, values.Key?.Kn);
-                Add(command, "@take", SqlDbType.Int, 0, values.Take);
-                Add(command, "@first", SqlDbType.Bit, 0, values.First);
-                Add(command, "@fname", SqlDbType.NVarChar, 400, values.Name);
-                Add(command, "@fschema", SqlDbType.NVarChar, 400, values.Schema);
-                Add(command, "@fowner", SqlDbType.NVarChar, 400, values.Owner);
-                Add(command, "@d1", SqlDbType.Date, 0, values.D1);
-                Add(command, "@d2", SqlDbType.Date, 0, values.D2);
-                Add(command, "@ssis_folder", SqlDbType.NVarChar, 128, values.SsisFolder);
-                Add(command, "@ssis_project", SqlDbType.NVarChar, 128, values.SsisProject);
-                Add(command, "@kb", SqlDbType.BigInt, 0, values.Key?.Kb);
+                command.Parameters.AddRange(Bind(values));
                 await using var reader = await command.ExecuteReaderAsync(token);
                 return await read(command, reader);
             }
@@ -301,11 +287,35 @@ internal sealed class ExplorerService : IDisposable
         finally { gate.Release(); }
     }
 
-    private static void Add(SqlCommand command, string name, SqlDbType type, int size, object? value)
+    /// <summary>The parameters <see cref="CatalogSql.Declarations"/> declares, in its order.</summary>
+    internal static SqlParameter[] Bind(Values values) =>
+    [
+        Parameter("@object_schema", SqlDbType.NVarChar, 128, values.ObjectSchema),
+        Parameter("@object_name", SqlDbType.NVarChar, 128, values.ObjectName),
+        Parameter("@k1", SqlDbType.NVarChar, 128, values.Key?.K1),
+        Parameter("@k2", SqlDbType.NVarChar, 128, values.Key?.K2),
+        Parameter("@kn", SqlDbType.Int, 0, values.Key?.Kn),
+        Parameter("@take", SqlDbType.Int, 0, values.Take),
+        Parameter("@first", SqlDbType.Bit, 0, values.First),
+        Parameter("@fname", SqlDbType.NVarChar, 400, values.Name),
+        Parameter("@fschema", SqlDbType.NVarChar, 400, values.Schema),
+        Parameter("@fowner", SqlDbType.NVarChar, 400, values.Owner),
+        Parameter("@d1", SqlDbType.Date, 0, values.D1),
+        Parameter("@d2", SqlDbType.Date, 0, values.D2),
+        Parameter("@ssis_folder", SqlDbType.NVarChar, 128, values.SsisFolder),
+        Parameter("@ssis_project", SqlDbType.NVarChar, 128, values.SsisProject),
+        Parameter("@kb", SqlDbType.BigInt, 0, values.Key?.Kb)
+    ];
+
+    private static void Add(SqlCommand command, string name, SqlDbType type, int size, object? value) => command.Parameters.Add(Parameter(name, type, size, value));
+
+    private static SqlParameter Parameter(string name, SqlDbType type, int size, object? value)
     {
+        // SqlClient cuts longer text to the size without an error, and a cut name resolves another object.
+        if (value is string text && size > 0 && text.Length > size) throw new InvalidOperationException("An Object Explorer parameter is longer than its declaration: " + name + ".");
         var parameter = size == 0 ? new SqlParameter(name, type) : new SqlParameter(name, type, size);
         parameter.Value = value ?? DBNull.Value;
-        command.Parameters.Add(parameter);
+        return parameter;
     }
 
     private static void TryCancel(SqlCommand command)
