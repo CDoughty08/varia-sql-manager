@@ -2,12 +2,13 @@ import { useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent,
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
+import type { IconId } from '../../../shared/icons'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
 
-interface Tool { readonly id: CommandId; readonly icon: string; readonly label: string; readonly args?: CommandArgs }
+interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly args?: CommandArgs }
 
 function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus, onBlur }: {
   tool: Tool; enabled: boolean; tabbable: boolean; buttonRef: Ref<HTMLButtonElement>; onFocus: () => void; onBlur: (event: FocusEvent<HTMLButtonElement>) => void
@@ -17,7 +18,7 @@ function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus, onBlur }: 
   const title = key ? `${tool.label} (${key.text})` : tool.label
   return <button ref={buttonRef} className="icon-button" aria-label={tool.label} title={title} disabled={!enabled} tabIndex={tabbable ? 0 : -1} onFocus={onFocus} onBlur={onBlur}
     onClick={() => void commands.execute(tool.id, tool.args, 'toolbar')}>
-    <span className={`codicon codicon-${tool.icon}`} aria-hidden="true" />
+    <Icon name={tool.icon} />
   </button>
 }
 

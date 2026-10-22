@@ -23,6 +23,7 @@ export const part = {
   titleBarContent: '.title-bar-content',
   titleBarCaption: '.title-bar-caption',
   titleBarMenus: '.title-bar-menus',
+  titleBarBrand: '.title-bar-brand',
   /** The banners above the workspace: command, file and theme notices and the backend's. */
   banner: '.global-error',
   backendBanner: '.backend-banner',
@@ -44,6 +45,7 @@ export const part = {
   querySegment: '.query-status-segment',
   // Document tabs
   tabName: '.tab-name',
+  tabIcon: '.tab-icon',
   // Query output
   outputToolbar: '.output-toolbar',
   outputStatus: '.output-status',
@@ -195,7 +197,7 @@ export const closeDocumentButton = (page, name) => documentTabs(page).getByRole(
 export const unsavedMark = scope => scope.getByRole('img', { name: 'Unsaved changes', exact: true })
 export const readOnlyMark = scope => scope.getByRole('img', { name: 'Read-only', exact: true })
 export const executingMark = scope => scope.getByRole('img', { name: 'Executing', exact: true })
-/** A tab's kind badge, drawn before its name: SQL, XML, JSON, PLAN, or the designer's icon named Table Designer. */
+/** A tab's kind icon, drawn before its name and named by the kind: Transact-SQL, XML document, JSON document, Execution plan or Table Designer. */
 export const kindBadge = (tab, kind) => tab.getByRole('img', { name: kind, exact: true })
 export const editorTextbox = page => page.locator('.monaco-editor [role="textbox"]')
 export const editorText = page => page.locator('.monaco-editor .view-lines').innerText()

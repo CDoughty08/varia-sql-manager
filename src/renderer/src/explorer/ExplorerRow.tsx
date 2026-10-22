@@ -1,6 +1,8 @@
 import { memo, useEffect, useRef, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type RefCallback, type SyntheticEvent } from 'react'
 import { explorerLimits, kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import { codiconClass } from '../../../shared/icons'
+import Icon from '../Icon'
 import { useConnectionAccent } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
 import ExplorerIcon, { type BadgeName } from './ExplorerIcon'
@@ -91,8 +93,8 @@ function LostActions({ rowId, label, actions }: { rowId: number; label: string; 
   const canReconnect = useCommandEnabled('connection.reconnect'), canRemove = useCommandEnabled('connection.removeLost')
   const stop = (event: MouseEvent) => event.stopPropagation()
   return <span className="oe-actions">
-    <button tabIndex={-1} disabled={!canReconnect} aria-label={'Reconnect ' + label} title="Reconnect…" onMouseDown={stop} onClick={() => actions.reconnect(rowId)}><span className="codicon codicon-plug" aria-hidden="true" /></button>
-    <button tabIndex={-1} disabled={!canRemove} aria-label={'Remove ' + label} title="Remove" onMouseDown={stop} onClick={() => actions.remove(rowId)}><span className="codicon codicon-close" aria-hidden="true" /></button>
+    <button tabIndex={-1} disabled={!canReconnect} aria-label={'Reconnect ' + label} title="Reconnect…" onMouseDown={stop} onClick={() => actions.reconnect(rowId)}><Icon name="plug" /></button>
+    <button tabIndex={-1} disabled={!canRemove} aria-label={'Remove ' + label} title="Remove" onMouseDown={stop} onClick={() => actions.remove(rowId)}><Icon name="close" /></button>
   </span>
 }
 function Accent({ color }: { color: string | undefined }) {
@@ -143,7 +145,7 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
     const icon = kind === RowKind.Error || kind === RowKind.MoreError ? 'error' : kind === RowKind.Loading || kind === RowKind.More ? 'loading' : 'info'
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
       aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}>
-      {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><span className={`codicon codicon-${icon}`} /></span><bdi className="oe-text">{text}</bdi>
+      {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><Icon name={icon} /></span><bdi className="oe-text">{text}</bdi>
     </div>
   }
   const expandable = node.hasChildren && !node.lost, folder = node.kind === 'folder', root = node.parent === 0
@@ -157,7 +159,7 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
     {indent}
-    <span className={`oe-twistie${expandable ? ` codicon codicon-chevron-${node.expanded ? 'down' : 'right'}` : ''}`} aria-hidden="true" onClick={toggle} />
+    <span className={`oe-twistie${expandable ? ' ' + codiconClass(node.expanded ? 'chevron-down' : 'chevron-right') : ''}`} aria-hidden="true" onClick={toggle} />
     <ExplorerIcon name={folder && node.expanded ? 'folder-opened' : node.icon} folder={folder} badge={badgeOf(node)} />
     {renaming && node.ref.type === 'object' && node.kind !== 'folder'
       ? <RenameBox rowId={rowId} name={node.ref.object.name ?? ''} title={kindSpecs[node.kind].title} actions={actions} />

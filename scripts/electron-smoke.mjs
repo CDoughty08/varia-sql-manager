@@ -203,7 +203,7 @@ try {
   await undoToClean()
   await redoToText(typed)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
-  await expect(kindBadge(activeDocument(page), 'SQL')).toHaveText('SQL')
+  await expect(kindBadge(activeDocument(page), 'Transact-SQL')).toHaveAttribute('data-icon', 'database')
   await page.keyboard.press('F10')
   await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
   await page.keyboard.press('ArrowRight')

@@ -94,12 +94,13 @@ describe('theme tokens in the renderer', () => {
     const workbench = declarations.filter(({ selector }) => selector === '.dock-workbench')
     expect(workbench.map(({ property }) => property).sort()).toEqual(['--dv-floating-titlebar-height', '--dv-paneview-header-height', '--dv-tab-font-size', '--dv-tabs-and-actions-container-height'])
   })
-  it('matches the font stacks in fonts.ts and keeps the Windows fonts first', () => {
+  it('matches the font stacks in fonts.ts and puts the Windows 11 fonts first, then the Windows 10 ones', () => {
     const root = new Map(declarations.filter(({ selector }) => selector === ':root').map(({ property, value }) => [property, value]))
     expect(root.get('--varia-font-ui')).toBe(uiFontFamily)
     expect(root.get('--varia-font-mono')).toBe(monoFontFamily)
-    expect(uiFontFamily.startsWith("'Segoe UI', ")).toBe(true)
-    expect(monoFontFamily.startsWith('Consolas, ')).toBe(true)
+    // The variable font's family for text sizes; Chromium does not match its bare name, 'Segoe UI Variable'.
+    expect(uiFontFamily.startsWith("'Segoe UI Variable Text', 'Segoe UI', ")).toBe(true)
+    expect(monoFontFamily.startsWith("'Cascadia Mono', Consolas, ")).toBe(true)
     expect(editorFontFamily.startsWith("'Cascadia Code', Consolas, ")).toBe(true)
     for (const stack of [uiFontFamily, monoFontFamily, editorFontFamily]) expect(stack).toMatch(/, (sans-serif|monospace)$/)
     const families = declarations.filter(({ property, value }) => /^font(-family)?$/.test(property) && !value.includes('var(--varia-font-') && value !== 'inherit')
