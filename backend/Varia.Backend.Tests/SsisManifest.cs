@@ -2,11 +2,15 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Varia.Backend.Tests;
 
 internal sealed record ShapeColumn(string Name, string Type, int MaxLength, int Precision, int Scale, bool Nullable);
-internal sealed record ShapeParameter(string Name, string Type, int MaxLength, bool Output);
+/// <summary>A procedure's or function's parameter. Default is the declared default as written (NULL in capitals), read from the
+/// module's text because sys.parameters does not hold T-SQL defaults; null when there is none.</summary>
+internal sealed record ShapeParameter(string Name, string Type, int MaxLength, bool Output, string? Default = null);
 internal sealed record ShapeIndex(string Table, string Name, string Type, bool PrimaryKey, bool Unique, List<string> Keys);
 internal sealed record ShapeForeignKey(string Name, string Child, string Parent, string OnDelete, List<string> Columns);
 internal sealed record ShapeDatabase(int CompatibilityLevel, bool ReadCommittedSnapshot, string Collation);
@@ -25,7 +29,7 @@ internal sealed record ManifestFile(string Comment, List<CatalogShape> Catalogs)
 /// <summary>tests/fixtures/ssisdb/manifest.json (D-ssis 12.2, 12.3): read from a real SSISDB, or from the Integration Services
 /// feature's catalog backup restored under a scratch name, and checked in. The fake catalog is generated from it, and the drift
 /// check fails when a real catalog differs from it.</summary>
-internal static class SsisManifest
+internal static partial class SsisManifest
 {
     public const string Comment = "Shape of the SSIS catalog (SSISDB) per SQL Server band. Written by backend/Varia.Backend.Tests with VARIA_TEST_SQL_SCRATCH=1, "
         + "VARIA_TEST_SSIS=1 and VARIA_UPDATE_SSIS_MANIFEST=1; tests/fixtures/ssisdb/schema.sql is generated from it (npx vitest run tests/ssisdb-fixtures.test.ts -u). Do not edit by hand.";
@@ -33,7 +37,7 @@ internal static class SsisManifest
     /// <summary>The catalog errors the fake raises and D-ssis maps to values, with their texts from sys.messages.</summary>
     public static readonly int[] ErrorNumbers = [27100, 27101, 27103, 27104, 27109, 27121, 27123, 27124, 27125, 27126, 27138, 27143, 27146, 27147, 27176, 27178, 27188, 27195, 27224];
 
-    private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
     public static string Folder() => Path.Combine(GoldenText.Repository(), "tests", "fixtures", "ssisdb");
     public static string PathOf() => Path.Combine(Folder(), "manifest.json");
@@ -91,6 +95,67 @@ internal static class SsisManifest
         for (var index = 0; index < keys.Count; index++)
             text.Append(index == 0 ? "\n" : ",\n").Append("        ").Append(Json(keys[index])).Append(": ").Append(value(map[keys[index]]));
         text.Append(keys.Count == 0 ? "}" : "\n      }").Append(last ? "\n" : ",\n");
+    }
+
+    // A parameter declaration: the name, a type (optionally schema-qualified, with a length), and an optional default. The
+    // first match per name is its declaration, because a module declares its parameters before its body uses them.
+    [GeneratedRegex(@"@(?<name>\w+)\s+(?:AS\s+)?(?:\[?\w+\]?\s*\.\s*)?\[?\w+\]?(?:\s*\([^)]*\))?(?:\s+VARYING)?\s*(?:=\s*(?<value>N?'(?:[^']|'')*'|[-+]?\d+(?:\.\d+)?|\w+))?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex Declaration();
+
+    /// <summary>The default each parameter of a module declares, by parameter name (with its @), from the module's text; a
+    /// parameter without a default is absent. NULL is written in capitals so either spelling compares equal.</summary>
+    public static Dictionary<string, string> Defaults(string definition)
+    {
+        var defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Declaration().Matches(WithoutComments(definition)))
+        {
+            var name = "@" + match.Groups["name"].Value;
+            if (!seen.Add(name) || !match.Groups["value"].Success) continue;
+            var value = match.Groups["value"].Value;
+            defaults[name] = value.Equals("NULL", StringComparison.OrdinalIgnoreCase) ? "NULL" : value;
+        }
+        return defaults;
+    }
+
+    /// <summary>T-SQL text with its line and (nested) block comments blanked out, leaving quoted strings and brackets alone.</summary>
+    private static string WithoutComments(string text)
+    {
+        var output = new StringBuilder(text.Length);
+        for (var index = 0; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (character is '\'' or '[')
+            {
+                var close = character == '\'' ? '\'' : ']';
+                var end = index + 1;
+                while (end < text.Length)
+                {
+                    if (text[end] != close) end++;
+                    else if (end + 1 < text.Length && text[end + 1] == close) end += 2;
+                    else break;
+                }
+                output.Append(text, index, Math.Min(text.Length, end + 1) - index);
+                index = end;
+            }
+            else if (character == '-' && index + 1 < text.Length && text[index + 1] == '-')
+            {
+                while (index < text.Length && text[index] != '\n') index++;
+                output.Append('\n');
+            }
+            else if (character == '/' && index + 1 < text.Length && text[index + 1] == '*')
+            {
+                var depth = 0;
+                for (; index < text.Length; index++)
+                {
+                    if (text[index] == '/' && index + 1 < text.Length && text[index + 1] == '*') { depth++; index++; }
+                    else if (text[index] == '*' && index + 1 < text.Length && text[index + 1] == '/' && --depth == 0) { index++; break; }
+                }
+                output.Append(' ');
+            }
+            else output.Append(character);
+        }
+        return output.ToString();
     }
 
     /// <summary>Where the Integration Services feature keeps its catalog backup, from the engine's service command line in
@@ -174,6 +239,11 @@ internal static class SsisShapeReader
         + "FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id LEFT JOIN sys.parameters AS p ON p.object_id = o.object_id\n"
         + "{0}\nWHERE s.name = N'catalog' AND o.type IN ('P', 'FN', 'IF', 'TF') AND o.name NOT LIKE N'varia[_]%'\nORDER BY o.name, p.parameter_id;";
 
+    // The start of each module's text, which holds its parameter declarations and their defaults (sys.parameters has no
+    // T-SQL defaults); 8,000 characters reach past the catalog's longest parameter list.
+    public const string HeadersSql = "SELECT o.name, LEFT(m.definition, 8000) FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id\n"
+        + "JOIN sys.sql_modules AS m ON m.object_id = o.object_id\nWHERE s.name = N'catalog' AND o.type IN ('P', 'FN', 'IF', 'TF') AND o.name NOT LIKE N'varia[_]%';";
+
     public const string IdentitiesSql = "SELECT s.name + N'.' + o.name + N'.' + c.name FROM sys.identity_columns AS c JOIN sys.objects AS o ON o.object_id = c.object_id\n"
         + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE s.name = N'internal' AND o.type = 'U' ORDER BY 1;";
 
@@ -234,6 +304,14 @@ internal static class SsisShapeReader
             if (row[2] is not { } name) continue;
             if (row[3] is not { } type) throw new InvalidOperationException("Parameter " + row[0] + " " + name + " has no type name.");
             list.Add(new(name, type, Int(row[4]), row[5] == "1"));
+        }
+        foreach (var row in await Rows(HeadersSql, database))
+        {
+            var defaults = SsisManifest.Defaults(row[1] ?? "");
+            foreach (var target in new[] { procedures, functions })
+                if (target.TryGetValue(row[0]!, out var list))
+                    for (var index = 0; index < list.Count; index++)
+                        if (defaults.TryGetValue(list[index].Name, out var value)) list[index] = list[index] with { Default = value };
         }
         var refused = (await Rows(SqlAuthSql, database)).Select(row => row[0]!).ToList();
         if (fake)

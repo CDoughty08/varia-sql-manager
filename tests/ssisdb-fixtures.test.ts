@@ -9,7 +9,7 @@ import { renderFakeSchema, typeText, type Manifest } from './fixtures/ssisdb/ren
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
 const column = z.strictObject({ name: z.string().min(1), type: z.string().min(1), maxLength: z.number().int(), precision: z.number().int(), scale: z.number().int(), nullable: z.boolean() })
-const parameter = z.strictObject({ name: z.string(), type: z.string().min(1), maxLength: z.number().int(), output: z.boolean() })
+const parameter = z.strictObject({ name: z.string(), type: z.string().min(1), maxLength: z.number().int(), output: z.boolean(), default: z.string().min(1).optional() })
 const shape = z.strictObject({
   band: z.number().int().min(13).max(17),
   source: z.enum(['backup', 'catalog']),
@@ -35,7 +35,7 @@ const newest = manifest.catalogs.at(-1)!
 function stubs(text: string): Map<string, string[]> {
   const found = new Map<string, string[]>()
   for (const match of text.matchAll(/CREATE PROCEDURE \[catalog\]\.\[(\w+)\]\n([\s\S]*?)\nAS\n/g)) {
-    const parameters = match[2].split(',\n').map((line) => line.trim().replace(/ = .*$/, '').replace(/ OUTPUT$/, ' OUTPUT')).filter(Boolean)
+    const parameters = match[2].split(',\n').map((line) => line.trim()).filter(Boolean)
     found.set(match[1], parameters)
   }
   return found
@@ -60,14 +60,22 @@ describe('SSIS catalog fixtures', () => {
     const schema = renderFakeSchema(newest)
     expect(schema).toContain('    [operation_id] bigint IDENTITY(1, 1) NOT NULL')
     expect(schema).toContain('    [operation_message_id] bigint IDENTITY(1, 1) NOT NULL')
-    // catalog.event_messages reads operation_messages' id (a LEFT JOIN, so no identity of its own, and nullable through its UNION).
-    expect(schema).toMatch(/CREATE TABLE \[catalog\]\.\[event_messages\] \(\n {4}\[event_message_id\] bigint NULL,/)
+    // catalog.event_messages is operation_messages LEFT JOIN the event rows, as the real view is: its id is operation_messages'
+    // (nullable, as the real view's UNION makes it), and every event column is NULL until the event row exists.
+    expect(schema).toMatch(/CREATE VIEW \[catalog\]\.\[event_messages\]\nAS\nSELECT\n {4}CONVERT\(bigint, m\.\[operation_message_id\]\) AS \[event_message_id\],\n {4}m\.\[operation_id\],/)
+    expect(schema).toContain('    e.[package_name],')
+    expect(schema).toContain('FROM [catalog].[operation_messages] AS m LEFT JOIN [catalog].[varia_event_messages] AS e ON e.[event_message_id] = m.[operation_message_id];')
+    expect(schema).toMatch(/CREATE TABLE \[catalog\]\.\[varia_event_messages\] \(\n {4}\[event_message_id\] bigint NOT NULL,\n {4}\[operation_id\] bigint NOT NULL,\n {4}\[package_name\] nvarchar\(260\) NULL,/)
+    expect(schema).not.toContain('CREATE TABLE [catalog].[event_messages]')
+    expect(schema).toContain('CREATE UNIQUE CLUSTERED INDEX [PK_Event_Messages] ON [catalog].[varia_event_messages] ([event_message_id]);')
+    const strict = { ...newest, views: { ...newest.views, event_messages: newest.views.event_messages.map((item) => (item.name === 'event_name' ? { ...item, nullable: false } : item)) } }
+    expect(() => renderFakeSchema(strict)).toThrow(/event_name comes from the joined table but is not nullable/)
     expect(schema).toContain('CREATE NONCLUSTERED INDEX [IX_OperationMessages_Operation_id] ON [catalog].[operation_messages] ([operation_id]);')
     expect(schema).toContain('CREATE UNIQUE CLUSTERED INDEX [PK_Executions] ON [catalog].[executions] ([execution_id]);')
     expect(typeText({ type: 'nvarchar', maxLength: -1, precision: 0, scale: 0 })).toBe('nvarchar(max)')
     expect(typeText({ type: 'datetimeoffset', maxLength: 10, precision: 34, scale: 7 })).toBe('datetimeoffset(7)')
     expect(() => typeText({ type: 'geography', maxLength: -1, precision: 0, scale: 0 })).toThrow(/geography/)
-    const broken = { ...newest, identities: [...newest.identities, 'internal.event_messages.event_message_id'] }
+    const broken = { ...newest, identities: [...newest.identities, 'internal.executions.reference_id'] }
     expect(() => renderFakeSchema(broken)).toThrow(/identity but nullable/)
   })
 
@@ -76,7 +84,7 @@ describe('SSIS catalog fixtures', () => {
     const real = [...found.keys()].filter((name) => !name.startsWith('varia_')).sort()
     expect(real).toEqual(['create_execution', 'set_execution_parameter_value', 'start_execution', 'stop_operation'])
     for (const name of real) {
-      const expected = newest.procedures[name].map((item) => `${item.name} ${typeText({ ...item, precision: 0, scale: 0 })}${item.output ? ' OUTPUT' : ''}`)
+      const expected = newest.procedures[name].map((item) => `${item.name} ${typeText({ ...item, precision: 0, scale: 0 })}${item.default ? ` = ${item.default}` : ''}${item.output ? ' OUTPUT' : ''}`)
       expect(found.get(name), name).toEqual(expected)
       expect(newest.sqlAuthRefused, name).toContain(name)
     }

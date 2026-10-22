@@ -56,7 +56,7 @@ internal static class SsisLiveChecks
                 if (update) written = real;
                 else Drift(check, manifest, real, "the real SSISDB");
             }
-            else Console.WriteLine("SSISDB does not exist on this server: the real catalog's drift check is skipped (create it in SSMS: Integration Services Catalogs, Create Catalog).");
+            else Console.WriteLine("SSISDB does not exist on this server: the real catalog's drift check is skipped. It runs with VARIA_TEST_SSIS=1 once the catalog exists, created with Varia's Create Catalog (PR S9a).");
         }
         if (!scratchAllowed)
         {
@@ -81,7 +81,9 @@ internal static class SsisLiveChecks
                 if (update) written ??= shape;
                 else Drift(check, manifest, shape, "the catalog backup " + Path.GetFileName(backup));
             }
-            else Console.WriteLine("No Integration Services catalog backup where the engine's service path implies (" + (backup ?? "not a Windows install") + "): the backup's drift check is skipped.");
+            else Console.WriteLine("SKIPPED: the catalog backup's drift check, because " + (backup is null ? "the engine's service path is not a Windows install's"
+                : header is { Status: "completed" } ? backup + " is not a backup of SSISDB"
+                : backup + " cannot be read (" + header?.Error + "); the path assumes Setup put the shared features under the instance's root, which a custom install may not (docs/integration-services.md 14.12)") + ".");
         }
         if (update)
         {
@@ -137,8 +139,8 @@ internal static class SsisLiveChecks
             return id;
         }
 
-        // The stubs, like the real procedures, refuse a caller whose sid is a SQL-type database user's. The catalog's dbo is
-        // sa (sid 0x01 in the backup), which matches no Windows caller; the fake's dbo is made sa too, or its creator would match.
+        // The catalog backup's dbo is sa (sid 0x01), and the fake's is made sa too, only so its owner is the real catalog's: the
+        // refusal does not depend on it, because dbo takes the owner's type ('U' for a Windows owner), never 'S' for a Windows caller.
         var owner = await sql("DECLARE @sql nvarchar(max) = N'ALTER AUTHORIZATION ON DATABASE::' + QUOTENAME(" + Literal(db) + ") + N' TO ' + QUOTENAME(SUSER_SNAME(0x01)) + N';';\nEXEC (@sql);", "master", null);
         if (owner.Status != "completed") throw new InvalidOperationException("The fake catalog's owner could not be set: " + owner.Error);
         await Exec(File.ReadAllText(Path.Combine(folder, "schema.sql")));
@@ -171,8 +173,19 @@ internal static class SsisLiveChecks
 
         // States and errors: the real numbers for a missing package, a second start, a late parameter, and every stop that cannot happen.
         await Exec("EXEC [catalog].[varia_fake_seed] N'VariaFake', N'Project', N'Package.dtsx'; EXEC [catalog].[varia_fake_seed] N'VariaFake', N'Project', N'Child.dtsx', @entry_point = 0;");
-        check(await Error(missingPackage) == 27146 && await Error(string.Format(CultureInfo.InvariantCulture, Create, "N'Child.dtsx'")) == 27146,
-            "the fake's create_execution refuses a package that does not exist or is not an entry point with 27146");
+        // The real create_execution commits its operation before it looks the package up, so a refusal leaves it Failed (4)
+        // with no execution (the caller gets no id: an error returns no output).
+        var refused = await Error(missingPackage);
+        var failed = await Scalar("SELECT TOP (1) CONCAT(o.operation_type, ' ', o.status, ' ', CASE WHEN o.end_time IS NULL THEN 0 ELSE 1 END, ' ', ISNULL(CONVERT(nvarchar(20), o.object_id), 'none'), ' ', o.object_name, ' ',"
+            + " (SELECT COUNT(*) FROM [catalog].[executions] WHERE execution_id = o.operation_id)) FROM [catalog].[operations] AS o ORDER BY o.operation_id DESC;");
+        check(refused == 27146 && failed == "200 4 1 none Project 0",
+            "the fake's create_execution refuses a package that does not exist with 27146 and leaves its operation Failed (4), ended, without an object or an execution, as the real one does (" + refused + ", " + failed + ")");
+        // The real one finds the package by folder, project and package name only: a package that is not an entry point gets
+        // an execution too (it can only fail when it runs).
+        var child = Long(await Scalar(string.Format(CultureInfo.InvariantCulture, Create, "N'Child.dtsx'") + " SELECT @id;"));
+        check(await Scalar("SELECT CONCAT(o.status, ' ', e.status, ' ', e.package_name) FROM [catalog].[operations] AS o JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id WHERE o.operation_id = " + child + ";") == "1 1 Child.dtsx",
+            "the fake's create_execution creates an execution (1) for a package that is not an entry point, as the real one does");
+        const string FailedStops = "SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202 AND status = 4 AND end_time IS NOT NULL AND object_id IS NULL;";
         var created = await Execution(start: false);
         var rows = (await Exec("SELECT o.operation_type, o.status, o.object_type, e.execution_id, e.status, e.folder_name, e.project_name, e.package_name, e.use32bitruntime\n"
             + "FROM [catalog].[operations] AS o JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id WHERE o.operation_id = " + created + ";")).Sets[0];
@@ -184,18 +197,23 @@ internal static class SsisLiveChecks
             && await Error("EXEC [catalog].[set_execution_parameter_value] 999999999, 50, N'LOGGING_LEVEL', 1;") == 27103
             && await Error("EXEC [catalog].[start_execution] NULL;") == 27138,
             "the fake sets a system parameter with its sql_variant type, and refuses an unknown object type (27101), execution (27103) and a null id (27138)");
-        check(await Error("EXEC [catalog].[stop_operation] " + created + ";") == 27124, "the fake refuses to stop an execution that has not started with 27124");
+        var failedStops = Long(await Scalar(FailedStops));
+        check(await Error("EXEC [catalog].[stop_operation] " + created + ";") == 27124 && Long(await Scalar(FailedStops)) == failedStops + 1,
+            "the fake refuses to stop an execution that has not started with 27124, and the stop operation (202) it recorded first is left Failed (4), as the real one is");
         check(await Error("EXEC [catalog].[start_execution] " + created + ";") == 0
             && await Scalar("SELECT CONCAT(o.status, ' ', e.status, ' ', CASE WHEN o.start_time IS NULL THEN 0 ELSE 1 END) FROM [catalog].[operations] AS o JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id WHERE o.operation_id = " + created + ";") == "2 2 1"
             && await Error("EXEC [catalog].[start_execution] " + created + ";") == 27121
             && await Error("EXEC [catalog].[set_execution_parameter_value] " + created + ", 50, N'LOGGING_LEVEL', 3;") == 27224,
             "the fake's start_execution makes it Running (2) once, then refuses a second start (27121) and a parameter change (27224)");
-        var stops = await Scalar("SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202;");
+        var stops = Long(await Scalar("SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202;"));
+        failedStops = Long(await Scalar(FailedStops));
         check(await Error("EXEC [catalog].[stop_operation] " + created + ";") == 0
             && await Scalar("SELECT CONCAT(o.status, ' ', e.status, ' ', CASE WHEN o.stopped_by_name = SUSER_SNAME() THEN 1 ELSE 0 END) FROM [catalog].[operations] AS o JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id WHERE o.operation_id = " + created + ";") == "8 8 1"
-            && await Scalar("SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202;") == (Long(stops) + 1).ToString(CultureInfo.InvariantCulture)
-            && await Error("EXEC [catalog].[stop_operation] " + created + ";") == 27126,
-            "the fake's stop_operation records a stop operation (202) and makes the execution Stopping (8), and a second stop is 27126");
+            && await Scalar("SELECT CONCAT(COUNT(*), ' ', MIN(s.status), ' ', MIN(CASE WHEN s.object_id = o.object_id AND s.object_name = o.object_name AND s.end_time IS NOT NULL THEN 1 ELSE 0 END)) FROM [catalog].[operations] AS s"
+                + " JOIN [catalog].[operations] AS o ON o.operation_id = " + created + " WHERE s.operation_type = 202 AND s.status <> 4;") == "1 7 1"
+            && Long(await Scalar("SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202;")) == stops + 1
+            && await Error("EXEC [catalog].[stop_operation] " + created + ";") == 27126 && Long(await Scalar(FailedStops)) == failedStops + 1,
+            "the fake's stop_operation records a stop operation (202) that takes the execution's object and ends Succeeded (7), and makes the execution Stopping (8); a second stop is 27126 and leaves its own stop Failed (4)");
         check(await Error("EXEC [catalog].[varia_fake_finish] " + created + ", 3;") == 0
             && await Scalar("SELECT CONCAT(status, ' ', CASE WHEN end_time IS NULL THEN 0 ELSE 1 END) FROM [catalog].[executions] WHERE execution_id = " + created + ";") == "3 1"
             && await Error("EXEC [catalog].[stop_operation] " + created + ";") == 27124,
@@ -253,12 +271,69 @@ internal static class SsisLiveChecks
         // operation message has its event message under the same id.
         var volume = await Execution(start: true);
         await Task.WhenAll(Enumerable.Range(0, 4).Select(thread => Exec("EXEC [catalog].[varia_fake_run] @operation_id = " + volume + ", @messages = 2000, @threads = 4, @thread = " + thread + ", @hold_every = 25, @hold_ms = 20;")));
-        var counts = (await Exec("SELECT COUNT(*), COUNT(DISTINCT m.operation_message_id), SUM(CASE WHEN e.event_message_id = m.operation_message_id THEN 1 ELSE 0 END),\n"
-            + "(SELECT COUNT(*) FROM [catalog].[event_messages] WHERE operation_id = " + volume + "),\n"
+        var counts = (await Exec("SELECT COUNT(*), COUNT(DISTINCT m.operation_message_id), SUM(CASE WHEN e.event_message_id = m.operation_message_id AND e.event_name IS NOT NULL THEN 1 ELSE 0 END),\n"
+            + "(SELECT COUNT(*) FROM [catalog].[varia_event_messages] WHERE operation_id = " + volume + "),\n"
             + "(SELECT COUNT(*) FROM [catalog].[varia_fake_commits] AS c JOIN [catalog].[varia_fake_commits] AS d ON d.commit_sequence = c.commit_sequence + 1 AND d.operation_message_id < c.operation_message_id\n"
             + "    JOIN [catalog].[operation_messages] AS x ON x.operation_message_id = c.operation_message_id WHERE x.operation_id = " + volume + ")\n"
             + "FROM [catalog].[operation_messages] AS m LEFT JOIN [catalog].[event_messages] AS e ON e.event_message_id = m.operation_message_id WHERE m.operation_id = " + volume + ";")).Sets[0][0];
         check(counts is ["2000", "2000", "2000", "2000", _],
             "four sessions write 2,000 messages of one execution into the fake with none lost or duplicated, each with its event message under the same id (" + counts[4] + " adjacent commits out of id order)");
+
+        // The real internal.append_event_message commits the operation message before it inserts the event row, so in every
+        // isolation mode catalog.event_messages can list a message whose event columns are still NULL; a tail that keys on the
+        // id must read such a row again (S4). The fake holds the event row back on an application lock.
+        const string Columns = "SELECT CONCAT(COUNT(*), ' ', SUM(CASE WHEN message IS NOT NULL THEN 1 ELSE 0 END), ' ', SUM(CASE WHEN package_name IS NULL AND event_name IS NULL AND message_source_name IS NULL"
+            + " AND execution_path IS NULL AND threadID IS NULL AND message_code IS NULL THEN 1 ELSE 0 END)) FROM [catalog].[event_messages] WHERE operation_id = {0};";
+        var split = await Execution(start: true);
+        var splitLock = "varia_fake_event_" + split.ToString(CultureInfo.InvariantCulture);
+        var splitHolder = Guid.NewGuid().ToString();
+        await Exec("DECLARE @granted int; EXEC @granted = sys.sp_getapplock @Resource = " + Literal(splitLock) + ", @LockMode = N'Exclusive', @LockOwner = N'Session'; IF @granted < 0 THROW 50000, 'no hold', 1;", splitHolder);
+        var writing = sql("EXEC [catalog].[varia_fake_run] @operation_id = " + split + ", @messages = 1, @threads = 1, @event_after_lock = " + Literal(splitLock) + ";", db, null);
+        string? half = null;
+        var waited = Stopwatch.StartNew();
+        while (half is null && waited.ElapsedMilliseconds < 30_000 && !writing.IsCompleted)
+        {
+            // A read that waits out its lock timeout is not the half-written row either.
+            var read = await sql("SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCK_TIMEOUT 1000; " + string.Format(CultureInfo.InvariantCulture, Columns, split), db, null);
+            if (read is { Status: "completed", Scalar: "1 1 1" }) half = read.Scalar;
+            else await Task.Delay(50);
+        }
+        var halfUncommitted = await Scalar("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; " + string.Format(CultureInfo.InvariantCulture, Columns, split));
+        await Exec("EXEC sys.sp_releaseapplock @Resource = " + Literal(splitLock) + ", @LockOwner = N'Session';", splitHolder);
+        var written = await writing;
+        await close(splitHolder);
+        var whole = await Scalar(string.Format(CultureInfo.InvariantCulture, Columns, split));
+        check(half == "1 1 1" && halfUncommitted == "1 1 1" && written.Status == "completed" && whole == "1 1 0",
+            "in the fake, as in the real catalog, a committed READ COMMITTED read (and READ UNCOMMITTED) of catalog.event_messages lists a message whose event row is not written yet, with its message and NULL event columns, and the same id later reads whole ("
+            + half + ", " + halfUncommitted + ", " + whole + ")");
+
+        // internal.append_operation_message writes an operation message without an event row, which catalog.event_messages
+        // still lists, with NULL event columns.
+        var mixed = await Execution(start: true);
+        await Exec("EXEC [catalog].[varia_fake_run] @operation_id = " + mixed + ", @messages = 6, @threads = 1, @operation_only_every = 3;");
+        check(await Scalar(string.Format(CultureInfo.InvariantCulture, Columns, mixed)) == "6 6 2"
+            && await Scalar("SELECT COUNT(*) FROM [catalog].[varia_event_messages] WHERE operation_id = " + mixed + ";") == "4",
+            "the fake writes operation-only messages, which catalog.event_messages lists with NULL event columns as the real view does");
+
+        // D-ssis 4.1 assumed SsisProfile's role functions never wait on locks. They can: while another session holds an
+        // uncommitted change to a role's members, IS_MEMBER of that role waits for it, READ UNCOMMITTED or not, so it needs
+        // the lock timeout and a BLOCKED value like any read (S1b). IS_SRVROLEMEMBER('sysadmin') does not wait.
+        var roleHolder = Guid.NewGuid().ToString();
+        await Exec("BEGIN TRANSACTION; CREATE USER [varia_fake_role_member] WITHOUT LOGIN; ALTER ROLE [ssis_admin] ADD MEMBER [varia_fake_role_member]; ALTER ROLE [ssis_logreader] ADD MEMBER [varia_fake_role_member];", roleHolder);
+        try
+        {
+            const string Uncommitted = "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 1000; ";
+            var server = await Error(Uncommitted + "SELECT IS_SRVROLEMEMBER('sysadmin');");
+            var admin = await Error(Uncommitted + "SELECT IS_MEMBER('ssis_admin');");
+            var logreader = await Error(Uncommitted + "SELECT IS_MEMBER('ssis_logreader');");
+            check(server == 0 && admin == 1222 && logreader == 1222,
+                "while another session holds an uncommitted change to the ssis_admin and ssis_logreader roles' members, IS_MEMBER of either waits until LOCK_TIMEOUT (1222) even under READ UNCOMMITTED, and IS_SRVROLEMEMBER('sysadmin') answers ("
+                + server + ", " + admin + ", " + logreader + ")");
+        }
+        finally
+        {
+            await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, roleHolder);
+            await close(roleHolder);
+        }
     }
 }

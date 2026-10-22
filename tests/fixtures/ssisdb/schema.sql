@@ -1,7 +1,8 @@
 -- Generated from manifest.json (band 17, backup 17.0.1000.7, schema version 8) by
 -- tests/ssisdb-fixtures.test.ts; regenerate with npx vitest run tests/ssisdb-fixtures.test.ts -u, never by hand. The fake catalog:
 -- one table per catalog view with its columns, an identity where the view reads its internal table's identity, and that
--- table's indexes where the view has their keys. No row-level security, no internal schema, no CLR.
+-- table's indexes where the view has their keys; catalog.event_messages is a view of operation_messages LEFT JOIN the
+-- fake's varia_event_messages, as the real view is. No row-level security, no internal schema, no CLR.
 CREATE SCHEMA [catalog];
 GO
 CREATE TABLE [catalog].[alwayson_replicas] (
@@ -75,14 +76,9 @@ CREATE TABLE [catalog].[event_message_context] (
 );
 CREATE UNIQUE CLUSTERED INDEX [PK_Event_Message_Context] ON [catalog].[event_message_context] ([context_id]);
 CREATE NONCLUSTERED INDEX [IX_EventMessageContext_EventMessageId] ON [catalog].[event_message_context] ([event_message_id]);
-CREATE TABLE [catalog].[event_messages] (
-    [event_message_id] bigint NULL,
+CREATE TABLE [catalog].[varia_event_messages] (
+    [event_message_id] bigint NOT NULL,
     [operation_id] bigint NOT NULL,
-    [message_time] datetimeoffset(7) NOT NULL,
-    [message_type] smallint NOT NULL,
-    [message_source_type] smallint NULL,
-    [message] nvarchar(max) NULL,
-    [extended_info_id] bigint NULL,
     [package_name] nvarchar(260) NULL,
     [event_name] nvarchar(1024) NULL,
     [message_source_name] nvarchar(4000) NULL,
@@ -94,8 +90,8 @@ CREATE TABLE [catalog].[event_messages] (
     [message_code] int NULL,
     [event_message_guid] uniqueidentifier NULL
 );
-CREATE UNIQUE CLUSTERED INDEX [PK_Event_Messages] ON [catalog].[event_messages] ([event_message_id]);
-CREATE NONCLUSTERED INDEX [IX_EventMessages_Operation_id] ON [catalog].[event_messages] ([operation_id]);
+CREATE UNIQUE CLUSTERED INDEX [PK_Event_Messages] ON [catalog].[varia_event_messages] ([event_message_id]);
+CREATE NONCLUSTERED INDEX [IX_EventMessages_Operation_id] ON [catalog].[varia_event_messages] ([operation_id]);
 CREATE TABLE [catalog].[executable_statistics] (
     [statistics_id] bigint IDENTITY(1, 1) NOT NULL,
     [execution_id] bigint NOT NULL,
@@ -391,4 +387,26 @@ CREATE TABLE [catalog].[worker_agents] (
     [LastOnlineTime] datetimeoffset(7) NOT NULL
 );
 CREATE UNIQUE CLUSTERED INDEX [PK_Worker_Agents] ON [catalog].[worker_agents] ([WorkerAgentId]);
+GO
+CREATE VIEW [catalog].[event_messages]
+AS
+SELECT
+    CONVERT(bigint, m.[operation_message_id]) AS [event_message_id],
+    m.[operation_id],
+    m.[message_time],
+    m.[message_type],
+    m.[message_source_type],
+    m.[message],
+    m.[extended_info_id],
+    e.[package_name],
+    e.[event_name],
+    e.[message_source_name],
+    e.[message_source_id],
+    e.[subcomponent_name],
+    e.[package_path],
+    e.[execution_path],
+    e.[threadID],
+    e.[message_code],
+    e.[event_message_guid]
+FROM [catalog].[operation_messages] AS m LEFT JOIN [catalog].[varia_event_messages] AS e ON e.[event_message_id] = m.[operation_message_id];
 GO

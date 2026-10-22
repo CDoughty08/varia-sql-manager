@@ -375,16 +375,16 @@
           {"name":"@task_package_path","type":"nvarchar","maxLength":-1,"output":false},
           {"name":"@dataflow_path_id_string","type":"nvarchar","maxLength":8000,"output":false},
           {"name":"@data_filename","type":"nvarchar","maxLength":8000,"output":false},
-          {"name":"@max_rows","type":"int","maxLength":4,"output":false},
-          {"name":"@data_tap_id","type":"bigint","maxLength":8,"output":true}
+          {"name":"@max_rows","type":"int","maxLength":4,"output":false,"default":"NULL"},
+          {"name":"@data_tap_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
         ],
         "add_data_tap_by_guid": [
           {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
           {"name":"@dataflow_task_guid","type":"uniqueidentifier","maxLength":16,"output":false},
           {"name":"@dataflow_path_id_string","type":"nvarchar","maxLength":8000,"output":false},
           {"name":"@data_filename","type":"nvarchar","maxLength":8000,"output":false},
-          {"name":"@max_rows","type":"int","maxLength":4,"output":false},
-          {"name":"@data_tap_id","type":"bigint","maxLength":8,"output":true}
+          {"name":"@max_rows","type":"int","maxLength":4,"output":false,"default":"NULL"},
+          {"name":"@data_tap_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
         ],
         "add_execution_worker": [
           {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
@@ -397,7 +397,7 @@
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@object_type","type":"smallint","maxLength":2,"output":false},
-          {"name":"@object_name","type":"nvarchar","maxLength":520,"output":false},
+          {"name":"@object_name","type":"nvarchar","maxLength":520,"output":false,"default":"NULL"},
           {"name":"@parameter_name","type":"nvarchar","maxLength":256,"output":false}
         ],
         "configure_catalog": [
@@ -406,22 +406,22 @@
         ],
         "create_customized_logging_level": [
           {"name":"@level_name","type":"nvarchar","maxLength":256,"output":false},
-          {"name":"@level_description","type":"nvarchar","maxLength":-1,"output":false},
-          {"name":"@profile_value","type":"bigint","maxLength":8,"output":false},
-          {"name":"@events_value","type":"bigint","maxLength":8,"output":false},
-          {"name":"@level_id","type":"bigint","maxLength":8,"output":true}
+          {"name":"@level_description","type":"nvarchar","maxLength":-1,"output":false,"default":"NULL"},
+          {"name":"@profile_value","type":"bigint","maxLength":8,"output":false,"default":"0"},
+          {"name":"@events_value","type":"bigint","maxLength":8,"output":false,"default":"0"},
+          {"name":"@level_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
         ],
         "create_environment": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
-          {"name":"@environment_description","type":"nvarchar","maxLength":2048,"output":false}
+          {"name":"@environment_description","type":"nvarchar","maxLength":2048,"output":false,"default":"NULL"}
         ],
         "create_environment_reference": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@reference_type","type":"char","maxLength":1,"output":false},
-          {"name":"@environment_folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_folder_name","type":"nvarchar","maxLength":256,"output":false,"default":"NULL"},
           {"name":"@reference_id","type":"bigint","maxLength":8,"output":true}
         ],
         "create_environment_variable": [
@@ -431,16 +431,16 @@
           {"name":"@data_type","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@sensitive","type":"bit","maxLength":1,"output":false},
           {"name":"@value","type":"sql_variant","maxLength":8016,"output":false},
-          {"name":"@description","type":"nvarchar","maxLength":2048,"output":false}
+          {"name":"@description","type":"nvarchar","maxLength":2048,"output":false,"default":"NULL"}
         ],
         "create_execution": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@package_name","type":"nvarchar","maxLength":520,"output":false},
-          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false},
-          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false},
-          {"name":"@runinscaleout","type":"bit","maxLength":1,"output":false},
-          {"name":"@useanyworker","type":"bit","maxLength":1,"output":false},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"},
+          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false,"default":"0"},
+          {"name":"@runinscaleout","type":"bit","maxLength":1,"output":false,"default":"NULL"},
+          {"name":"@useanyworker","type":"bit","maxLength":1,"output":false,"default":"1"},
           {"name":"@execution_id","type":"bigint","maxLength":8,"output":true}
         ],
         "create_execution_dump": [
@@ -448,7 +448,7 @@
         ],
         "create_folder": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
-          {"name":"@folder_id","type":"bigint","maxLength":8,"output":true}
+          {"name":"@folder_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
         ],
         "delete_customized_logging_level": [
           {"name":"@level_name","type":"nvarchar","maxLength":256,"output":false}
@@ -485,13 +485,13 @@
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@packages_table","type":"Package_Table_Type","maxLength":-1,"output":false},
-          {"name":"@operation_id","type":"bigint","maxLength":8,"output":true}
+          {"name":"@operation_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
         ],
         "deploy_project": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_stream","type":"varbinary","maxLength":-1,"output":false},
-          {"name":"@operation_id","type":"bigint","maxLength":8,"output":true}
+          {"name":"@operation_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
         ],
         "disable_worker_agent": [
           {"name":"@WorkerAgentId","type":"uniqueidentifier","maxLength":16,"output":false}
@@ -504,7 +504,7 @@
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@package_name","type":"nvarchar","maxLength":520,"output":false},
-          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false}
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
         ],
         "get_project": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
@@ -571,7 +571,7 @@
         "set_environment_reference_type": [
           {"name":"@reference_id","type":"bigint","maxLength":8,"output":false},
           {"name":"@reference_type","type":"char","maxLength":1,"output":false},
-          {"name":"@environment_folder_name","type":"nvarchar","maxLength":256,"output":false}
+          {"name":"@environment_folder_name","type":"nvarchar","maxLength":256,"output":false,"default":"NULL"}
         ],
         "set_environment_variable_property": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
@@ -614,8 +614,8 @@
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@parameter_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@parameter_value","type":"sql_variant","maxLength":8016,"output":false},
-          {"name":"@object_name","type":"nvarchar","maxLength":520,"output":false},
-          {"name":"@value_type","type":"char","maxLength":1,"output":false}
+          {"name":"@object_name","type":"nvarchar","maxLength":520,"output":false,"default":"NULL"},
+          {"name":"@value_type","type":"char","maxLength":1,"output":false,"default":"'V'"}
         ],
         "set_worker_agent_property": [
           {"name":"@WorkerAgentId","type":"uniqueidentifier","maxLength":16,"output":false},
@@ -624,7 +624,7 @@
         ],
         "start_execution": [
           {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
-          {"name":"@retry_count","type":"int","maxLength":4,"output":false}
+          {"name":"@retry_count","type":"int","maxLength":4,"output":false,"default":"0"}
         ],
         "startup": [],
         "stop_operation": [
@@ -642,23 +642,23 @@
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@package_name","type":"nvarchar","maxLength":520,"output":false},
           {"name":"@validation_id","type":"bigint","maxLength":8,"output":true},
-          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false},
-          {"name":"@environment_scope","type":"char","maxLength":1,"output":false},
-          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false}
+          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false,"default":"0"},
+          {"name":"@environment_scope","type":"char","maxLength":1,"output":false,"default":"'D'"},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
         ],
         "validate_project": [
           {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
           {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
-          {"name":"@validate_type","type":"char","maxLength":1,"output":false},
+          {"name":"@validate_type","type":"char","maxLength":1,"output":false,"default":"'F'"},
           {"name":"@validation_id","type":"bigint","maxLength":8,"output":true},
-          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false},
-          {"name":"@environment_scope","type":"char","maxLength":1,"output":false},
-          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false}
+          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false,"default":"0"},
+          {"name":"@environment_scope","type":"char","maxLength":1,"output":false,"default":"'D'"},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
         ]
       },
       "functions": {
         "dm_execution_performance_counters": [
-          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false}
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
         ],
         "get_operation_log_size": [
           {"name":"","type":"bigint","maxLength":8,"output":true}
