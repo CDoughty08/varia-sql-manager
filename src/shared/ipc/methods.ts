@@ -7,10 +7,11 @@ export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
  *  one of 16 read slots, and explorer runs at once under Object Explorer's own gates (4 per connection, 8 in all; static
  *  folders need none), and actions runs object action DDL at once under the action service's own gates (1 per connection,
- *  2 in all), so a DROP waiting on a lock never holds a metadata slot. Main reserves 32 extra pending requests for the
+ *  2 in all), so a DROP waiting on a lock never holds a metadata slot, and ssis runs SSIS Catalog reads at once under the
+ *  SSIS service's own gates (2 per connection, 4 in all), so a read waiting on SSISDB never holds one either. Main reserves 32 extra pending requests for the
  *  control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user signs in in the web
  *  browser, for up to 3 minutes; those sign-ins run one at a time. */
-export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions'
+export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions' | 'ssis'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly kind: MethodKind
@@ -66,6 +67,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
+  // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).
+  'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }

@@ -191,7 +191,9 @@ backend schedules it: `control` runs at once, `metadata` waits for one of 8 slot
 deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, `explorer`
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
 `actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
-for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot.
+for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot, and `ssis` runs SSIS Catalog reads
+at once under the SSIS service's own gates (2 per connection, 4 in all, waited for at most 30 s, then `BUSY`), so a read
+waiting on SSISDB never holds one either.
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -217,6 +219,7 @@ for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metada
 | `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`) |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
+| `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
@@ -306,6 +309,34 @@ action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`,
 cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
 not reachable from the wire.
+
+**Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
+serves the server's Integration Services Catalogs folder (from SQL Server 2016) and the catalog's folders, projects, packages
+and environments, whose refs carry `ssisFolder` and `ssisProject` (docs/object-explorer.md). Those listings run on the SSIS
+read pool (the program name plus " - Integration Services", Initial Catalog the catalog's database), never the Object
+Explorer pool, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`; packages page by `package_id` (`@kb`), since their names
+(≤ 260) can be longer than a sysname cursor key. On SQL Server on Linux, and on Azure SQL Database without a visible
+catalog, the folder answers a `NOT_SUPPORTED` value that says why; a catalog node whose database is gone answers
+`NOT_FOUND`, one whose database is offline, restoring or single-user in use `DATABASE_UNAVAILABLE` (retryable), and one the
+login may not open `NO_DB_ACCESS`. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
+target }` (the target an Object Explorer ref of the view's own SSIS kind; the catalog only by its database's name) answers
+`{ model?, revision?, elapsedMs, error? }`: one batch per view on the same pool, READ COMMITTED when the catalog's database
+runs RCSI and READ UNCOMMITTED otherwise, read once more after error 601. `model.view` names it: the catalog's profile
+(`band`, `cloud`, `hostPlatform`, `auth`: sql, integrated or entra, `rcsi`, `features`, `roles`: `sysadmin`, `admin` for
+sysadmin or ssis_admin, and `ssisAdmin` and `ssisLogreader`, read only for logins that are not sysadmin), its folder count and,
+for ssis_admin and sysadmin, `properties`; a folder's row and counts; a project's row, packages, parameters and
+references; a package's row and parameters; an environment's row and variables. Lists hold at most 2,048 rows and the
+answer about 4,000,000 bytes, past which `truncated` is set; values are text of at most 4,000 characters, and a sensitive
+parameter or variable never has one. `revision` (64 hex characters) is a SHA-256 of what a later write depends on: names,
+descriptions, a project's `object_version_lsn` and last deployment, parameter values, references, variables and catalog
+properties, never validation results, counts or the profile, which change without a write; a truncated answer has none,
+because it does not cover the rows it left out. The first request on a
+connection reads its SSIS profile, cached until disconnect, with the role checks at `LOCK_TIMEOUT 1000` (`IS_MEMBER`
+waits on a pending change to a role's members; a sysadmin's are not evaluated). Failures are `result.error` values:
+`CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`, `NOT_SUPPORTED` (before 2016,
+and on Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA` and `SQL_ERROR`. **SSIS cancellation**
+works as the object actions' does (`SsisRequests`, `varia:ssis-cancel`, 1–64 ids, 64 tombstones for 60 s; 256 running): main
+routes every `ssis.*` method there, the backend sends an attention, and the request answers `CANCELLED`.
 
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers
@@ -876,7 +907,9 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
+| Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
+| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 characters; error messages ≤ 2,048 | zod and backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
@@ -925,7 +958,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | --- | --- |
 | Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |
