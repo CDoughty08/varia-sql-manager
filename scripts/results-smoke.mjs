@@ -10,6 +10,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
+import { activeDocument, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindBadge, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -37,18 +38,18 @@ page.on('pageerror', error => failures.push(error.message))
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
 const setClipboard = text => application.evaluate(({ clipboard }, value) => clipboard.writeText(value), text)
-const status = () => page.locator('.output-status')
-const queryTabs = () => page.locator('.query-tabs').getByRole('tab')
+const status = () => outputStatus(page)
+const queryTabs = () => documentTabs(page).getByRole('tab')
 const server = () => page.getByLabel('Query server', { exact: true })
 const grid = (index = 0) => page.locator(`[data-result-grid][data-result-index="${index}"]`)
-const scroller = (index = 0) => grid(index).locator('.rg-scroll')
-const cell = (row, column, of = grid()) => of.locator(`.rg-row[aria-rowindex="${row + 2}"] .rg-c[aria-colindex="${column + 2}"]`)
+const scroller = (index = 0) => grid(index).locator(gridPart.scroller)
+const cell = (row, column, of = grid()) => gridCell(of, row, column)
 const header = (name, of = grid()) => of.getByRole('columnheader', { name, exact: true })
 /** A grid's strip, beside the grid rather than inside its table structure. */
-const strip = (index = 0) => page.locator('.rg-frame').filter({ has: grid(index) }).locator('.rg-strip')
+const strip = (index = 0) => page.locator(gridPart.frame).filter({ has: grid(index) }).locator(gridPart.strip)
 /** A row's number as drawn in the sticky row-number column (screen readers read the row's own header instead). */
-const rowNumber = (row, of = grid()) => of.locator('.rg-rn:visible').filter({ hasText: new RegExp(`^${row + 1}$`) })
-const outputTab = name => page.locator('.output-toolbar').getByRole('tab', { name })
+const rowNumber = (row, of = grid()) => of.locator(gridPart.rowNumber + ':visible').filter({ hasText: new RegExp(`^${row + 1}$`) })
+const outputTab = name => outputView(page, name)
 const stats = () => page.evaluate(() => window.__variaGrid.stats())
 const w1 = row => shapes.W1.row(row).map(value => value ?? 'NULL')
 const w1Names = shapes.W1.columns.map(column => column.name)
@@ -95,30 +96,30 @@ async function settled(index = 0) {
 }
 /** The first and last row numbers drawn inside the grid's body; NaN, which fails every comparison, before a scroll's rows are drawn
  * (Math.min of none is Infinity, which passed `toBeGreaterThan` polls before any row was there). */
-const visibleRows = (index = 0) => grid(index).evaluate(root => {
-  const body = root.querySelector('.rg-scroll').getBoundingClientRect(), head = root.querySelector('.rg-head').getBoundingClientRect()
-  const numbers = [...root.querySelectorAll('.rg-row')].filter(row => row.style.display !== 'none').filter(row => {
+const visibleRows = (index = 0) => grid(index).evaluate((root, gridPart) => {
+  const body = root.querySelector(gridPart.scroller).getBoundingClientRect(), head = root.querySelector(gridPart.head).getBoundingClientRect()
+  const numbers = [...root.querySelectorAll(gridPart.row)].filter(row => row.style.display !== 'none').filter(row => {
     const box = row.getBoundingClientRect()
     return box.top >= head.bottom - 1 && box.bottom <= body.bottom + 1
-  }).map(row => Number(row.querySelector('.rg-rh').textContent))
+  }).map(row => Number(row.querySelector(gridPart.rowHeader).textContent))
   return numbers.length === 0 ? [NaN, NaN] : [Math.min(...numbers), Math.max(...numbers)]
-})
+}, gridPart)
 /** The shown rows' numbers in DOM order, which browse-mode screen readers follow: ascending, whatever was scrolled. */
-const rowOrder = (index = 0) => grid(index).evaluate(root => [...root.querySelectorAll('.rg-row')].filter(row => row.style.display !== 'none').map(row => Number(row.getAttribute('aria-rowindex'))))
+const rowOrder = (index = 0) => grid(index).evaluate((root, row) => [...root.querySelectorAll(row)].filter(item => item.style.display !== 'none').map(item => Number(item.getAttribute('aria-rowindex'))), gridPart.row)
 const ascending = values => values.length > 0 && values.every((value, index) => index === 0 || value > values[index - 1])
 /** True when the element is drawn inside the grid's body, not scrolled away. */
-const insideGrid = (locator, index = 0) => locator.evaluate((element, gridIndex) => {
-  const root = document.querySelector(`[data-result-grid][data-result-index="${gridIndex}"]`), box = element.getBoundingClientRect(), body = root.querySelector('.rg-scroll').getBoundingClientRect()
+const insideGrid = (locator, index = 0) => locator.evaluate((element, { gridIndex, scroller }) => {
+  const root = document.querySelector(`[data-result-grid][data-result-index="${gridIndex}"]`), box = element.getBoundingClientRect(), body = root.querySelector(scroller).getBoundingClientRect()
   return element.style.display !== 'none' && box.left >= body.left - 1 && box.right <= body.right + 1 && box.top >= body.top - 1 && box.bottom <= body.bottom + 1
-}, index)
+}, { gridIndex: index, scroller: gridPart.scroller })
 /** How many cells inside the grid's body are still waiting for their rows. */
-const loadingInView = (index = 0) => grid(index).evaluate(root => {
-  const body = root.querySelector('.rg-scroll').getBoundingClientRect(), head = root.querySelector('.rg-head').getBoundingClientRect()
-  return [...root.querySelectorAll('.rg-c.is-load')].filter(cell => {
+const loadingInView = (index = 0) => grid(index).evaluate((root, gridPart) => {
+  const body = root.querySelector(gridPart.scroller).getBoundingClientRect(), head = root.querySelector(gridPart.head).getBoundingClientRect()
+  return [...root.querySelectorAll(gridPart.loadingCell)].filter(cell => {
     const box = cell.getBoundingClientRect()
     return cell.style.display !== 'none' && cell.parentElement.style.display !== 'none' && box.width > 0 && box.right > body.left && box.left < body.right && box.bottom > head.bottom && box.top < body.bottom
   }).length
-})
+}, gridPart)
 let tracer
 /** Traces the renderer from now on; the returned function stops and gives each main-thread task's clock and CPU ms. */
 async function startTrace() {
@@ -191,7 +192,7 @@ try {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
   // Closing an unsaved query asks first; answer Don't Save.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await page.getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
@@ -246,7 +247,7 @@ try {
     const names = await activeNames()
     expect(names.length).toBeGreaterThan(0)
     expect(names.every(name => name !== ''), `names as the active cell moved: ${JSON.stringify(names)}`).toBe(true)
-    await expect(grid().locator('.rg-row[aria-rowindex="1000001"] .rg-rh')).toHaveText('1000000')
+    await expect(grid().locator(`${gridPart.row}[aria-rowindex="1000001"] ${gridPart.rowHeader}`)).toHaveText('1000000')
     expect(await scroller().evaluate(element => element.scrollHeight)).toBeLessThanOrEqual(200_000 + 1)
     await page.keyboard.press('Control+Home')
     await expect(cell(0, 0)).toHaveText('0')
@@ -288,15 +289,15 @@ try {
   // 3. Wide results: End and Ctrl+→ bring the last column into view, the DOM stays small, and the row numbers stay at
   // the grid's left edge however far it scrolls, with native and with virtual scrolling.
   // The numbers are drawn in one sticky column, each level with its row.
-  const rowHeaderAtLeft = () => grid().evaluate(root => {
-    const rows = [...root.querySelectorAll('.rg-row')].filter(item => item.style.display !== 'none')
-    const marks = [...root.querySelectorAll('.rg-rn')].filter(item => item.style.display !== 'none')
-    const row = rows.find(item => marks.some(mark => mark.textContent === item.querySelector('.rg-rh').textContent))
-    const mark = marks.find(item => item.textContent === row?.querySelector('.rg-rh').textContent)
+  const rowHeaderAtLeft = () => grid().evaluate((root, gridPart) => {
+    const rows = [...root.querySelectorAll(gridPart.row)].filter(item => item.style.display !== 'none')
+    const marks = [...root.querySelectorAll(gridPart.rowNumber)].filter(item => item.style.display !== 'none')
+    const row = rows.find(item => marks.some(mark => mark.textContent === item.querySelector(gridPart.rowHeader).textContent))
+    const mark = marks.find(item => item.textContent === row?.querySelector(gridPart.rowHeader).textContent)
     return !!mark && Math.abs(mark.getBoundingClientRect().left - root.getBoundingClientRect().left) <= 1 && Math.abs(mark.getBoundingClientRect().top - row.getBoundingClientRect().top) <= 1
-  })
+  }, gridPart)
   // A sticky element inside a pooled row makes every row slot a composited layer, which made scroll bar jumps long tasks.
-  const stickyInRows = () => grid().evaluate(root => [...root.querySelectorAll('.rg-row, .rg-row *')].filter(item => getComputedStyle(item).position === 'sticky').length)
+  const stickyInRows = () => grid().evaluate((root, row) => [...root.querySelectorAll(`${row}, ${row} *`)].filter(item => getComputedStyle(item).position === 'sticky').length, gridPart.row)
   const last = shapes.X1.row(0)[299]
   for (const cap of [undefined, 50_000]) {
     await page.evaluate(value => window.__variaGrid.setScrollCap(value), cap)
@@ -328,15 +329,15 @@ try {
   await page.evaluate(() => window.__variaGrid.setScrollCap())
 
   // 4. Stacked sets: equal heights; a splitter by mouse and keys; Tab order; a thousand one-row sets.
-  const heights = () => page.locator('.rs-item').evaluateAll(items => items.map(item => item.getBoundingClientRect().height))
+  const heights = () => page.locator(part.resultItem).evaluateAll(items => items.map(item => item.getBoundingClientRect().height))
   await run('-- varia-fake: sets=N1*50,N1*50,N1*50,N1*50,N1*50')
-  await expect(page.locator('.rs-item')).toHaveCount(5)
+  await expect(page.locator(part.resultItem)).toHaveCount(5)
   await expect(page.locator('[data-result-grid]')).toHaveCount(5)
   const five = await heights()
   expect(Math.max(...five) - Math.min(...five)).toBeLessThanOrEqual(1)
   await run('-- varia-fake: sets=N1*50,N1*50')
   await expect(page.locator('[data-result-grid]')).toHaveCount(2)
-  const splitter = page.locator('.rs-splitter').first()
+  const splitter = resultSplitters(page).first()
   const difference = async () => { const [first, second] = await heights(); return Math.round(first - second) }
   expect(Math.abs(await difference())).toBeLessThanOrEqual(1)
   const split = await splitter.boundingBox()
@@ -386,7 +387,7 @@ try {
     const target = page.getByRole('grid', { name: 'Result 1000 of 1000, 1 row, 1 column', exact: true })
     let most = 0
     for (let step = 0; step < 400 && !(await target.count()); step++) {
-      await page.locator('.rs-stack').evaluate(stack => { stack.scrollTop += stack.clientHeight * 4 })
+      await page.locator(part.resultStack).evaluate(stack => { stack.scrollTop += stack.clientHeight * 4 })
       await page.waitForTimeout(25)
       most = Math.max(most, await page.locator('[data-result-grid]').count())
     }
@@ -416,7 +417,7 @@ try {
   await page.keyboard.press('ArrowDown')
   for (let column = 0; column < 3; column++) await page.keyboard.press('ArrowRight')
   await expect.poll(async () => (await active()).label).toBe('truncated pre, truncated')
-  await expect(cell(1, 3)).toHaveClass(/is-trunc/)
+  await expect(matching(cell(1, 3), gridPart.truncatedCell)).toHaveCount(1)
   await page.keyboard.press('ArrowLeft')
   await page.keyboard.press('ArrowLeft')
   // A NULL and a value that could not be read both show NULL; their labels tell them apart, and so does more than hue.
@@ -432,9 +433,9 @@ try {
   // 6. Selection and copy: clicks, Shift, a drag that scrolls, Ctrl+click on columns and rows, headers and the corner;
   // the exact text by keys, with headers, and through Edit › Copy; a long copy's strip; a copy over the limit.
   await run('-- varia-fake: sets=W1*400')
-  const selected = () => grid().locator('.rg-c.is-sel').count()
+  const selected = () => grid().locator(gridPart.selectedCell).count()
   // The first cell is the current cell from the start, so a first Shift+click selects from it.
-  await expect(cell(0, 0)).toHaveClass(/is-sel/)
+  await expect(cell(0, 0)).toHaveAttribute('aria-selected', 'true')
   await cell(2, 2).click({ modifiers: ['Shift'] })
   await expect.poll(selected).toBe(9)
   await cell(1, 1).click()
@@ -465,8 +466,8 @@ try {
   await rowNumber(2).click({ modifiers: ['Control'] })
   await page.keyboard.press('Control+Shift+C')
   await expect.poll(clipboard).toBe(tsv([w1Names, w1(0), w1(2)]))
-  await grid().locator('.rg-corner').click()
-  await expect.poll(() => grid().locator('.rg-ch.sel').count()).toBeGreaterThan(3)
+  await grid().getByRole('columnheader', { name: 'Select all', exact: true }).click()
+  await expect.poll(() => grid().locator(gridPart.selectedColumnHeader).count()).toBeGreaterThan(3)
   await page.keyboard.press('Control+C')
   await expect.poll(clipboard).toBe(tsv(Array.from({ length: 400 }, (_, row) => w1(row))))
   await cell(0, 0).click()
@@ -483,8 +484,8 @@ try {
   await cell(0, 0).click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Control+C')
-  await expect(page.locator('.job-notice')).toHaveText('Copied 20 rows. 10 values were truncated.')
-  await expect(page.locator('.output-panel > [role="status"]')).toHaveText('Copied 20 rows. 10 values were truncated.')
+  await expect(jobNotice(page)).toHaveText('Copied 20 rows. 10 values were truncated.')
+  await expect(outputAnnouncer(page)).toHaveText('Copied 20 rows. 10 values were truncated.')
   // A copy that takes a while shows its strip, then sets the clipboard.
   await run('-- varia-fake: sets=W1*200000')
   await measured('copying 200,000 rows', async () => {
@@ -493,10 +494,10 @@ try {
     await setClipboard('')
     await writeFile(join(control, 'hold', 'results.copy'), '')
     await page.keyboard.press('Control+C')
-    await expect(page.locator('.job-strip')).toContainText('Copying…')
+    await expect(jobProgress(page)).toContainText('Copying…')
     await rm(join(control, 'hold', 'results.copy'))
     await expect.poll(async () => (await clipboard()).split(eol).length, { timeout: 60000 }).toBe(200_000)
-    await expect(page.locator('.job-strip')).toHaveCount(0)
+    await expect(jobProgress(page)).toHaveCount(0)
   })
   const copied = (await clipboard()).split(eol)
   expect([copied[0], copied.at(-1)]).toEqual([w1(0).join('\t'), w1(199_999).join('\t')])
@@ -525,7 +526,7 @@ try {
   const initial = nameBox.width, border = { x: nameBox.x + nameBox.width - 1, y: nameBox.y + nameBox.height / 2 }
   expect(await clipped()).toBe(false)
   await page.mouse.move(border.x, border.y)
-  await expect(grid()).toHaveClass(/rg-border-hover/)
+  await expect(matching(grid(), gridPart.borderHover)).toHaveCount(1)
   await page.mouse.down()
   await page.mouse.move(border.x + 50, border.y, { steps: 5 })
   await expect.poll(() => widthOf(header('name'))).toBeCloseTo(initial + 50, 0)
@@ -540,13 +541,13 @@ try {
   await expect.poll(() => widthOf(header('name'))).toBeLessThan(initial / 2)
   expect(await clipped()).toBe(true)
   // Only the current cell's column (the first) is marked, as before the drag.
-  expect(await grid().locator('.rg-ch.sel').allTextContents()).toEqual(['id'])
+  expect(await grid().locator(gridPart.selectedColumnHeader).allTextContents()).toEqual(['id'])
   const narrowed = await header('name').boundingBox()
   await page.mouse.dblclick(narrowed.x + narrowed.width - 1, narrowed.y + narrowed.height / 2)
   await expect.poll(() => widthOf(header('name'))).toBeCloseTo(initial, 0)
   expect(await clipped()).toBe(false)
   await page.mouse.move(border.x, border.y + 200)
-  await expect(grid()).not.toHaveClass(/rg-border-hover/)
+  await expect(matching(grid(), gridPart.borderHover)).toHaveCount(0)
   console.log('Results checks: a column border resizes its column, Escape restores it, and a double-click fits it.')
 
   // 8. Save Results As: the grid's menu writes CSV through main's dialog, the extension picks tab-delimited text or JSON,
@@ -565,7 +566,7 @@ try {
   const choose = path => application.evaluate((_, value) => { globalThis.variaSave.paths.push(value) }, path)
   const lastDialog = () => application.evaluate(() => globalThis.variaSave.dialogs.at(-1))
   const files = async () => (await readdir(saveDir)).sort()
-  const notice = page.locator('.job-notice')
+  const notice = jobNotice(page)
   const w1Rows = count => Array.from({ length: count }, (_, row) => shapes.W1.row(row))
   // Independent of the backend's writers: CSV quotes only where needed and leaves NULL empty; TSV writes NULL.
   const csvField = value => value === null ? '' : value === '' || /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value
@@ -606,9 +607,9 @@ try {
   await choose(join(saveDir, 'held.csv'))
   await cell(0, 0).click()
   await page.keyboard.press('Control+S')
-  await expect(page.locator('.job-strip:not(.job-notice)')).toContainText(/^Saving held\.csv… \d+% \([\d,]+ of 5,000 rows\)/)
+  await expect(jobProgress(page)).toContainText(/^Saving held\.csv… \d+% \([\d,]+ of 5,000 rows\)/)
   // The strip's progress is visual only: the pane's live region says how the save ended, once.
-  await expect(page.locator('.output-toolbar [role="status"], .output-toolbar [aria-live]')).toHaveCount(0)
+  await expect(outputToolbar(page).locator('[role="status"], [aria-live]')).toHaveCount(0)
   await expect.poll(async () => (await files()).some(name => name.endsWith('.tmp'))).toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'results-saving.png') })
   await page.keyboard.press('Escape')
@@ -618,12 +619,12 @@ try {
   await choose(join(saveDir, 'kept.csv'))
   await cell(0, 0).click()
   await page.keyboard.press('Control+S')
-  await expect(page.locator('.job-strip:not(.job-notice)')).toContainText('Saving kept.csv…')
+  await expect(jobProgress(page)).toContainText('Saving kept.csv…')
   await run('-- varia-fake: sets=M1*1')
-  await expect(page.locator('.job-strip:not(.job-notice)')).toContainText('Saving kept.csv…')
+  await expect(jobProgress(page)).toContainText('Saving kept.csv…')
   await rm(join(control, 'hold', 'results.export'))
   await expect(notice).toHaveText('Saved 5,000 rows to kept.csv.', { timeout: 30000 })
-  await expect(page.locator('.job-strip:not(.job-notice)')).toHaveCount(0)
+  await expect(jobProgress(page)).toHaveCount(0)
   expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
   expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
   // Back to the default (null resets), so the copies below have no header line.
@@ -632,9 +633,9 @@ try {
   await textbox().focus()
   await page.keyboard.press('F1')
   await page.keyboard.type('close results')
-  await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+  await expect(quickInputActive(page)).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
-  await expect(page.locator('.output-empty')).toHaveText('Results were closed to free memory. Execute the query again to see them.')
+  await expect(outputEmpty(page)).toHaveText('Results were closed to free memory. Execute the query again to see them.')
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
   // Run from the editor, it leaves focus there.
   await expect(textbox()).toBeFocused()
@@ -643,7 +644,7 @@ try {
   await expect(outputTab(/^Results/)).toHaveText('Results')
   await expect(outputTab(/^Results/)).toHaveAccessibleName('Results')
   await outputTab(/^Messages/).click()
-  await expect(page.locator('.messages')).toContainText('Completion time:')
+  await expect(messages(page)).toContainText('Completion time:')
   console.log('Results checks: Save Results As writes CSV, tab-delimited text and JSON, shows a cancellable strip, and outlives running again; Close Results frees the results.')
 
   // 9. Values: XML, JSON and plan cells are links. A click opens the whole value, formatted, in a new tab named as SSMS
@@ -666,7 +667,7 @@ try {
   const lastLine = async () => Math.max(...(await page.locator('.margin-view-overlays .line-numbers').allTextContents()).map(Number))
   await run('SELECT 1 -- FOR_XML_FIXTURE')
   const forXml = cell(0, 0)
-  await expect(forXml).toHaveClass(/is-link/)
+  await expect(matching(forXml, gridPart.linkCell)).toHaveCount(1)
   expect((await computed(forXml)).color).toBe(await tokenColor('resultsGrid.linkForeground'))
   await forXml.hover()
   await expect(forXml).toHaveAttribute('title', 'Open in a new tab (Enter)')
@@ -679,13 +680,13 @@ try {
   await expect(queryTabs()).toHaveCount(2)
   await expect(textbox()).toBeFocused()
   expect(await editorLanguage()).toBe('xml')
-  await expect(page.locator('.query-context')).toHaveText('XML document')
-  await expect(page.locator('.query-tab.active .sql-icon')).toHaveText('XML')
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+  await expect(queryStatus(page)).toHaveText('XML document')
+  await expect(kindBadge(activeDocument(page), 'XML')).toHaveText('XML')
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   await expect(server()).toBeDisabled()
   await expect(server()).toHaveValue('')
-  await expect(page.locator('.toolbar-actions button.execute')).toBeDisabled()
-  await expect(page.locator('.output-empty')).toContainText('Query results appear here for query tabs.')
+  await expect(toolbarButton(page, /^Execute/)).toBeDisabled()
+  await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
   const forXmlText = '<objects>\n  <o>\n    <name>Orders</name>\n    <object_id>1</object_id>\n  </o>\n  <o>\n    <name>Customers</name>\n    <object_id>2</object_id>\n  </o>\n</objects>'
   expect(await editorText()).toBe(forXmlText)
   await page.keyboard.press('F5')
@@ -707,8 +708,8 @@ try {
   await page.keyboard.press('Enter')
   await expect(valueTab('ExecutionPlan1.sqlplan')).toHaveAttribute('aria-selected', 'true')
   expect(await editorLanguage()).toBe('xml')
-  await expect(page.locator('.query-context')).toHaveText('Execution plan')
-  await expect(page.locator('.query-tab.active .sql-icon')).toHaveText('PLAN')
+  await expect(queryStatus(page)).toHaveText('Execution plan')
+  await expect(kindBadge(activeDocument(page), 'PLAN')).toHaveText('PLAN')
   expect(await editorText()).toBe('<ShowPlanXML>\n  <BatchSequence>\n    <Batch />\n  </BatchSequence>\n</ShowPlanXML>')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
@@ -717,7 +718,7 @@ try {
   await cell(0, 2).click()
   await expect(valueTab('data1.json')).toHaveAttribute('aria-selected', 'true')
   expect(await editorLanguage()).toBe('json')
-  await expect(page.locator('.query-context')).toHaveText('JSON document')
+  await expect(queryStatus(page)).toHaveText('JSON document')
   expect((await editorText()).startsWith('{\n  "items": [\n    {\n      "id": 1,\n      "name": "Item 1",\n')).toBe(true)
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
@@ -728,7 +729,7 @@ try {
     await cell(2, 1).click()
     await expect(valueTab(`doc${++opened}.xml`)).toHaveAttribute('aria-selected', 'true', { timeout: 30000 })
     await expect.poll(async () => { await textbox().focus(); await page.keyboard.press('Control+End'); return lastLine() }, { timeout: 30000 }).toBe(2 + 4 * items)
-    await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+    await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
     await page.keyboard.press('Control+W')
     await expect(queryTabs()).toHaveCount(1)
   })
@@ -737,22 +738,22 @@ try {
   // Hidden bars in a small scroller give Linux that geometry. The press a scroll-bar drag sends there (at the edge, and
   // 40 px in, where a zoomed-out window's bar still is) selects nothing and opens nothing; the same press on the plan
   // cell under it selects the cell and opens the plan.
-  const overlayStyle = await page.addStyleTag({ content: '[data-result-grid] .rg-scroll { max-width: 520px; max-height: 80px } [data-result-grid] .rg-scroll::-webkit-scrollbar { width: 0; height: 0 }' })
+  const overlayStyle = await page.addStyleTag({ content: `[data-result-grid] ${gridPart.scroller} { max-width: 520px; max-height: 80px } [data-result-grid] ${gridPart.scroller}::-webkit-scrollbar { width: 0; height: 0 }` })
   await cell(0, 0).click()
   await page.keyboard.press('End')
   await settled()
   await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
   const beforeOverlayPress = await active()
-  const overlayBar = await scroller().evaluate(element => {
-    const box = element.getBoundingClientRect(), row = element.querySelector('.rg-row[aria-rowindex="3"]').getBoundingClientRect()
-    const x = box.left + element.clientWidth - 5, y = row.top + row.height / 2, under = document.elementFromPoint(x, y)?.closest('.rg-c')
-    const inner = document.elementFromPoint(x - 35, y)?.closest('.rg-c')
+  const overlayBar = await scroller().evaluate((element, gridPart) => {
+    const box = element.getBoundingClientRect(), row = element.querySelector(gridPart.row + '[aria-rowindex="3"]').getBoundingClientRect()
+    const x = box.left + element.clientWidth - 5, y = row.top + row.height / 2, under = document.elementFromPoint(x, y)?.closest(gridPart.cell)
+    const inner = document.elementFromPoint(x - 35, y)?.closest(gridPart.cell)
     return {
       x, y, inner: inner === under, overlay: element.offsetWidth === element.clientWidth && element.offsetHeight === element.clientHeight,
       overflows: element.scrollWidth > element.clientWidth && element.scrollHeight > element.clientHeight,
-      inView: y < box.top + element.clientHeight, link: !!under?.classList.contains('is-link'), column: under?.getAttribute('aria-colindex')
+      inView: y < box.top + element.clientHeight, link: !!under?.matches(gridPart.linkCell), column: under?.getAttribute('aria-colindex')
     }
-  })
+  }, gridPart)
   expect(overlayBar).toMatchObject({ inner: true, overlay: true, overflows: true, inView: true, link: true, column: '5' })
   const pressAt = (on, x = overlayBar.x) => scroller().evaluate((element, { x, y, on }) => {
     const target = on === 'scroller' ? element : document.elementFromPoint(x, y)
@@ -770,7 +771,7 @@ try {
   expect(await active()).toEqual(beforeOverlayPress)
   await pressAt('cell')
   await expect(queryTabs()).toHaveCount(2)
-  await expect(page.locator('.query-context')).toHaveText('Execution plan')
+  await expect(queryStatus(page)).toHaveText('Execution plan')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
   expect(await active()).toMatchObject({ row: 1, column: 3 })
@@ -781,15 +782,15 @@ try {
   await writeFile(join(control, 'hold', 'query.execute'), '')
   await run('-- varia-fake: sets=N1*10 messages=3 errors=2 hold', { running: true })
   await outputTab(/^Messages/).click()
-  await expect(page.locator('.messages')).toContainText('Message 3')
+  await expect(messages(page)).toContainText('Message 3')
   await expect(status()).toContainText('Executing query…')
   await rm(join(control, 'hold', 'query.execute'))
   await expect(status()).toContainText('Query completed with errors.')
-  const entries = await page.locator('.messages .msg').evaluateAll(items => items.map(item => [item.classList.contains('error') ? 'error' : 'info', item.textContent]))
+  const entries = await messageLines(page).evaluateAll((items, error) => items.map(item => [item.matches(error) ? 'error' : 'info', item.textContent]), part.errorMessage)
   expect(entries.slice(0, 5)).toEqual([['info', 'Message 1'], ['info', 'Message 2'], ['info', 'Message 3'], ['error', 'Msg 50000, Level 16, State 1, Line 1\nFake error 1.'], ['error', 'Msg 50000, Level 16, State 1, Line 2\nFake error 2.']])
   expect(entries.at(-1)[1]).toMatch(/^Completion time: \d{4}-\d\d-\d\dT/)
-  expect((await computed(page.locator('.messages .msg.error').first())).color).toBe(await tokenColor('errorForeground'))
-  await expect(outputTab(/^Messages/).locator('.error-count')).toHaveText('!')
+  expect((await computed(errorMessages(page).first())).color).toBe(await tokenColor('errorForeground'))
+  await expect(outputTab(/^Messages/).locator(part.errorCount)).toHaveText('!')
   // The badges are drawn; the tabs' names say what they mean.
   await expect(outputTab(/^Messages/)).toHaveAccessibleName('Messages, contains errors')
   await expect(outputTab(/^Results/)).toHaveAccessibleName('Results, 1 result set')
@@ -800,8 +801,8 @@ try {
   await expect(outputTab(/^Messages/)).toBeFocused()
   await expect(outputTab(/^Messages/)).toHaveAttribute('aria-selected', 'true')
   expect([await outputTab(/^Results/).getAttribute('tabindex'), await outputTab(/^Messages/).getAttribute('tabindex')]).toEqual(['-1', '0'])
-  const panel = page.locator('.output-panel [role="tabpanel"]')
-  await expect(panel.locator('.messages')).toBeVisible()
+  const panel = outputPane(page).getByRole('tabpanel')
+  await expect(panel.getByRole('log', { name: 'Messages', exact: true })).toBeVisible()
   expect(await panel.getAttribute('aria-labelledby')).toBe(await outputTab(/^Messages/).getAttribute('id'))
   expect(await outputTab(/^Messages/).getAttribute('aria-controls')).toBe(await panel.getAttribute('id'))
   await page.keyboard.press('Home')
@@ -811,7 +812,7 @@ try {
   await expect(outputTab(/^Messages/)).toBeFocused()
   await run('-- varia-fake: sets=W1*0')
   await outputTab(/^Messages/).click()
-  await expect(page.locator('.messages')).toContainText('Commands completed successfully.')
+  await expect(messages(page)).toContainText('Commands completed successfully.')
   console.log('Results checks: Messages stream, show errors in red and in order, and end with the completion time.')
 
   // 11. Lifecycle: running again frees the last run's windows, closing a tab disposes its grids, and results outlive
@@ -845,14 +846,14 @@ try {
   // 12. Memory: the status bar shows what the backend holds against its budget, with a warning from 90 %.
   await server().selectOption({ index: 1 })
   await run('-- varia-fake: sets=W1*10 memory=0.92')
-  const memory = page.locator('.memory-indicator')
+  const memory = memoryIndicator(page)
   // The warning icon is drawn; the words say it to screen readers.
   await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
   // Script As's segment and then the server and database give way to a long text; the backend status and the indicator
   // keep their size. Every segment keeps one line (step 17 fits a long server name into a small window).
-  expect(await page.locator('.status-bar > :not(.status-scripting)').evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
+  expect(await statusBar(page).locator(`:scope > :not(${part.statusSegment})`).evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
     .toEqual(['0 nowrap', '1 nowrap', '0 nowrap'])
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
   // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
@@ -860,7 +861,7 @@ try {
   await expect(grid()).toBeFocused()
   await page.keyboard.press('F1')
   await page.keyboard.type('close results')
-  await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+  await expect(quickInputActive(page)).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
   await expect(memory).toHaveCount(0)
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
@@ -872,9 +873,9 @@ try {
   const closeResults = async () => {
     await page.keyboard.press('F1')
     await page.keyboard.type('close results')
-    await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+    await expect(quickInputActive(page)).toContainText('Query: Close Results')
     await page.keyboard.press('Enter')
-    await expect(page.locator('.quick-input')).toHaveCount(0)
+    await expect(quickInput(page)).toHaveCount(0)
   }
   await run('-- varia-fake: sets=W1*10 memory=0.1')
   await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
@@ -914,7 +915,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await outputMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -930,8 +931,8 @@ try {
   }
   await cell(3, 2).click({ button: 'right' })
   await expect(outputMenu).toBeVisible()
-  await expect(cell(3, 2)).toHaveClass(/is-sel/)
-  await expect(cell(4, 2)).not.toHaveClass(/is-sel/)
+  await expect(cell(3, 2)).toHaveAttribute('aria-selected', 'true')
+  await expect(cell(4, 2)).toHaveAttribute('aria-selected', 'false')
   await page.keyboard.press('Escape')
   await expect(outputMenu).toHaveCount(0)
 
@@ -969,7 +970,7 @@ try {
   await page.emulateMedia({ forcedColors: 'active' })
   await cell(1, 3).click()
   // The grid paints the selection on its next frame.
-  await expect(cell(1, 3)).toHaveClass(/is-sel/)
+  await expect(cell(1, 3)).toHaveAttribute('aria-selected', 'true')
   const selectedCell = await computed(cell(1, 3))
   await expect.poll(() => computed(cell(1, 3), '::after')).toEqual(selectedCell)
   await expect.poll(async () => (await computed(header('clipped'))).background).toBe(selectedCell.background)
@@ -1018,11 +1019,11 @@ try {
   await page.keyboard.press('F6')
   await expect(textbox()).toBeFocused()
   await page.keyboard.press('Control+R')
-  await expect(page.locator('[data-pane-tab="output"]')).toHaveCount(0)
-  await expect(page.locator('.output-panel')).toBeHidden()
+  await expect(paneTab(page, 'output')).toHaveCount(0)
+  await expect(outputPane(page)).toBeHidden()
   await page.keyboard.press('Control+R')
-  await expect(page.locator('[data-pane-tab="output"]')).toBeVisible()
-  await expect(page.locator('.output-panel')).toBeVisible()
+  await expect(paneTab(page, 'output')).toBeVisible()
+  await expect(outputPane(page)).toBeVisible()
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   expect(await widthOf(header('id'))).toBeCloseTo(resized, 0)
@@ -1041,14 +1042,14 @@ try {
     press()
     return closed
   })).toBe(true)
-  await expect(page.locator('.output-panel')).toBeVisible()
+  await expect(outputPane(page)).toBeVisible()
   await expect(scroller()).toHaveAttribute('data-moved', 'kept')
   await expect.poll(scrollTop).toBe(keptTop)
   await expect.poll(async () => { const [first, last] = await visibleRows(); return first <= kept.row + 1 && last >= kept.row + 1 }).toBe(true)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   expect(await widthOf(header('id'))).toBeCloseTo(resized, 0)
   // The pane's live region reads out only what happens while a tab is shown: switching tabs repeats no sentence.
-  const liveRegion = page.locator('.output-panel > [role="status"]')
+  const liveRegion = outputAnnouncer(page)
   await page.keyboard.press('Control+N')
   await expect(queryTabs()).toHaveCount(2)
   await expect(liveRegion).toHaveText('')
@@ -1075,17 +1076,17 @@ try {
   if (!(await server().inputValue())) await server().selectOption({ index: 1 })
   await typeSql('SELECT 1;')
   await page.keyboard.press('F5')
-  await expect(page.locator('.messages .msg.error')).toContainText('The SQL backend stopped', { timeout: 30000 })
+  await expect(errorMessages(page)).toContainText('The SQL backend stopped', { timeout: 30000 })
   await queryTabs().first().click()
-  await expect(page.locator('.rg-overlay')).toHaveText('These results are no longer available because the SQL backend restarted.', { timeout: 30000 })
+  await expect(page.locator(gridPart.overlay)).toHaveText('These results are no longer available because the SQL backend restarted.', { timeout: 30000 })
   // Nothing is left to save.
   await textbox().focus()
   await page.keyboard.press('F1')
   await page.keyboard.type('save results as')
-  await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Save Results As')
-  await expect(page.locator('.quick-input .quick-input-row.active')).toHaveClass(/disabled/)
+  await expect(quickInputActive(page)).toContainText('Save Results As')
+  await expect(quickInputActive(page)).toHaveAttribute('aria-disabled', 'true')
   await page.keyboard.press('Escape')
-  await expect(page.locator('.quick-input')).toHaveCount(0)
+  await expect(quickInput(page)).toHaveCount(0)
   console.log('Results checks: a backend crash marks the shown results unavailable, and Save Results As is disabled.')
 
   // 17. At a small window the output toolbar, the grid's strip and the status bar stay inside it.
@@ -1093,22 +1094,22 @@ try {
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024)
   await queryTabs().nth(1).click()
   await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
-  await page.locator('.explorer-row.lost').getByRole('button', { name: /^Reconnect/ }).click()
+  await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
   const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
   await connect.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(connect).toHaveCount(0)
-  await expect(page.locator('.query-context')).not.toContainText('connection lost')
+  await expect(queryStatus(page)).not.toContainText('connection lost')
   // A cancelled run keeps the rows it read, marked incomplete in the grid's strip.
   await run('-- varia-fake: sets=W1*200000@20000', { running: true })
   await expect(cell(0, 0)).toHaveText('0')
-  await page.locator('.toolbar-actions').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await toolbarButton(page, 'Cancel').click()
   await expect(status()).toContainText('Query was cancelled.')
   await outputTab(/^Results/).click()
   await expect(strip()).toContainText('This result is incomplete')
   // A grid holds only its rows: the strip (a status, here with no Retry) is outside the table structure.
   await expect(grid().locator('[role="status"], button')).toHaveCount(0)
   const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
-  for (const locator of [page.locator('.output-toolbar'), strip(), page.locator('.status-bar')]) {
+  for (const locator of [outputToolbar(page), strip(), statusBar(page)]) {
     const box = await locator.boundingBox()
     expect(box.x).toBeGreaterThanOrEqual(-1)
     expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1)
@@ -1123,12 +1124,12 @@ try {
   await choose(join(saveDir, 'Quarterly revenue by region and product category for the board 2026-10-10.csv'))
   await cell(0, 0).click()
   await page.keyboard.press('Control+S')
-  const strips = page.locator('.job-strip:not(.job-notice)')
+  const strips = jobProgress(page)
   await expect(strips).toHaveCount(1)
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Control+C')
   await expect(strips).toHaveCount(2)
-  for (const locator of [...await page.locator('.output-toolbar > *').all(), ...await strips.getByRole('button', { name: 'Cancel', exact: true }).all()]) {
+  for (const locator of [...await outputToolbar(page).locator(':scope > *').all(), ...await strips.getByRole('button', { name: 'Cancel', exact: true }).all()]) {
     const box = await locator.boundingBox()
     expect(box.x).toBeGreaterThanOrEqual(-1)
     expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1)
@@ -1142,25 +1143,25 @@ try {
   // inside the bar, as the backend status, the editor's segments and the memory indicator do in the IDE status bar, and
   // the page never scrolls.
   const longServer = 'sqlprod-analytics-warehouse-cluster-01.' + 'reporting-'.repeat(10) + 'corp.contoso.com\\INSTANCE01,1433'
-  await page.getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill(longServer)
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await server().selectOption({ label: longServer })
   await run('-- varia-fake: sets=W1*10 memory=0.5')
-  await expect(page.locator('.memory-indicator')).toHaveText(/^Results 128 MB/)
-  await expect(page.locator('.query-status-bar')).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')}( \\(\\d+\\.\\d+\\))? \\| \\S`))
-  expect(await page.evaluate(() => {
-    const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, .query-status-segment')].every(child => { const part = child.getBoundingClientRect(); return part.left >= box.left - 0.5 && part.right <= box.right + 0.5 && part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 }) }
-    const server = document.querySelector('.query-status-server'), database = document.querySelector('.query-status-database')
+  await expect(memoryIndicator(page)).toHaveText(/^Results 128 MB/)
+  await expect(queryStatus(page)).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')}( \\(\\d+\\.\\d+\\))? \\| \\S`))
+  expect(await page.evaluate(([part, facts]) => {
+    const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, ' + part.querySegment)].every(child => { const rect = child.getBoundingClientRect(); return rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 }) }
+    const server = document.querySelector(facts.server), database = document.querySelector(facts.database)
     return {
-      fits: fits(document.querySelector('.status-bar')) && fits(document.querySelector('.query-status-bar')), rows: document.querySelector('.query-status-rows')?.textContent,
+      fits: fits(document.querySelector(part.statusBar)) && fits(document.querySelector(part.queryStatus)), rows: document.querySelector(facts.rows)?.textContent,
       overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: server.scrollWidth > server.clientWidth,
       // The server gives way before the database, which stays whole while the server can shrink.
       database: database.scrollWidth <= database.clientWidth
     }
-  })).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true, database: true })
+  }, [part, queryFacts])).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true, database: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
   // Script As requests held in the backend keep Cancel and the start of their text: the editor's segments give way,
   // no segment covers another, and the text keeps a gap from the backend status even when it fills its segment (two
@@ -1175,26 +1176,26 @@ try {
     await contextMenu('Script Table as').getByRole('menuitem', { name: verb, exact: true }).click({ force: true })
     await contextMenu(verb).getByRole('menuitem', { name: destination, exact: true }).click({ force: true })
   }
-  const statusLayout = () => page.evaluate(() => {
-    const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect()
-    const parts = { backend: bar.firstElementChild, cancel: bar.querySelector('button[aria-label="Cancel scripting"]'), place: bar.querySelector('.editor-status'), memory: bar.querySelector('.memory-indicator') }
-    const boxes = Object.entries(parts).map(([name, part]) => [name, part.getBoundingClientRect()])
+  const statusLayout = () => page.evaluate(part => {
+    const bar = document.querySelector(part.statusBar), box = bar.getBoundingClientRect()
+    const parts = { backend: bar.firstElementChild, cancel: bar.querySelector('button[aria-label="Cancel scripting"]'), place: bar.querySelector(part.editorStatus), memory: bar.querySelector(part.memory) }
+    const boxes = Object.entries(parts).map(([name, element]) => [name, element.getBoundingClientRect()])
     const overlaps = boxes.flatMap(([name, a], i) => boxes.slice(i + 1).filter(([, b]) => a.left < b.right - 0.5 && b.left < a.right - 0.5).map(([other]) => name + '/' + other))
-    const text = bar.querySelector('.status-scripting-text').getBoundingClientRect(), gap = text.left - parts.backend.getBoundingClientRect().right
+    const text = bar.querySelector(part.statusSegmentText).getBoundingClientRect(), gap = text.left - parts.backend.getBoundingClientRect().right
     return {
-      overlaps, inside: boxes.every(([, part]) => part.left >= box.left - 0.5 && part.right <= box.right + 0.5),
+      overlaps, inside: boxes.every(([, rect]) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5),
       text: text.width >= 40, gap: gap >= 8 || gap, placeShown: parts.place.getBoundingClientRect().width >= 40
     }
-  })
+  }, part)
   await scriptOrders('CREATE To', 'Clipboard')
   const cancelScripting = page.getByRole('button', { name: 'Cancel scripting', exact: true })
   await expect(cancelScripting).toBeVisible()
   expect(await statusLayout()).toEqual({ overlaps: [], inside: true, text: true, gap: true, placeShown: true })
-  await page.locator('.status-bar').screenshot({ path: resolve('artifacts', 'results-small-scripting.png') })
+  await statusBar(page).screenshot({ path: resolve('artifacts', 'results-small-scripting.png') })
   await scriptOrders('DROP To', 'New Query Editor Window')
-  await expect(page.locator('.status-scripting-more')).toHaveText('(+1 more)')
+  await expect(statusSegment(page).locator(part.statusSegmentMore)).toHaveText('(+1 more)')
   expect(await statusLayout()).toEqual({ overlaps: [], inside: true, text: true, gap: true, placeShown: true })
-  await page.locator('.status-bar').screenshot({ path: resolve('artifacts', 'results-small-scripting-2.png') })
+  await statusBar(page).screenshot({ path: resolve('artifacts', 'results-small-scripting-2.png') })
   await rm(join(control, 'hold', 'scripting.script'))
   await expect(cancelScripting).toHaveCount(0)
   expect(failures).toEqual([])
@@ -1218,7 +1219,7 @@ try {
     page.on('pageerror', error => failures.push(error.message))
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
     await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-    await expect(page.locator('.status-bar').getByText(/· Ready/)).toBeVisible({ timeout: 30000 })
+    await expect(statusBar(page).getByText(/· Ready/)).toBeVisible({ timeout: 30000 })
     await connectLive(page, expect)
     await enlargeOutput(page)
     // The session opens with the first run, so the timed one below measures rows, not the login.
@@ -1227,18 +1228,18 @@ try {
     // Row 1 painted, timed in the page from just before F5 (a poll from here would add its own interval). The server holds
     // a part-filled packet until the batch ends, so RAISERROR WITH NOWAIT sends the last rows before the wait.
     await typeSql(`${liveRowsSql(1_000_000)}\nRAISERROR(N'All rows sent.', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:05:00';`)
-    await page.evaluate(first => {
+    await page.evaluate(({ first, cell }) => {
       window.__variaLiveFirst = new Promise(done => {
         const started = performance.now()
         const check = () => {
-          const element = document.querySelector('[data-result-grid] .rg-row[aria-rowindex="2"] .rg-c[aria-colindex="3"]')
+          const element = document.querySelector('[data-result-grid] ' + cell)
           if (element?.textContent === first) done(performance.now() - started)
           else if (performance.now() - started < 30000) requestAnimationFrame(check)
           else done(Infinity)
         }
         requestAnimationFrame(check)
       })
-    }, liveText(1)[1])
+    }, { first: liveText(1)[1], cell: gridCellSelector(0, 1) })
     await page.keyboard.press('F5')
     const firstRows = await page.evaluate(() => window.__variaLiveFirst)
     console.log(`Results live: the first rows of a million painted ${Math.round(firstRows)} ms after F5.`)
@@ -1248,7 +1249,7 @@ try {
     await expect.poll(rowsRead, { timeout: 120000 }).toBe(1_000_000)
     await expect(status()).toContainText('Executing query…')
     await page.screenshot({ path: resolve('artifacts', 'results-live.png') })
-    await page.locator('.toolbar-actions').getByRole('button', { name: 'Cancel', exact: true }).click()
+    await toolbarButton(page, 'Cancel').click()
     await expect(status()).toContainText('Query was cancelled.', { timeout: 30000 })
     await outputTab(/^Results/).click()
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
@@ -1263,7 +1264,7 @@ try {
     const csvPath = join(liveSaves, 'million.csv')
     await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }) }, csvPath)
     await page.keyboard.press('Control+S')
-    await expect(page.locator('.job-notice')).toHaveText('Saved 1,000,000 rows to million.csv.', { timeout: 120000 })
+    await expect(jobNotice(page)).toHaveText('Saved 1,000,000 rows to million.csv.', { timeout: 120000 })
     const saved = await readFile(csvPath)
     let lines = 0
     for (let index = saved.indexOf(10); index !== -1; index = saved.indexOf(10, index + 1)) lines++
@@ -1287,7 +1288,7 @@ try {
     expect(await copied()).toEqual({ count: 100_000, first: tsv([liveText(1)]), last: tsv([liveText(100_000)]) })
     // FOR XML PATH arrives as rows of about 2,000 characters; the grid shows one link, which opens the whole value.
     await run(`SELECT TOP (200) name, object_id FROM sys.all_objects ORDER BY object_id FOR XML PATH('o'), ROOT('objects');`)
-    await expect(cell(0, 0)).toHaveClass(/is-link/)
+    await expect(matching(cell(0, 0), gridPart.linkCell)).toHaveCount(1)
     await cell(0, 0).click()
     await expect(queryTabs().filter({ hasText: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B1.xml' })).toHaveAttribute('aria-selected', 'true')
     const xml = await editorText()
@@ -1300,13 +1301,13 @@ try {
     await run(`PRINT 'before';\nSELECT 1/0 AS boom;\nPRINT 'after';`)
     await expect(status()).toContainText('Query completed with errors.')
     await expect(outputTab(/^Messages/)).toHaveAttribute('aria-selected', 'true')
-    const messages = await page.locator('.messages .msg').evaluateAll(items => items.map(item => [item.classList.contains('error') ? 'error' : 'info', item.textContent]))
+    const messages = await messageLines(page).evaluateAll((items, error) => items.map(item => [item.matches(error) ? 'error' : 'info', item.textContent]), part.errorMessage)
     expect(messages.slice(0, 3)).toEqual([['info', 'before'], ['error', 'Msg 8134, Level 16, State 1, Line 2\nDivide by zero error encountered.'], ['info', 'after']])
     expect(messages.at(-1)[1]).toMatch(/^Completion time: \d{4}-\d\d-\d\dT/)
     // Memory: Close Results in one tab races the summary of a 1,000-set run in another. The summary takes its figure
     // before it is serialized, so the close's fall can arrive first; the indicator must still end on what the backend
     // holds, which the next summary (SELECT 1) reports.
-    const memory = page.locator('.memory-indicator')
+    const memory = memoryIndicator(page)
     const shown = async () => (await memory.count()) ? (await memory.textContent()).trim() : '(hidden)'
     const wideColumns = Array.from({ length: 30 }, (_, c) => `${c + 1} AS [c${String(c + 1).padStart(3, '0')}_${'x'.repeat(110)}]`).join(', ')
     const thousandSets = `SET NOCOUNT ON; DECLARE @i int = 0; WHILE @i < 1000 BEGIN SELECT ${wideColumns}; WAITFOR DELAY '00:00:00.002'; SET @i += 1; END`
@@ -1348,14 +1349,14 @@ try {
       await queryTabs().first().click()
       await page.keyboard.press('F1')
       await page.keyboard.type('close results')
-      await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
+      await expect(quickInputActive(page)).toContainText('Query: Close Results')
       await page.evaluate(() => {
         const input = document.activeElement
         window.__variaRace.trigger = () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
       })
       await page.waitForFunction(() => window.__variaRace.log.some(entry => entry[0] === 'summary' && entry[3] === 1000), null, { timeout: 120000 })
       if (!(await page.evaluate(() => window.__variaRace.fired))) await page.keyboard.press('Enter')
-      await expect(page.locator('.quick-input')).toHaveCount(0)
+      await expect(quickInput(page)).toHaveCount(0)
       await page.waitForTimeout(1500)
       const log = await page.evaluate(() => window.__variaRace.log)
       const summaryAt = log.findIndex(entry => entry[0] === 'summary' && entry[3] === 1000), summarySeq = log[summaryAt][1]
