@@ -36,9 +36,11 @@ export function liveIndicator(snapshot: LiveSnapshot, now: number, shown?: reado
   const newest = probes.reduce<number | undefined>((latest, probe) => probe.lastSampleAt === undefined ? latest : Math.max(latest ?? 0, probe.lastSampleAt), undefined)
   const updated = newest === undefined ? undefined : formatUpdated(newest, now)
   const reason = snapshot.error?.message
+  // A running view's error is an update the backend refused (it shows what still runs): the badge says so.
+  const noted = (detail?: string) => { const text = [detail, reason].filter(Boolean).join(' · '); return text ? { detail: text } : {} }
   switch (snapshot.status) {
     case 'connecting': return { tone: 'connecting', label: 'Connecting', ...updated ? { detail: updated } : {} }
-    case 'paused': return { tone: 'paused', label: snapshot.pausedBy === 'user' ? 'Paused' : 'Paused while hidden', ...updated ? { detail: updated } : {} }
+    case 'paused': return { tone: 'paused', label: snapshot.pausedBy === 'hidden' ? 'Paused while hidden' : 'Paused', ...noted(updated) }
     case 'dormant': return { tone: 'paused', label: 'Paused while hidden', ...updated ? { detail: updated } : {} }
     case 'lost': return { tone: 'lost', label: 'Connection lost', detail: reason ?? updated ?? 'The SQL backend stopped.' }
     case 'ended': {
@@ -52,12 +54,12 @@ export function liveIndicator(snapshot: LiveSnapshot, now: number, shown?: reado
   const running = probes.filter(probe => probe.state !== 'paused' && probe.state !== 'unavailable')
   if (snapshot.hiddenMode === 'statusOnly') {
     const every = running.length ? Math.min(...running.map(probe => probe.effectiveIntervalMs)) : undefined
-    return { tone: 'paused', label: every === undefined ? 'Paused while hidden' : `Hidden · status every ${formatInterval(every)}`, ...updated ? { detail: updated } : {} }
+    return { tone: 'paused', label: every === undefined ? 'Paused while hidden' : `Hidden · status every ${formatInterval(every)}`, ...noted(updated) }
   }
   const slowed = running.filter(probe => probe.effectiveIntervalMs > probe.intervalMs)
-  if (slowed.length > 0) return { tone: 'slowed', label: `Slowed to ${formatInterval(Math.max(...slowed.map(probe => probe.effectiveIntervalMs)))}`, ...updated ? { detail: updated } : {} }
+  if (slowed.length > 0) return { tone: 'slowed', label: `Slowed to ${formatInterval(Math.max(...slowed.map(probe => probe.effectiveIntervalMs)))}`, ...noted(updated) }
   const failing = running.find(probe => probe.state === 'failing' || probe.state === 'stale')
-  if (failing) return { tone: 'stale', label: 'Live', detail: [updated, failing.error?.message].filter(Boolean).join(' · ') || 'Waiting for the first sample' }
+  if (failing) return { tone: 'stale', label: 'Live', detail: [updated, failing.error?.message, reason].filter(Boolean).join(' · ') || 'Waiting for the first sample' }
   const every = running.length ? Math.min(...running.map(probe => probe.intervalMs)) : undefined
-  return { tone: 'live', label: every === undefined ? 'Live' : `Live · every ${formatInterval(every)}`, ...updated ? { detail: updated } : {} }
+  return { tone: 'live', label: every === undefined ? 'Live' : `Live · every ${formatInterval(every)}`, ...noted(updated) }
 }

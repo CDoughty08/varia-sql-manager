@@ -1,7 +1,8 @@
 // Live views' lifecycle in the renderer (docs/ipc.md, Live subscriptions): each view subscribes through LiveService, which
 // keeps the subscription in step with what the user can see. The backend schedules every sample and the renderer never
-// polls; the only timers here are the hidden-view hysteresis, the 150 ms settings debounce and the moment a probe turns
-// stale. Every frame is applied synchronously and only then acknowledged, so the next one can come.
+// polls; the only timers here are the hidden-view hysteresis, the 150 ms settings debounce, the moment a probe turns stale
+// and the back-off before an update the backend refused for now is sent again. Every frame is applied synchronously and
+// only then acknowledged, so the next one can come.
 import type { ApiResult, ResultDescriptor } from '../../../shared/contracts'
 import { limits, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveSourceSpec } from '../../../shared/live/catalog'
@@ -26,7 +27,9 @@ export const liveServiceLimits = {
   statusOnlyIntervalMs: 30_000,
   ringBytesPerHandle: 4 * MiB,
   ringBytes: 32 * MiB,
-  settingsDebounceMs: 150
+  settingsDebounceMs: 150,
+  /** An update refused for now (too many requests, busy, timed out) is sent again after 1 s, doubling to 30 s. */
+  retryMs: { first: 1000, max: 30_000 }
 } as const
 
 /** What a live view belongs to: its visibility pauses the view, and its end ends it. */
@@ -113,6 +116,9 @@ export interface LiveHandle extends ExternalStore<LiveSnapshot>, Disposable {
   /** Changes a probe's settings; changes within 150 ms go as one update. A member present as undefined drops that
    *  setting (sort, view, filter) or restores the default interval. */
   setProbe(probe: LiveProbeId, patch: LiveProbeOptions): void
+  /** Replaces the source's arguments (live.update `args`): the subscription, its history and its state carry on, and a
+   *  later subscription (out of dormancy, after a Reconnect) uses them. A refusal is reported on the view. */
+  setArgs(args: LiveArgs): void
   /** Pause / Resume: no SQL while paused, whatever the view's visibility. */
   setUserPaused(paused: boolean): void
   /** Refresh now: every running probe samples at once (a dormant view subscribes again). */
@@ -159,14 +165,34 @@ const invalidSpec = 'This live view names probes its source does not have.'
 const sameSort = (left?: readonly LiveSort[], right?: readonly LiveSort[]) => (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((key, at) => key.column === right![at].column && key.descending === right![at].descending)
 const sameFilter = (left?: LiveFilter, right?: LiveFilter) => left === right || (!!left && !!right && left.text === right.text && (left.columns ?? []).join('\u001f') === (right.columns ?? []).join('\u001f') && !!left.columns === !!right.columns)
 const lostCodes: ReadonlySet<ErrorCode> = new Set(['BACKEND_LOST', 'RESULT_UNAVAILABLE', 'BACKEND_UNAVAILABLE'])
-/** Errors of an update to a stream that is ending: its end reports what happened. */
+/** Errors of an update to a stream that is ending: its end reports what happened. Updates wait for live.opened, so a
+ *  subscription the backend has not registered yet never answers NOT_FOUND. */
 const endingCodes: ReadonlySet<ErrorCode> = new Set(['NOT_FOUND', 'CANCELLED'])
+/** Refusals that may pass: the update is sent again after a back-off. Any other is not, until the view changes again. */
+const retryCodes: ReadonlySet<ErrorCode> = new Set(['TOO_MANY_REQUESTS', 'BUSY', 'TIMEOUT', 'BACKEND_UNAVAILABLE'])
 
 interface ProbeSettings { intervalMs: number; paused: boolean; sort?: LiveSort[]; view?: string; filter?: LiveFilter }
-/** What the backend runs, as this side last told it. `virtual`: a subscription made while paused pauses every probe
- *  instead (subscribe has no subscription-wide pause), so resuming unpauses the probes. */
-interface Sent { paused: boolean; virtual: boolean; probes: Map<LiveProbeId, ProbeSettings> }
-interface StreamRecord { readonly live: LiveStream; readonly subscriptionId: string; readonly connectionId: string; sent: Sent; opened: boolean }
+interface Wanted { paused: boolean; probes: Map<LiveProbeId, ProbeSettings> }
+/** What the backend runs: the subscription's settings, then each update it accepted. `virtual`: a subscription made while
+ *  paused pauses every probe instead (subscribe has no subscription-wide pause), so resuming unpauses the probes. */
+interface Sent extends Wanted { virtual: boolean; args: LiveArgs | undefined }
+interface StreamRecord {
+  readonly live: LiveStream
+  readonly subscriptionId: string
+  readonly connectionId: string
+  sent: Sent
+  /** The tracked keys' seq the backend accepted, by probe/table. */
+  readonly tracked: Map<string, number>
+  opened: boolean
+  /** True once live.opened arrives, false if the stream ends or is stopped first. The backend registers a subscription
+   *  just before live.opened, so every update waits for it rather than being refused NOT_FOUND. */
+  readonly ready: Promise<boolean>
+  becameReady(opened: boolean): void
+  /** Its end arrived: a new subscription may take its place in main's and the backend's counts. */
+  settled: boolean
+  /** The backend refused the last update and has not accepted one since: the view shows what still runs. */
+  refused?: { code: ErrorCode; message: string }
+}
 interface ProbeRuntime {
   opened?: { state: 'ok' | 'limited' | 'unavailable'; reason?: LiveErrorCode; note?: string; minIntervalMs: number; maxIntervalMs: number }
   effectiveIntervalMs?: number
@@ -210,8 +236,13 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
       const next = o.settings.getSnapshot().values
       if (next === values) return
       const history = next['liveData.historyMinutes'] !== values['liveData.historyMinutes']
+      const delays = next['liveData.pauseAfterSeconds'] !== values['liveData.pauseAfterSeconds'] || next['liveData.stopAfterHiddenMinutes'] !== values['liveData.stopAfterHiddenMinutes']
       values = next
-      for (const handle of [...this.handles.values()]) handle.visibilityChanged()
+      for (const handle of [...this.handles.values()]) {
+        // Views already hidden take the new delays too, counted from when they hid.
+        if (delays) handle.hiddenDelaysChanged()
+        handle.visibilityChanged()
+      }
       if (history) this.rebalance()
     })
     this.stopPage = o.page.subscribe(() => this.pageChanged())
@@ -288,6 +319,14 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
   }
   defer(callback: () => void): void { this.schedule(callback) }
 
+  /** A status-only slot came free: hidden views that paused only because the slots were full take it, oldest first. */
+  statusOnlyFreed(): void {
+    for (const handle of [...this.handles.values()]) {
+      if (this.statusOnly >= liveServiceLimits.statusOnly) return
+      handle.claimStatusOnly()
+    }
+  }
+
   removed(handle: Handle): void {
     if (this.handles.get(handle.id) !== handle) return
     this.handles.delete(handle.id)
@@ -321,15 +360,20 @@ class Handle implements LiveHandle {
   private readonly runtime = new Map<LiveProbeId, ProbeRuntime>()
   private readonly rings = new Map<LiveProbeId, MetricRing>()
   private readonly tables = new Map<LiveProbeId, Map<number, LiveTable>>()
-  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[] }>()
-  private readonly args: LiveArgs | undefined
+  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number }>()
+  private args: LiveArgs | undefined
   private readonly whileHidden: 'statusOnly' | undefined
   private snapshot: LiveSnapshot
   private stream: StreamRecord | undefined
+  /** The last subscription this view stopped: the next one waits for its end (see restart). */
+  private previous: StreamRecord | undefined
+  private pendingStart = false
   private kept: ResultKey[] = []
   private resume: string | undefined
   private ended: LiveEnd | undefined
   private error: { code: ErrorCode; message: string } | undefined
+  /** The error is a refused update's (a later accepted one clears it), not the stream's end. */
+  private updateError = false
   private spid: number | undefined
   private userPaused = false
   private hidden = false
@@ -339,6 +383,11 @@ class Handle implements LiveHandle {
   private dormantTimer: unknown
   private staleTimer: unknown
   private debounceTimer: unknown
+  private retryTimer: unknown
+  private retries = 0
+  /** When the pending hidden timers started, so a change of their delays counts from then. */
+  private pauseArmedAt: number | undefined
+  private dormantArmedAt: number | undefined
   private ownerConnection: string | undefined
   private readonly stopOwner: () => void
   private chain: Promise<void> = Promise.resolve()
@@ -392,22 +441,51 @@ class Handle implements LiveHandle {
       const wanted = desired.probes.get(probe)!
       return { probe, intervalMs: wanted.intervalMs, ...(desired.paused || wanted.paused ? { paused: true } : {}), ...wanted.sort ? { sort: wanted.sort } : {}, ...wanted.view ? { view: wanted.view } : {}, ...wanted.filter ? { filter: wanted.filter } : {} }
     })
-    const params: LiveSubscribeParams = { subscriptionId, connectionId: this.connectionId, source: this.source, probes, ...this.args ? { args: this.args } : {}, ...this.resume ? { resume: this.resume } : {} }
-    const sent: Sent = { paused: desired.paused, virtual: desired.paused, probes: new Map([...desired.probes].map(([probe, settings]) => [probe, { ...settings, paused: settings.paused }])) }
+    const args = this.args
+    const params: LiveSubscribeParams = { subscriptionId, connectionId: this.connectionId, source: this.source, probes, ...args ? { args } : {}, ...this.resume ? { resume: this.resume } : {} }
+    const sent: Sent = { paused: desired.paused, virtual: desired.paused, args, probes: new Map([...desired.probes].map(([probe, settings]) => [probe, { ...settings }])) }
+    let becameReady!: (opened: boolean) => void
+    const ready = new Promise<boolean>(resolve => { becameReady = resolve })
     let record!: StreamRecord
     const live = this.service.client.live(params, (event, bytes) => this.applyEvent(record, event, bytes))
-    record = { live, subscriptionId, connectionId: this.connectionId, sent, opened: false }
+    record = { live, subscriptionId, connectionId: this.connectionId, sent, tracked: new Map(), opened: false, ready, becameReady, settled: false }
     this.stream = record
     this.ended = undefined
     this.error = undefined
-    this.status = this.pausedNow() ? 'paused' : 'connecting'
+    this.updateError = false
+    this.retries = 0
+    this.clearTimer('retryTimer')
+    this.status = this.runningStatus(record)
     const now = this.service.now()
     for (const runtime of this.runtime.values()) { runtime.opened = undefined; runtime.since = now }
-    void live.done.then(result => this.streamEnded(record, result))
+    void live.done.then(result => {
+      record.settled = true
+      record.becameReady(false)
+      this.streamEnded(record, result)
+    })
     // Subscribed while hidden (at launch, or after a Reconnect): the hysteresis runs from now.
     if (this.hidden) { this.clearTimer('pauseTimer'); this.clearTimer('dormantTimer'); this.startHiddenTimers() }
-    if (this.tracks.size > 0) this.enqueue(() => this.sendTracks([...this.tracks.values()].map(track => ({ ...track, seq: ++this.trackSeq }))))
+    // The new subscription follows the same rows: each tracked table goes again with a new seq once it opens.
+    if (this.tracks.size > 0) {
+      for (const track of this.tracks.values()) track.seq = ++this.trackSeq
+      this.queueSync()
+    }
     this.changed()
+  }
+
+  /** Subscribes again once the subscription this view last stopped has ended: main and the backend count a cancelled
+   *  stream until its end arrives, so a Reconnect with every slot taken would otherwise be refused its own slot. */
+  private restart(): void {
+    const previous = this.previous
+    if (!previous || previous.settled) { this.start(); return }
+    this.status = 'connecting'
+    this.changed()
+    if (this.pendingStart) return
+    this.pendingStart = true
+    void previous.live.done.then(() => {
+      this.pendingStart = false
+      if (!this.disposed && !this.stream && this.status === 'connecting') this.start()
+    })
   }
 
   /** Ends the running subscription, if any, without reporting its end: the view moves on (dormant, or a new
@@ -415,7 +493,11 @@ class Handle implements LiveHandle {
   private stop(): void {
     const record = this.stream
     this.stream = undefined
-    record?.live.cancel()
+    this.clearTimer('retryTimer')
+    if (!record) return
+    this.previous = record
+    record.becameReady(false)
+    record.live.cancel()
   }
 
   private applyEvent(record: StreamRecord, event: LiveEvent, bytes: number): void {
@@ -443,8 +525,9 @@ class Handle implements LiveHandle {
       const series = this.service.catalog.probes[probe.probe]?.series?.length ?? 0
       if (series > 0 && !this.rings.has(probe.probe)) { this.rings.set(probe.probe, new MetricRing(2, series)); rings = true }
     }
-    if (this.status === 'connecting') this.status = 'live'
+    if (this.status === 'connecting') this.status = this.runningStatus(record)
     if (rings) this.service.rebalance()
+    record.becameReady(true)
   }
 
   private applyTick(record: StreamRecord, tick: LiveTick): void {
@@ -484,6 +567,8 @@ class Handle implements LiveHandle {
   private streamEnded(record: StreamRecord, result: ApiResult<LiveEnd>): void {
     if (record !== this.stream || this.disposed) return
     this.stream = undefined
+    this.clearTimer('retryTimer')
+    this.updateError = false
     if (result.ok) {
       const end = result.value
       if (end.resume !== undefined) this.resume = end.resume
@@ -500,6 +585,8 @@ class Handle implements LiveHandle {
       this.status = lostCodes.has(code) ? 'lost' : 'ended'
     }
     this.clearTimer('staleTimer')
+    // An ended view runs nothing, so its status-only slot goes to a hidden view waiting for one.
+    this.leaveStatusOnly()
     this.changed()
   }
 
@@ -513,14 +600,15 @@ class Handle implements LiveHandle {
       if (connection !== undefined && connection !== this.connectionId) {
         this.connectionId = connection
         this.stop()
-        if (this.status !== 'dormant') this.start()
-        this.service.changed()
-      } else if (connection === undefined && (this.stream || this.status === 'dormant')) {
+        if (this.status !== 'dormant') this.restart()
+        this.changed()
+      } else if (connection === undefined && (this.stream || this.pendingStart || this.status === 'dormant')) {
         // The owner no longer has a connection (its tab was disconnected): the view ends as if the server had, and a
         // dormant one never subscribes again on the connection it no longer has.
         this.stop()
         this.ended = { ended: 'disconnected', ticks: this.counts.ticks, elapsedMs: 0 }
         this.status = 'ended'
+        this.leaveStatusOnly()
         this.changed()
       }
     }
@@ -539,30 +627,66 @@ class Handle implements LiveHandle {
     if (hidden) { this.startHiddenTimers(); return }
     this.clearTimer('pauseTimer')
     this.clearTimer('dormantTimer')
-    this.leaveStatusOnly()
     this.hiddenPaused = false
+    this.leaveStatusOnly()
     // Back in view: a dormant view subscribes again (its history continues, with a gap); a paused one resumes at once.
-    if (this.status === 'dormant') this.start()
+    if (this.status === 'dormant') this.restart()
     else this.resumeRunning()
   }
 
   private startHiddenTimers(): void {
     if (this.statusOnly) return
-    const settings = this.service.settings
-    this.pauseTimer = this.service.timers.setTimeout(() => { this.pauseTimer = undefined; this.hiddenLong() }, settings['liveData.pauseAfterSeconds'] * 1000)
-    this.dormantTimer = this.service.timers.setTimeout(() => { this.dormantTimer = undefined; this.goDormant() }, settings['liveData.stopAfterHiddenMinutes'] * 60_000)
+    const now = this.service.now()
+    this.armPause(now)
+    this.armDormant(now)
+  }
+
+  private armPause(from: number): void {
+    this.clearTimer('pauseTimer')
+    this.pauseArmedAt = from
+    const due = from + this.service.settings['liveData.pauseAfterSeconds'] * 1000
+    this.pauseTimer = this.service.timers.setTimeout(() => { this.pauseTimer = undefined; this.pauseArmedAt = undefined; this.hiddenLong() }, Math.max(0, due - this.service.now()))
+  }
+
+  private armDormant(from: number): void {
+    this.clearTimer('dormantTimer')
+    this.dormantArmedAt = from
+    const due = from + this.service.settings['liveData.stopAfterHiddenMinutes'] * 60_000
+    this.dormantTimer = this.service.timers.setTimeout(() => { this.dormantTimer = undefined; this.dormantArmedAt = undefined; this.goDormant() }, Math.max(0, due - this.service.now()))
+  }
+
+  /** The pause or stop delay changed: the hidden timers still pending run to the new delay from when they started. */
+  hiddenDelaysChanged(): void {
+    if (this.disposed || !this.hidden) return
+    if (this.pauseArmedAt !== undefined) this.armPause(this.pauseArmedAt)
+    if (this.dormantArmedAt !== undefined) this.armDormant(this.dormantArmedAt)
+  }
+
+  private statusOnlyAllowed(): boolean {
+    return this.whileHidden === 'statusOnly' && this.service.catalog.sources[this.source]?.hidden === 'statusOnly'
   }
 
   /** Hidden for the pause delay: pause, or keep only the status probes where the view and its source allow it. */
   private hiddenLong(): void {
     if (this.disposed || !this.hidden || this.statusOnly || this.hiddenPaused) return
-    const allowed = this.whileHidden === 'statusOnly' && this.service.catalog.sources[this.source]?.hidden === 'statusOnly'
-    if (allowed && !this.userPaused && this.service.statusOnly < liveServiceLimits.statusOnly) {
-      this.statusOnly = true
-      this.service.statusOnly++
-      this.clearTimer('dormantTimer')
-    } else this.hiddenPaused = true
+    if (this.statusOnlyAllowed() && !this.userPaused && this.service.statusOnly < liveServiceLimits.statusOnly) this.enterStatusOnly()
+    else this.hiddenPaused = true
     this.resumeRunning()
+  }
+
+  /** A slot came free: a hidden view that paused only because every slot was taken keeps its status probes after all. */
+  claimStatusOnly(): void {
+    if (this.disposed || !this.hidden || this.statusOnly || !this.hiddenPaused || this.userPaused || !this.statusOnlyAllowed() || !this.stream) return
+    if (this.service.statusOnly >= liveServiceLimits.statusOnly) return
+    this.hiddenPaused = false
+    this.enterStatusOnly()
+    this.resumeRunning()
+  }
+
+  private enterStatusOnly(): void {
+    this.statusOnly = true
+    this.service.statusOnly++
+    this.clearTimer('dormantTimer')
   }
 
   /** Hidden for the stop delay: the subscription ends, and what the backend held with it; the view keeps its history. */
@@ -579,31 +703,39 @@ class Handle implements LiveHandle {
     if (!this.statusOnly) return
     this.statusOnly = false
     this.service.statusOnly--
+    this.service.statusOnlyFreed()
   }
 
   /** Pause, resume or settings: the running subscription is told the difference. */
   private resumeRunning(): void {
     if (this.stream) {
-      if (this.status === 'live' || this.status === 'paused' || this.status === 'connecting') {
-        const paused = this.pausedNow()
-        if (paused) this.status = 'paused'
-        else if (this.status === 'paused') {
-          this.status = this.stream.opened ? 'live' : 'connecting'
-          const now = this.service.now()
-          for (const runtime of this.runtime.values()) runtime.since = now
-        }
-      }
+      this.restatus(this.stream)
       this.queueSync()
     }
     this.armStale()
     this.changed()
   }
 
+  /** A running view's status follows what it shows (shown()); coming out of a pause, its probes count stale from now. */
+  private restatus(record: StreamRecord): void {
+    if (this.status !== 'live' && this.status !== 'paused' && this.status !== 'connecting') return
+    const before = this.status
+    this.status = this.runningStatus(record)
+    if (before === 'paused' && this.status !== 'paused') {
+      const now = this.service.now()
+      for (const runtime of this.runtime.values()) runtime.since = now
+    }
+  }
+
+  private runningStatus(record: StreamRecord): LiveStatus {
+    return this.shown(record).paused ? 'paused' : record.opened ? 'live' : 'connecting'
+  }
+
   private pausedNow(): boolean { return this.userPaused || this.hiddenPaused }
 
   // ---- What the backend runs -------------------------------------------------------------------------------------
 
-  private desired(): { paused: boolean; probes: Map<LiveProbeId, ProbeSettings> } {
+  private desired(): Wanted {
     const statusOnly = this.statusOnly && !this.userPaused
     const probes = new Map<LiveProbeId, ProbeSettings>()
     for (const [probe, settings] of this.settings) {
@@ -615,8 +747,16 @@ class Handle implements LiveHandle {
     return { paused: !statusOnly && this.pausedNow(), probes }
   }
 
+  /** What the view shows: what it wants, or, while the backend refuses the change, what the backend still runs. A refused
+   *  pause never reads Paused while the server is still sampled. */
+  private shown(record = this.stream): Wanted {
+    if (!record?.refused) return this.desired()
+    const sent = record.sent
+    return { paused: sent.paused, probes: new Map([...sent.probes].map(([probe, settings]) => [probe, sent.virtual ? { ...settings, paused: true } : settings])) }
+  }
+
   /** The update that takes the backend from `sent` to `wanted`, or undefined when they already agree. */
-  private patchFor(sent: Sent, wanted: { paused: boolean; probes: Map<LiveProbeId, ProbeSettings> }): LivePatch | undefined {
+  private patchFor(sent: Sent, wanted: Wanted): LivePatch | undefined {
     const patch: LivePatch = {}
     const probes: LiveProbePatch[] = []
     const unpause = sent.virtual && !wanted.paused
@@ -636,9 +776,11 @@ class Handle implements LiveHandle {
       if (Object.keys(entry).length > 1) probes.push(entry)
     }
     if (probes.length) patch.probes = probes
+    if (this.args !== sent.args && this.args) patch.args = this.args
     return Object.keys(patch).length ? patch : undefined
   }
 
+  /** Brings the backend to what the view wants, one update at a time, each from what the backend last accepted. */
   private queueSync(): void {
     if (this.syncQueued) return
     this.syncQueued = true
@@ -647,50 +789,72 @@ class Handle implements LiveHandle {
       for (;;) {
         const record = this.stream
         if (!record || this.disposed) return
+        const ready = await record.ready
+        if (record !== this.stream || this.disposed) continue
+        if (!ready) return
         const wanted = this.desired()
         const patch = this.patchFor(record.sent, wanted)
-        if (!patch) return
-        const virtual = record.sent.virtual && wanted.paused
+        const tracks = [...this.tracks].filter(([key, track]) => record.tracked.get(key) !== track.seq).slice(0, limits.live.probes)
+        const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys] })) } : patch
+        if (!update) {
+          // The view came back to what the backend runs: a refusal no longer matters.
+          if (record.refused) this.accepted(record)
+          return
+        }
+        const sent: Sent = { paused: wanted.paused, virtual: record.sent.virtual && wanted.paused, args: this.args, probes: new Map([...wanted.probes].map(([probe, settings]) => [probe, { ...settings }])) }
         this.counts.updates++
-        this.counts.lastPatch = patch
-        const result = await record.live.update(patch)
-        if (record !== this.stream) return
-        // A failed update is not sent again until the settings change once more; the view says why.
-        record.sent = { paused: wanted.paused, virtual, probes: new Map([...wanted.probes].map(([probe, settings]) => [probe, { ...settings }])) }
-        if (result.ok) this.applied(result.value)
-        else this.failed(result)
+        this.counts.lastPatch = update
+        const result = await record.live.update(update)
+        if (record !== this.stream) continue
+        if (!result.ok) { this.refused(record, result); return }
+        record.sent = sent
+        for (const [key, track] of tracks) record.tracked.set(key, track.seq)
+        this.accepted(record, result.value)
       }
     })
   }
 
-  private applied(result: LiveUpdateResult): void {
-    for (const probe of result.probes) {
+  /** The backend took an update (or no longer needs the refused one): the view shows what it wants again. */
+  private accepted(record: StreamRecord, result?: LiveUpdateResult): void {
+    for (const probe of result?.probes ?? []) {
       const runtime = this.runtime.get(probe.probe)
       if (runtime) runtime.effectiveIntervalMs = probe.effectiveIntervalMs
     }
+    record.refused = undefined
+    this.retries = 0
+    this.clearTimer('retryTimer')
+    if (this.updateError) { this.error = undefined; this.updateError = false }
+    this.restatus(record)
+    this.armStale()
+    this.changed()
+  }
+
+  /** The backend refused an update: the view shows what it still runs and why, and one refused for now goes again after
+   *  a back-off. The update to a stream that is ending says nothing; its end will. */
+  private refused(record: StreamRecord, result: { error: string; code?: ErrorCode }): void {
+    if (result.code !== undefined && endingCodes.has(result.code)) return
+    const code = result.code ?? 'BACKEND_ERROR'
+    record.refused = { code, message: result.error }
+    this.reportUpdateError(code, result.error)
+    if (retryCodes.has(code)) {
+      this.clearTimer('retryTimer')
+      const delay = Math.min(liveServiceLimits.retryMs.max, liveServiceLimits.retryMs.first * 2 ** this.retries++)
+      this.retryTimer = this.service.timers.setTimeout(() => { this.retryTimer = undefined; this.queueSync() }, delay)
+    }
+    this.restatus(record)
+    this.armStale()
+    this.changed()
+  }
+
+  private reportUpdateError(code: ErrorCode, message: string): void {
+    this.error = { code, message }
+    this.updateError = true
     this.changed()
   }
 
   /** Updates go one at a time, in order: a resume never overtakes the pause before it. */
   private enqueue(task: () => Promise<void> | void): void {
     this.chain = this.chain.then(task).catch(onUnexpectedError)
-  }
-
-  private async sendTracks(tracks: { probe: LiveProbeId; table: number; seq: number; keys: string[] }[]): Promise<void> {
-    const record = this.stream
-    if (!record || this.disposed || tracks.length === 0) return
-    const patch: LivePatch = { track: tracks.map(track => ({ probe: track.probe, table: track.table, seq: track.seq, keys: track.keys })) }
-    this.counts.updates++
-    this.counts.lastPatch = patch
-    const result = await record.live.update(patch)
-    if (!result.ok && record === this.stream) this.failed(result)
-  }
-
-  /** An update the backend refused: the view says why (an update to a stream that is ending says nothing; its end will). */
-  private failed(result: { error: string; code?: ErrorCode }): void {
-    if (result.code !== undefined && endingCodes.has(result.code)) return
-    this.error = { code: result.code ?? 'BACKEND_ERROR', message: result.error }
-    this.changed()
   }
 
   // ---- The handle's API ------------------------------------------------------------------------------------------
@@ -714,39 +878,45 @@ class Handle implements LiveHandle {
     this.debounceTimer = this.service.timers.setTimeout(() => { this.debounceTimer = undefined; this.queueSync(); this.changed() }, liveServiceLimits.settingsDebounceMs)
   }
 
+  setArgs(args: LiveArgs): void {
+    if (this.disposed) return
+    this.args = args
+    this.queueSync()
+  }
+
   setUserPaused(paused: boolean): void {
     if (this.disposed || this.userPaused === paused) return
     this.userPaused = paused
     // A hidden view the user pauses stays paused when they resume it until it shows again, and goes dormant in time.
     if (paused && this.statusOnly) {
-      this.leaveStatusOnly()
       this.hiddenPaused = true
-      this.dormantTimer = this.service.timers.setTimeout(() => { this.dormantTimer = undefined; this.goDormant() }, this.service.settings['liveData.stopAfterHiddenMinutes'] * 60_000)
+      this.leaveStatusOnly()
+      this.armDormant(this.service.now())
     }
     this.resumeRunning()
   }
 
   refresh(): void {
     if (this.disposed) return
-    if (this.status === 'dormant') { this.start(); return }
+    if (this.status === 'dormant') { this.restart(); return }
     const record = this.stream
     if (!record || this.pausedNow()) return
     this.enqueue(async () => {
-      if (record !== this.stream) return
+      if (!await record.ready || record !== this.stream) return
       this.counts.updates++
       this.counts.lastPatch = { refresh: true }
       const result = await record.live.update({ refresh: true })
-      if (!result.ok && record === this.stream) this.failed(result)
+      if (record !== this.stream) return
+      if (!result.ok) { if (result.code === undefined || !endingCodes.has(result.code)) this.reportUpdateError(result.code ?? 'BACKEND_ERROR', result.error) }
+      else if (this.updateError && !record.refused) { this.error = undefined; this.updateError = false; this.changed() }
     })
   }
 
   track(probe: LiveProbeId, keys: readonly string[], table = 0): void {
     if (this.disposed || !this.settings.has(probe)) return
     const list = keys.filter(key => key.length <= limits.live.keyCharacters).slice(0, limits.live.trackedKeys)
-    const track = { probe, table, keys: list }
-    this.tracks.set(probe + '/' + table, track)
-    const seq = ++this.trackSeq
-    this.enqueue(() => this.sendTracks([{ ...track, seq }]))
+    this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq })
+    this.queueSync()
   }
 
   ring(probe: LiveProbeId): MetricRing | undefined { return this.rings.get(probe) }
@@ -777,8 +947,7 @@ class Handle implements LiveHandle {
     this.disposed = true
     this.stopOwner()
     this.stop()
-    this.leaveStatusOnly()
-    for (const timer of ['pauseTimer', 'dormantTimer', 'staleTimer', 'debounceTimer'] as const) this.clearTimer(timer)
+    for (const timer of ['pauseTimer', 'dormantTimer', 'staleTimer', 'debounceTimer', 'retryTimer'] as const) this.clearTimer(timer)
     // A finished source's last tables were kept for the view; nothing reads them now.
     if (this.kept.length) void this.service.client.release(this.kept)
     this.kept = []
@@ -790,6 +959,8 @@ class Handle implements LiveHandle {
     }
     this.listeners.clear()
     this.service.removed(this)
+    // After it left the service's list, so the slot goes to another view.
+    this.leaveStatusOnly()
   }
 
   // ---- Snapshots -------------------------------------------------------------------------------------------------
@@ -797,34 +968,35 @@ class Handle implements LiveHandle {
   /** The stale deadline closest ahead: a probe that delivered nothing for twice its interval turns stale then. */
   private armStale(): void {
     this.clearTimer('staleTimer')
-    if (this.disposed || !this.stream || this.pausedNow()) return
+    if (this.disposed || !this.stream) return
+    const shown = this.shown()
+    if (shown.paused) return
     const now = this.service.now()
     let next = Number.POSITIVE_INFINITY
-    const desired = this.desired()
     for (const [probe, runtime] of this.runtime) {
-      const deadline = this.staleAt(probe, runtime, desired)
+      const deadline = this.staleAt(probe, runtime, shown)
       if (deadline !== undefined && deadline > now) next = Math.min(next, deadline)
     }
     if (next !== Number.POSITIVE_INFINITY) this.staleTimer = this.service.timers.setTimeout(() => { this.staleTimer = undefined; this.changed(); this.armStale() }, next - now)
   }
 
-  private staleAt(probe: LiveProbeId, runtime: ProbeRuntime, desired = this.desired()): number | undefined {
-    const want = desired.probes.get(probe)
+  private staleAt(probe: LiveProbeId, runtime: ProbeRuntime, shown: Wanted): number | undefined {
+    const want = shown.probes.get(probe)
     if (runtime.since === undefined || !want || want.paused || runtime.opened?.state === 'unavailable') return undefined
     return runtime.since + 2 * (runtime.effectiveIntervalMs ?? want.intervalMs)
   }
 
   private build(): LiveSnapshot {
     const now = this.service.now()
-    const desired = this.desired()
+    const shown = this.shown()
     const running = !!this.stream && (this.status === 'live' || this.status === 'connecting' || this.status === 'paused')
     const probes: Record<string, LiveProbeSnapshot> = {}
     for (const [probe, settings] of this.settings) {
       const runtime = this.runtime.get(probe)!
-      const want = desired.probes.get(probe)!
-      const stale = this.staleAt(probe, runtime, desired)
+      const want = shown.probes.get(probe)!
+      const stale = this.staleAt(probe, runtime, shown)
       const state: LiveProbeState = runtime.opened?.state === 'unavailable' ? 'unavailable'
-        : !running || desired.paused || want.paused ? 'paused'
+        : !running || shown.paused || want.paused ? 'paused'
           : runtime.error ? 'failing'
             : stale !== undefined && now >= stale ? 'stale'
               : runtime.opened?.state === 'limited' ? 'limited' : 'fresh'
@@ -834,7 +1006,9 @@ class Handle implements LiveHandle {
         ...runtime.error ? { error: runtime.error } : {}, ...runtime.opened?.reason ? { reason: runtime.opened.reason } : {}, ...runtime.opened?.note ? { note: runtime.opened.note } : {}
       }
     }
-    const pausedBy = this.status === 'paused' || this.status === 'dormant' ? (this.userPaused ? 'user' : 'hidden') : undefined
+    // A pause the backend has not taken back (a refused resume) is nobody's wish: it reads Paused, with the error.
+    const pausedBy = this.status === 'dormant' ? (this.userPaused ? 'user' : 'hidden')
+      : this.status === 'paused' ? (this.userPaused ? 'user' : this.hiddenPaused ? 'hidden' : undefined) : undefined
     return {
       status: this.status, ...pausedBy ? { pausedBy } : {}, ...this.statusOnly && !this.userPaused && this.stream ? { hiddenMode: 'statusOnly' as const } : {}, probes, connectionId: this.connectionId,
       ...this.stream ? { subscriptionId: this.stream.subscriptionId } : {}, ...this.spid !== undefined && this.stream ? { spid: this.spid } : {},
@@ -857,7 +1031,9 @@ class Handle implements LiveHandle {
     })
   }
 
-  private clearTimer(name: 'pauseTimer' | 'dormantTimer' | 'staleTimer' | 'debounceTimer'): void {
+  private clearTimer(name: 'pauseTimer' | 'dormantTimer' | 'staleTimer' | 'debounceTimer' | 'retryTimer'): void {
+    if (name === 'pauseTimer') this.pauseArmedAt = undefined
+    if (name === 'dormantTimer') this.dormantArmedAt = undefined
     if (this[name] === undefined) return
     this.service.timers.clearTimeout(this[name])
     this[name] = undefined

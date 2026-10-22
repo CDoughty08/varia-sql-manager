@@ -116,7 +116,8 @@ try {
   })
   if (liveTick.early) throw new Error(`The live stream ended early: ${JSON.stringify(liveTick.early)}`)
   if (!liveTick.end.ok || liveTick.end.value.ended !== 'cancelled') throw new Error(`The live stream did not end cancelled: ${JSON.stringify(liveTick.end)}`)
-  record('e2e.liveData.tickP99Ms', percentile(liveTick.samples, 99), 'ms', `${liveTick.samples.length} ticks of debug.synthetic; p50 ${percentile(liveTick.samples, 50).toFixed(2)} ms`)
+  record('e2e.liveData.tickP50Ms', percentile(liveTick.samples, 50), 'ms', `${liveTick.samples.length} ticks of debug.synthetic`)
+  record('e2e.liveData.tickP99Ms', percentile(liveTick.samples, 99), 'ms', `${liveTick.samples.length} ticks of debug.synthetic`)
 
   step = 'W1 into the results worker'
   const w1 = await app.evaluate(() => globalThis.__variaTest.synthesize('W1', 500000))

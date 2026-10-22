@@ -833,31 +833,43 @@ and results worker](#results-port-and-results-worker)). Views never call it them
 - **Open.** `live.open(spec, owner)` subscribes at once with each probe's catalogue default interval unless the view asks
   for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
   `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
-  connection, and closes with the tab. At most 16 views are open in a window; another, or one naming probes its source
-  does not have, is a handle that has already ended with `TOO_MANY_REQUESTS` or `INVALID_PARAMS` as a value, never an
-  exception, and runs nothing.
+  connection, and closes with the tab. At most 16 views are open in a window, first come, whoever owns them; another, or
+  one naming probes its source does not have, is a handle that has already ended with `TOO_MANY_REQUESTS` or
+  `INVALID_PARAMS` as a value, never an exception, and runs nothing. An owner of many background views (a status chip per
+  connected server) should share handles rather than take one each, or the documents a user opens find none left.
 - **Frames.** Each event is applied synchronously in the port message's own task (states, the probe's history ring, its
   tables as `ResultHandle`s), then `onTick` listeners run (an exception there is reported and changes nothing), and only
   then is it acknowledged. Snapshot listeners hear of it once an animation frame, however many frames arrived.
 - **Hidden.** A view whose owner is hidden, or whose window is (`document.visibilityState`; test mode's `setPageHidden`),
   for `liveData.pauseAfterSeconds` (2 s) sends `live.update { paused: true }`; shown again it sends `paused: false` at once.
-  Hidden for `liveData.stopAfterHiddenMinutes` (5 min) it cancels its subscription (the backend releases what it held) and
+  A view opened or reconnected while hidden counts from then, and a change of either delay applies to views already
+  hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) it cancels its subscription (the backend releases what it held) and
   is `dormant`; shown again it subscribes again with a new subscription id and the last resume token, and its history
   continues after a gap. With `liveData.pauseWhenHidden` off, hidden views keep running. A source may allow
   `hidden: 'statusOnly'` (none does yet; the catalogue field is the renderer's alone and stays out of the backend's JSON):
   a view that asks for it with `whileHidden` keeps its probes without tables at 30 s or slower instead of pausing, never
-  goes dormant, and pauses its table probes; at most 4 such views a window, the rest pause.
+  goes dormant, and pauses its table probes; at most 4 such views a window, the rest pause. A view that ends, is lost,
+  closes or shows gives its slot to the oldest hidden view that paused only because none was free.
 - **Pause, settings, refresh.** The user's Pause is `paused: true` and visibility never undoes it. Probe settings
   (interval, pause, sort, view, filter) changed within 150 ms go as one update, with `clear` for what a change drops.
-  Updates go one at a time, in order, each computed from what the backend was last told, so a resume never overtakes its
-  pause; a refused one is reported on the view (`error`) and not sent again. A view subscribing while paused pauses every
-  probe in `live.subscribe` (there is no subscription-wide pause there) and unpauses them when it resumes. Refresh sends
-  `refresh: true` (a dormant view subscribes again); `track` sends a keyed table's tracked keys with a new `seq` each time.
+  Updates wait for `live.opened` (the backend registers a subscription just before it and refuses an earlier update
+  `NOT_FOUND`), then go one at a time, in order, each computed from what the backend last accepted, so a resume never
+  overtakes its pause. A refused one leaves the view showing what the backend still runs (a refused pause never reads
+  Paused), with the reason in `error` and on the indicator; `TOO_MANY_REQUESTS`, `BUSY`, `TIMEOUT` and
+  `BACKEND_UNAVAILABLE` refusals go again after 1 s, doubling to 30 s, any other with the view's next change, and the next
+  accepted update clears the error. A view subscribing while paused pauses every probe in `live.subscribe` (there is no
+  subscription-wide pause there) and unpauses them when it resumes. `setArgs` changes the source's `args` in place (the
+  history and state carry on, and later subscriptions use them). Refresh sends `refresh: true` (a dormant view subscribes
+  again); `track` sends a keyed table's tracked keys with a new `seq` each time, and a new subscription sends them again
+  with new ones.
 - **Ends.** A backend that went away (`BACKEND_LOST`, `RESULT_UNAVAILABLE`, `BACKEND_UNAVAILABLE`) leaves the view `lost`
   with its history and its tables' handles (they read `lost`); nothing resubscribes by itself, since the connection went
-  with its backend. When the owner moves to another connection (Reconnect retargets the tab), the view subscribes on it;
-  when the owner loses its connection, the view ends `disconnected`. Every other end is `ended` with the backend's reason.
-  A finished source's kept tables stay readable until the view closes, which releases them.
+  with its backend. When the owner moves to another connection (Reconnect retargets the tab), the view subscribes on it
+  once the old stream's end has arrived (main and the backend count a cancelled stream until then, so a full window or
+  server keeps the view's slot); a dormant view stays dormant until it shows. When the owner loses its connection, the
+  view ends `disconnected`. Every other end is `ended` with the backend's reason. A finished source's kept tables stay
+  readable until the view closes, which releases them; if the source finished while the view's cancel was on its way,
+  `ResultClient` closes what it kept at once.
 - **History.** `MetricRing` (`live/ring.ts`) keeps each metrics probe's samples in typed arrays: a sample's time, its gap
   and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
   Its capacity is `liveData.historyMinutes` at the probe's interval, at most 7,200 samples, then fitted to 4 MiB a view and
@@ -1357,7 +1369,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
-| Live tick round trip in the app, acknowledgement → next tick at the page, p99 | ≤ 10 ms | ≤ 50 ms | 4 ms, p50 0.7 ms (Windows, 24 CPUs) | not measured |
+| Live tick round trip in the app, acknowledgement → next tick at the page, p50 / p99 | ≤ 2 / 10 ms | p50 ≤ 10 ms | 0.7 / 2.8 – 4 ms (Windows, 24 CPUs) | not measured |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |
 | B1 into the worker | ≥ 200 MB/s | ≥ 40 MB/s | 90 – 143 MB/s | 90 MB/s |
 | First 100-row window of a stored result | ≤ 50 ms | ≤ 250 ms | 17 – 21 ms | 20 ms |

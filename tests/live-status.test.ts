@@ -28,6 +28,18 @@ describe('live indicator', () => {
     expect(liveIndicator(snapshot({}, { a: probe({ state: 'stale', lastSampleAt: undefined }) }), now).detail).toBe('Waiting for the first sample')
   })
 
+  it('adds the reason a running view\'s last change was refused, so a refused pause never reads as a quiet Live or Paused', () => {
+    const error = { code: 'TOO_MANY_REQUESTS' as const, message: 'Too many pending backend requests.' }
+    expect(liveIndicator(snapshot({ error }), now)).toEqual({ tone: 'live', label: 'Live · every 2 s', detail: 'Updated 1 s ago · Too many pending backend requests.' })
+    expect(liveIndicator(snapshot({ error }, { a: probe({ lastSampleAt: undefined }) }), now)).toEqual({ tone: 'live', label: 'Live · every 2 s', detail: 'Too many pending backend requests.' })
+    expect(liveIndicator(snapshot({ error }, { a: probe({ effectiveIntervalMs: 4000 }) }), now).detail).toBe('Updated 1 s ago · Too many pending backend requests.')
+    expect(liveIndicator(snapshot({ error }, { a: probe({ state: 'stale' }) }), now).detail).toBe('Updated 1 s ago · Too many pending backend requests.')
+    expect(liveIndicator(snapshot({ error, hiddenMode: 'statusOnly' }), now).detail).toBe('Updated 1 s ago · Too many pending backend requests.')
+    // A refused resume: paused, but by nobody's wish.
+    expect(liveIndicator(snapshot({ status: 'paused', error }), now)).toEqual({ tone: 'paused', label: 'Paused', detail: 'Updated 1 s ago · Too many pending backend requests.' })
+    expect(liveIndicator(snapshot({ status: 'paused', pausedBy: 'hidden', error }), now).label).toBe('Paused while hidden')
+  })
+
   it('says why a view is not live', () => {
     expect(liveIndicator(snapshot({ status: 'connecting' }, { a: probe({ lastSampleAt: undefined }) }), now)).toEqual({ tone: 'connecting', label: 'Connecting' })
     expect(liveIndicator(snapshot({ status: 'paused', pausedBy: 'user' }), now)).toEqual({ tone: 'paused', label: 'Paused', detail: 'Updated 1 s ago' })

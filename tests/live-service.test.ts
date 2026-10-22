@@ -5,11 +5,14 @@ import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick, LiveUpdateResul
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 import { documentOwner, LiveService, liveServiceLimits, type LiveCatalog, type LiveOwner, type LiveSpec, type PageVisibility } from '../src/renderer/src/live/LiveService'
 import { ringGap } from '../src/renderer/src/live/ring'
+import { liveIndicator } from '../src/renderer/src/live/status'
 import type { LivePatch, LiveStream, ResultHandle } from '../src/renderer/src/results/ResultClient'
 import type { ResultKey } from '../src/renderer/src/results/worker-protocol'
 
 // LiveService against a fake ResultClient: each stream records what the service sent, and the test plays the backend's
-// side (events, update answers, the end). Timers and the clock are vitest's fake ones.
+// side (events, update answers, the end). As the real ones do, the backend refuses an update NOT_FOUND until it has
+// registered the subscription (just before live.opened), and main refuses a 17th stream that has not ended. Timers and
+// the clock are vitest's fake ones.
 
 interface FakeStream {
   params: LiveSubscribeParams
@@ -21,6 +24,9 @@ interface FakeStream {
   held: (() => void)[]
   answer: (patch: LivePatch) => ApiResult<LiveUpdateResult>
   cancelled: boolean
+  /** live.opened was delivered: the backend has registered the subscription. */
+  registered: boolean
+  ended: boolean
   end(result: ApiResult<LiveEnd>): void
   stream: LiveStream
 }
@@ -29,28 +35,35 @@ class FakeClient {
   readonly streams: FakeStream[] = []
   readonly released: ResultKey[][] = []
   readonly handles = new Map<number, { state: string }>()
+  /** A cancelled stream's end arrives only when the test sends it, as main's does a moment later. */
+  holdCancel = false
   live(params: LiveSubscribeParams, onEvent: (event: LiveEvent, bytes: number) => void): LiveStream {
     let settle!: (result: ApiResult<LiveEnd>) => void
     const done = new Promise<ApiResult<LiveEnd>>(resolve => { settle = resolve })
-    let ended = false
+    const running = this.streams.filter(stream => !stream.ended).length
     const fake: FakeStream = {
-      params: structuredClone(params), onEvent, acks: [], updates: [], hold: false, held: [], cancelled: false,
+      params: structuredClone(params), onEvent, acks: [], updates: [], hold: false, held: [], cancelled: false, registered: false, ended: false,
       answer: () => ({ ok: true, value: { applied: true, probes: params.probes.map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: false })) } }),
-      end: result => { if (!ended) { ended = true; settle(result) } },
+      end: result => { if (!fake.ended) { fake.ended = true; settle(result) } },
       stream: {
         subscriptionId: params.subscriptionId,
         done,
         update: patch => {
           fake.updates.push(structuredClone(patch))
-          if (ended || fake.cancelled) return Promise.resolve({ ok: false, error: 'This live view has ended.', code: 'NOT_FOUND' })
+          if (fake.ended || fake.cancelled || !fake.registered) return Promise.resolve({ ok: false, error: 'This live view has ended.', code: 'NOT_FOUND' })
           if (!fake.hold) return Promise.resolve(fake.answer(patch))
           return new Promise(resolve => fake.held.push(() => resolve(fake.answer(patch))))
         },
-        cancel: () => { if (!ended) { fake.cancelled = true; fake.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } }) } },
+        cancel: () => {
+          if (fake.ended) return
+          fake.cancelled = true
+          if (!this.holdCancel) fake.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+        },
         ack: bytes => { fake.acks.push(bytes) }
       }
     }
     this.streams.push(fake)
+    if (running >= liveServiceLimits.handles) fake.end({ ok: false, error: 'Too many live streams are open in this window.', code: 'TOO_MANY_REQUESTS' })
     return fake.stream
   }
   open(descriptor: ResultDescriptor): ResultHandle {
@@ -125,7 +138,10 @@ function tick(fake: FakeStream, o: { gap?: 'baseline' | 'resumed' | 'late'; tabl
     }))
   } as LiveTick
 }
-const deliver = (fake: FakeStream, event: LiveEvent, bytes = 100) => fake.onEvent(event, bytes)
+const deliver = (fake: FakeStream, event: LiveEvent, bytes = 100) => {
+  if (event.type === 'live.opened') fake.registered = true
+  fake.onEvent(event, bytes)
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date('2026-10-22T10:00:00Z') })
@@ -374,24 +390,358 @@ describe('LiveService', () => {
     vi.advanceTimersByTime(150)
     await settle()
     expect(fake.updates.at(-1)).toEqual({ probes: [{ probe: 'debug.synthetic.status', intervalMs: 1000 }] })
-    // Track sends the keys with a fresh sequence number each time, and drops keys longer than the limit.
+    // Track sends the keys with a fresh sequence number each time, and drops keys longer than the limit; a list the next
+    // one replaced before it went is never sent.
     handle.track('debug.synthetic.table', ['5', 'x'.repeat(513), '7'])
+    await settle()
+    handle.track('debug.synthetic.table', ['8'])
     handle.track('debug.synthetic.table', ['9'])
     await settle()
-    expect(fake.updates.slice(-2)).toEqual([{ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['5', '7'] }] }, { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 2, keys: ['9'] }] }])
+    expect(fake.updates.slice(-2)).toEqual([{ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['5', '7'] }] }, { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 3, keys: ['9'] }] }])
   })
 
-  it('reports a refused update as a value and does not send it again', async () => {
+  it('holds every update until live.opened, so a pause or tracked keys sent at once are never refused NOT_FOUND', async () => {
+    makeService()
+    const view = owner()
+    const handle = service.open(spec(['debug.synthetic.table', 'debug.synthetic.status']), view.value)
+    const fake = client.last
+    // A view restored paused, following rows, before the backend registered its subscription.
+    handle.setUserPaused(true)
+    handle.track('debug.synthetic.table', ['5'])
+    handle.refresh()
+    await settle()
+    expect(fake.updates).toEqual([])
+    deliver(fake, opened(fake))
+    await settle()
+    expect(fake.updates).toEqual([{ paused: true, track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['5'] }] }])
+    expect(handle.getSnapshot()).toMatchObject({ status: 'paused', pausedBy: 'user' })
+    expect(handle.getSnapshot().error).toBeUndefined()
+    handle.setUserPaused(false)
+    await settle()
+    // Out of dormancy the new subscription follows the same rows, with a new seq, once it is open.
+    view.show(false)
+    vi.advanceTimersByTime(5 * 60_000)
+    await settle()
+    view.show(true)
+    const again = client.last
+    expect(again).not.toBe(fake)
+    await settle()
+    expect(again.updates).toEqual([])
+    deliver(again, opened(again))
+    await settle()
+    expect(again.updates).toEqual([{ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 2, keys: ['5'] }] }])
+    // A stream that ends before it opens sends nothing it held.
+    const third = service.open(spec(['debug.synthetic.status']), owner().value)
+    third.setUserPaused(true)
+    client.last.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    await settle()
+    expect(client.last.updates).toEqual([])
+    expect(third.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'BUSY' } })
+  })
+
+  it('never reads Paused while the backend refuses the pause, says why, and sends it again after a back-off', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.status']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    fake.answer = () => ({ ok: false, error: 'Too many pending backend requests.', code: 'TOO_MANY_REQUESTS' })
+    handle.setUserPaused(true)
+    await settle()
+    expect(fake.updates).toEqual([{ paused: true }])
+    // The server is still sampled: the view says so, and every tick still counts.
+    expect(handle.getSnapshot()).toMatchObject({ status: 'live', error: { code: 'TOO_MANY_REQUESTS' }, probes: { 'debug.synthetic.status': { state: 'fresh' } } })
+    expect(handle.getSnapshot().pausedBy).toBeUndefined()
+    deliver(fake, tick(fake))
+    expect(liveIndicator(handle.getSnapshot(), Date.now())).toEqual({ tone: 'live', label: 'Live · every 1 s', detail: 'Updated just now · Too many pending backend requests.' })
+    vi.advanceTimersByTime(999)
+    await settle()
+    expect(fake.updates).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    await settle()
+    expect(fake.updates).toEqual([{ paused: true }, { paused: true }])
+    vi.advanceTimersByTime(1999)
+    await settle()
+    expect(fake.updates).toHaveLength(2)
+    fake.answer = () => ({ ok: true, value: { applied: true, probes: [{ probe: 'debug.synthetic.status', intervalMs: 1000, effectiveIntervalMs: 1000, paused: true }] } })
+    vi.advanceTimersByTime(1)
+    await settle()
+    expect(fake.updates).toHaveLength(3)
+    expect(handle.getSnapshot()).toMatchObject({ status: 'paused', pausedBy: 'user' })
+    expect(handle.getSnapshot().error).toBeUndefined()
+    vi.advanceTimersByTime(60_000)
+    await settle()
+    expect(fake.updates).toHaveLength(3)
+
+    // A refused resume reads Paused (nobody's wish) with the reason, and goes again too.
+    fake.answer = () => ({ ok: false, error: 'The SQL backend is busy.', code: 'BUSY' })
+    handle.setUserPaused(false)
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ status: 'paused', error: { code: 'BUSY' }, probes: { 'debug.synthetic.status': { state: 'paused' } } })
+    expect(liveIndicator(handle.getSnapshot(), Date.now())).toMatchObject({ tone: 'paused', label: 'Paused', detail: expect.stringContaining('The SQL backend is busy.') })
+    // The view changing back to what runs makes the refusal moot.
+    handle.setUserPaused(true)
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ status: 'paused', pausedBy: 'user' })
+    expect(handle.getSnapshot().error).toBeUndefined()
+    vi.advanceTimersByTime(60_000)
+    await settle()
+    expect(fake.updates).toHaveLength(4)
+  })
+
+  it('does not send a refusal that will not pass again by itself, sends it with the next change, and clears its error once one is accepted', async () => {
     makeService()
     const handle = service.open(spec(['debug.synthetic.status']), owner().value)
     const fake = client.last
     deliver(fake, opened(fake))
     fake.answer = () => ({ ok: false, error: 'The request is not valid.', code: 'INVALID_REQUEST' })
-    handle.setUserPaused(true)
+    handle.setProbe('debug.synthetic.status', { intervalMs: 5000 })
+    vi.advanceTimersByTime(150)
     await settle()
+    vi.advanceTimersByTime(60_000)
+    await settle()
+    expect(fake.updates).toEqual([{ probes: [{ probe: 'debug.synthetic.status', intervalMs: 5000 }] }])
+    expect(handle.getSnapshot().error).toEqual({ code: 'INVALID_REQUEST', message: 'The request is not valid.' })
+    // What the backend runs is still the old interval, so the next change goes from there.
+    fake.answer = () => ({ ok: true, value: { applied: true, probes: [{ probe: 'debug.synthetic.status', intervalMs: 2000, effectiveIntervalMs: 2000, paused: false }] } })
+    handle.setProbe('debug.synthetic.status', { intervalMs: 2000 })
+    vi.advanceTimersByTime(150)
+    await settle()
+    expect(fake.updates.at(-1)).toEqual({ probes: [{ probe: 'debug.synthetic.status', intervalMs: 2000 }] })
+    expect(handle.getSnapshot().error).toBeUndefined()
+    // A refused refresh is reported, and the next accepted update clears it.
+    fake.answer = () => ({ ok: false, error: 'Too many pending backend requests.', code: 'TOO_MANY_REQUESTS' })
+    handle.refresh()
+    await settle()
+    expect(handle.getSnapshot().error?.code).toBe('TOO_MANY_REQUESTS')
+    fake.answer = () => ({ ok: true, value: { applied: true, probes: [] } })
+    handle.refresh()
+    await settle()
+    expect(handle.getSnapshot().error).toBeUndefined()
+  })
+
+  it('shows the interval the backend runs when an update slows a probe', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.status']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    fake.answer = () => ({ ok: true, value: { applied: true, probes: [{ probe: 'debug.synthetic.status', intervalMs: 2000, effectiveIntervalMs: 4000, paused: false }] } })
+    handle.setProbe('debug.synthetic.status', { intervalMs: 2000 })
+    vi.advanceTimersByTime(150)
+    await settle()
+    expect(handle.getSnapshot().probes['debug.synthetic.status']).toMatchObject({ intervalMs: 2000, effectiveIntervalMs: 4000 })
+    expect(liveIndicator(handle.getSnapshot(), Date.now()).label).toBe('Slowed to 4 s')
+  })
+
+  it('changes a running view\'s arguments in place, keeps its history, and subscribes again with them', async () => {
+    makeService()
+    const view = owner()
+    const handle = service.open(spec(['debug.synthetic.metrics'], { args: { rows: 3 } }), view.value)
+    const fake = client.last
+    handle.setArgs({ rows: 5 })
+    await settle()
+    expect(fake.updates).toEqual([])
+    deliver(fake, opened(fake))
+    deliver(fake, tick(fake))
+    await settle()
+    expect(fake.updates).toEqual([{ args: { rows: 5 } }])
+    const ring = handle.ring('debug.synthetic.metrics')!
+    expect(ring.length).toBe(1)
+    fake.answer = () => ({ ok: false, error: 'Invalid arguments for this source.', code: 'INVALID_PARAMS' })
+    handle.setArgs({ rows: 7 })
+    await settle()
+    expect(handle.getSnapshot().error).toEqual({ code: 'INVALID_PARAMS', message: 'Invalid arguments for this source.' })
+    expect(handle.getSnapshot().status).toBe('live')
+    handle.setArgs({ rows: 9 })
+    view.show(false)
+    vi.advanceTimersByTime(5 * 60_000)
+    await settle()
+    view.show(true)
+    expect(client.last.params.args).toEqual({ rows: 9 })
+    expect(handle.ring('debug.synthetic.metrics')).toBe(ring)
+  })
+
+  it('pauses a view opened or reconnected while its owner is hidden once the pause delay passes', async () => {
+    makeService()
+    const view = owner({ visible: false, connectionId })
+    const handle = service.open(spec(['debug.synthetic.status']), view.value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    vi.advanceTimersByTime(1999)
+    await settle()
+    expect(fake.updates).toEqual([])
+    vi.advanceTimersByTime(1)
     await settle()
     expect(fake.updates).toEqual([{ paused: true }])
-    expect(handle.getSnapshot().error).toEqual({ code: 'INVALID_REQUEST', message: 'The request is not valid.' })
+    fake.end({ ok: false, error: 'The SQL backend restarted.', code: 'BACKEND_LOST' })
+    await settle()
+    // A Reconnect while hidden: the hysteresis runs again from the new subscription.
+    view.show(true)
+    view.show(false)
+    view.move(otherConnection)
+    const again = client.last
+    deliver(again, opened(again))
+    vi.advanceTimersByTime(2000)
+    await settle()
+    expect(again.updates).toEqual([{ paused: true }])
+    expect(handle.getSnapshot()).toMatchObject({ status: 'paused', pausedBy: 'hidden', connectionId: otherConnection })
+  })
+
+  it('applies new hidden delays to views already hidden, counted from when they hid', async () => {
+    makeService({ settings: { 'liveData.pauseAfterSeconds': 60 } })
+    const view = owner()
+    const handle = service.open(spec(['debug.synthetic.status']), view.value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    view.show(false)
+    vi.advanceTimersByTime(1000)
+    settings.set({ 'liveData.pauseAfterSeconds': 2 })
+    vi.advanceTimersByTime(999)
+    await settle()
+    expect(fake.updates).toEqual([])
+    vi.advanceTimersByTime(1)
+    await settle()
+    expect(fake.updates).toEqual([{ paused: true }])
+    vi.advanceTimersByTime(58_000)
+    settings.set({ 'liveData.stopAfterHiddenMinutes': 1 })
+    expect(fake.cancelled).toBe(false)
+    vi.advanceTimersByTime(1000)
+    expect(fake.cancelled).toBe(true)
+    await settle()
+    expect(handle.getSnapshot().status).toBe('dormant')
+  })
+
+  it('counts stale from a resume, not from the last sample before the pause', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.status']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    deliver(fake, tick(fake))
+    handle.setUserPaused(true)
+    await settle()
+    vi.advanceTimersByTime(60_000)
+    handle.setUserPaused(false)
+    await settle()
+    expect(handle.getSnapshot().probes['debug.synthetic.status'].state).toBe('fresh')
+    vi.advanceTimersByTime(1999)
+    expect(handle.getSnapshot().probes['debug.synthetic.status'].state).toBe('fresh')
+    vi.advanceTimersByTime(1)
+    expect(handle.getSnapshot().probes['debug.synthetic.status'].state).toBe('stale')
+  })
+
+  it('waits for the old stream\'s end before subscribing on a Reconnect, so a full window keeps its slot', async () => {
+    makeService()
+    client.holdCancel = true
+    const views = Array.from({ length: liveServiceLimits.handles }, () => owner({ connectionId }))
+    const handles = views.map(view => service.open(spec(['debug.synthetic.status']), view.value))
+    for (const fake of [...client.streams]) deliver(fake, opened(fake))
+    const old = client.streams[0]
+    views[0].move(otherConnection)
+    expect(old.cancelled).toBe(true)
+    expect(client.streams).toHaveLength(16)
+    expect(handles[0].getSnapshot()).toMatchObject({ status: 'connecting', connectionId: otherConnection })
+    // Moving again while it waits subscribes once, on the latest connection.
+    const third = '9d3c1f0a-5e2b-4c7d-8a6f-1b2c3d4e5f60'
+    views[0].move(third)
+    await settle()
+    expect(client.streams).toHaveLength(16)
+    old.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(client.streams).toHaveLength(17)
+    expect(client.last.ended).toBe(false)
+    expect(client.last.params.connectionId).toBe(third)
+    deliver(client.last, opened(client.last))
+    expect(handles[0].getSnapshot()).toMatchObject({ status: 'live', connectionId: third })
+    // Losing the connection while it waits ends the view, and nothing subscribes later.
+    const next = client.streams[1]
+    views[1].move(otherConnection)
+    views[1].move(undefined)
+    next.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(client.streams).toHaveLength(17)
+    expect(handles[1].getSnapshot()).toMatchObject({ status: 'ended', ended: { ended: 'disconnected' } })
+  })
+
+  it('keeps a dormant view dormant through a Reconnect, and subscribes on the new connection when it shows', async () => {
+    makeService()
+    const view = owner({ connectionId })
+    const handle = service.open(spec(['debug.synthetic.status']), view.value)
+    deliver(client.last, opened(client.last))
+    view.show(false)
+    vi.advanceTimersByTime(5 * 60_000)
+    await settle()
+    expect(handle.getSnapshot().status).toBe('dormant')
+    view.move(otherConnection)
+    expect(client.streams).toHaveLength(1)
+    expect(handle.getSnapshot()).toMatchObject({ status: 'dormant', connectionId: otherConnection })
+    view.show(true)
+    expect(client.streams).toHaveLength(2)
+    expect(client.last.params.connectionId).toBe(otherConnection)
+  })
+
+  it('reads every way the backend can go away as lost', async () => {
+    makeService()
+    const codes = ['BACKEND_LOST', 'RESULT_UNAVAILABLE', 'BACKEND_UNAVAILABLE', 'PORT_CLOSED'] as const
+    const handles = codes.map(code => {
+      const handle = service.open(spec(['debug.synthetic.status']), owner().value)
+      client.last.end({ ok: false, error: 'Gone.', code })
+      return handle
+    })
+    await settle()
+    expect(handles.map(handle => handle.getSnapshot().status)).toEqual(['lost', 'lost', 'lost', 'ended'])
+  })
+
+  it('releases only the tables a finished source kept when the view closes', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.table']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    const left = descriptor(), right = descriptor()
+    deliver(fake, { type: 'live.tick', seq: 1, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.table', costMs: 1, effectiveIntervalMs: 1000, tables: [{ table: 0, descriptor: left, revision: 1 }, { table: 1, descriptor: right, revision: 1 }] }] } as LiveTick)
+    expect(handle.table('debug.synthetic.table', 1)?.descriptor).toEqual(right)
+    fake.end({ ok: true, value: { ended: 'sourceEnded', kept: [right.resultId], ticks: 1, elapsedMs: 1000 } })
+    await settle()
+    handle.dispose()
+    expect(client.released).toEqual([[{ generation: 1, resultId: right.resultId }]])
+  })
+
+  it('frees a status-only slot when its view ends, is lost or closes, and hands it to a hidden view waiting for one', async () => {
+    const source: LiveSourceSpec = { ...liveSources['debug.synthetic'], hidden: 'statusOnly' }
+    const catalog: LiveCatalog = { sources: { 'debug.synthetic': source }, probes: liveProbes as Record<string, LiveProbeSpec> }
+    makeService({ catalog })
+    const views = Array.from({ length: 6 }, () => owner())
+    // The fourth runs only a status probe, so only its hidden mode can make it read stale.
+    const handles = views.map((view, index) => service.open(spec(index === 3 ? ['debug.synthetic.status'] : ['debug.synthetic.table', 'debug.synthetic.status'], { whileHidden: 'statusOnly' }), view.value))
+    const fakes = [...client.streams]
+    for (const fake of fakes) deliver(fake, opened(fake))
+    for (const view of views.slice(0, 5)) view.show(false)
+    vi.advanceTimersByTime(2000)
+    await settle()
+    expect(service.statusOnly).toBe(4)
+    expect(fakes[4].updates).toEqual([{ paused: true }])
+    expect(handles[4].getSnapshot()).toMatchObject({ status: 'paused', pausedBy: 'hidden' })
+    // Badges never read a status-only view as fresh.
+    deliver(fakes[3], tick(fakes[3]))
+    expect(handles[3].getSnapshot()).toMatchObject({ status: 'live', hiddenMode: 'statusOnly', probes: { 'debug.synthetic.status': { state: 'fresh' } } })
+    expect(service.peek('debug.synthetic').find(peek => peek.id === handles[3].id)?.stale).toBe(true)
+    // An execution finished while hidden: its slot goes to the view that was waiting, before that one goes dormant.
+    fakes[0].end({ ok: true, value: { ended: 'sourceEnded', ticks: 3, elapsedMs: 3000 } })
+    await settle()
+    expect(service.statusOnly).toBe(4)
+    expect(fakes[4].updates.at(-1)).toEqual({ paused: false, probes: [{ probe: 'debug.synthetic.table', paused: true }, { probe: 'debug.synthetic.status', intervalMs: 30_000 }] })
+    expect(handles[4].getSnapshot()).toMatchObject({ status: 'live', hiddenMode: 'statusOnly' })
+    vi.advanceTimersByTime(10 * 60_000)
+    expect(fakes[4].cancelled).toBe(false)
+    // Lost, and closed, free theirs too.
+    fakes[1].end({ ok: false, error: 'The SQL backend restarted.', code: 'BACKEND_LOST' })
+    await settle()
+    expect(service.statusOnly).toBe(3)
+    handles[2].dispose()
+    expect(service.statusOnly).toBe(2)
+    views[5].show(false)
+    vi.advanceTimersByTime(2000)
+    await settle()
+    expect(service.statusOnly).toBe(3)
+    expect(fakes[5].updates).toEqual([{ probes: [{ probe: 'debug.synthetic.table', paused: true }, { probe: 'debug.synthetic.status', intervalMs: 30_000 }] }])
   })
 
   it('turns a probe stale after twice its interval without a sample, and fresh again with the next one', () => {
@@ -536,6 +886,7 @@ describe('LiveService', () => {
     view.move(otherConnection)
     const fake = client.last
     expect(fake.params.probes).toEqual([{ probe: 'debug.synthetic.status', intervalMs: 1000, paused: true }, { probe: 'debug.synthetic.table', intervalMs: 1000, paused: true }])
+    deliver(fake, opened(fake))
     await settle()
     expect(fake.updates).toEqual([])
     expect(handle.getSnapshot()).toMatchObject({ status: 'paused', pausedBy: 'hidden' })

@@ -612,11 +612,14 @@ export class ResultClient implements Disposable {
   }
 
   /** The backend released every result of an ended stream but those a finished source kept; a stream that ended with
-   *  its backend lost them. */
+   *  its backend lost them. A source can finish while its cancel is on the way: nobody reads what it kept then, so those
+   *  are closed at once rather than held against the budget until the backend restarts. */
   private liveEnded(state: LiveState, result: ApiResult<LiveEnd>): void {
     const kept = new Set(result.ok && result.value.ended === 'sourceEnded' ? result.value.kept ?? [] : [])
     const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'RESULT_UNAVAILABLE')
-    this.drop([...state.results.values()].filter(key => !kept.has(key.resultId)), lost ? 'lost' : 'released')
+    const results = [...state.results.values()]
+    this.drop(results.filter(key => !kept.has(key.resultId)), lost ? 'lost' : 'released')
+    if (state.cancelled && kept.size > 0) void this.release(results.filter(key => kept.has(key.resultId)))
     state.end(result)
   }
 
