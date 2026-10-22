@@ -635,6 +635,10 @@ try {
   await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
   await expect(page.locator('.output-empty')).toHaveText('Results were closed to free memory. Execute the query again to see them.')
+  // A line only, centred by the states kit's empty state, with nothing to click.
+  await expect(page.locator('.output-empty.empty-state .empty-state-detail')).toHaveCount(1)
+  await expect(page.locator('.output-empty.empty-state')).toHaveCSS('justify-content', 'center')
+  await expect(page.locator('.output-empty .empty-state-title, .output-empty button')).toHaveCount(0)
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
   // Run from the editor, it leaves focus there.
   await expect(textbox()).toBeFocused()
@@ -686,6 +690,9 @@ try {
   await expect(server()).toHaveValue('')
   await expect(page.locator('.toolbar-actions button.execute')).toBeDisabled()
   await expect(page.locator('.output-empty')).toContainText('Query results appear here for query tabs.')
+  await expect(page.locator('.output-empty.empty-state .empty-state-title')).toHaveText('Query results')
+  await expect(page.locator('.output-empty .empty-state-icon.codicon-table')).toHaveCount(1)
+  await expect(page.locator('.output-empty.empty-state')).toHaveCSS('justify-content', 'center')
   const forXmlText = '<objects>\n  <o>\n    <name>Orders</name>\n    <object_id>1</object_id>\n  </o>\n  <o>\n    <name>Customers</name>\n    <object_id>2</object_id>\n  </o>\n</objects>'
   expect(await editorText()).toBe(forXmlText)
   await page.keyboard.press('F5')

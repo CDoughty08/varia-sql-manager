@@ -186,7 +186,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   // Live views: the dot (also on document tabs), the paused label, and the stale badge.
   ...graphic(['live.indicator'], ...contentSurfaces, strip, ['documentTabs.background', 'documentTabs.activeBackground']),
   ...text(['live.pausedForeground'], ...contentSurfaces),
-  ...text(['live.staleForeground'], ...contentSurfaces.map(surface => [...surface, 'live.staleBackground'] as ColorKey[])),
+  // The stale badge also goes in the status bar (every state) and on Object Explorer rows.
+  ...text(['live.staleForeground'], ...kitSurfaces.map(surface => [...surface, 'live.staleBackground'] as ColorKey[])),
   // A tile's threshold outline and glyph.
   ...graphic(['tile.warningBorder', 'tile.criticalBorder'], tile)
 ]

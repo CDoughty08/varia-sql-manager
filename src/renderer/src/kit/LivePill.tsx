@@ -1,15 +1,16 @@
 import { useTicker } from '../core/useTicker'
-import { liveLabel, staleLabel, updatedLabel, type LiveStatus } from './format'
+import { liveIcon, liveLabel, staleLabel, updatedLabel, type LiveStatus } from './format'
 
 /**
  * What a live view is doing: a pulsing dot and "Live · every 2 s", a steady dot and "Live · slowed to 4 s" when the
- * server asked for longer, or a pause glyph and "Paused". The state comes from the live layer; this only draws it.
+ * server asked for longer, or, in muted text, a glyph and what stopped it ("Starting…", "Paused", "Stopped while
+ * hidden", "Disconnected" …). The state comes from the live layer; this only draws it.
  */
 export function LivePill(status: LiveStatus) {
-  const text = liveLabel(status)
+  const icon = liveIcon(status)
   return <span className="live-pill" data-state={status.state}>
-    {status.state === 'paused' ? <span className="codicon codicon-debug-pause" aria-hidden="true" /> : <span className="live-dot" aria-hidden="true" />}
-    <span>{text}</span>
+    {icon ? <span className={`codicon codicon-${icon}`} aria-hidden="true" /> : <span className="live-dot" aria-hidden="true" />}
+    <span>{liveLabel(status)}</span>
   </span>
 }
 

@@ -1488,13 +1488,13 @@
         },
         "live.pausedForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Text and glyph of a paused live view. Default $textMuted (Dark #9298a4, Light #5c6370).",
-          "markdownDescription": "(Varia) Text and glyph of a paused live view. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+          "description": "(Varia) Text and glyph of a live view that is not collecting: starting, paused, stopped or ended. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(Varia) Text and glyph of a live view that is not collecting: starting, paused, stopped or ended. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
         },
         "live.staleForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Text and glyph of live data that is out of date, as in \"Stale since 22:44:03\". Default $warning (Dark #e4bb6a, Light #875800).",
-          "markdownDescription": "(Varia) Text and glyph of live data that is out of date, as in \"Stale since 22:44:03\". Default `$warning` (Dark `#e4bb6a`, Light `#875800`)."
+          "description": "(Varia) Text and glyph of live data that is out of date, as in \"Stale since 22:44:03\". Default $warningSurfaceText (Dark #f0d49e, Light #6b4400).",
+          "markdownDescription": "(Varia) Text and glyph of live data that is out of date, as in \"Stale since 22:44:03\". Default `$warningSurfaceText` (Dark `#f0d49e`, Light `#6b4400`)."
         },
         "live.staleBackground": {
           "$ref": "#/definitions/value",

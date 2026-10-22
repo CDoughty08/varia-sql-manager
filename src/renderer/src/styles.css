@@ -706,6 +706,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .chip-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 24px; padding: 0 10px; border: 1px solid var(--varia-chip-border); border-radius: var(--varia-radius-pill); background: var(--varia-chip-background); color: var(--varia-chip-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .chip[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
+/* An on chip stays filled under the pointer, so the click that turned it on shows at once, as a key press does. */
+.chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: none; }
 .chip-count { font-weight: 600; font-variant-numeric: tabular-nums; }
 .live-pill, .stale-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--varia-live-indicator); }
@@ -713,7 +715,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .live-pill[data-state="live"] .live-dot { animation: varia-pulse var(--varia-motion-pulse) var(--varia-motion-ease) infinite; }
 @keyframes varia-pulse { from { box-shadow: 0 0 0 0 var(--varia-live-indicator); } 70%, to { box-shadow: 0 0 0 5px transparent; } }
 @media (prefers-reduced-motion: reduce) { .live-pill[data-state="live"] .live-dot { animation: none; } }
-.live-pill[data-state="paused"] { color: var(--varia-live-pausedForeground); }
+/* Starting, paused, stopped or ended: muted, with a glyph in place of the dot. */
+.live-pill:not([data-state="live"], [data-state="slowed"]) { color: var(--varia-live-pausedForeground); }
 .stale-badge[data-stale] { height: 20px; padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-pill); background: var(--varia-live-staleBackground); color: var(--varia-live-staleForeground); }
 .tile { display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; padding: var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); color: var(--varia-foreground); }
 /* Over a threshold the outline takes the tone at twice the width, inside the tile so nothing moves. */
@@ -732,8 +735,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .status-pill, .stale-badge[data-stale], .tile { border: 1px solid CanvasText; }
   .tile[data-tone] { border-width: 2px; box-shadow: none; }
   .chip { border-color: ButtonText; }
-  .chip[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  /* Kept out of forcing, an on chip and the live dot must set every colour they show, hovered and focused too. */
+  .chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .chip[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
   .live-dot, .skeleton-row::before { forced-color-adjust: none; background: CanvasText; }
+  /* The pulse ring is the theme colour, so the dot holds still: its word still says it is live. */
+  .live-pill[data-state="live"] .live-dot { animation: none; }
   /* On a selected row a pill follows the row's text. */
   [aria-selected="true"] .status-pill { color: inherit; border-color: currentColor; background: transparent; }
 }

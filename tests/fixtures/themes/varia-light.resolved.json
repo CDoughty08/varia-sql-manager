@@ -221,7 +221,7 @@
     "chip.activeBorder": "#4453d0",
     "live.indicator": "#146f3b",
     "live.pausedForeground": "#5c6370",
-    "live.staleForeground": "#875800",
+    "live.staleForeground": "#6b4400",
     "live.staleBackground": "#87580024",
     "tile.background": "#ffffff",
     "tile.border": "#e3e6eb",

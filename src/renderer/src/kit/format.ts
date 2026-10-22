@@ -32,15 +32,48 @@ export function formatClock(time: number | Date): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-/** What a live view is doing. `slowed` is set when the server asked for a longer interval than the one chosen. */
-export type LiveState = 'live' | 'paused' | 'slowed'
-export interface LiveStatus { readonly state: LiveState; readonly intervalMs: number; readonly effectiveMs?: number }
+/**
+ * What a live view is doing: the live layer's subscription status (D-live §6.1, `LiveSnapshot.status`), plus `slowed`,
+ * which is `live` while the server asks for a longer interval than the one chosen.
+ */
+export type LiveState = 'connecting' | 'live' | 'slowed' | 'paused' | 'dormant' | 'lost' | 'ended'
+/** Why a subscription ended (the live layer's `LiveEnd.ended`). */
+export type LiveEndReason = 'cancelled' | 'disconnected' | 'sourceEnded' | 'failed' | 'shutdown'
+export interface LiveStatus {
+  readonly state: LiveState
+  readonly intervalMs: number
+  readonly effectiveMs?: number
+  /** Who paused it: the person, or the view being hidden (which the live layer resumes by itself). */
+  readonly pausedBy?: 'hidden' | 'user'
+  readonly ended?: LiveEndReason
+}
 
-/** "Live · every 2 s", "Live · slowed to 4 s", "Paused". */
-export function liveLabel({ state, intervalMs, effectiveMs }: LiveStatus): string {
-  if (state === 'paused') return 'Paused'
-  if (state === 'slowed' && effectiveMs !== undefined && effectiveMs > intervalMs) return `Live · slowed to ${formatInterval(effectiveMs)}`
+/**
+ * "Live · every 2 s", "Live · slowed to 4 s", "Starting…" before the first sample, "Paused" or "Paused while hidden",
+ * "Stopped while hidden" (dormant: it starts again when shown), "Stopped · backend unavailable" once the backend was
+ * lost, and for an ended view "Finished", "Disconnected", "Stopped · failed" or "Stopped".
+ */
+export function liveLabel({ state, intervalMs, effectiveMs, pausedBy, ended }: LiveStatus): string {
+  switch (state) {
+    case 'connecting': return 'Starting…'
+    case 'paused': return pausedBy === 'hidden' ? 'Paused while hidden' : 'Paused'
+    case 'dormant': return 'Stopped while hidden'
+    case 'lost': return 'Stopped · backend unavailable'
+    case 'ended': return ended === 'sourceEnded' ? 'Finished' : ended === 'disconnected' ? 'Disconnected' : ended === 'failed' ? 'Stopped · failed' : 'Stopped'
+    case 'slowed': if (effectiveMs !== undefined && effectiveMs > intervalMs) return `Live · slowed to ${formatInterval(effectiveMs)}`
+  }
   return `Live · every ${formatInterval(intervalMs)}`
+}
+
+/** The glyph a view that is not collecting shows in place of the dot. */
+export function liveIcon({ state, ended }: LiveStatus): string | undefined {
+  switch (state) {
+    case 'connecting': return 'circle-outline'
+    case 'paused': case 'dormant': return 'debug-pause'
+    case 'lost': return 'debug-disconnect'
+    case 'ended': return ended === 'disconnected' ? 'debug-disconnect' : ended === 'sourceEnded' ? 'pass' : 'debug-stop'
+    default: return undefined
+  }
 }
 
 /** A live view's age line: "Updated 12 s ago", or "Waiting for data" before the first sample. */
@@ -52,6 +85,20 @@ export function updatedLabel(updatedAt: number | undefined, now: number): string
 export function staleLabel(since: number, now: number, retryAt?: number): string {
   const retry = retryAt === undefined ? '' : retryAt <= now ? ' · retrying now' : ` · retrying in ${formatInterval(Math.ceil((retryAt - now) / 1000) * 1000)}`
   return `Stale since ${formatClock(since)}${retry}`
+}
+
+/** The outcome of the last Copy details: which text it took, and whether main put it on the clipboard. */
+export interface CopyRecord { readonly text: string; readonly ok: boolean }
+
+/** Copies through `write` and settles with the outcome; a rejected write counts as not copied, never as an error. */
+export function copyText(write: (text: string) => Promise<{ readonly ok: boolean }>, text: string): Promise<CopyRecord> {
+  return write(text).then(result => ({ text, ok: result.ok === true }), () => ({ text, ok: false }))
+}
+
+/** What Copy details says, only about the details shown now: an error that replaces the copied one says nothing yet. */
+export function copyStatus(copied: CopyRecord | undefined, text: string): string {
+  if (copied?.text !== text) return ''
+  return copied.ok ? 'Details copied.' : 'The details could not be copied.'
 }
 
 /** Copy details stays well inside main's clipboard limit and a support message. */

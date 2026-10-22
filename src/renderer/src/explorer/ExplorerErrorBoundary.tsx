@@ -1,7 +1,11 @@
 import { Component, createRef, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
 import { onUnexpectedError } from '../core/errors'
+import type { ErrorReport } from '../kit/format'
 import InlineError from '../kit/InlineError'
 import { failureDetails } from '../ShellFailure'
+
+/** What the fault says, and what Copy details takes: the sentence, then the fault and its component stack. */
+export const explorerFault = (details?: string): ErrorReport => ({ message: 'Object Explorer stopped because of a rendering error.', extra: details })
 
 /** Focus went with an element that was removed. */
 export const focusLost = (): boolean => !document.activeElement || document.activeElement === document.body
@@ -27,7 +31,7 @@ export default class ExplorerErrorBoundary extends Component<{ readonly onReload
   }
   render(): ReactNode {
     if (!this.state.failed) return this.props.children
-    return <InlineError className="explorer-fault" message="Object Explorer stopped because of a rendering error." extra={this.state.details}
+    return <InlineError className="explorer-fault" {...explorerFault(this.state.details)}
       actions={[{ label: 'Reload Object Explorer', buttonRef: this.reload, run: () => { this.props.onReload(); this.reloading = true; this.setState({ failed: false, details: undefined }) } }]} />
   }
 }

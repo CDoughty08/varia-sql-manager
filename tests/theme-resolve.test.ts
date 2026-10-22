@@ -93,7 +93,7 @@ statusPill.criticalBackground #f39a9a24 #b4222924|statusPill.criticalForeground 
 statusPill.infoForeground #bcc5ff #3240b0|statusPill.neutralBackground #30343e #d6dae0|statusPill.neutralForeground #bcc1cb #3a404b
 chip.background #d9dce300 #1c1f2600|chip.foreground #bcc1cb #3a404b|chip.border #6b728673 #878e9b73|chip.activeBackground #21273b #e7ebfc
 chip.activeForeground #bcc5ff #3240b0|chip.activeBorder #8f9cff #4453d0|live.indicator #74d19c #146f3b|live.pausedForeground #9298a4 #5c6370
-live.staleForeground #e4bb6a #875800|live.staleBackground #e4bb6a24 #87580024|tile.background #16181d #ffffff|tile.border #262a31 #e3e6eb
+live.staleForeground #f0d49e #6b4400|live.staleBackground #e4bb6a24 #87580024|tile.background #16181d #ffffff|tile.border #262a31 #e3e6eb
 tile.warningBorder #e4bb6a #875800|tile.criticalBorder #f39a9a #b42229|skeleton.background #30343e #d6dae0
 connection.red #e66767 #c42b3c|connection.orange #e09358 #b45309
 connection.yellow #d8bf5e #8f6b00|connection.green #6fbf8a #2e7d4f|connection.blue #6ea4ea #2563a8|connection.purple #ab95ea #7a4bbf
