@@ -212,7 +212,9 @@ const workbenchDatabases = [
 ]
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
-// these rows in the folders that list them. Every database has dbo.Orders; Audits fails until allow/audits exists.
+// these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
+// exists. The SSIS Catalog has one folder, Finance, with the project Loads (an entry point and a child package) and the
+// environment Test.
 const explorerProfile = { band: 16, engine: 'box' }
 const explorerRows = {
   systemDatabases: () => ['master', 'model', 'msdb', 'tempdb'].map(name => explorerObject({ kind: 'database', name }, name, { subtype: 'system', hasChildren: true })),
@@ -227,7 +229,15 @@ const explorerRows = {
   serverRoles: () => serverRoles.map(name => explorerObject({ kind: 'serverRole', name }, name)),
   cryptographicProviders: () => [explorerObject({ kind: 'cryptographicProvider', name: 'Test EKM Provider' }, 'Test EKM Provider')],
   audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
-  serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')]
+  serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')],
+  integrationServicesCatalogs: () => [explorerObject({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', { hasChildren: true })],
+  ssisFolders: () => [explorerObject({ kind: 'ssisFolder', name: 'Finance' }, 'Finance', { hasChildren: true })],
+  ssisProjects: owner => [explorerObject({ kind: 'ssisProject', ssisFolder: owner.name, name: 'Loads' }, 'Loads', { hasChildren: true, sublabel: '(Deployed 2026-10-21 14:05)' })],
+  ssisEnvironments: owner => [explorerObject({ kind: 'ssisEnvironment', ssisFolder: owner.name, name: 'Test' }, 'Test', { sublabel: '(2 variables)' })],
+  ssisPackages: owner => [
+    explorerObject({ kind: 'ssisPackage', ssisFolder: owner.ssisFolder, ssisProject: owner.name, name: 'Daily.dtsx' }, 'Daily.dtsx', { subtype: 'entryPoint' }),
+    explorerObject({ kind: 'ssisPackage', ssisFolder: owner.ssisFolder, ssisProject: owner.name, name: 'Child.dtsx' }, 'Child.dtsx', { subtype: 'child', icon: 'symbol-file' })
+  ]
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {
@@ -237,7 +247,9 @@ async function explorerChildren({ node, subtype }) {
   if (node.type === 'folder' && node.folder === 'audits' && !await controlled(join('allow', 'audits'))) {
     return { nodes: statics, elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } }
   }
-  const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : [])]
+  // A folder lists its rows; an object whose kind lists rows (the SSIS catalog's folders) lists them after its folders.
+  const list = node.type === 'folder' ? node.folder : kindSpecs[node.object.kind].list
+  const nodes = [...statics, ...(list ? explorerRows[list]?.(owner) ?? [] : [])]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come

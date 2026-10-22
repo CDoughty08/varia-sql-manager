@@ -67,6 +67,12 @@ internal static class ExplorerLabels
     private static string TitleCase(string text) => string.Join(" ", text.Split(['_', ' '], StringSplitOptions.RemoveEmptyEntries)
         .Select(word => char.ToUpperInvariant(word[0]) + word[1..].ToLowerInvariant()));
 
+    /// <summary>An SSIS project's deployment, in the catalog's own offset: "(Deployed 2026-10-21 14:05)".</summary>
+    public static string? Deployed(DateTimeOffset? deployed) => deployed is { } value ? "(Deployed " + value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + ")" : null;
+
+    /// <summary>An SSIS environment's variable count: "(1 variable)", "(3 variables)".</summary>
+    public static string Variables(int count) => "(" + count.ToString("N0", CultureInfo.InvariantCulture) + (count == 1 ? " variable)" : " variables)");
+
     /// <summary>sys.databases.state text, or null for ONLINE.</summary>
     public static string? DatabaseState(int state) => state switch
     {

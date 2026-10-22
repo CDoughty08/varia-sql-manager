@@ -11,10 +11,11 @@ using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 using Varia.Backend.Scripting;
+using Varia.Backend.Ssis;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost
+internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ISsisHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
@@ -24,7 +25,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
-        "entra.cache.clear"
+        "entra.cache.clear",
+        "ssis.describe"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -49,6 +51,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
+    private readonly SsisService ssis;
     private readonly EntraService entra;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
@@ -123,6 +126,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
+        ssis = new SsisService(this);
         if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
     }
 
@@ -144,6 +148,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public ScriptingService Scripting => scripting;
     /// <summary>Object actions (the checks reach its dry run and test options).</summary>
     public ActionService Actions => actions;
+    /// <summary>The SSIS Catalog's reads (the checks point it at a fake catalog through its options).</summary>
+    public SsisService Ssis => ssis;
     /// <summary>Microsoft Entra ID (the checks replace its token source).</summary>
     internal EntraService Entra => entra;
 
@@ -156,6 +162,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
+        "ssis.describe" => RequestLane.Ssis,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -200,6 +207,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
         "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
+        "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -377,6 +385,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
+        ssis.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
         foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
@@ -471,6 +480,24 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Scripting");
 
     Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+
+    /// <summary>The SSIS read pool (D-ssis 1.4): tree listings, describes and later live reads, under its own program name, in
+    /// the catalog's database on every engine, so no statement crosses databases. Its prologues fix isolation and lock timeouts.</summary>
+    SqlConnection IExplorerHost.SsisConnection(string connectionId) => PoolConnection(connectionId, ssis.Options.CatalogDatabase, SsisPool);
+    string IExplorerHost.SsisCatalog => ssis.Options.CatalogDatabase;
+    ServerProfile ISsisHost.Profile(string connectionId) => Profile(connectionId);
+    SqlConnection ISsisHost.SsisConnection(string connectionId, string catalogDatabase) => PoolConnection(connectionId, catalogDatabase, SsisPool);
+    SqlConnection ISsisHost.SsisServerConnection(string connectionId) => PoolConnection(connectionId, null, SsisPool);
+    Task ISsisHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    private const string SsisPool = " - Integration Services";
+
+    /// <summary>How a connection signed in, from its settings: Windows (Kerberos off Windows), Microsoft Entra ID, or SQL Server authentication.</summary>
+    string ISsisHost.Authentication(string connectionId)
+    {
+        if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+        var builder = new SqlConnectionStringBuilder(connectionString);
+        return builder.IntegratedSecurity ? "integrated" : builder.Authentication is SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword ? "sql" : "entra";
+    }
     Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
     private SqlConnection PoolConnection(string connectionId, string? database, string suffix)
@@ -1287,6 +1314,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         foreach (var query in queries.Values) query.Cancel();
         scripting.CancelAll();
         actions.CancelAll();
+        ssis.CancelAll();
     }
     public void Dispose()
     {
@@ -1294,6 +1322,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         explorer.Dispose();
         scripting.Dispose();
         actions.Dispose();
+        ssis.Dispose();
         CancelAll();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();

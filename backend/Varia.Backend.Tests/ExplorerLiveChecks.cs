@@ -74,14 +74,26 @@ internal static class ExplorerLiveChecks
         var major = int.Parse(info.ServerVersion.Split('.')[0]);
 
         check(info.ProductVersion is { Length: > 0 } && info.Login is { Length: > 0 } && info.EngineEdition is > 0, "connect probes the server profile: product version, login and engine edition");
+        bool linux;
         await using (var probe = new SqlConnection(ConnectionSettings.Build(live("master")).ConnectionString))
         {
             await probe.OpenAsync();
             var profile = await ServerProfile.ProbeAsync(probe, CancellationToken.None);
             check(profile.Major == major && profile.CatalogBand == Math.Min(ExplorerCatalog.BandOf(major), 16),
                 "the profile's catalog band matches the version's on a box server (" + profile.CatalogBand + " on " + major + ")");
+            await using var platform = probe.CreateCommand();
+            platform.CommandText = "SELECT host_platform FROM sys.dm_os_host_info;";
+            linux = major >= 14 && await platform.ExecuteScalarAsync() is "Linux";
+            check(profile.Linux == linux, "the profile says whether SQL Server runs on Linux, as sys.dm_os_host_info does (" + (linux ? "Linux" : "Windows") + ")");
         }
-        check((await client.Labels(Object(Server))).SequenceEqual(["Databases", "Security", "Server Objects"]), "the server's folders, in SSMS order");
+        check((await client.Labels(Object(Server))).SequenceEqual(["Databases", "Security", "Server Objects", "Integration Services Catalogs"]), "the server's folders, in SSMS order");
+        // Without a catalog the folder is empty on Windows; SQL Server on Linux cannot have one, and the folder says so.
+        if (!(await client.Labels(Folder(Server, "databases"))).Contains("SSISDB"))
+        {
+            var catalogs = await client.Children(Folder(Server, "integrationServicesCatalogs"));
+            check(linux ? catalogs is { Nodes.Count: 0, Error: { Code: "NOT_SUPPORTED", Retryable: false } } : catalogs is { Nodes.Count: 0, Error: null },
+                "Integration Services Catalogs is empty without SSISDB on Windows, and says the catalog is not supported on Linux: " + catalogs.Error?.Message);
+        }
         var system = await client.All(Folder(Server, "systemDatabases"));
         check(system.Nodes.Select(node => node.Label).SequenceEqual(["master", "model", "msdb", "tempdb"]) && system.Nodes.All(node => node is { Subtype: "system", Icon: "svg:database", HasChildren: true }),
             "System Databases lists exactly master, model, msdb and tempdb");
@@ -225,6 +237,8 @@ internal static class ExplorerLiveChecks
         ExplorerChildrenResult result;
         try { result = await client.Children(node, subtype); }
         catch (RequestException error) { errors.Add(path + ": " + error.Code); return; }
+        // SQL Server on Linux cannot have an SSIS Catalog: its folder answers so, by design.
+        if (result.Error is { Code: "NOT_SUPPORTED" } && node is { Type: "folder", Folder: "integrationServicesCatalogs" }) return;
         if (result.Error is not null) { errors.Add(path + ": " + result.Error.Code + " " + result.Error.Message); return; }
         if (depth == 0) return;
         var objects = 0;

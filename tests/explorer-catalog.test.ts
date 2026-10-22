@@ -26,7 +26,8 @@ const without = (lines: readonly string[], removed: readonly string[]) => {
 const server = [
   'Databases', '  System Databases', '  Database Snapshots',
   'Security', '  Logins', '  Server Roles', '  Credentials', '  Cryptographic Providers', '  Audits', '  Server Audit Specifications',
-  'Server Objects', '  Backup Devices', '  Linked Servers', '  Triggers'
+  'Server Objects', '  Backup Devices', '  Linked Servers', '  Triggers',
+  'Integration Services Catalogs'
 ]
 const database17 = [
   'Tables', '  System Tables', '  FileTables', '  External Tables', '  Graph Tables', '  Dropped Ledger Tables',
@@ -54,8 +55,8 @@ describe('Object Explorer catalogue', () => {
     for (const [name, values] of Object.entries({ nodeKinds, folderIds, nodeSubtypes, queryIds, explorerIcons, svgIcons, kindScopes, parentKinds, filterProperties })) {
       expect(unique(values), name).toBe(true)
     }
-    expect(nodeKinds).toHaveLength(51)
-    expect(folderIds).toHaveLength(72)
+    expect(nodeKinds).toHaveLength(56)
+    expect(folderIds).toHaveLength(76)
     for (const id of folderIds) expect(folderSpecs[id].id).toBe(id)
     for (const kind of nodeKinds) expect(kindSpecs[kind].kind).toBe(kind)
     expect(Object.keys(folderSpecs)).toEqual([...folderIds])
@@ -128,8 +129,9 @@ describe('Object Explorer catalogue', () => {
       expect(spec.rows !== undefined, kind).toBe(spec.list !== undefined)
       for (const row of spec.rows ?? []) expect(nodeKinds, kind).toContain(row)
     }
-    // No shipped kind lists rows yet; the SSIS catalog (S1b) is the first.
-    expect(nodeKinds.filter(kind => kindSpecs[kind].list)).toEqual([])
+    // SSMS lists an SSIS catalog's folders directly below it, with no folder in between.
+    expect(nodeKinds.filter(kind => kindSpecs[kind].list)).toEqual(['ssisCatalog'])
+    expect(kindSpecs.ssisCatalog).toMatchObject({ list: 'ssisFolders', rows: ['ssisFolder'], folders: [] })
     for (const id of folderIds) {
       const spec = folderSpecs[id]
       expect(spec.rows !== undefined, id).toBe(spec.list !== undefined)
@@ -165,10 +167,12 @@ describe('Object Explorer catalogue', () => {
     }
     expect([...usedSubtypes].sort()).toEqual([...nodeSubtypes].sort())
     expect(nodeKinds.filter(kind => kindSpecs[kind].historyLookup)).toEqual(['table'])
-    expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue'])
+    const ssisKinds = ['ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment']
+    expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue', ...ssisKinds])
     // Schema-scoped objects insert [schema].[name]; the rest a one-part name, except parameters, the server and return values.
     for (const kind of nodeKinds) expect(kindSpecs[kind].insert === 'twoPart', kind).toBe(kindSpecs[kind].scope === 'schemaObject')
-    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'none')).toEqual(['server', 'returnValue'])
+    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'none')).toEqual(['server', 'returnValue', ...ssisKinds])
+    expect(nodeKinds.filter(kind => kindSpecs[kind].scope.startsWith('ssis'))).toEqual(ssisKinds)
     expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'raw')).toEqual(['parameter'])
   })
   it('lets every folder hang below some kind, and child kinds below the kinds that list them', () => {
@@ -177,8 +181,13 @@ describe('Object Explorer catalogue', () => {
       expect(owners.length, id).toBeGreaterThan(0)
       const { owner } = folderSpecs[id]
       if (owner === 'server' || owner === 'database') expect(owners, id).toEqual([owner])
-      else for (const kind of owners) expect(parentKinds, id).toContain(kind)
+      // Object folders hang below the SQL objects that own child refs, or below SSIS folders and projects.
+      else for (const kind of owners) expect([...parentKinds, 'ssisFolder', 'ssisProject'], id).toContain(kind)
     }
+    expect(folderOwnerKinds('integrationServicesCatalogs')).toEqual(['server'])
+    expect(folderOwnerKinds('ssisProjects')).toEqual(['ssisFolder'])
+    expect(folderOwnerKinds('ssisEnvironments')).toEqual(['ssisFolder'])
+    expect(folderOwnerKinds('ssisPackages')).toEqual(['ssisProject'])
     expect(folderOwnerKinds('columns')).toEqual(['table', 'view', 'function', 'tableType'])
     expect(folderOwnerKinds('parameters')).toEqual(['procedure', 'function'])
     expect(folderOwnerKinds('systemTables')).toEqual(['database'])
@@ -204,8 +213,9 @@ describe('Object Explorer catalogue', () => {
       const { maxName } = kindSpecs[kind]
       if (maxName !== undefined) expect(Number.isInteger(maxName) && maxName > 128 && maxName <= explorerLimits.maxName, kind).toBe(true)
     }
-    // Packages (260) arrive with the SSIS kinds in S1b.
-    expect(nodeKinds.filter(kind => kindSpecs[kind].maxName !== undefined)).toEqual([])
+    // An SSIS package name may be 260 code units (catalog.packages.name is nvarchar(260)).
+    expect(nodeKinds.filter(kind => kindSpecs[kind].maxName !== undefined)).toEqual(['ssisPackage'])
+    expect(maxNameOf(kindSpecs.ssisPackage)).toBe(260)
     expect(maxNameOf(kindSpecs.table)).toBe(128)
     expect(maxNameOf({ maxName: 260 })).toBe(260)
   })
@@ -231,8 +241,10 @@ describe('Object Explorer catalogue', () => {
   })
   it('serves the SSMS server folders, and only Databases on cloud editions', () => {
     for (const band of [12, 13, 14, 16, 17]) {
-      expect(outline(staticChildren({ kind: 'server' }, box(band)), box(band)), `box ${band}`).toEqual(server)
-      expect(outline(staticChildren({ kind: 'server' }, cloud(band)), cloud(band)), `cloud ${band}`).toEqual(['Databases', '  System Databases'])
+      // The SSIS Catalog exists from SQL Server 2016 (13), on SQL Server and on the Azure-SSIS IR's catalog databases.
+      const ssis = band >= 13 ? ['Integration Services Catalogs'] : []
+      expect(outline(staticChildren({ kind: 'server' }, box(band)), box(band)), `box ${band}`).toEqual(band >= 13 ? server : server.slice(0, -1))
+      expect(outline(staticChildren({ kind: 'server' }, cloud(band)), cloud(band)), `cloud ${band}`).toEqual(['Databases', '  System Databases', ...ssis])
     }
   })
   it('serves the SSMS database folders for each version band, on every engine', () => {
@@ -260,7 +272,10 @@ describe('Object Explorer catalogue', () => {
     for (const subtype of [undefined, 'sql', 'clr', 'extended', 'replicationFilter', 'system'] as const) expect(labels('procedure', subtype)).toEqual(['Parameters'])
     for (const subtype of ['inline', 'tableValued', 'clrTableValued'] as const) expect(labels('function', subtype)).toEqual(['Columns', 'Parameters'])
     for (const subtype of [undefined, 'scalar', 'clrScalar', 'aggregate'] as const) expect(labels('function', subtype)).toEqual(['Parameters'])
-    const parents = ['server', 'database', 'table', 'view', 'tableType', 'procedure', 'function']
+    expect(labels('ssisFolder')).toEqual(['Projects', 'Environments'])
+    expect(labels('ssisProject')).toEqual(['Packages'])
+    expect(labels('server')).toEqual(['Databases', 'Security', 'Server Objects', 'Integration Services Catalogs'])
+    const parents = ['server', 'database', 'table', 'view', 'tableType', 'procedure', 'function', 'ssisFolder', 'ssisProject']
     for (const kind of nodeKinds.filter(kind => !parents.includes(kind))) expect(foldersFor(kind), kind).toEqual([])
     for (const id of ['columns', 'parameters'] as const) expect(staticChildren({ folder: id }, box(12))).toEqual([])
   })

@@ -4,7 +4,7 @@ namespace Varia.Backend.Protocol;
 /// metadata takes one of 8 slots, query uses the session path, results one of 16 read slots, explorer runs at once
 /// under Object Explorer's own gates (static folders need no slot at all), and actions runs DDL at once under the action
 /// service's own gates, so a DROP waiting on a lock never holds a metadata slot.</summary>
-internal enum RequestLane { Control, Metadata, Query, Results, Explorer, Actions }
+internal enum RequestLane { Control, Metadata, Query, Results, Explorer, Actions, Ssis }
 
 /// <summary>Why a request's token was cancelled: CANCEL frame reasons 1–4, or its own header deadline.</summary>
 internal enum CancelReason { None = 0, User = 1, Deadline = 2, ConsumerGone = 3, Shutdown = 4, Expired = 5 }
