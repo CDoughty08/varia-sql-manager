@@ -1,10 +1,11 @@
 // The document frame's rules without the DOM: which section is current, what the keys do in the section list and on
 // the Script drawer's splitter, and how much of a script the drawer draws. A document's service keeps a FrameState per
 // open document (tabs remount their view when they switch), so the frame itself holds no state.
+import { scriptDestinations, scriptDestinationSpecs } from '../../../shared/scripting/catalog.ts'
 import { formatCount } from '../results/status'
 
 export const frameLimits = {
-  /** Characters and lines the Script drawer draws; Open in Query Window and Copy always take the whole script. */
+  /** Characters and lines the Script drawer draws; its ways out (scriptDestinationSpecs) always take the whole script. */
   previewCharacters: 200_000,
   previewLines: 5_000,
   /** The drawer's share of the document's height while it is open. */
@@ -78,12 +79,25 @@ export function scriptSizeKey(size: number, key: string): number | undefined {
 
 /**
  * The section list's keys, as SSMS's "Select a page": Down and Up move to the next and previous section without
- * wrapping, Home and End to the first and last. Undefined when the key moves nothing.
+ * wrapping, Home and End to the first and last. Right and Left do what Down and Up do, since a narrow document lays the
+ * list across the top. `from` is the focused item, which the scroll may have left behind the current one. The section
+ * the key goes to (`from` itself at either end); undefined for any other key.
  */
-export function sectionKey(key: string, ids: readonly string[], current: string): string | undefined {
-  const index = ids.indexOf(current)
-  const next = key === 'ArrowDown' ? index + 1 : key === 'ArrowUp' ? index - 1 : key === 'Home' ? 0 : key === 'End' ? ids.length - 1 : -1
-  return next >= 0 && next < ids.length && next !== index ? ids[next] : undefined
+export function sectionKey(key: string, ids: readonly string[], from: string): string | undefined {
+  if (!ids.length) return undefined
+  const index = Math.max(0, ids.indexOf(from))
+  const next = key === 'ArrowDown' || key === 'ArrowRight' ? index + 1 : key === 'ArrowUp' || key === 'ArrowLeft' ? index - 1 : key === 'Home' ? 0 : key === 'End' ? ids.length - 1 : undefined
+  return next === undefined ? undefined : ids[Math.min(ids.length - 1, Math.max(0, next))]
+}
+
+/**
+ * How far a list must scroll along one axis (px) to show an item whole, as `scrollIntoView`'s 'nearest' would, but for
+ * the list alone: 0 when it already shows, and its start first when it is longer than the view.
+ */
+export function revealBy(start: number, end: number, viewStart: number, viewEnd: number): number {
+  if (start < viewStart) return start - viewStart
+  if (end > viewEnd) return Math.min(end - viewEnd, start - viewStart)
+  return 0
 }
 
 export interface ScrollView { readonly scrollTop: number; readonly clientHeight: number; readonly scrollHeight: number }
@@ -138,6 +152,9 @@ function countLines(text: string): number {
   return text.endsWith('\n') ? count - 1 : count
 }
 
+// "Open in Query Window, Save Script As… and Copy", from the catalogue the drawer's buttons come from.
+const drawerTitles = scriptDestinations.map(destination => scriptDestinationSpecs[destination].drawerTitle)
+const drawerWays = `${drawerTitles.slice(0, -1).join(', ')} and ${drawerTitles.at(-1)}`
 const plural = (count: number, word: string) => `${formatCount(count)} ${word}${count === 1 ? '' : 's'}`
 
 /** The drawer's caption beside its title: "12 lines". */
@@ -146,7 +163,7 @@ export function scriptLinesLabel(preview: ScriptPreview): string { return plural
 /** Said under a cut preview: how much shows, and where the rest is. */
 export function scriptPreviewNote(preview: ScriptPreview): string | undefined {
   if (!preview.truncated) return undefined
-  return `Showing the first ${plural(preview.shownLines, 'line')} of ${formatCount(preview.lines)}. Open in Query Window or Copy takes the whole script.`
+  return `Showing the first ${plural(preview.shownLines, 'line')} of ${formatCount(preview.lines)}. ${drawerWays} take the whole script.`
 }
 
 /** A section's name in the list: its title, and that it needs attention when it does (the glyph alone is decoration). */

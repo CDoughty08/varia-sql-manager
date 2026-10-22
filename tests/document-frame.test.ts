@@ -2,9 +2,9 @@ import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { DocumentFrameView, DocumentHeader, FactLine, headerVerbs, type FrameSection, type HeaderVerb } from '../src/renderer/src/kit/DocumentFrame'
-import { frameLimits, initialFrameState, resizeScript, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, verbTooltip, type FrameState } from '../src/renderer/src/kit/document-frame'
+import { frameLimits, initialFrameState, resizeScript, revealBy, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, verbTooltip, type FrameState } from '../src/renderer/src/kit/document-frame'
 import ScriptDrawer, { scriptDrawerActions, type ScriptContent } from '../src/renderer/src/kit/ScriptDrawer'
-import { scriptDestinations } from '../src/shared/scripting/catalog'
+import { scriptDestinations, scriptDestinationSpecs } from '../src/shared/scripting/catalog'
 import { contrastPairs } from '../src/shared/theme/contrast-pairs'
 import { densityUse } from '../src/shared/theme/metrics'
 import { colorRegistry } from '../src/shared/theme/registry'
@@ -50,9 +50,18 @@ describe('document frame state', () => {
   })
   it('moves through the section list as SSMS moves through its pages, without wrapping', () => {
     const ids = sections.map(section => section.id)
-    expect(['ArrowDown', 'ArrowUp', 'Home', 'End', 'ArrowRight', 'PageDown'].map(key => sectionKey(key, ids, 'files'))).toEqual(['options', 'general', 'general', 'options', undefined, undefined])
-    expect([sectionKey('ArrowDown', ids, 'options'), sectionKey('ArrowUp', ids, 'general'), sectionKey('Home', ids, 'general'), sectionKey('End', ids, 'options')]).toEqual([undefined, undefined, undefined, undefined])
+    expect(['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageDown', 'Enter'].map(key => sectionKey(key, ids, 'files'))).toEqual(['options', 'general', 'general', 'options', undefined, undefined])
+    // Across the top of a narrow document the list is a row: Right and Left move as Down and Up do.
+    expect(['ArrowRight', 'ArrowLeft'].map(key => sectionKey(key, ids, 'files'))).toEqual(['options', 'general'])
+    // At either end the key stays where it is (it is still the list's key, so it does not scroll anything).
+    expect([sectionKey('ArrowDown', ids, 'options'), sectionKey('ArrowRight', ids, 'options'), sectionKey('ArrowUp', ids, 'general'), sectionKey('Home', ids, 'general'), sectionKey('End', ids, 'options')]).toEqual(['options', 'options', 'general', 'general', 'options'])
+    // An item the list no longer has moves from the first.
+    expect(sectionKey('ArrowDown', ids, 'gone')).toBe('files')
     expect(sectionKey('ArrowDown', [], '')).toBeUndefined()
+  })
+  it('scrolls the list only as far as it takes to show the current section whole', () => {
+    // Inside the view: nothing. Above or before it: back to its start. Below or after: to its end, or its start if it is longer than the view.
+    expect([revealBy(10, 30, 0, 100), revealBy(-15, 5, 0, 100), revealBy(90, 112, 0, 100), revealBy(40, 180, 50, 100), revealBy(0, 100, 0, 100)]).toEqual([0, -15, 12, -10, 0])
   })
   it('marks the section whose heading reached the top, and the chosen one where the end of the scroll stops it', () => {
     const tops = [0, 400, 900, 1000]
@@ -89,7 +98,7 @@ describe('script preview', () => {
     const big = Array.from({ length: frameLimits.previewLines + 10 }, (_, index) => `PRINT ${index}`).join('\n')
     const preview = scriptPreview(big)
     expect([preview.lines, preview.shownLines, preview.truncated, preview.text.length <= frameLimits.previewCharacters]).toEqual([5010, 5000, true, true])
-    expect(scriptPreviewNote(preview)).toBe('Showing the first 5,000 lines of 5,010. Open in Query Window or Copy takes the whole script.')
+    expect(scriptPreviewNote(preview)).toBe('Showing the first 5,000 lines of 5,010. Open in Query Window, Save Script As… and Copy take the whole script.')
     expect(scriptPreviewNote(scriptPreview('SELECT 1'))).toBeUndefined()
     const wide = scriptPreview(('y'.repeat(99) + '\n').repeat(3000))
     expect([wide.truncated, wide.text.length <= frameLimits.previewCharacters, wide.text.endsWith('y')]).toEqual([true, true, true])
@@ -112,7 +121,8 @@ describe('document frame markup', () => {
     expect(markup).toBe('<header class="document-header"><div class="document-heading">'
       + '<nav class="document-crumbs" aria-label="Location"><ol>'
       + '<li title="localhost (SQL Server 17.0)"><span class="document-crumb">localhost</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span></li>'
-      + '<li><span class="document-crumb">Databases</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span></li></ol></nav>'
+      // A crumb is cut at 32 characters, so its tooltip is its label when the document gives no other.
+      + '<li title="Databases"><span class="document-crumb">Databases</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span></li></ol></nav>'
       + '<h1 class="document-title" id="doc-1-title">AdventureWorks</h1><span class="document-subtitle">Database</span><span class="status-pill">Unsaved changes</span></div>'
       + '<div class="document-actions" role="group" aria-label="AdventureWorks actions"><button type="button">Every 2 s</button>'
       + '<button type="button" class="document-verb danger" title="Stop"><span class="codicon codicon-debug-stop" aria-hidden="true"></span>Stop</button>'
@@ -124,14 +134,21 @@ describe('document frame markup', () => {
   })
   it('makes verbs of catalogue commands, with the catalogue\'s words and icon unless the document names its own', () => {
     const ran: unknown[] = []
-    const verbs = headerVerbs([{ command: 'file.save', emphasis: 'primary' }, { command: 'query.cancel', label: 'Stop', icon: 'debug-stop', emphasis: 'danger', args: { tabId: 't1' } }], [true, false],
-      id => id === 'file.save' ? { text: 'Ctrl+S' } : undefined, (id, args) => ran.push([id, args]))
+    const verbs = headerVerbs([{ command: 'file.save', emphasis: 'primary' }, { command: 'query.cancel', label: 'Stop', icon: 'debug-stop', emphasis: 'danger', args: { tabId: 't1' } }, { command: 'view.toggleResultsPane' }, { command: 'view.toggleResultsPane' }],
+      [true, false, true, true], [true, true, true, false], id => id === 'file.save' ? { text: 'Ctrl+S' } : undefined, (id, args) => ran.push([id, args]))
     expect(verbs.map(({ run: _run, ...verb }) => verb)).toEqual([
       { key: 'file.save-0', label: 'Save', title: 'Save (Ctrl+S)', icon: 'save', emphasis: 'primary', disabled: false },
-      { key: 'query.cancel-1', label: 'Stop', title: 'Stop', icon: 'debug-stop', emphasis: 'danger', disabled: true }
+      { key: 'query.cancel-1', label: 'Stop', title: 'Stop', icon: 'debug-stop', emphasis: 'danger', disabled: true },
+      // Only a command with a toggled condition is a toggle button, pressed or not.
+      { key: 'view.toggleResultsPane-2', label: 'Toggle Results Pane', title: 'Toggle Results Pane', icon: 'output', emphasis: undefined, disabled: false, pressed: true },
+      { key: 'view.toggleResultsPane-3', label: 'Toggle Results Pane', title: 'Toggle Results Pane', icon: 'output', emphasis: undefined, disabled: false, pressed: false }
     ])
     verbs[1].run()
     expect(ran).toEqual([['query.cancel', { tabId: 't1' }]])
+    const markup = html(createElement(DocumentHeader, { id: 'd', title: 'Activity Monitor', verbs: verbs.slice(2) }))
+    expect(markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane" aria-pressed="true">')
+    expect(markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane" aria-pressed="false">')
+    expect(html(createElement(DocumentHeader, { id: 'd', title: 'x', verbs: verbs.slice(0, 1) }))).not.toContain('aria-pressed')
   })
   it('lists facts as terms and values', () => {
     expect(html(createElement(FactLine, { facts: [{ label: 'Folder', value: 'Warehouse' }, { label: 'Started', value: '22:41:07 +01:00', title: '2026-10-22 22:41:07 +01:00' }] })))
@@ -148,8 +165,13 @@ describe('document frame markup', () => {
     const markup = html(createElement(DocumentFrameView, { id: 'doc-2', title: 'AdventureWorks', sections: frameSections, frame, attributes: { 'data-designer': 'doc-2' } }))
     expect(markup.startsWith('<div class="document-frame" role="region" aria-labelledby="doc-2-title" data-document-frame="doc-2" data-designer="doc-2">')).toBe(true)
     expect(markup).toContain('<nav class="document-nav" aria-label="Sections">'
-      + '<button type="button" class="document-nav-item" data-section="general" aria-controls="doc-2-section-general"><span class="document-nav-title">General</span></button>'
-      + '<button type="button" class="document-nav-item" data-section="files" aria-current="location" aria-label="Files (needs attention)" aria-controls="doc-2-section-files"><span class="document-nav-title">Files</span><span class="codicon codicon-error" aria-hidden="true"></span></button>')
+      + '<button type="button" class="document-nav-item" data-section="general" tabindex="-1" aria-controls="doc-2-section-general"><span class="document-nav-title">General</span></button>'
+      + '<button type="button" class="document-nav-item" data-section="files" tabindex="0" aria-current="location" aria-label="Files (needs attention)" aria-controls="doc-2-section-files"><span class="document-nav-title">Files</span><span class="codicon codicon-error" aria-hidden="true"></span></button>'
+      + '<button type="button" class="document-nav-item" data-section="messages" tabindex="-1" aria-controls="doc-2-section-messages">')
+    // The list is one tab stop, on the current section, or the first when the current one is not in the list.
+    expect(markup.match(/tabindex="0"/g)).toHaveLength(1)
+    const lost = html(createElement(DocumentFrameView, { id: 'doc-2', title: 'x', sections: frameSections, frame: { ...frame, section: 'gone' } }))
+    expect(lost.match(/data-section="\w+" tabindex="0"/g)).toEqual(['data-section="general" tabindex="0"'])
     expect(markup).toContain('<div class="document-content document-sections">')
     expect(markup).toContain('<section class="document-section" id="doc-2-section-general" aria-labelledby="doc-2-section-general-heading" data-section="general"><div class="document-section-head">'
       + '<h2 class="document-section-title" id="doc-2-section-general-heading">General</h2></div><div class="document-section-body" id="doc-2-section-general-body"><p>facts</p></div></section>')
@@ -173,9 +195,10 @@ describe('document frame markup', () => {
     expect(closed).toBe('<section class="document-script" aria-labelledby="doc-3-script-head"><div class="document-script-head">'
       + '<button type="button" id="doc-3-script-head" class="document-script-toggle" aria-expanded="false" aria-controls="doc-3-script"><span class="codicon codicon-chevron-right" aria-hidden="true"></span>Script</button>'
       + '<span class="document-script-lines">2 lines</span><span class="document-script-notice" role="status"></span><div class="document-script-actions" role="group" aria-label="Script">'
-      + '<button type="button" class="icon-button" aria-label="Open in Query Window" title="Open in Query Window"><span class="codicon codicon-go-to-file" aria-hidden="true"></span></button>'
-      + '<button type="button" class="icon-button" aria-label="Copy" title="Copy"><span class="codicon codicon-copy" aria-hidden="true"></span></button>'
-      + '<button type="button" class="icon-button" aria-label="Save Script As…" title="Save Script As…"><span class="codicon codicon-save-as" aria-hidden="true"></span></button></div></div></section>')
+      // Script As's destinations, in its order and with its icons.
+      + '<button type="button" class="icon-button" aria-label="Open in Query Window" title="Open in Query Window" data-destination="newQuery"><span class="codicon codicon-file-code" aria-hidden="true"></span></button>'
+      + '<button type="button" class="icon-button" aria-label="Save Script As…" title="Save Script As…" data-destination="file"><span class="codicon codicon-save-as" aria-hidden="true"></span></button>'
+      + '<button type="button" class="icon-button" aria-label="Copy" title="Copy" data-destination="clipboard"><span class="codicon codicon-clippy" aria-hidden="true"></span></button></div></div></section>')
     const open = drawer(true, { state: 'ready', text: 'ALTER DATABASE [x] SET READ_ONLY\nGO\n' }, 'Script copied to the clipboard.')
     expect(open).toContain('<section class="document-script" aria-labelledby="doc-3-script-head" data-open="" style="flex-basis:40%">'
       + '<div class="document-script-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize Script" tabindex="0" aria-valuenow="40" aria-valuemin="15" aria-valuemax="70"></div>')
@@ -194,8 +217,9 @@ describe('document frame markup', () => {
     // A failed preview is a status, not an alert: it must not interrupt someone typing.
     expect(drawer(true, { state: 'failed', error: { message: 'Could not script.', code: 'SCRIPT_FAILED' } })).toContain('<p class="inline-error-message" role="status">Could not script.</p>')
     const long = drawer(true, { state: 'ready', text: 'PRINT 1\n'.repeat(frameLimits.previewLines + 1) })
-    expect(long).toContain('<p class="document-script-note">Showing the first 5,000 lines of 5,001. Open in Query Window or Copy takes the whole script.</p>')
-    expect(scriptDrawerActions.map(action => action.destination).sort()).toEqual([...scriptDestinations].sort())
+    expect(long).toContain('<p class="document-script-note">Showing the first 5,000 lines of 5,001. Open in Query Window, Save Script As… and Copy take the whole script.</p>')
+    // The drawer's words and icons are the scripting catalogue's.
+    expect(scriptDrawerActions).toEqual(scriptDestinations.map(destination => ({ destination, label: scriptDestinationSpecs[destination].drawerTitle, icon: scriptDestinationSpecs[destination].icon })))
   })
   it('adds the drawer under the content when the document has a script, from the frame state', () => {
     const frame = { ...initialFrameState(sections), scriptOpen: true, scriptSize: 0.25 }
@@ -231,6 +255,25 @@ describe('document frame styles and colors', () => {
     expect(valueOf('.document-script-text:focus-visible', 'outline')).toBe('1px solid var(--varia-focusBorder)')
     expect(valueOf('.document-script-splitter:hover, .document-script-splitter:focus-visible', 'background')).toBe('var(--varia-sash-hoverBorder)')
   })
+  it('keeps a danger verb in the error colour when hovered, and a pressed verb in the selection colours', () => {
+    const danger = ['button', '.document-verb', '.danger', ':not(.primary)', ':not(:disabled)']
+    for (const state of [[], [':hover']]) {
+      const style = computed([...danger, ...state]), name = state.join('') || 'rest'
+      // button:hover:not(:disabled) outranks a lone .danger rule: the words would turn neutral just as the pointer reaches Stop.
+      expect([style.get('color'), style.get('border-color')], name).toEqual(['var(--varia-errorForeground)', 'var(--varia-errorForeground)'])
+    }
+    expect(computed([...danger, ':hover']).get('background-color')).toBe('var(--varia-button-secondaryHoverBackground)')
+    const pressed = ['button', '.document-verb', '[aria-pressed="true"]', ':not(.primary)', ':not(:disabled)']
+    for (const state of [[], [':hover']]) {
+      const style = computed([...pressed, ...state]), name = state.join('') || 'rest'
+      expect([style.get('background-color'), style.get('color'), style.get('border-color'), style.get('transition')], name)
+        .toEqual(['var(--varia-list-inactiveSelectionBackground)', 'var(--varia-list-inactiveSelectionForeground)', 'var(--varia-panelTitle-activeBorder)', 'none'])
+      const strong = computed([...pressed, ...state], true)
+      expect([strong.get('forced-color-adjust'), strong.get('background-color'), strong.get('color'), strong.get('border-color')], name).toEqual(['none', 'Highlight', 'HighlightText', 'Highlight'])
+    }
+    // Off, a toggle verb is an ordinary one.
+    expect(computed(['button', '.document-verb', '[aria-pressed="false"]', ':not(.primary)', ':not(:disabled)']).get('border-color')).toBe('var(--varia-button-border)')
+  })
   it('sizes its bars, buttons and rows from the density tokens', () => {
     expect(densityUse.bar).toContain('.document-script-head')
     expect(densityUse.control).toContain('.document-verb')
@@ -242,6 +285,7 @@ describe('document frame styles and colors', () => {
     expect(has('list.inactiveSelectionForeground', ['editor.background', 'list.inactiveSelectionBackground'], 4.5)).toBe(true)
     expect(has('panelTitle.activeBorder', ['editor.background', 'list.inactiveSelectionBackground'], 3)).toBe(true)
     expect(has('errorForeground', ['editor.background', 'list.inactiveSelectionBackground'], 3)).toBe(true)
+    expect(has('errorForeground', ['editor.background', 'button.secondaryHoverBackground'], 4.5)).toBe(true)
     expect(has('focusBorder', ['editor.background', 'list.inactiveSelectionBackground'], 3)).toBe(true)
     expect(has('sash.hoverBorder', ['panel.background'], 3)).toBe(true)
     expect(has('breadcrumb.separatorForeground', ['editor.background'], 4.5)).toBe(true)

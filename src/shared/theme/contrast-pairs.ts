@@ -193,7 +193,9 @@ export const contrastPairs: readonly ContrastPair[] = [
 
   // The document frame (src/renderer/src/kit): the current section in its list, its accent edge (beside it, or under it
   // in a narrow document), a section's problem glyph and the focus ring on it; the Script drawer's splitter, hovered or focused.
+  // A pressed header verb takes the current section's colours; a danger verb keeps its words in the error colour when hovered.
   ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
+  ...text(['errorForeground'], hovered(...editor)),
   ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
   ...graphic(['sash.hoverBorder'], panel)
 ]

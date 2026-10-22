@@ -2,12 +2,12 @@ import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode 
 import { commandDescriptor } from '../../../shared/commands/catalog'
 import { nextFrame } from '../core/frame'
 import type { CommandArgs, CommandId } from '../core/types'
-import { useCommandsEnabled } from '../core/useCommand'
+import { useCommandsEnabled, useCommandsToggled } from '../core/useCommand'
 import { useWorkbench } from '../core/WorkbenchContext'
-import { scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
+import { revealBy, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
 import ScriptDrawer, { type ScriptDrawerProps } from './ScriptDrawer'
 
-/** One step of the path to the document's object: the server (connection), a folder, a database. */
+/** One step of the path to the document's object: the server (connection), a folder, a database. Its tooltip is `title`, or the label, which may be cut. */
 export interface Crumb { readonly label: string; readonly title?: string }
 /** A fact in the line under the header ("Folder Warehouse", "Started 22:41:07 +01:00"). */
 export interface Fact { readonly label: string; readonly value: string; readonly title?: string }
@@ -23,8 +23,11 @@ export interface Verb {
   readonly icon?: string
   readonly emphasis?: 'primary' | 'danger'
 }
-/** A verb as the header draws it, with its state and its key worked out. */
-export interface HeaderVerb { readonly key: string; readonly label: string; readonly title: string; readonly icon?: string; readonly emphasis?: Verb['emphasis']; readonly disabled: boolean; readonly run: () => void }
+/**
+ * A verb as the header draws it, with its state and its key worked out. `pressed` is set for a command with a `toggled`
+ * condition (Split View), whose button then says whether it is on (`aria-pressed`).
+ */
+export interface HeaderVerb { readonly key: string; readonly label: string; readonly title: string; readonly icon?: string; readonly emphasis?: Verb['emphasis']; readonly disabled: boolean; readonly pressed?: boolean; readonly run: () => void }
 export interface FrameSection extends SectionInfo {
   readonly content: ReactNode
   /** Its heading opens and closes it; a collapsed section's content is not rendered. */
@@ -53,7 +56,7 @@ export function DocumentHeader({ id, title, crumbs = [], subtitle, state, tools,
   return <header className="document-header">
     <div className="document-heading">
       {crumbs.length > 0 && <nav className="document-crumbs" aria-label="Location">
-        <ol>{crumbs.map((crumb, index) => <li key={index} title={crumb.title}>
+        <ol>{crumbs.map((crumb, index) => <li key={index} title={crumb.title ?? crumb.label}>
           <span className="document-crumb">{crumb.label}</span><span className="codicon codicon-chevron-right" aria-hidden="true" />
         </li>)}</ol>
       </nav>}
@@ -64,7 +67,7 @@ export function DocumentHeader({ id, title, crumbs = [], subtitle, state, tools,
     {(tools || verbs.length > 0) && <div className="document-actions" role="group" aria-label={`${title} actions`}>
       {tools}
       {verbs.map((verb, index) => <button key={verb.key} type="button" className={index === primary ? 'document-verb primary' : verb.emphasis === 'danger' ? 'document-verb danger' : 'document-verb'}
-        title={verb.title} disabled={verb.disabled} onClick={verb.run}>
+        title={verb.title} aria-pressed={verb.pressed} disabled={verb.disabled} onClick={verb.run}>
         {verb.icon && <span className={`codicon codicon-${verb.icon}`} aria-hidden="true" />}{verb.label}
       </button>)}
     </div>}
@@ -85,20 +88,36 @@ interface NavProps {
   readonly onChoose: (id: string) => void
 }
 
-/** The section list beside the content: each section is a button, the current one marked (`aria-current`). */
+/**
+ * The section list beside the content: each section is a button, the current one marked (`aria-current`). The list is
+ * one tab stop, on the current section; the keys move from the focused one, wherever the scroll has taken the current.
+ */
 export function SectionNav({ id, sections, current, onChoose }: NavProps) {
   const nav = useRef<HTMLElement>(null)
+  const item = (section: string) => nav.current?.querySelector<HTMLElement>(`[data-section="${CSS.escape(section)}"]`)
+  // The list follows the scroll, so the current section stays in view where the list is longer than its box.
+  useLayoutEffect(() => {
+    const list = nav.current, marked = item(current)
+    if (!list || !marked) return
+    const view = list.getBoundingClientRect(), box = marked.getBoundingClientRect()
+    const top = view.top + list.clientTop, left = view.left + list.clientLeft
+    list.scrollTop += revealBy(box.top, box.bottom, top, top + list.clientHeight)
+    list.scrollLeft += revealBy(box.left, box.right, left, left + list.clientWidth)
+  }, [current])
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
-    const next = sectionKey(event.key, sections.map(section => section.id), current)
+    const from = (event.target as HTMLElement).closest<HTMLElement>('[data-section]')?.dataset.section ?? current
+    const next = sectionKey(event.key, sections.map(section => section.id), from)
     if (next === undefined) return
     event.preventDefault()
     event.stopPropagation()
-    onChoose(next)
-    nav.current?.querySelector<HTMLElement>(`[data-section="${CSS.escape(next)}"]`)?.focus()
+    if (next !== from || next !== current) onChoose(next)
+    // The layout effect above shows it inside the list; focus alone would scroll whatever holds the document too.
+    item(next)?.focus({ preventScroll: true })
   }
+  const stop = sections.some(section => section.id === current) ? current : sections[0]?.id
   return <nav ref={nav} className="document-nav" aria-label="Sections" onKeyDown={keyDown}>
-    {sections.map(section => <button key={section.id} type="button" className="document-nav-item" data-section={section.id} aria-current={section.id === current ? 'location' : undefined}
+    {sections.map(section => <button key={section.id} type="button" className="document-nav-item" data-section={section.id} tabIndex={section.id === stop ? 0 : -1} aria-current={section.id === current ? 'location' : undefined}
       aria-label={section.problem ? sectionLabel(section) : undefined} aria-controls={sectionDomId(id, section.id)} onClick={() => onChoose(section.id)}>
       <span className="document-nav-title">{section.title}</span>
       {section.problem && <span className="codicon codicon-error" aria-hidden="true" />}
@@ -214,21 +233,22 @@ function SectionedBody({ id, sections, frame, onFrame }: { readonly id: string; 
  * Header verbs from catalogue commands: the catalogue's title and icon unless the document names its own, whether each
  * can run now, its key in the tooltip, and running it as the toolbar does.
  */
-export function headerVerbs(verbs: readonly Verb[], enabled: readonly boolean[], keyOf: (id: CommandId) => { readonly text: string } | undefined, execute: (id: CommandId, args: CommandArgs | undefined) => void): HeaderVerb[] {
+export function headerVerbs(verbs: readonly Verb[], enabled: readonly boolean[], toggled: readonly boolean[], keyOf: (id: CommandId) => { readonly text: string } | undefined, execute: (id: CommandId, args: CommandArgs | undefined) => void): HeaderVerb[] {
   return verbs.map((verb, index) => {
     const descriptor = commandDescriptor(verb.command), label = verb.label ?? descriptor.title
     return {
       key: `${verb.command}-${index}`, label, title: verbTooltip(label, keyOf(verb.command)), icon: verb.icon ?? descriptor.icon, emphasis: verb.emphasis,
-      disabled: !enabled[index], run: () => execute(verb.command, verb.args)
+      disabled: !enabled[index], ...(descriptor.toggled === undefined ? {} : { pressed: !!toggled[index] }), run: () => execute(verb.command, verb.args)
     }
   })
 }
 
-/** `headerVerbs` for a rendered header, kept current as commands become available. */
+/** `headerVerbs` for a rendered header, kept current as commands become available and toggles change. */
 export function useHeaderVerbs(verbs: readonly Verb[]): readonly HeaderVerb[] {
   const workbench = useWorkbench()
   const enabled = useCommandsEnabled(verbs.map(verb => ({ id: verb.command, args: verb.args })))
-  return headerVerbs(verbs, enabled, id => workbench.keybindings.lookup(id), (id, args) => void workbench.commands.execute(id, args, 'toolbar'))
+  const toggled = useCommandsToggled(verbs.map(verb => verb.command))
+  return headerVerbs(verbs, enabled, toggled, id => workbench.keybindings.lookup(id), (id, args) => void workbench.commands.execute(id, args, 'toolbar'))
 }
 
 export interface DocumentFrameProps extends Omit<DocumentFrameViewProps, 'verbs'> { readonly verbs?: readonly Verb[] }

@@ -1,5 +1,5 @@
 import { useMemo, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
+import { scriptDestinations, scriptDestinationSpecs, type ScriptDestination } from '../../../shared/scripting/catalog.ts'
 import { frameLimits, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey } from './document-frame'
 import type { ErrorReport } from './format'
 import InlineError from './InlineError'
@@ -15,12 +15,9 @@ export type ScriptContent =
   | { readonly state: 'ready'; readonly text: string }
   | { readonly state: 'failed'; readonly error: ErrorReport }
 
-/** The drawer's three ways out, the destinations Script As and the object dialogs' Script button deliver to. */
-export const scriptDrawerActions: readonly { readonly destination: ScriptDestination; readonly label: string; readonly icon: string }[] = [
-  { destination: 'newQuery', label: 'Open in Query Window', icon: 'go-to-file' },
-  { destination: 'clipboard', label: 'Copy', icon: 'copy' },
-  { destination: 'file', label: 'Save Script As…', icon: 'save-as' }
-]
+/** The drawer's ways out, the destinations Script As and the object dialogs' Script button deliver to, worded and drawn as the catalogue says. */
+export const scriptDrawerActions: readonly { readonly destination: ScriptDestination; readonly label: string; readonly icon: string }[] =
+  scriptDestinations.map(destination => ({ destination, label: scriptDestinationSpecs[destination].drawerTitle, icon: scriptDestinationSpecs[destination].icon }))
 
 export interface ScriptDrawerProps {
   /** The document's id, for the drawer's element ids. */
@@ -74,7 +71,7 @@ export default function ScriptDrawer({ id, open, size, content, onToggle, onResi
       <span className="document-script-notice" role="status">{notice}</span>
       <div className="document-script-actions" role="group" aria-label="Script">
         {scriptDrawerActions.map(action => <button key={action.destination} type="button" className="icon-button" aria-label={action.label} title={action.label} disabled={!ready}
-          onClick={() => onDeliver(action.destination)}><span className={`codicon codicon-${action.icon}`} aria-hidden="true" /></button>)}
+          data-destination={action.destination} onClick={() => onDeliver(action.destination)}><span className={`codicon codicon-${action.icon}`} aria-hidden="true" /></button>)}
       </div>
     </div>
     {open && <div className="document-script-body" id={bodyId}>

@@ -45,11 +45,13 @@ export interface ScriptDestinationSpec {
   readonly icon: 'file-code' | 'save-as' | 'clippy'
   /** It opens or saves a document, so it waits while a document task runs (`documentBusy`). */
   readonly documentTask: boolean
+  /** The button for it in a document's Script drawer (src/renderer/src/kit/ScriptDrawer.tsx), with the same icon. */
+  readonly drawerTitle: string
 }
 export const scriptDestinationSpecs: { readonly [D in ScriptDestination]: ScriptDestinationSpec } = {
-  newQuery: { title: 'New Query Editor Window', mnemonic: 'n', order: 1, icon: 'file-code', documentTask: true },
-  file: { title: 'File…', mnemonic: 'f', order: 2, icon: 'save-as', documentTask: true },
-  clipboard: { title: 'Clipboard', mnemonic: 'l', order: 3, icon: 'clippy', documentTask: false }
+  newQuery: { title: 'New Query Editor Window', mnemonic: 'n', order: 1, icon: 'file-code', documentTask: true, drawerTitle: 'Open in Query Window' },
+  file: { title: 'File…', mnemonic: 'f', order: 2, icon: 'save-as', documentTask: true, drawerTitle: 'Save Script As…' },
+  clipboard: { title: 'Clipboard', mnemonic: 'l', order: 3, icon: 'clippy', documentTask: false, drawerTitle: 'Copy' }
 }
 
 /** The "Script … as" menu titles, by key; native menus receive the key, never text. */

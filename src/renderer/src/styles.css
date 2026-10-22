@@ -760,7 +760,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-verb { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; }
 .document-verb:not(.primary) { border-color: var(--varia-button-border); }
 /* Stop execution, Kill session…: outlined in the error colour, so a verb that ends something never looks like the primary one. */
-.document-verb.danger { color: var(--varia-errorForeground); border-color: var(--varia-errorForeground); }
+.document-verb.danger, .document-verb.danger:hover:not(:disabled) { color: var(--varia-errorForeground); border-color: var(--varia-errorForeground); }
+/* A toggle verb (Split View) that is on: the current section's colours and an accent edge, hovered or not. */
+.document-verb[aria-pressed="true"], .document-verb[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
 .document-facts { display: flex; flex-wrap: wrap; gap: var(--varia-space-1) var(--varia-space-4); flex: none; margin: 0; padding: 0 var(--varia-space-4) var(--varia-space-2); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .document-facts > div { display: flex; gap: 6px; min-width: 0; max-width: 100%; }
 .document-facts dt { flex: none; color: var(--varia-descriptionForeground); }
@@ -811,6 +813,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .document-nav-item[aria-current="location"], .document-nav-item[aria-current="location"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .document-nav-item[aria-current="location"] > .codicon { color: HighlightText; }
   .document-nav-item[aria-current="location"]:focus-visible { outline: 2px solid HighlightText; outline-offset: -2px; }
+  .document-verb[aria-pressed="true"], .document-verb[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .document-verb[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
   .document-script-splitter { background: CanvasText; forced-color-adjust: none; }
   .document-script-splitter:hover, .document-script-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
 }
