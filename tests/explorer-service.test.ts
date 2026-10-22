@@ -48,8 +48,10 @@ const failure = (code: ExplorerError['code'], message: string, nodes: ExplorerNo
 function fakeBackend() {
   const state = {
     tables: ['dbo.T0', 'dbo.T1', 'dbo.T2'], pageSize: 2000, dropped: new Set<string>(), auditsDenied: true, offline: true, failNext: undefined as ApiResult<ExplorerChildrenResult> | undefined,
-    /** AppData's row fields (a sublabel, no chevron when offline), and table subtypes by name. */
-    appData: {} as Partial<ExplorerNode>, subtypes: {} as Record<string, NodeSubtype>
+    /** AppData's row fields (a sublabel, no chevron when offline), table subtypes and other row fields by name. */
+    appData: {} as Partial<ExplorerNode>, subtypes: {} as Record<string, NodeSubtype>, tableFields: {} as Record<string, Partial<ExplorerNode>>,
+    /** Locked cannot be opened while this holds; `leafTables` lists tables without a chevron. */
+    lockedDenied: true, leafTables: false
   }
   const sent: Sent[] = []
   const holds: ((params: ExplorerChildrenParams) => boolean)[] = []
@@ -62,7 +64,7 @@ function fakeBackend() {
       const value = node.object
       switch (value.kind) {
         case 'server': return ok([folder(value, 'databases'), folder(value, 'serverSecurity'), folder(value, 'serverObjects')])
-        case 'database': return value.name === 'Locked' ? failure('NO_DB_ACCESS', 'The current login cannot access database Locked.') : ok([folder(value, 'tables'), folder(value, 'views')])
+        case 'database': return value.name === 'Locked' && state.lockedDenied ? failure('NO_DB_ACCESS', 'The current login cannot access database Locked.') : ok([folder(value, 'tables'), folder(value, 'views')])
         case 'table': return state.dropped.has(`${value.schema}.${value.name}`) ? failure('NOT_FOUND', `${value.schema}.${value.name} no longer exists.`) : ok([folder(value, 'columns'), folder(value, 'keys')])
         default: return ok([])
       }
@@ -84,7 +86,7 @@ function fakeBackend() {
         const offset = params.cursor ? Number(params.cursor.split('.')[2]) : 0
         const statics = params.cursor ? [] : [folder(owner, 'systemTables')]
         const names = params.filter?.name ? state.tables.filter(name => name.includes(params.filter!.name!.value)) : state.tables
-        const rows = names.slice(offset, offset + state.pageSize).map(name => object(tableRef(name), name, state.subtypes[name] ? { subtype: state.subtypes[name] } : {}))
+        const rows = names.slice(offset, offset + state.pageSize).map(name => object(tableRef(name), name, { ...state.subtypes[name] ? { subtype: state.subtypes[name] } : {}, ...state.leafTables ? { hasChildren: false } : {}, ...state.tableFields[name] }))
         const end = offset + state.pageSize
         return { ok: true, value: { nodes: [...statics, ...rows], elapsedMs: 1, ...params.cursor ? {} : { total: 1 + names.length }, ...end < names.length ? { cursor: `v1.tables.${end}` } : {} } }
       }
@@ -677,6 +679,16 @@ describe('ExplorerService: reconcile', () => {
     f.explorer.refresh(tables)
     await settle()
     expect(f.explorer.getSnapshot().selected).toBe(views)
+    // So does Stop: a later refresh does not move the selection.
+    f.hold(isFolder('tables'))
+    f.explorer.reconcile(tables, { select: table('T1') })
+    f.explorer.stop()
+    await settle()
+    f.unhold()
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.find('dbo.T1')).toBeDefined()
+    expect(f.explorer.getSnapshot().selected).toBe(views)
   })
   it('keeps the old rows a paged folder has not brought back until its last page, through Stop, then removes them', async () => {
     const f = fixture()
@@ -739,11 +751,13 @@ describe('ExplorerService: reconcile', () => {
     const tables = await f.open('Tables')
     const t1 = await f.open('dbo.T1')
     f.state.subtypes['dbo.T1'] = 'systemVersioned'
+    f.state.tableFields['dbo.T1'] = { label: 'dbo.T1 (System-Versioned)', detail: 'Created 2024-05-01', icon: kindSpecs.view.icon, created: '2024-05-01T09:30:00' }
     f.explorer.reconcile(tables)
     await settle()
-    expect(f.find('dbo.T1')).toBe(t1)
+    expect(f.find('dbo.T1 (System-Versioned)')).toBe(t1)
     expect(f.calls().at(-1)).toMatchObject({ node: { type: 'object', object: { kind: 'table', name: 'T1' } }, subtype: 'systemVersioned' })
-    expect(f.explorer.node(t1)).toMatchObject({ subtype: 'systemVersioned', expanded: true, load: 'loaded' })
+    expect(f.explorer.node(t1)).toMatchObject({ subtype: 'systemVersioned', expanded: true, load: 'loaded', detail: 'Created 2024-05-01', icon: kindSpecs.view.icon, created: '2024-05-01T09:30:00' })
+    expect(f.explorer.node(t1)!.lower).toBe('dbo.t1 (system-versioned)')
     f.state.appData = { sublabel: '(Read-Only)' }
     f.explorer.reconcile(databases)
     await settle()
@@ -763,6 +777,108 @@ describe('ExplorerService: reconcile', () => {
     f.explorer.expand(app)
     await settle()
     expect(f.labels()).toContain('      Tables')
+  })
+  it('drops the error of a row it keeps and loads it again: at once when expanded, else when next expanded', async () => {
+    // After DDL (Database Properties set MULTI_USER, say) on the listing folder, with the row expanded.
+    const f = fixture()
+    f.connect()
+    await settle()
+    const databases = await f.open('Databases')
+    const locked = await f.open('Locked')
+    expect(f.labels()).toContain('[The current login cannot access database Locked.]')
+    f.state.lockedDenied = false
+    f.explorer.reconcile(databases)
+    await settle()
+    expect(f.find('Locked')).toBe(locked)
+    expect(f.explorer.node(locked)).toMatchObject({ load: 'loaded', error: undefined, expanded: true })
+    expect(f.labels().filter(label => label.startsWith('['))).toEqual([])
+    expect(f.find('Tables', locked)).toBeDefined()
+    // After F5 on the folder, with the row expanded: it loads as a first load, which announces nothing as added.
+    const h = fixture()
+    h.connect()
+    await settle()
+    const listing = await h.open('Databases')
+    const opened = await h.open('Locked')
+    h.state.lockedDenied = false
+    h.explorer.refresh(listing)
+    await settle()
+    expect(h.explorer.node(opened)).toMatchObject({ load: 'loaded', error: undefined, expanded: true })
+    expect(h.explorer.node(opened)!.children!.map(child => child.label)).toEqual(['Tables', 'Views'])
+    expect(h.explorer.getSnapshot().announcement?.text).toBe('Could not load Locked: The current login cannot access database Locked.')
+    // After F5 on the folder (access granted, say), with the row collapsed: expanding it loads it.
+    const g = fixture()
+    g.connect()
+    await settle()
+    const folder = await g.open('Databases')
+    const row = await g.open('Locked')
+    g.explorer.collapse(row)
+    g.state.lockedDenied = false
+    g.explorer.refresh(folder)
+    await settle()
+    expect(g.explorer.node(row)).toMatchObject({ load: 'none', error: undefined, expanded: false })
+    const from = g.calls().length
+    g.explorer.expand(row)
+    await settle()
+    expect(g.calls().slice(from).map(params => params.node)).toEqual([{ type: 'object', object: { kind: 'database', name: 'Locked' } }])
+    expect(g.explorer.node(row)!.children!.map(child => child.label)).toEqual(['Tables', 'Views'])
+    // A row whose refresh failed keeps its rows, which are reconciled, so what is expanded below them stays.
+    const app = g.find('AppData')
+    g.explorer.expand(app)
+    await settle()
+    const tables = g.find('Tables', app)
+    g.explorer.expand(tables)
+    await settle()
+    const t1 = g.find('dbo.T1')
+    g.explorer.expand(t1)
+    await settle()
+    g.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    g.explorer.refresh(tables)
+    await settle()
+    expect(g.labels()).toContain('[Refresh failed: Another session holds a lock on this metadata. Press Enter to retry.]')
+    g.explorer.reconcile(app)
+    await settle()
+    expect(g.explorer.node(tables)).toMatchObject({ load: 'loaded', error: undefined, expanded: true })
+    expect(g.labels().filter(label => label.startsWith('['))).toEqual([])
+    expect(g.find('dbo.T1')).toBe(t1)
+    expect(g.explorer.node(t1)!.expanded).toBe(true)
+  })
+  it('keeps a row the user expands while a refresh waits loading at the user\'s priority', async () => {
+    const f = fixture({ inFlightPerConnection: 1 })
+    f.state.tables = Array.from({ length: 6 }, (_, index) => `dbo.T${index}`)
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    for (const name of ['dbo.T0', 'dbo.T1', 'dbo.T2']) await f.open(name)
+    const t5 = f.find('dbo.T5')
+    f.hold(isFolder('tables'))
+    f.explorer.refresh(tables)
+    f.explorer.expand(t5)
+    const from = f.calls().length
+    f.unhold()
+    f.release()
+    while (f.explorer.context.getSnapshot().explorerLoading) await settle()
+    // The expanded tables below reload in the background, after the one the user opened, which is not asked for again.
+    expect(f.calls().slice(from).map(params => params.node.type === 'object' ? params.node.object.name : params.node.folder)).toEqual(['T5', 'T0', 'T1', 'T2'])
+    expect(f.explorer.node(t5)).toMatchObject({ expanded: true, load: 'loaded' })
+    expect(f.explorer.node(t5)!.children!.map(child => child.label)).toEqual(['Columns', 'Keys'])
+  })
+  it('reconciles in the background when asked, behind the user\'s loads, without a refreshed event', async () => {
+    const f = fixture({ inFlightPerConnection: 1 })
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    f.hold(isFolder('views'))
+    f.explorer.expand(f.find('Views'))
+    const from = f.calls().length, events = f.emitted.length
+    f.state.tables = ['dbo.T0', 'dbo.T1', 'dbo.T2', 'dbo.T3']
+    f.explorer.reconcile(tables, { background: true })
+    f.explorer.expand(f.find('Security'))
+    f.unhold()
+    f.release()
+    while (f.explorer.context.getSnapshot().explorerLoading) await settle()
+    expect(f.calls().slice(from).map(params => params.node.type === 'folder' ? params.node.folder : params.node.object.kind)).toEqual(['serverSecurity', 'tables'])
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added')
+    expect(f.emitted.slice(events).filter(event => event.type === 'explorer.refreshed')).toEqual([])
   })
   it('reconciles a folder of 99,000 rows page by page, each page within the budget', async () => {
     const f = fixture()
@@ -789,6 +905,40 @@ describe('ExplorerService: reconcile', () => {
     expect(f.explorer.node(tables)!.children!.at(-1)!.label).toBe('dbo.Extra')
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
     // A garbage collection can land in any page.
+    expect(durations.filter(ms => ms >= 25).length, durations.map(ms => ms.toFixed(1)).join(' ')).toBeLessThanOrEqual(2)
+  })
+  it('reconciles 99,000 rows without chevrons page by page within the budget while 300 loads wait on another server', async () => {
+    const f = fixture()
+    f.state.tables = Array.from({ length: 300 }, (_, index) => `dbo.Wait${index}`)
+    f.connect('server-a')
+    f.connect('server-b')
+    await settle()
+    let waiting = f.find('server-b.example')
+    for (const label of ['Databases', 'AppData', 'Tables']) { waiting = f.find(label, waiting); f.explorer.expand(waiting); await settle() }
+    f.hold(params => params.connectionId === cid('server-b') && params.node.type === 'object')
+    for (const child of f.explorer.node(waiting)!.children!.filter(child => child.kind === 'table')) f.explorer.expand(child.id)
+    const names = Array.from({ length: 99_000 }, (_, index) => `dbo.Table${index}`)
+    f.state.tables = names
+    f.state.leafTables = true
+    let tables = f.find('server-a.example')
+    for (const label of ['Databases', 'AppData', 'Tables']) { tables = f.find(label, tables); f.explorer.expand(tables); await settle() }
+    while (f.explorer.node(tables)!.more === 'auto') await settle()
+    expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
+    f.state.tables = [...names.slice(1), 'dbo.Extra']
+    const isA = (params: ExplorerChildrenParams) => params.connectionId === cid('server-a') && isFolder('tables')(params)
+    f.hold(isA)
+    f.explorer.reconcile(tables)
+    const durations: number[] = []
+    while (f.sent.some(entry => !entry.settled && isA(entry.params))) {
+      const start = performance.now()
+      f.release(isA)
+      await settle()
+      durations.push(performance.now() - start)
+    }
+    expect(durations).toHaveLength(50)
+    expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
+    expect(f.explorer.context.getSnapshot().explorerLoading).toBe(true)
     expect(durations.filter(ms => ms >= 25).length, durations.map(ms => ms.toFixed(1)).join(' ')).toBeLessThanOrEqual(2)
   })
 })

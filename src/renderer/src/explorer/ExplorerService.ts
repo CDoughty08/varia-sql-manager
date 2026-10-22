@@ -95,6 +95,11 @@ export interface ReconcileOptions {
   readonly select?: ExplorerNodeRef
   /** Reloads the expanded nodes below too, and has collapsed ones reload when next expanded (Refresh does). */
   readonly deep?: boolean
+  /**
+   * A reconcile nobody asked for (a probe saw a change): it loads behind the user's own loads and emits no
+   * `explorer.refreshed`, so the query bars' database lists are not reloaded for it.
+   */
+  readonly background?: boolean
 }
 
 const serverRef: ExplorerNodeRef = { type: 'object', object: { kind: 'server' } }
@@ -260,7 +265,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       const object = options.select.type === 'object' ? options.select.object : undefined
       this.pendingSelect = { folder: node.id, key: refKey(node.connectionId, options.select), name: object?.name }
     }
-    this.reconcileNode(node, options)
+    this.reconcileNode(node, options, options.background ? 'background' : 'user')
     this.invalidate()
   }
   /** Stops every load. Partly loaded folders show a Stopped row, and first pages that never arrived collapse. */
@@ -555,6 +560,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
     Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0 })
+    // A lost root never loads again (reconnecting adds a new one); this only lets go of the rows a reconcile held.
     const state = this.state(root)
     state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
     root.rev++
@@ -788,7 +794,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // The subtype picks the folders below (a table's history row), so they are listed again.
     const subtype = node.subtype !== wire.subtype
     if (subtype) { node.subtype = wire.subtype; changed = true }
-    if (subtype || !wire.hasChildren) this.forget(node)
+    // A row that never had a chevron has nothing to drop (most rows of a big folder of leaves), and walking every pending
+    // load for each of them would make a reconcile's pages as slow as the queue is long.
+    if (subtype || (!wire.hasChildren && (node.hasChildren || node.children !== undefined))) this.forget(node)
     if (node.hasChildren !== wire.hasChildren) {
       node.hasChildren = wire.hasChildren
       // An empty folder gets its chevron back and lists its rows again when expanded.
@@ -809,12 +817,22 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.rev++
   }
   /**
-   * Below a child a reconcile kept: an expanded one that lost its rows loads them again, and a deep reconcile reloads
+   * Below a child a reconcile kept: an expanded one that lost its rows loads them again, one that could not load drops
+   * its error and loads again (what failed may be fixed: access granted, MULTI_USER set), and a deep reconcile reloads
    * expanded ones too (in the background, after the user's loads) and has collapsed ones reconcile when next expanded.
    */
   private reconcileBelow(child: TreeNode, deep: boolean): void {
+    // A first page asked for while the reconcile waited (the user expanded the row) is new enough: it keeps its place in
+    // the queue and its priority.
+    const running = this.running.get(child.id)
+    if (running && running.mode !== 'more') return
+    const failed = child.load === 'error'
     if (deep && (child.expanded || child.children?.length)) this.reconcileNode(child, { deep: true }, 'background')
-    else if (child.expanded && child.load === 'none') this.ensureLoading(child, 'background')
+    else if (failed && child.children?.length) this.reconcileNode(child, {}, 'background')
+    else {
+      if (failed) { child.error = undefined; child.load = 'none'; this.state(child).retryMode = undefined; child.rev++ }
+      if (child.expanded && child.load === 'none') this.ensureLoading(child, 'background')
+    }
   }
   /** Children shown that a load brought: during a reconcile, not the old rows still waiting. */
   private loadedCount(node: TreeNode): number {
@@ -994,7 +1012,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (node.load === 'error') node.load = node.children?.length ? 'loaded' : 'none'
     if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
     if (options.select && node.hasChildren) node.expanded = true
-    if (node.expanded) this.loadFirst(node, 'reconcile', priority, deep)
+    // A node never listed (one that could not load, say) has its first load, with nothing to announce as added.
+    if (node.expanded) this.loadFirst(node, node.children !== undefined || this.pendingSelect?.folder === node.id ? 'reconcile' : 'keep', priority, deep)
     else if (node.children?.length) {
       node.load = 'none'
       state.pendingMode = 'reconcile'
