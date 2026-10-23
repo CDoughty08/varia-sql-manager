@@ -97,6 +97,7 @@ PageChecks.Run(Check);
 HostChecks.Run(Check);
 await ConnectionFailureChecks.RunAsync(Check);
 await ConnectionFailureChecks.IdentityAsync(Check);
+SessionChecks.Run(Check);
 await EntraChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);

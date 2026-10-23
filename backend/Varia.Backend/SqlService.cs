@@ -1156,7 +1156,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 var open = await CountAsync(connection, TransactionCountSql, token);
                 return new SessionState(open ?? 0, open is not null);
             }
-            catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested && connection.State != System.Data.ConnectionState.Open)
+            catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested && IsSessionLost(error, connection.State))
             {
                 throw Lost(args.SessionId, session, "The SQL session was lost, so SQL Server rolled back its transaction.");
             }
@@ -1171,6 +1171,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         session.Close();
         return new RequestException("SESSION_LOST", message);
     }
+
+    // Managed SNI can report a fatal transport error before its asynchronous close updates Connection.State.
+    // Severity 20 and above ends the session even while the connection still appears open.
+    internal static bool IsSessionLost(Exception error, System.Data.ConnectionState state) =>
+        state != System.Data.ConnectionState.Open || error is SqlException sql && sql.Errors.Cast<SqlError>().Any(item => item.Class >= 20);
 
     /// <summary>@@TRANCOUNT after the batch, or null when the batch compiled without executing. The token alone carries the
     /// deadline (see ExecuteAsync).</summary>
@@ -1242,7 +1247,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             }
             catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested)
             {
-                if (connection.State != System.Data.ConnectionState.Open) throw Lost();
+                if (IsSessionLost(error, connection.State)) throw Lost();
                 if (error is not SqlException failed) throw;
                 var details = string.Join(Environment.NewLine, failed.Errors.Cast<SqlError>().Where(item => item.Class > 10)
                     .Select(item => "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + "\n" + item.Message));

@@ -148,8 +148,11 @@ export async function dialogLifecycle(launchOptions) {
     // The renderer crashes while Save Grid Results is open: the crash prompt waits for it rather than opening over it,
     // and what the dead page asked for and was not shown yet (the Script As save, the close prompt) never is.
     const beforeCrash = await spawns()
+    const beforeLoss = (await rendererLosses(application)).length
     await crash(application)
-    await wait(1000)
+    // forcefullyCrashRenderer returns before Chromium reports the crash (or the watchdog observes it). Keep the file
+    // chooser open until main has handled that loss; shared runners can take longer than a fixed one-second delay.
+    await expect.poll(async () => (await rendererLosses(application)).slice(beforeLoss).some(loss => loss.handled), { timeout: 15000 }).toBe(true)
     expect(await shown(application)).toEqual(['Save Grid Results'])
     await application.evaluate(() => globalThis.variaReleaseGridSave())
     await expect.poll(() => shown(application), { timeout: 15000 }).toEqual(['Save Grid Results', 'Workbench stopped'])
