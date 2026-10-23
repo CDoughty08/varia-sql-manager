@@ -95,8 +95,19 @@ export const part = {
   quickInputHighlight: '.quick-input-hl',
   quickInputGroup: '.quick-input-group',
   quickInputEmpty: '.quick-input-empty',
+  // Connection environment labels (src/renderer/src/EnvironmentTag.tsx): the kit's tag, in a wrapper that bounds it per
+  // place (data-place: explorer, tab, query, status or list), and the kit's pill and its label inside it.
+  environmentTag: '.environment-tag',
+  statusPill: '.status-pill',
+  statusPillLabel: '.status-pill-label',
+  /** The status bars' spans that hold the tag with its visually hidden prefix. */
+  queryEnvironment: '.query-status-environment',
+  statusEnvironment: '.status-environment',
   // Dialogs
   connectionChoice: '.connection-choice',
+  /** The Connect and Connection Environment dialogs' scrolling form, and the Environment field's preview of the tag. */
+  connectionScroll: '.connection-scroll',
+  environmentPreview: '.environment-preview',
   optionsNote: '.options-note',
   optionsDescription: '.options-description',
   optionsForm: '.options-form',
@@ -121,6 +132,8 @@ export const part = {
   menu: '.menu',
   explorerTreeBox: '.explorer-tree',
   explorerRow: '.explorer-row',
+  explorerServerRow: '.explorer-row.server',
+  activeDocumentTab: '.query-tab.active',
   dialogPages: '.object-dialog-pages',
   titleBarMenus: '.title-bar-menus'
 }
@@ -289,6 +302,8 @@ export const optionsForm = dialog => dialog.locator(part.optionsForm)
 export const optionsDescription = dialog => dialog.locator(part.optionsDescription)
 /** Saved connections in the Connect dialog's history, by the text they show. */
 export const savedConnections = (dialog, text) => dialog.locator(part.connectionChoice, { hasText: text })
+/** A connection's environment tag (its pill) in a place: explorer, tab, query or status. */
+export const environmentPill = (scope, place) => scope.locator(`${part.environmentTag}[data-place="${place}"] ${part.statusPill}`)
 
 // Menus and the quick input
 

@@ -175,6 +175,8 @@ export const contrastPairs: readonly ContrastPair[] = [
 
   // The states kit (src/renderer/src/kit). A pill or tag's text and glyph on its own fill, over every surface it may sit on.
   ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], ...kitSurfaces.map(surface => [...surface, toneKeys(tone).background]))),
+  // Environment tags (PROD, STAGING, TEST) also label the Connect dialog's history rows, the selected one included.
+  ...(['critical', 'info', 'neutral'] as const).flatMap(tone => text([toneKeys(tone).foreground], [...activeSelection, toneKeys(tone).background])),
   // Empty states and inline errors: the title and line, the error glyph and message, and their outlined actions.
   ...text(['emptyState.titleForeground', 'emptyState.foreground', 'descriptionForeground', 'foreground', 'errorForeground', 'button.secondaryForeground'], ...contentSurfaces),
   ...graphic(['button.border'], ...contentSurfaces),

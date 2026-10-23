@@ -1,7 +1,9 @@
 namespace Varia.Backend;
 
+/// <summary>Environment is the profile's label (Production, Staging, a custom one of at most 32 characters); the backend only
+/// bounds it, since the workbench shows it and SQL Server never sees it.</summary>
 internal sealed record ConnectOptions(string Server, string Database, string Authentication, string? Username, string? Password, bool TrustServerCertificate,
-    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, AdvancedConnectionOptions? Advanced = null);
+    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null);
 internal sealed record AdvancedConnectionOptions(
     int CommandTimeout = 0, int ConnectTimeout = 15, bool ColumnEncryption = false, bool SecureEnclaves = false,
     string AttestationProtocol = "None", string EnclaveAttestationUrl = "", bool MultipleActiveResultSets = false,

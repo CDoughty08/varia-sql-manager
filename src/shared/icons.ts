@@ -40,7 +40,7 @@ export const codiconIcons = [
   'loading', 'lock', 'milestone', 'multiple-windows', 'new-file', 'output', 'package', 'pass', 'person', 'play', 'plug', 'redo', 'references', 'refresh',
   'remote', 'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty', 'star-full',
   'symbol-color', 'symbol-constant', 'symbol-field', 'symbol-function', 'symbol-key', 'symbol-namespace', 'symbol-numeric', 'symbol-operator',
-  'symbol-parameter', 'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'tools', 'trash', 'triangle-right', 'type-hierarchy', 'verified',
+  'symbol-parameter', 'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'tag', 'tools', 'trash', 'triangle-right', 'type-hierarchy', 'verified',
   'warning', 'watch', 'whitespace', 'window', 'word-wrap', 'workspace-trusted', 'zap', 'zoom-in', 'zoom-out'
 ] as const
 export type CodiconId = typeof codiconIcons[number]
