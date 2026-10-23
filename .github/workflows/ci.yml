@@ -153,7 +153,8 @@ jobs:
         # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on
         # macOS they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
         if: runner.os != 'macOS'
-        timeout-minutes: 20
+        # Measured stage timings project the complete Windows suite past 21 minutes with live-view and lifecycle coverage.
+        timeout-minutes: 25
         run: npm run test:smoke
       - name: IPC benchmarks (report only)
         # The IPC and results grid benchmarks. Shared Windows and macOS runners vary too much for floors; the end-to-end

@@ -20,9 +20,18 @@ const exists = path => access(path).then(() => true, () => false)
  *  `hold` stays open until answer() or, as Electron's does, until its signal aborts it (it then answers its cancelId and
  *  is listed in `globalThis.variaAborted`). */
 async function mockDialogs(application, path, hold = []) {
-  await application.evaluate(({ dialog }, [filePath, held]) => {
+  await application.evaluate(({ BrowserWindow, dialog, ipcMain }, [filePath, held]) => {
     const log = globalThis.variaDialogs = [], { appendFileSync } = process.getBuiltinModule('node:fs')
     const answers = globalThis.variaAnswers = {}, aborted = globalThis.variaAborted = []
+    if (!globalThis.variaObservingCommands) {
+      globalThis.variaObservingCommands = true
+      // Main's listener runs first. A rendered workbench can precede its command subscription's IPC, which main's
+      // close guard needs before it can ask that page about unsaved queries.
+      ipcMain.on('varia:commands-ready', (event, ready) => {
+        const contents = BrowserWindow.getAllWindows()[0]?.webContents
+        if (contents && event.sender === contents && event.senderFrame === contents.mainFrame) globalThis.variaCommandsReady = ready === true
+      })
+    }
     let open = 0
     const track = async (options, answer) => {
       log.push({ title: options.title, open: ++open })
@@ -59,6 +68,7 @@ const answer = (application, title, response) => application.evaluate((_electron
 }, [title, response])
 const crash = application => application.evaluate(({ BrowserWindow }) => {
   const contents = BrowserWindow.getAllWindows()[0].webContents
+  globalThis.variaCommandsReady = false
   if (process.platform !== 'linux') { contents.forcefullyCrashRenderer(); return }
   // Electron's Linux API sends crash IPC to the renderer's IO thread; CI observed that process still alive afterward.
   // These checks need an exited renderer before testing dialog invalidation, so terminate its known OS process.
@@ -66,6 +76,7 @@ const crash = application => application.evaluate(({ BrowserWindow }) => {
   if (!Number.isInteger(pid) || pid <= 0) throw new Error('The renderer has no OS process to terminate.')
   process.kill(pid, 'SIGKILL')
 })
+export { crash as crashRenderer, crashAndAwaitLoss as crashRendererAndAwaitLoss }
 /** Native crash state for CI diagnostics, including Linux zombies which still answer signal 0. */
 const rendererSnapshot = (application, previousPid = 0) => application.evaluate(({ BrowserWindow }, previous) => {
   const contents = BrowserWindow.getAllWindows()[0]?.webContents
@@ -177,7 +188,7 @@ export async function dialogLifecycle(launchOptions) {
     const beforeLoss = (await rendererLosses(application)).length
     const beforeRenderer = await rendererSnapshot(application)
     await crash(application)
-    // forcefullyCrashRenderer returns before Chromium reports the crash (or the watchdog observes it). Keep the file
+    // Requesting the crash returns before Chromium reports it (or the watchdog observes it). Keep the file
     // chooser open until main has handled that loss; shared runners can take longer than a fixed one-second delay.
     try {
       await expect.poll(async () => (await rendererLosses(application)).slice(beforeLoss).some(loss => loss.handled), { timeout: 15000 }).toBe(true)
@@ -289,22 +300,34 @@ const windowIdsOf = application => application.evaluate(({ BrowserWindow }) => B
 // A renderer only the watchdog saw go never answers, so each script gets a second.
 const workbenchReady = application => application.evaluate(({ BrowserWindow }) => {
   const contents = BrowserWindow.getAllWindows()[0]?.webContents
-  if (!contents || contents.isCrashed()) return false
+  if (!contents || contents.isCrashed() || !globalThis.variaCommandsReady) return false
   const script = contents.executeJavaScript("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')").catch(() => false)
   return Promise.race([script, new Promise(resolve => setTimeout(resolve, 1000, false))])
 })
+/** Fences one crash before another can target its recovered renderer; keeps native state if main misses the loss. */
+async function crashAndAwaitLoss(application, stage, lossIndex) {
+  const before = await rendererSnapshot(application)
+  const losing = lossIndex ?? before.losses.length
+  await crash(application)
+  try {
+    await expect.poll(async () => (await rendererLosses(application))[losing], { timeout: 15000 }).toMatchObject({ handled: true })
+  } catch (error) {
+    const after = await rendererSnapshot(application, before.pid).catch(snapshotError => ({ unavailable: snapshotError.message }))
+    console.error(`Renderer watchdog loss was not handled (${stage}): ` + JSON.stringify({ losing, before, after }))
+    throw error
+  }
+  return losing
+}
 /** A crash Chromium sees, answered Reload (the crash prompt is held); the reload launches the renderer `holder` takes. */
 async function crashToHolder(application, holder) {
   await application.evaluate((_electron, kind) => globalThis.__variaTest.holdNextRenderer(kind), holder)
-  await crash(application)
+  await crashAndAwaitLoss(application, `setup held ${holder}`)
   await expect.poll(() => answer(application, 'Workbench stopped', 0), { timeout: 15000 }).toBe(true)
   await expect.poll(() => workbenchReady(application), { timeout: 30000 }).toBe(true)
 }
 /** Crashes the held renderer; returns who saw it go once its crash prompt (held) is open. */
 async function crashHeldRenderer(application) {
-  const losing = (await rendererLosses(application)).length
-  await crash(application)
-  await expect.poll(async () => (await rendererLosses(application))[losing], { timeout: 15000 }).toMatchObject({ handled: true })
+  const losing = await crashAndAwaitLoss(application, 'held renderer')
   await expect.poll(() => application.evaluate(() => 'Workbench stopped' in globalThis.variaAnswers), { timeout: 15000 }).toBe(true)
   return (await rendererLosses(application))[losing].source
 }
@@ -332,11 +355,10 @@ export async function rendererWatchdog(launchOptions) {
       for (let attempt = 1; attempt <= 3 && !unseen; attempt++) {
         // Chromium sees this crash; the reload after it launches the renderer the holder takes.
         await application.evaluate((_electron, kind) => globalThis.__variaTest.holdNextRenderer(kind), holder)
-        await crash(application)
+        await crashAndAwaitLoss(application, `setup ${holder} attempt ${attempt}`)
         await expect.poll(ready, { timeout: 30000 }).toBe(true)
         const [losing, prompts, [before]] = [(await losses()).length, (await shown(application)).length, await windowIds()]
-        await crash(application)
-        await expect.poll(async () => (await losses())[losing], { timeout: 15000 }).toMatchObject({ handled: true })
+        await crashAndAwaitLoss(application, `${holder} attempt ${attempt}`, losing)
         await expect.poll(() => shown(application), { timeout: 15000 }).toHaveLength(prompts + 1)
         // Reload: in place once Chromium has seen the crash too, or in a new window when it never does.
         await expect.poll(ready, { timeout: 30000 }).toBe(true)
@@ -390,11 +412,11 @@ export async function rendererWatchdog(launchOptions) {
       }, dialogs + '.windows')
       await crashToHolder(application, 'process')
       // Playwright gives up on a page whose renderer crashed, so the query is typed through Electron.
-      await application.evaluate(async ({ BrowserWindow }) => {
-        const contents = BrowserWindow.getAllWindows()[0].webContents
-        await contents.executeJavaScript("document.querySelector('.monaco-editor [role=\"textbox\"]').focus()")
-        await contents.insertText('SELECT 1 -- unsaved')
-      })
+      await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript("(() => { const input = document.querySelector('.monaco-editor [role=\"textbox\"]'); input?.focus(); return !!input && document.activeElement === input })()")), { timeout: 15000 }).toBe(true)
+      await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.insertText('SELECT 1 -- unsaved'))
+      // insertText resolves before Monaco has necessarily applied the input. A clean document would let quit finish,
+      // so wait for both the edit and the document's accessible dirty mark before testing its pending close prompt.
+      await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript("document.querySelector('.monaco-editor .view-lines')?.textContent?.replaceAll('\\u00a0', ' ').includes('SELECT 1 -- unsaved') && !!document.querySelector('[role=\"img\"][aria-label=\"Unsaved changes\"]')")), { timeout: 15000 }).toBe(true)
       let exited = false
       child.once('exit', () => { exited = true })
       await quit(application, child)

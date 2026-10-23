@@ -66,7 +66,7 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
-      - name: Dialog lifecycle regression
+      - name: Dialog, renderer watchdog, and session prompt regressions
         id: dialogs
         if: inputs.suite == 'dialogs' || inputs.suite == 'all'
         timeout-minutes: 5
@@ -116,7 +116,7 @@ jobs:
             printf 'Commit: `%s`\n\n' "$GITHUB_SHA"
             printf '| Check | Result |\n| --- | --- |\n'
             printf '| Build and offline checks | %s |\n' "$CHECK_OUTCOME"
-            printf '| Dialog lifecycle | %s |\n' "$DIALOGS_OUTCOME"
+            printf '| Dialogs, renderer watchdog, and session prompts | %s |\n' "$DIALOGS_OUTCOME"
             printf '| Results grid | %s |\n' "$RESULTS_OUTCOME"
             printf '| Results grid at 1024x768 | %s |\n' "$SMALL_OUTCOME"
           } >> "$GITHUB_STEP_SUMMARY"
