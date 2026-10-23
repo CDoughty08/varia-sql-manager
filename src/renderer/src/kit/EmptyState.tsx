@@ -1,4 +1,6 @@
 import type { ReactNode, Ref } from 'react'
+import type { IconId } from '../../../shared/icons'
+import Icon from '../Icon'
 
 export interface EmptyAction {
   readonly label: string
@@ -10,8 +12,8 @@ export interface EmptyAction {
 }
 
 interface Props {
-  /** A codicon name (without `codicon-`), drawn at 16 px as decoration. */
-  readonly icon?: string
+  /** An icon from the registry, drawn at 16 px as decoration. */
+  readonly icon?: IconId
   readonly title?: string
   /** One line saying what fills the view, or why it is empty. */
   readonly detail?: ReactNode
@@ -25,7 +27,7 @@ export default function EmptyState({ icon, title, detail, actions = [], classNam
   // Only the first action marked primary is filled, so a view never offers two equal calls to action.
   const primary = actions.findIndex(action => action.primary)
   return <div className={className ? `empty-state ${className}` : 'empty-state'}>
-    {icon && <span className={`empty-state-icon codicon codicon-${icon}`} aria-hidden="true" />}
+    {icon && <Icon name={icon} className="empty-state-icon" />}
     {title && <p className="empty-state-title">{title}</p>}
     {detail !== undefined && <p className="empty-state-detail">{detail}</p>}
     {actions.length > 0 && <div className="empty-state-actions">

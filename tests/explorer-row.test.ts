@@ -11,7 +11,7 @@ const tableRef: ExplorerNodeRef = { type: 'object', object: { kind: 'table', dat
 function node(fields: Partial<TreeNode> = {}): TreeNode {
   return {
     id: 7, parent: 3, connectionId: 'c', ref: tableRef, kind: 'table', folder: undefined, level: 5, label: 'dbo.Orders', lower: 'dbo.orders', sublabel: undefined, detail: undefined,
-    icon: 'svg:table', subtype: undefined, status: undefined, created: undefined, hasChildren: true, expanded: false, children: undefined, staticCount: 0, total: undefined,
+    icon: 'table', subtype: undefined, status: undefined, created: undefined, hasChildren: true, expanded: false, children: undefined, staticCount: 0, total: undefined,
     cursor: undefined, load: 'none', more: 'none', error: undefined, connectionError: undefined, filtered: false, lost: false, showLoading: false, generation: 0, rev: 0,
     lastUsed: 0, descendants: 0, ...fields
   }

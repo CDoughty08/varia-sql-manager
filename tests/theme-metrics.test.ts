@@ -3,7 +3,11 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { gridLimits } from '../src/renderer/src/grid/constants'
 import { explorerLimits } from '../src/shared/explorer/catalog'
-import { defaultDensity, densities, densityUse, minimumFontSize, motion, radii, reducedMotion, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending, type DensityMetrics, type TypeStepName } from '../src/shared/theme/metrics'
+import { defaultSettings } from '../src/shared/settings/catalog'
+import {
+  defaultDensity, densities, densityUse, glyphSizes, glyphUse, minimumFontSize, motion, radii, reducedMotion, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending,
+  type DensityMetrics, type GlyphSizeName, type TypeStepName
+} from '../src/shared/theme/metrics'
 import { cssRules, stylesheetRules, type CssRule } from './fixtures/css-rules'
 
 const rules = stylesheetRules()
@@ -15,17 +19,13 @@ const parts = (selector: string) => selector.split(/,(?![^(]*\))/).map(part => p
 /** The compound a selector part styles (`button.active` in `.title-bar-menus button.active`). */
 const subject = (part: string) => part.split(/\s*[\s>+~]\s*(?![^(]*\))/).pop() ?? ''
 
-// Codicon and text glyphs sized as icons, not text. They move to the icon registry's sizes with the icon system.
-const glyphSizes: Readonly<Record<string, string>> = {
-  '.oe-icon .codicon': '15px', '.oe-icon .oe-badge': '9px', '.oe-actions .codicon': '14px', '.query-status-state .codicon': '12px',
-  '.memory-indicator .codicon': '12px', '.editor-status .codicon': '12px', '.favorite-button': '18px'
-}
 // A 3 px connection colour edge keeps its own rounding.
 const indicatorRadii: Readonly<Record<string, string>> = { '.connection-swatch': '1px' }
 // Monaco's own shadow for its find and hover widgets, as VS Code defines it (theme-smoke checks the computed value).
 const shadowShims = new Set(['--vscode-shadow-lg'])
 
 const sizeToken = /^var\(--varia-size-(xs|sm|md|lg|xl)\)$/
+const glyphToken = /^var\(--varia-glyph-(badge|sm|md|lg)\)$/
 /** The size of a `font` shorthand, which comes before the family: `var(--varia-size-sm)/19px var(--varia-font-mono)`. */
 const shorthandSize = (value: string) => value.match(/^(?:(?:italic|normal|bold|[1-9]00)\s+)*(var\([^)]*\)|[^\s/]+)/)?.[1] ?? ''
 /** The type step a top-level rule sizes its text with. */
@@ -71,17 +71,40 @@ describe('metric tokens', () => {
     expect(defaultDensity).toBe('compact')
     for (const [name, value] of Object.entries(densities.compact)) expect(densities.comfortable[name as keyof typeof densities.compact], name).toBeGreaterThanOrEqual(value)
   })
-  it('sizes all text from the type scale, so nothing is under 11 px', () => {
+  it('sizes all text from the type scale, so nothing is under 11 px, and icons from the glyph sizes', () => {
     const found: string[] = []
-    for (const { property, value, selector, where } of all) {
+    for (const { property, value, where } of all) {
       if (property === 'font-size' || property === '--dv-tab-font-size') {
-        if (!sizeToken.test(value) && value !== 'inherit' && glyphSizes[selector] !== value) found.push(where)
+        if (!sizeToken.test(value) && !glyphToken.test(value) && value !== 'inherit') found.push(where)
       } else if (property === 'font' && value !== 'inherit') {
         if (!sizeToken.test(shorthandSize(value))) found.push(where)
       }
     }
-    expect(found, 'use var(--varia-size-*) from src/shared/theme/metrics.ts').toEqual([])
-    for (const [selector, size] of Object.entries(glyphSizes)) expect(all.some(entry => entry.selector === selector && entry.property === 'font-size' && entry.value === size), selector).toBe(true)
+    expect(found, 'use var(--varia-size-*), or var(--varia-glyph-*) for an icon, from src/shared/theme/metrics.ts').toEqual([])
+  })
+  it('lists only glyph rules whose classes the renderer draws', () => {
+    // theme-smoke's size probe builds its own elements, so a rule no markup uses would pass it and stay in the docs.
+    const files = readdirSync('src/renderer/src', { recursive: true, encoding: 'utf8' }).filter(file => /\.tsx?$/.test(file)).map(file => join('src/renderer/src', file))
+    const code = [...files, 'src/shared/icons.ts'].map(file => readFileSync(file, 'utf8')).join('\n')
+    const classes = [...new Set(Object.values(glyphUse).flat().flatMap(selector => [...selector.matchAll(/\.([\w-]+)/g)].map(match => match[1])))]
+    expect(classes.filter(name => !new RegExp(`(?<![\\w-])${name}(?![\\w-])`).test(code))).toEqual([])
+  })
+  it('sizes icons only with the glyph sizes, as glyphUse lists them, on the codicon font\'s grid', () => {
+    // Only the icon rules glyphUse names take a glyph size (theme-smoke checks that no text is under 11 px).
+    for (const name of Object.keys(glyphSizes) as GlyphSizeName[]) {
+      const sized = all.filter(({ property, value }) => property === 'font-size' && value === `var(--varia-glyph-${name})`).map(({ selector }) => selector)
+      expect([...new Set(sized)].sort(), name).toEqual([...glyphUse[name]].sort())
+    }
+    // Monaco's codicon.css sizes every codicon with `.codicon[class*='codicon-']`; styles.css loads after it, so a rule
+    // that may reach a codicon needs at least that rank (theme-smoke checks the computed sizes). `.icon` is only ever an svg.
+    const monacoRank = specificity('.codicon[class*=\'codicon-\']')
+    expect(Object.values(glyphUse).flat().filter(selector => selector !== '.icon' && specificity(selector) < monacoRank)).toEqual([])
+    // Varia's SVG icons are 1em square, so a font size sizes them as it sizes the font's glyphs, and no rule resizes them otherwise.
+    expect(['width', 'height', 'flex'].map(property => all.find(entry => entry.selector === '.icon' && !entry.at.length && entry.property === property)?.value)).toEqual(['1em', '1em', '0 0 1em'])
+    expect(all.filter(entry => entry.selector !== '.icon' && parts(entry.selector).some(part => /\.icon(?![\w-])/.test(subject(part))) && /^(?:width|height|flex(?:-basis)?)$/.test(entry.property)).map(({ where }) => where)).toEqual([])
+    // md is the grid codicons are drawn on, and the size Monaco's codicon.css gives them.
+    const codicon = cssRules(readFileSync('node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css', 'utf8'))
+    expect(codicon.flatMap(rule => rule.declarations).filter(({ property }) => property === 'font').map(({ value }) => value)).toEqual([`normal normal normal ${glyphSizes.md.px}px/1 codicon`])
   })
   it('keeps literal font sizes out of renderer code', () => {
     // Inline styles, canvas fonts and style.setProperty calls take their sizes from metrics.ts too.
@@ -168,6 +191,9 @@ describe('metric tokens', () => {
     expect(all.find(entry => entry.selector === '.icon-button' && entry.property === 'width')?.value).toBe('var(--varia-control)')
     // The tree places its rows by explorerLimits.rowHeight, so the two must agree.
     expect(explorerLimits.rowHeight).toBe(densities[defaultDensity].row)
+  })
+  it('starts the query editor at the body text size, so its text keeps the rhythm of the UI', () => {
+    expect(defaultSettings['environment.fonts.editorFontSize']).toBe(typeScale.md.size)
   })
   it('draws numbers that change with tabular figures', () => {
     for (const selector of ['.rg', '.status-bar', '.query-status-bar']) {

@@ -1,5 +1,6 @@
 import { documentEncodingLabel, lineEndingLabel } from '../../shared/files/encoding'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
+import Icon from './Icon'
 
 /**
  * The IDE status bar's editor segments, as Visual Studio shows them: Ln, Col and Ch of the caret, INS or OVR, the line
@@ -20,6 +21,6 @@ export default function EditorStatus() {
     <span className="editor-status-mode" title={mode === 'insert' ? 'Insert mode (Insert switches to overtype)' : 'Overtype mode (Insert switches to insert)'}>{mode === 'insert' ? 'INS' : 'OVR'}</span>
     <span className="editor-status-eol" title="Line endings">{lineEndingLabel(caret.eol)}</span>
     <span className="editor-status-encoding" title="Encoding">{encoding}</span>
-    {file?.readOnly && <span className="editor-status-readonly" title="The file is read-only: Save asks before overwriting it."><span className="codicon codicon-lock" aria-hidden="true" />Read-only</span>}
+    {file?.readOnly && <span className="editor-status-readonly" title="The file is read-only: Save asks before overwriting it."><Icon name="lock" />Read-only</span>}
   </span>
 }
