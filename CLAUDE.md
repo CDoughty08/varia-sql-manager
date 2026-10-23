@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 777 offline
-  checks; how many depends on the server version and authentication (1219 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 791 offline
+  checks; how many depends on the server version and authentication (1255 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -46,6 +46,12 @@ pages, limits, error codes, display formats, benchmarks).
   `VARIA_TEST_ENTRA_SP_CLIENT_ID` and `VARIA_TEST_ENTRA_SP_SECRET` (a service principal with a user in the Azure SQL
   database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never
   print the secret. Without them the offline checks cover Entra through a fake token source.
+- SSIS: `VARIA_TEST_SQL_SCRATCH=1` also builds the fake SSIS catalog (`VariaScratch_…_ssis`, from
+  `tests/fixtures/ssisdb/`); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` and of the Integration Services
+  catalog backup (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1`
+  rewrites (then regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These checks never
+  create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) may, on a
+  server whose owner allows it. docs/integration-services.md records what is verified.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`. Every
