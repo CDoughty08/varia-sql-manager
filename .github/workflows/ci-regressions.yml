@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: dialogs, results, or all for Electron; activity for live SQL
+        description: dialogs, results, tail, or all for Electron; activity for live SQL
         type: string
         default: all
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
       suite:
         description: Electron suite, or activity for live SQL checks
         type: choice
-        options: [dialogs, results, all, activity]
+        options: [dialogs, results, tail, all, activity]
         default: all
 
 permissions:
@@ -40,8 +40,8 @@ jobs:
           SUITE: ${{ inputs.suite }}
         run: |
           case "$SUITE" in
-            dialogs|results|all|activity) ;;
-            *) echo '::error::Choose dialogs, results, all, or activity.'; exit 1 ;;
+            dialogs|results|tail|all|activity) ;;
+            *) echo '::error::Choose dialogs, results, tail, all, or activity.'; exit 1 ;;
           esac
       - uses: actions/checkout@v7
         with:
@@ -93,6 +93,19 @@ jobs:
         if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success' && runner.os == 'Linux' && (inputs.suite == 'results' || inputs.suite == 'all')
         timeout-minutes: 8
         run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/results-smoke.mjs
+      - name: Options, Files, Editor, and Table Designer smoke tests
+        id: tail
+        if: (success() || failure()) && steps.check.outcome == 'success' && (runner.os != 'Linux' || steps.display.outcome == 'success') && (inputs.suite == 'tail' || inputs.suite == 'all')
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          for suite in options-resize options files editor table-designer; do
+            if [ "$RUNNER_OS" = Linux ]; then
+              xvfb-run -a -s "-screen 0 1600x1000x24" node "scripts/$suite-smoke.mjs"
+            else
+              node "scripts/$suite-smoke.mjs"
+            fi
+          done
       - name: Upload regression screenshots and diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
@@ -110,6 +123,7 @@ jobs:
           DIALOGS_OUTCOME: ${{ steps.dialogs.outcome }}
           RESULTS_OUTCOME: ${{ steps.results.outcome }}
           SMALL_OUTCOME: ${{ steps.results-small.outcome }}
+          TAIL_OUTCOME: ${{ steps.tail.outcome }}
         run: |
           {
             printf '## Electron regressions (%s, %s)\n\n' "$RUNNER_OS" "$SUITE"
@@ -119,6 +133,7 @@ jobs:
             printf '| Dialogs, renderer watchdog, and session prompts | %s |\n' "$DIALOGS_OUTCOME"
             printf '| Results grid | %s |\n' "$RESULTS_OUTCOME"
             printf '| Results grid at 1024x768 | %s |\n' "$SMALL_OUTCOME"
+            printf '| Options, Files, Editor, and Table Designer | %s |\n' "$TAIL_OUTCOME"
           } >> "$GITHUB_STEP_SUMMARY"
 
   activity:

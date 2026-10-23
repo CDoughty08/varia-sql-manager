@@ -11,7 +11,7 @@ on:
       regression-suite:
         description: Focused regressions (none runs full CI; all runs Electron suites)
         type: choice
-        options: [none, dialogs, results, all, activity]
+        options: [none, dialogs, results, tail, all, activity]
         default: none
 
 concurrency:
