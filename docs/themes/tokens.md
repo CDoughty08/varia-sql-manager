@@ -73,7 +73,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000099` | `#0000002e` |
 | `backdrop` | Modal scrim. | `#080c14bf` | `#1f273366` |
 
-## Color keys (205)
+## Color keys (213)
 
 ### Base
 
@@ -258,6 +258,14 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.headerDescriptionForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | The (No column name) placeholder. |
 | `resultsGrid.gridlines` | Varia | `$borderSubtle` | `#252f3d` | `#e3e7ed` | Cell borders. |
 | `resultsGrid.alternateRowBackground` | Varia | `$text/3` | `#d9e1ec08` | `#1f273308` | Tint of every other row. |
+| `resultsGrid.rowErrorBackground` | Varia | `$error/12` | `#f39c9f1f` | `#ae21171f` | Live grid rows toned error: a session blocked by another, a failed operation, an error message. |
+| `resultsGrid.rowErrorForeground` | Varia | `@resultsGrid.foreground` | `#d9e1ec` | `#1f2733` | Text of live grid rows toned error. |
+| `resultsGrid.rowWarningBackground` | Varia | `$warning/12` | `#dfbd821f` | `#8a53001f` | Live grid rows toned warning: a session blocking others, a warning message. |
+| `resultsGrid.rowWarningForeground` | Varia | `@resultsGrid.foreground` | `#d9e1ec` | `#1f2733` | Text of live grid rows toned warning. |
+| `resultsGrid.rowRunningBackground` | Varia | `$accent/10` | `#8fb7ff1a` | `#005fb81a` | Live grid rows toned running: a session rolling back, a running operation. |
+| `resultsGrid.rowRunningForeground` | Varia | `@resultsGrid.foreground` | `#d9e1ec` | `#1f2733` | Text of live grid rows toned running. |
+| `resultsGrid.rowMutedBackground` | Varia | `@resultsGrid.background` | `#141a23` | `#fafbfc` | Live grid rows toned muted: a row that left its source and stays one more sample, a system session. |
+| `resultsGrid.rowMutedForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Text of live grid rows toned muted. |
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#8a9cb3` | `#525e72` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | Dark `$warning/70`, Light `$warning` | `#dfbd82b3` | `#8a5300` | NULL values. |
 | `resultsGrid.nullBackground` | Varia | Dark `$warning/8`, Light `$warning/12` | `#dfbd8214` | `#8a53001f` | NULL cells, tinted as in SSMS. |

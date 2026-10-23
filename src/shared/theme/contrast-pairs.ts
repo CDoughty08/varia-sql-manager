@@ -111,6 +111,13 @@ export const contrastPairs: readonly ContrastPair[] = [
   // NULL cells are tinted, over the grid and over a striped row.
   ...text(['resultsGrid.nullForeground'], [...panel, 'resultsGrid.nullBackground'], [...striped, 'resultsGrid.nullBackground']),
   ...text(['resultsGrid.linkForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
+  // A toned live grid row has its own background instead of the stripe; its NULL cells drop their tint, keeping their colour.
+  ...([['resultsGrid.rowErrorForeground', 'resultsGrid.rowErrorBackground'], ['resultsGrid.rowWarningForeground', 'resultsGrid.rowWarningBackground'],
+    ['resultsGrid.rowRunningForeground', 'resultsGrid.rowRunningBackground'], ['resultsGrid.rowMutedForeground', 'resultsGrid.rowMutedBackground']] as const)
+    .flatMap(([foreground, background]) => [
+      ...text([foreground, 'errorForeground'], ['resultsGrid.background', background]),
+      ...text(['resultsGrid.nullForeground'], ['resultsGrid.background', background])
+    ]),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
   // The readability audit: the remaining text each surface draws (styles.css and Monaco's widgets).

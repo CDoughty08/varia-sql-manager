@@ -238,9 +238,10 @@ internal sealed class LiveTableSet(ResultStore store, string subscriptionId, Liv
         store.Release(ids);
     }
 
-    /// <summary>The result columns of a catalogue table: every cell is text, as its display.</summary>
+    /// <summary>The result columns of a catalogue table: every cell is text, as its display; a tone column keeps its role, so the grid
+    /// hides it and Copy and Save leave it out.</summary>
     internal static (List<ResultColumn> Columns, WireKind[] Wires) Shape(LiveTableJson spec) =>
-        ([.. spec.Columns.Select(column => new ResultColumn(column.Name, column.DataType, "text", Nullable: true))], [.. spec.Columns.Select(_ => WireKind.Text)]);
+        ([.. spec.Columns.Select(column => new ResultColumn(column.Name, column.DataType, "text", column.Role, Nullable: true))], [.. spec.Columns.Select(_ => WireKind.Text)]);
 
     /// <summary>Writes one row; false when the set stores nothing more (released, or out of budget).</summary>
     internal static bool Write(ResultSetBuffer set, LiveRow row)

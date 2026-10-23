@@ -103,7 +103,14 @@ export interface LiveTable {
   readonly revision?: number
   readonly segment?: number
   readonly diff?: { readonly added: number; readonly removed: number; readonly changed: number }
-  readonly tracked?: { readonly seq: number; readonly rows: readonly number[] }
+  /** Where each tracked key went (-1: gone), in the order of the track list with this seq; `keys` is that list when the
+   *  view still knows it (one of its last few), so a grid can map its rows without asking again. */
+  readonly tracked?: { readonly seq: number; readonly rows: readonly number[]; readonly keys?: readonly string[] }
+  /** Rows of this revision that left the source and stay one revision because they were tracked (LiveGrid mutes them). */
+  readonly departed?: readonly number[]
+  /** Append: the segment this one rolled on from, and whether the table started again (a new filter or args). */
+  readonly rolledFrom?: number
+  readonly restarted?: boolean
 }
 export interface AppliedTick { readonly subscriptionId: string; readonly tick: LiveTick }
 export interface LiveFrames { readonly events: number; readonly ticks: number; readonly lastSeq: number; readonly updates: number; readonly lastPatch?: LivePatch; readonly subscriptions: number }
@@ -361,6 +368,8 @@ class Handle implements LiveHandle {
   private readonly rings = new Map<LiveProbeId, MetricRing>()
   private readonly tables = new Map<LiveProbeId, Map<number, LiveTable>>()
   private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number }>()
+  /** The last few track lists sent per table, by seq: a sample names the list it answers by seq alone. */
+  private readonly trackHistory = new Map<string, { seq: number; keys: readonly string[] }[]>()
   private args: LiveArgs | undefined
   private readonly whileHidden: 'statusOnly' | undefined
   private snapshot: LiveSnapshot
@@ -545,8 +554,19 @@ class Handle implements LiveHandle {
       runtime.error = undefined
       const ring = this.rings.get(sample.probe)
       if (ring && sample.metrics) ring.push(tick.sampledAt, sample.metrics, sample.gap === 'reset' ? ringGap | ringReset : sample.gap ? ringGap : 0)
-      for (const entry of sample.tables ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision, ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: entry.tracked } : {} })
-      for (const entry of sample.append ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'append', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), segment: entry.segment })
+      for (const entry of sample.tables ?? []) {
+        const keys = entry.tracked && this.trackHistory.get(sample.probe + '/' + entry.table)?.find(item => item.seq === entry.tracked!.seq)?.keys
+        this.setTable(sample.probe, {
+          probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision,
+          ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: { ...entry.tracked, ...keys ? { keys } : {} } } : {}, ...entry.departed ? { departed: entry.departed } : {}
+        })
+      }
+      for (const entry of sample.append ?? []) {
+        this.setTable(sample.probe, {
+          probe: sample.probe, index: entry.table, mode: 'append', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), segment: entry.segment,
+          ...entry.rolledFrom !== undefined ? { rolledFrom: entry.rolledFrom } : {}, ...entry.restarted ? { restarted: true } : {}
+        })
+      }
     }
     for (const error of tick.errors ?? []) {
       const runtime = this.runtime.get(error.probe)
@@ -796,6 +816,7 @@ class Handle implements LiveHandle {
         const patch = this.patchFor(record.sent, wanted)
         const tracks = [...this.tracks].filter(([key, track]) => record.tracked.get(key) !== track.seq).slice(0, limits.live.probes)
         const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys] })) } : patch
+        for (const [key, track] of tracks) this.remember(key, track.seq, track.keys)
         if (!update) {
           // The view came back to what the backend runs: a refusal no longer matters.
           if (record.refused) this.accepted(record)
@@ -917,6 +938,17 @@ class Handle implements LiveHandle {
     const list = keys.filter(key => key.length <= limits.live.keyCharacters).slice(0, limits.live.trackedKeys)
     this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq })
     this.queueSync()
+  }
+
+  /** Keeps a track list as it is sent, for the samples that answer it by seq: the last 4 per table (updates go one at a
+   *  time, so the samples of a tick answer the newest accepted list or the one before). */
+  private remember(key: string, seq: number, keys: readonly string[]): void {
+    const history = this.trackHistory.get(key) ?? []
+    // A list sent again (after a refusal) is the same list.
+    if (history.at(-1)?.seq === seq) return
+    history.push({ seq, keys })
+    if (history.length > 4) history.shift()
+    this.trackHistory.set(key, history)
   }
 
   ring(probe: LiveProbeId): MetricRing | undefined { return this.rings.get(probe) }

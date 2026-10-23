@@ -400,6 +400,38 @@ describe('LiveService', () => {
     expect(fake.updates.slice(-2)).toEqual([{ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['5', '7'] }] }, { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 3, keys: ['9'] }] }])
   })
 
+  it('gives a table the keys its tracked rows answer, its departed rows, and an append segment\'s roll and restart', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.table', 'debug.synthetic.log']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    handle.track('debug.synthetic.table', ['5', '7'])
+    await settle()
+    handle.track('debug.synthetic.table', ['8'])
+    handle.track('debug.synthetic.table', ['9'])
+    await settle()
+    // Sent: seq 1 (5, 7) and seq 3 (9); seq 2 was replaced before it went.
+    expect(fake.updates.map(update => update.track?.[0].seq)).toEqual([1, 3])
+    const sample = (tracked: { seq: number; rows: number[] }, departed?: number[], log?: Record<string, unknown>) => ({
+      type: 'live.tick', seq: ++seq, sampledAt: Date.now(),
+      samples: [
+        { probe: 'debug.synthetic.table', costMs: 1, effectiveIntervalMs: 1000, tables: [{ table: 0, descriptor: descriptor(), revision: seq, tracked, ...departed ? { departed } : {} }] },
+        { probe: 'debug.synthetic.log', costMs: 1, effectiveIntervalMs: 1000, append: [{ table: 0, descriptor: descriptor(), segment: 1, ...log }] }
+      ]
+    }) as unknown as LiveTick
+    deliver(fake, sample({ seq: 1, rows: [2, -1] }, [2], { rolledFrom: 7 }))
+    expect(handle.table('debug.synthetic.table')).toMatchObject({ tracked: { seq: 1, rows: [2, -1], keys: ['5', '7'] }, departed: [2] })
+    expect(handle.table('debug.synthetic.log')).toMatchObject({ mode: 'append', segment: 1, rolledFrom: 7 })
+    expect(handle.table('debug.synthetic.log')?.restarted).toBeUndefined()
+    deliver(fake, sample({ seq: 3, rows: [0] }, undefined, { restarted: true, retired: [3] }))
+    expect(handle.table('debug.synthetic.table')).toMatchObject({ tracked: { seq: 3, rows: [0], keys: ['9'] } })
+    expect(handle.table('debug.synthetic.table')?.departed).toBeUndefined()
+    expect(handle.table('debug.synthetic.log')).toMatchObject({ restarted: true })
+    // A seq the view never sent (or long forgotten) has rows but no keys: the grid then keeps its rows where they are.
+    deliver(fake, sample({ seq: 2, rows: [4] }))
+    expect(handle.table('debug.synthetic.table')?.tracked).toEqual({ seq: 2, rows: [4] })
+  })
+
   it('holds every update until live.opened, so a pause or tracked keys sent at once are never refused NOT_FOUND', async () => {
     makeService()
     const view = owner()

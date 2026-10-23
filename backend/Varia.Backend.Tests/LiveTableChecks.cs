@@ -10,7 +10,8 @@ namespace Varia.Backend.Tests;
 /// <summary>Offline checks of the live tables (Live/LiveTables.cs): live memory (the subscription limit, the live share,
 /// small pages, no forced collection), snapshot revisions (two alive, diff, tracking, departed rows, sort, filter, view, row
 /// cap, facets, cell text equal to a query's), append segments (settle window, late ids, dedupe bound, roll, restart, start,
-/// budget), and the synthetic source's multi-table, state-built, append and wide probes through LiveService.</summary>
+/// budget), the synthetic source's multi-table, state-built, append and wide probes through LiveService, and row tones
+/// (stored with their role, left out of Copy and Save, also of a revision retired while it is copied).</summary>
 internal static class LiveTableChecks
 {
     private static readonly LiveLimitsJson Limits = LiveCatalog.Current.Limits;
@@ -27,6 +28,7 @@ internal static class LiveTableChecks
         await SyntheticChecks(check);
         await LogChecks(check);
         await EndChecks(check);
+        await ToneChecks(check);
         SqlChecks(check);
     }
 
@@ -570,6 +572,65 @@ internal static class LiveTableChecks
 
     private static LiveSample? SampleOf(LiveTickEvent tick, string probe) => tick.Samples.FirstOrDefault(sample => sample.Probe == probe);
 
+    /// <summary>Row tones: the tone column keeps its role in the stored result (the grid hides it and colours the row), and Copy
+    /// and Save leave it out whatever columns they name, headers and JSON keys included. A copy leases the revision it reads,
+    /// so a revision retired by the next samples while it is copied still copies whole.</summary>
+    private static async Task ToneChecks(Action<bool, string> check)
+    {
+        var service = new SqlService(new ResultStore(1L << 30, 1L << 29), hooks: true);
+        var view = Subscribe(service, [SyntheticSampler.GridProbe, SyntheticSampler.LogProbe], new { tickMs = 20, rows = 5, logRows = 4 }, id: 11);
+        await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2);
+        service.Live.Update(new LiveUpdateArgs(view.Id, SyntheticSampler.Source, Paused: true), Json);
+        await Task.Delay(200);
+        var items = view.Recorder.Ticks.Select(tick => SampleOf(tick, SyntheticSampler.GridProbe)?.Tables?.FirstOrDefault(table => table.Table == 0)).Last(table => table is not null)!.Descriptor;
+        var log = view.Recorder.Ticks.SelectMany(tick => SampleOf(tick, SyntheticSampler.LogProbe)?.Append ?? []).Last().Descriptor;
+        var itemRows = Rows(service.Results, items);
+        var logRows = Rows(service.Results, log);
+        string? Expected(long id) => (id % 5) switch { 0 => "error", 1 => "warning", 2 => "running", _ => null };
+        check(items.Columns is [.., { Name: "tone", Role: "tone" }] && items.Columns.Take(4).All(column => column.Role is null) && log.Columns is [.., { Name: "tone", Role: "tone" }]
+            && itemRows.Count == 5 && itemRows.All(row => row[4] == Expected(long.Parse(row[0]!, CultureInfo.InvariantCulture)))
+            && logRows.Count > 0 && logRows.All(row => row[3] == (row[1] switch { "3" => "error", "2" => "warning", _ => null })),
+            "the synthetic grid and log store a last tone column with its role, toned by group and by level");
+        await Stop(view);
+
+        var store = Store();
+        var jobs = new ResultJobs(store);
+        var tableSet = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits);
+        var spec = Probe(new LiveTableJson("toned", "snapshot", [Column("id"), Column("name", "nvarchar"), new LiveColumnJson("tone", "tone", "nvarchar", "tone")], ["id"]));
+        var table = tableSet.Snapshot(spec, 0);
+        List<LiveRow> Toned(long first) => [.. Enumerable.Range(0, 3).Select(offset => new LiveRow([LiveCell.Of(first + offset), LiveCell.Of("n" + (first + offset)), offset == 0 ? LiveCell.Of("error") : LiveCell.Null]))];
+        var shown = table.Write(Toned(1), new()).Sample!.Descriptor;
+        // Every column, whole rows (the grid's Select All), with headers; then the tone column alone.
+        var copy = await TextChecks.Copy(jobs, new ResultsCopyArgs(shown.ResultId, [new CopyPartArgs([[0, ResultJobs.MaxSafeInteger]], [[0, 2]])], true, "lf", ResultJobs.MaxCopyBytes));
+        var toneOnly = await TextChecks.Copy(jobs, new ResultsCopyArgs(shown.ResultId, [new CopyPartArgs([[0, 0]], [[2, 2]])], false, "lf", ResultJobs.MaxCopyBytes));
+        var estimate = ResultJobs.EstimateCopy(store.Find(shown.ResultId)!, [new CopyPartArgs([[0, ResultJobs.MaxSafeInteger]], [[0, 2]])], true, false);
+        check(System.Text.Encoding.UTF8.GetString(copy.Text) == "id\tname\n1\tn1\n2\tn2\n3\tn3" && copy.Result.Rows == 3 && estimate >= copy.Text.Length && estimate < copy.Text.Length + 5
+            && toneOnly.Text.Length == 0 && toneOnly.Result.Rows == 1,
+            "Copy leaves a row tone column out of the header and every row, and from its estimate (an upper bound, without the tone's bytes); a copy of the tone alone copies no text: "
+            + JsonSerializer.Serialize(System.Text.Encoding.UTF8.GetString(copy.Text)) + ", estimate " + estimate + ", tone alone " + toneOnly.Text.Length + " bytes, " + toneOnly.Result.Rows + " rows");
+        var folder = Directory.CreateTempSubdirectory("varia-tone-");
+        try
+        {
+            var csv = Path.Combine(folder.FullName, "toned.csv");
+            var json = Path.Combine(folder.FullName, "toned.json");
+            await jobs.ExportAsync(new ResultsExportArgs(shown.ResultId, csv, "csv", true, "NULL", Guid.NewGuid().ToString("N")), null);
+            await jobs.ExportAsync(new ResultsExportArgs(shown.ResultId, json, "json", true, "NULL", Guid.NewGuid().ToString("N")), null);
+            using var document = JsonDocument.Parse(File.ReadAllBytes(json));
+            check(File.ReadAllText(csv) == "id,name\r\n1,n1\r\n2,n2\r\n3,n3\r\n"
+                && document.RootElement.EnumerateArray().All(row => row.EnumerateObject().Select(member => member.Name).SequenceEqual(["id", "name"])),
+                "Save Results As leaves a row tone column out of CSV (header too) and of JSON's keys");
+
+            // The next two samples retire the revision being copied after its first page: the lease keeps it whole.
+            var retiring = table.Write(Toned(10), new()).Sample!.Descriptor;
+            var retiredMidCopy = false;
+            var leasing = new ResultJobs(store) { AfterPage = () => { if (retiredMidCopy) return; table.Write(Toned(20), new()); table.Write(Toned(30), new()); retiredMidCopy = store.Find(retiring.ResultId) is null; } };
+            var leased = await TextChecks.Copy(leasing, new ResultsCopyArgs(retiring.ResultId, [new CopyPartArgs([[0, ResultJobs.MaxSafeInteger]], [[0, 2]])], false, "lf", ResultJobs.MaxCopyBytes));
+            check(retiredMidCopy && System.Text.Encoding.UTF8.GetString(leased.Text) == "10\tn10\n11\tn11\n12\tn12",
+                "a copy of the live revision a grid shows completes when later samples retire that revision while it runs");
+        }
+        finally { folder.Delete(true); }
+    }
+
     private static async Task SyntheticChecks(Action<bool, string> check)
     {
         var service = new SqlService(new ResultStore(1L << 30, 1L << 29), hooks: true);
@@ -694,7 +755,7 @@ internal static class LiveTableChecks
         seen = tail.Recorder.Ticks.Count;
         await tail.Recorder.WaitAsync(recorder => recorder.Ticks.Skip(seen).Any(tick => SampleOf(tick, SyntheticSampler.LogProbe)?.Append?[0].Restarted == true));
         var before = tail.Recorder.Ticks.Skip(seen).Select(tick => SampleOf(tick, SyntheticSampler.LogProbe)?.Append?[0]).FirstOrDefault(sample => sample?.Restarted == true);
-        check(tailRows is [[null, null, "3 earlier rows are not shown."], ["4", "0", "Message 4"], ["5", "1", "Message 5"]] && before is not null && Ids(store, before.Descriptor).SequenceEqual(["1", "2"]),
+        check(tailRows is [[null, null, "3 earlier rows are not shown.", null], ["4", "0", "Message 4", null], ["5", "1", "Message 5", null]] && before is not null && Ids(store, before.Descriptor).SequenceEqual(["1", "2"]),
             "a tail start shows the last rows after a note row, and a new start before an id restarts the table ending there: " + string.Join(" | ", tailRows.Select(row => string.Join(",", row))));
         await Stop(tail);
         check(store.Count == 0, "ended subscriptions leave no live table stored");

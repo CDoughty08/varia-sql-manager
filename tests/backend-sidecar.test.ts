@@ -670,6 +670,9 @@ describe('real .NET sidecar live subscriptions (test hooks)', () => {
     expect(ticks[0].samples.find(sample => sample.probe === 'debug.synthetic.grid')!.tables![0].facets).toMatchObject([{ column: 'group' }])
     const items = await rowsOf(connection, grid.tables![0].descriptor)
     expect(items.map(row => row[2])).toEqual(items.map(row => 'Item ' + row[0]))
+    // The row tone travels as the last column with its role, so the grid hides it; its cells name each row's tone.
+    expect(grid.tables![0].descriptor.columns.at(-1)).toMatchObject({ name: 'tone', role: 'tone' })
+    expect(items.map(row => row[4])).toEqual(items.map(row => ['error', 'warning', 'running', null, null][Number(row[0]) % 5]))
     // Track two keys as the grid will: the cell texts the worker decoded.
     const keys = [items[1][0]!, items[4][0]!]
     await call(connection, 'live.update', { subscriptionId: value.subscriptionId, source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.grid', table: 0, seq: 9, keys }] } as BackendMethods['live.update']['params'])

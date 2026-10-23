@@ -1091,6 +1091,46 @@
           "description": "(Varia) Tint of every other row. Default $text/3 (Dark #d9e1ec08, Light #1f273308).",
           "markdownDescription": "(Varia) Tint of every other row. Default `$text/3` (Dark `#d9e1ec08`, Light `#1f273308`)."
         },
+        "resultsGrid.rowErrorBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Live grid rows toned error: a session blocked by another, a failed operation, an error message. Default $error/12 (Dark #f39c9f1f, Light #ae21171f).",
+          "markdownDescription": "(Varia) Live grid rows toned error: a session blocked by another, a failed operation, an error message. Default `$error/12` (Dark `#f39c9f1f`, Light `#ae21171f`)."
+        },
+        "resultsGrid.rowErrorForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of live grid rows toned error. Default @resultsGrid.foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Text of live grid rows toned error. Default `@resultsGrid.foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "resultsGrid.rowWarningBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Live grid rows toned warning: a session blocking others, a warning message. Default $warning/12 (Dark #dfbd821f, Light #8a53001f).",
+          "markdownDescription": "(Varia) Live grid rows toned warning: a session blocking others, a warning message. Default `$warning/12` (Dark `#dfbd821f`, Light `#8a53001f`)."
+        },
+        "resultsGrid.rowWarningForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of live grid rows toned warning. Default @resultsGrid.foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Text of live grid rows toned warning. Default `@resultsGrid.foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "resultsGrid.rowRunningBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Live grid rows toned running: a session rolling back, a running operation. Default $accent/10 (Dark #8fb7ff1a, Light #005fb81a).",
+          "markdownDescription": "(Varia) Live grid rows toned running: a session rolling back, a running operation. Default `$accent/10` (Dark `#8fb7ff1a`, Light `#005fb81a`)."
+        },
+        "resultsGrid.rowRunningForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of live grid rows toned running. Default @resultsGrid.foreground (Dark #d9e1ec, Light #1f2733).",
+          "markdownDescription": "(Varia) Text of live grid rows toned running. Default `@resultsGrid.foreground` (Dark `#d9e1ec`, Light `#1f2733`)."
+        },
+        "resultsGrid.rowMutedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Live grid rows toned muted: a row that left its source and stays one more sample, a system session. Default @resultsGrid.background (Dark #141a23, Light #fafbfc).",
+          "markdownDescription": "(Varia) Live grid rows toned muted: a row that left its source and stays one more sample, a system session. Default `@resultsGrid.background` (Dark `#141a23`, Light `#fafbfc`)."
+        },
+        "resultsGrid.rowMutedForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of live grid rows toned muted. Default $textMuted (Dark #8a9cb3, Light #525e72).",
+          "markdownDescription": "(Varia) Text of live grid rows toned muted. Default `$textMuted` (Dark `#8a9cb3`, Light `#525e72`)."
+        },
         "resultsGrid.rowNumberForeground": {
           "$ref": "#/definitions/value",
           "description": "(Varia) Row numbers. Default $textMuted (Dark #8a9cb3, Light #525e72).",

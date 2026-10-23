@@ -88,7 +88,9 @@ pages, limits, error codes, display formats, benchmarks).
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/` and `results/`); no React per row or cell, and frames stay O(visible cells).
+  forbids HTML sinks under `grid/`, `results/` and `live/`); no React per row or cell, and frames stay O(visible cells).
+  Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
+  tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.

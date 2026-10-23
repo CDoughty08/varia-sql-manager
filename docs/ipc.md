@@ -803,6 +803,11 @@ from its own state; the writers do the rest.
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
   facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
   not fit is left out (`more`) for a later tick to send.
+- **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, an nvarchar that is never a key or facet):
+  each cell is `error`, `warning`, `running`, `muted` or NULL. The stored result's column keeps the role
+  (`ResultColumn.role` `tone`), so the grid hides it and colours the row instead (LiveGrid, below), and Copy and Save
+  Results As leave it out of every part, header and JSON object whatever columns a request names (`ResultJobs` through
+  `ResultTextWriter.Hidden`; a part of only the tone copies no text).
 - **Append tables.** One result (a segment) grows by the rows a source reads above the table's settled id, ordered by its one
   key, an integer id. Ids are assigned at insert, not commit, so a lower id can become visible after a higher one (under READ
   COMMITTED, or for an instant under READ UNCOMMITTED): each read covers every unsettled id again (the source reads `@top` =
@@ -885,10 +890,11 @@ overlaps itself; a source runs its due probes through an `ILiveSampler`. `debug.
 no SQL, and its tables go through the same writers as the SQL sources' (Tables, above): its metrics probe counts samples and
 draws a wave (the rate is null until a second sample); its table probe stores one snapshot per sample whose rows move on by
 one id each time, so rows leave at the top and arrive at the bottom; its status probe reports the phase and the sample
-count; its grid probe stores two snapshot tables from one sample, items (a view, facets, departed rows) and their groups,
+count; its grid probe stores two snapshot tables from one sample, items (a view, facets, departed rows, a row tone by group)
+and their groups,
 which come from the source's own state rather than a query, and with `errorEvery` fails the groups alone, as one failed
-statement of a batch would; its log probe grows an append table from an in-memory log, with late messages, a start, and a
-restart when its filter or level changes; and its wide probe stores the 23-column snapshot the churn benchmark swaps,
+statement of a batch would; its log probe grows an append table from an in-memory log (toned by level), with late
+messages, a start, and a restart when its filter or level changes; and its wide probe stores the 23-column snapshot the churn benchmark swaps,
 reporting the backend's gen2 collections. Its scope is `none`, so any connection id is accepted;
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
 
@@ -1038,6 +1044,37 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   pill and badge text ("Live · every 2 s", "Slowed to 4 s", "Paused while hidden", "Updated 12 s ago", "Connection lost").
   `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
   hidden or stale view reads stale.
+- **Tables.** `handle.table(probe, index)` is the table's latest result as a `ResultHandle`, with its revision, diff and
+  departed rows (snapshot) or segment, `rolledFrom` and `restarted` (append). `tracked` carries the rows the backend
+  found and, when the view still has it (one of the last 4 lists it sent for the table), the key list that `seq` answers.
+
+**LiveGrid** (`live/LiveGrid.ts`, its React shell `live/LiveGridPane.tsx`): a live table in a results grid. It wraps
+`GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys, selection, Copy) with three additions:
+`GridView.swap(handle, descriptor, mapRow)` shows another result with the same columns in place (widths and scroll stay;
+the first row shown, the active cell and each block move through `mapRow`, `grid/swap.ts`), a hidden tone column, and
+follow tail.
+- **Snapshot revisions.** After each applied tick (before it is acknowledged) the grid first reads the rows the new revision
+  will show into the window cache (`GridView.prepare`, at most 250 ms), then swaps it in, so a swap never paints a frame of
+  empty cells; a newer revision arriving meanwhile has retired the one shown and swaps in at once. The grid tracks the
+  active row and the rows next to it, the first row shown and every block's anchor and focus rows (at most 64): it reads
+  their keys from the window cache's worker (`display: false` over the key columns, in as few windows as fit), sends them
+  with `track` only when the list changes, and maps each row it knew to where the backend says its key went; rows it did
+  not know keep their index. A block whose row is gone collapses to the active cell; an active row that is gone moves to
+  where the nearest surviving row went (below, then above, within 64 rows). A view scrolled to the very top stays at the top,
+  so rows that sort first are seen. Departed rows are muted for their one revision, whatever their tone.
+- **Tones.** The tone column (the result's last, role `tone`) is not shown: each row tile the grid reads also reads the tile
+  column that holds it, and each pooled row takes one class, `tone-error`, `tone-warning`, `tone-running` or
+  `tone-muted` (theme keys `resultsGrid.row{Error,Warning,Running,Muted}{Background,Foreground}`; a NULL in a toned row drops
+  its tint). Under forced colours a toned row's number gets a bar and a muted row dims. The owner may name tones for screen
+  readers (`toneLabel`, "blocked", "ended"), which the active cell's label then ends with.
+- **Append segments.** A segment grows in place. While the view is at its last row it stays there as rows arrive; scrolled
+  up, it stays where it is and the pane counts the rows that arrived since ("n new rows · Jump to latest", which scrolls
+  back and follows again). A roll swaps to the new segment and keeps following; a restart (a new filter or args) keeps the
+  view's intent: the tail if it followed, else the top of the new rows.
+- **Sort, Copy, Save.** `sortBy(column, descending)` sets the probe's sort by catalogue column id (never the tone; append
+  tables are in id order), and the next revision arrives sorted. Copy and Save act on the revision the grid shows, through
+  `results.copy` and `results.export`, which lease it: the samples after it may retire it mid-job and the job still
+  completes. An append segment saves once it is complete (a roll or the source's end).
 
 
 ## Results port and results worker
