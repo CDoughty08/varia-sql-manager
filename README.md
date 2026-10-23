@@ -22,7 +22,7 @@ npm run build
 npm start               # Launch the built workbench using the local .NET runtime
 ```
 
-Without a desktop session on Linux, run the Electron tests under a virtual display: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`. Screenshots go to `artifacts/`. The tests keep Chromium's sandbox on unless they run as root, so the AppArmor note above applies to them too.
+Without a desktop session on Linux, run the Electron tests under a virtual display: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`. Screenshots go to `artifacts/`. The tests keep Chromium's sandbox on unless they run as root, so the AppArmor note above applies to them too. They find the workbench's toolbar, document tabs, status bars, panes, menus, and dialogs by ARIA role and accessible name, through `scripts/fixtures/ui.mjs`; the few parts with no role of their own are named only there, and `tests/smoke-selectors.test.ts` keeps the workbench's class names out of the suites.
 
 The .NET SDK is selected through `global.json`. npm and NuGet lockfiles pin resolved dependencies. This bootstrap runs locally; installers, code signing, and bundled .NET distribution are future work.
 

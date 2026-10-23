@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, statusBar, themeNotice, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'theme-profile-'))
@@ -45,12 +46,11 @@ const variable = key => page.evaluate(name => getComputedStyle(document.document
 const variables = keys => Promise.all(keys.map(variable))
 const native = () => application.evaluate(({ BrowserWindow, nativeTheme }) => ({ source: nativeTheme.themeSource, dark: nativeTheme.shouldUseDarkColors, background: BrowserWindow.getAllWindows()[0].getBackgroundColor().toLowerCase() }))
 const backgroundOf = selector => page.locator(selector).first().evaluate(element => getComputedStyle(element).backgroundColor)
-const shellClasses = () => page.locator('.dv-shell').evaluate(element => [...element.classList].filter(name => /^(dockview-theme-|varia-dock$)/.test(name)).sort())
-const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
+const editorText = () => editorTextOf(page)
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
 // Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
 const dockTabFocusRing = () => page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] })
-const contextMenuBorder = () => page.locator('.menu').evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
+const contextMenuBorder = () => openMenus(page).evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
 // A theme color as the browser resolves it, to compare with computed styles.
 const colorOf = key => page.evaluate(name => {
   const probe = document.body.appendChild(document.createElement('div'))
@@ -89,14 +89,14 @@ try {
   expect(await variable('editor.background')).toBe('#11151c')
   expect(await backgroundOf('.monaco-editor')).toBe('rgb(17, 21, 28)')
   expect(await native()).toMatchObject({ source: 'dark', background: '#11151c' })
-  expect(await shellClasses()).toEqual(['dockview-theme-dark', 'varia-dock'])
+  expect(await dockShell(page)).toEqual({ themes: ['dockview-theme-dark'], varia: true })
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['dark', 'dark'])
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
-  await expect(page.locator('.status-bar')).toHaveAttribute('data-state', 'disconnected')
+  await expect(themeNotice(page)).toHaveCount(0)
+  await expect(statusBar(page)).toHaveAttribute('data-state', 'disconnected')
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
 
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.
-  await page.getByLabel('Move Query output', { exact: true }).selectOption('float')
+  await movePane(page, 'output', 'float')
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   expect(await backgroundOf('.dv-floating-titlebar')).toBe('rgb(24, 31, 42)')
   await menu('layout.reset')
@@ -106,13 +106,13 @@ try {
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(118, 172, 255)'])
   // The editor's context menu is the workbench's: its border and highlighted item use the menu colors.
   await page.locator('.monaco-editor .view-lines').click({ button: 'right' })
-  await expect(page.locator('.menu')).toBeVisible()
+  await expect(openMenus(page)).toBeVisible()
   expect(await contextMenuBorder()).toBe('1px solid rgb(95, 112, 137)')
   await page.keyboard.press('ArrowDown')
-  await expect(page.locator('.menu-item[data-active]')).toBeFocused()
-  expect(await page.locator('.menu-item[data-active]').evaluate(item => getComputedStyle(item).backgroundColor)).toBe(await colorOf('menu.selectionBackground'))
+  await expect(activeMenuItem(page)).toBeFocused()
+  expect(await activeMenuItem(page).evaluate(item => getComputedStyle(item).backgroundColor)).toBe(await colorOf('menu.selectionBackground'))
   await page.keyboard.press('Escape')
-  await expect(page.locator('.menu')).toHaveCount(0)
+  await expect(openMenus(page)).toHaveCount(0)
   // The find and hover widgets take their shadow from --vscode-shadow-lg, which standalone Monaco leaves undefined too.
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+F')
@@ -141,7 +141,7 @@ try {
   await menu('theme.mode.light')
   await expect.poll(() => variables(lightKeys)).toEqual(['#ffffff', '#1f2733', '#005fb8', '#e9edf2', '#c42b3c'])
   await expect.poll(() => backgroundOf('.monaco-editor')).toBe('rgb(255, 255, 255)')
-  expect(await shellClasses()).toEqual(['dockview-theme-light', 'varia-dock'])
+  expect(await dockShell(page)).toEqual({ themes: ['dockview-theme-light'], varia: true })
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['light', 'light'])
   await expect.poll(native).toMatchObject({ source: 'light', background: '#ffffff' })
   if (process.platform !== 'darwin') expect(await application.evaluate(() => globalThis.themeOverlays.at(-1))).toEqual({ color: '#e9edf2', symbolColor: '#1f2733' })
@@ -163,12 +163,12 @@ try {
   await expect.poll(() => variables(['button.background', 'tab.activeBorderTop', 'editor.background'])).toEqual(['#ffb000', '#ffb000', '#11151c'])
   await expect.poll(native).toMatchObject({ source: 'dark', background: '#11151c' })
   await expect.poll(appearance).toEqual({ version: 1, mode: 'dark', darkTheme: 'smoke', lightTheme: 'varia-light' })
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
+  await expect(themeNotice(page)).toHaveCount(0)
 
   // Theme values never reach CSS as text: the grammar drops this entry and the default accent is used.
   await writeFile(smokeTheme, '{ "kind": "varia-color-theme", "version": 1, "name": "Smoke", "type": "dark", "palette": { "accent": "red;}body{display:none" } }')
   await menu('theme.reload')
-  const notice = page.locator('.theme-notice[role="status"]')
+  const notice = themeNotice(page).and(page.getByRole('status'))
   await expect(notice).toContainText('smoke.json /palette/accent')
   await expect(notice).toContainText('Reloaded 1 theme; 1 has problems.')
   await expect.poll(() => variable('button.background')).toBe('#8fb7ff')
@@ -193,14 +193,14 @@ try {
   await notice.getByRole('button', { name: 'Open Themes Folder', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.openedThemes)).toBe(themesFolder)
   await notice.getByRole('button', { name: 'Dismiss', exact: true }).click()
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
+  await expect(themeNotice(page)).toHaveCount(0)
   // Dismissing hides that notice, not its text: reloading again reports again.
   await menu('theme.reload')
   await expect(notice).toContainText('Reloaded 1 theme; 1 has problems.')
   await notice.getByRole('button', { name: 'Dismiss', exact: true }).click()
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
-  await page.locator('.toolbar').getByRole('button', { name: 'New query', exact: true }).click()
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(themeNotice(page)).toHaveCount(0)
+  await toolbarButton(page, 'New query').click()
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   expect((await page.evaluate(() => window.varia.health())).ok).toBe(true)
   console.log('Theme checks: custom themes load and switch, and an injection attempt only warns.')
 
@@ -209,7 +209,7 @@ try {
   await writeFile(smokeTheme, broken)
   await close()
   await launch()
-  const alert = page.locator('.theme-notice[role="alert"]')
+  const alert = themeNotice(page).and(page.getByRole('alert'))
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('smoke.json')
   await expect(alert).toContainText('Varia Dark is used instead')
@@ -227,7 +227,7 @@ try {
   await expect.poll(async () => (await appearance())?.darkTheme).toBe('custom-theme')
   expect(JSON.parse(await readFile(join(themesFolder, 'custom-theme.json'), 'utf8'))).toMatchObject({ kind: 'varia-color-theme', version: 1, name: 'My Theme', type: 'dark', palette: { accent: '#8fb7ff' } })
   expect(JSON.parse(await readFile(join(themesFolder, 'varia-theme.schema.json'), 'utf8')).title).toMatch(/Varia/)
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
+  await expect(themeNotice(page)).toHaveCount(0)
   console.log('Theme checks: Create Custom Theme writes a starter and the schema, then selects the starter.')
 
   await menu('theme.mode.system')
