@@ -119,10 +119,10 @@ characters.
 
 ### Palette
 
-The 66 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-66). Slots group
+The 67 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-67). Slots group
 the colors that belong together: surfaces (`canvas`, `panel`, `sideBar`, `chrome`, `raised`, `overlay`, `input`),
 interaction (`hover`, `active`, `selection`, `selectionStrong`), text tiers (`text` down to `textMuted`), borders,
-accents, status colors, glyphs, the six connection colors, five chart series colors (`chart1` to `chart5`, a categorical
+accents, status colors (with `successText`, the success color for text on tinted fills such as success pills), glyphs, the six connection colors, five chart series colors (`chart1` to `chart5`, a categorical
 set checked for color-vision deficiencies, used only inside charts), and the SQL syntax colors (`syntaxKeyword` and so on).
 
 You can add your own slots, named like `nord0` (a lowercase letter, then up to 31 letters and digits), and refer to them
@@ -131,9 +131,9 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 215 keys are listed in [`tokens.md`](tokens.md#color-keys-215) by area: title bar and menus, buttons and inputs,
+The 242 keys are listed in [`tokens.md`](tokens.md#color-keys-242) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
-dialogs, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
+dialogs, status pills, chips, live views and tiles, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
 (`charts.foreground`), grid lines (`charts.lines`), and series, which take `charts.blue`, `charts.orange`, `charts.green`,
 `charts.yellow` and `charts.purple` in that order (the `chart1` to `chart5` slots), `charts.gray` for a stacked chart's
 "Other". `charts.red` is a status color for marks such as a failed execution, never a series' color. Series colors are checked at 3:1 and chart text at
@@ -221,6 +221,15 @@ bidirectional-text characters are removed from names, and the window chrome only
   as muted italics, and a status bar tinted only while a query runs or the backend is down.
 - Every key default names a slot or another key; no key has a literal default, so a theme recolors everything,
   the docking compass included.
+- State is drawn with the states kit in `src/renderer/src/kit` (empty states, inline errors with Copy details, loading
+  placeholders, status pills and environment tags, filter chips, live labels and metric tiles), never with ad-hoc
+  colors. A pill has one of six tones (`src/shared/theme/tones.ts`: running, success, warning, critical, info, neutral),
+  each with its own `statusPill.<tone>Background` and `Foreground` keys, and always carries a word.
+  `contrast-pairs.ts` holds every tone's text to 4.5:1 over every surface pills sit on: documents, panels, dialogs,
+  tab strips, Object Explorer rows (hovered, selected, the active server) and every status bar state, which is why pill
+  text uses the status surface texts (`errorSurfaceText`, `warningSurfaceText`, `successText`) rather than the plain
+  status colors. `tests/states-kit.test.ts` checks the components' markup and words, and that a placeholder waits
+  `--varia-motion-delay` (300 ms) before it appears.
 - Sizes are not theme keys. The type scale (nothing under 11 px), spacing, radii, shadows, motion and bar heights live in
   `metrics.ts`, and `:root` in `styles.css` repeats them as `--varia-size-*`, `--varia-line-*`, `--varia-space-*`,
   `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key), `--varia-motion-*`, `--varia-header`,

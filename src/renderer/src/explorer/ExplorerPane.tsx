@@ -3,7 +3,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
 import { useMenuTarget } from '../menus/useMenuTarget'
-import Icon from '../Icon'
+import EmptyState from '../kit/EmptyState'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
 
@@ -104,7 +104,7 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
-        : <div className="explorer-empty"><Icon name="server" /><p>Connect to SQL Server to browse databases and objects.</p><button ref={connectButton} disabled={!connect} onClick={() => void commands.execute('connection.connect', undefined, 'toolbar')}>Connect to server</button></div>}
+        : <EmptyState className="explorer-empty" icon="server" detail="Connect to SQL Server to browse databases and objects." actions={[{ label: 'Connect to server', run: () => void commands.execute('connection.connect', undefined, 'toolbar'), disabled: !connect, buttonRef: connectButton, primary: true }]} />}
       {error && <p className="explorer-error" role="alert">{error}</p>}
     </div>
     <div className="explorer-footer">{live ? `${live} connected server${live === 1 ? '' : 's'}` : servers.length ? 'No connected servers' : 'Windows & SQL authentication'}</div>
