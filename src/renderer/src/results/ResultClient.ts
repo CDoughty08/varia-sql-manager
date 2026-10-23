@@ -1,7 +1,9 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
-// reads and decodes pages, and the UI thread receives only windows of display text.
-import type { BackendStatus, MemoryOrder, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, WireKind } from '../../../shared/contracts'
+// reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
+// same worker and port: their tables are ordinary stored results, opened with the same handles.
+import type { ApiResult, BackendStatus, MemoryOrder, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, WireKind } from '../../../shared/contracts'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
+import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
 import { gridLimits as g } from '../grid/constants'
@@ -72,6 +74,21 @@ export interface ResultHandle extends Disposable {
   /** Releases the result in the backend (results.close); queued while the results port is down. */
   close(): Promise<void>
 }
+/** What an update of a live stream may change: everything but which subscription and source it is. */
+export type LivePatch = Omit<LiveUpdateParams, 'subscriptionId' | 'source'>
+/** A live subscription (docs/ipc.md, Live subscriptions) as `ResultClient.live` runs it. */
+export interface LiveStream {
+  readonly subscriptionId: string
+  /** Settles once, with the subscription's end or why it could not run; it never rejects. */
+  readonly done: Promise<ApiResult<LiveEnd>>
+  /** Changes the running subscription's settings (live.update); a failure is a value. */
+  update(patch: LivePatch): Promise<ApiResult<LiveUpdateResult>>
+  /** Ends the subscription; `done` then settles with `cancelled` (at once when it was never sent). */
+  cancel(): void
+  /** The page applied an event of `bytes` (as `onEvent` received it), so main may send the next one. Until then the
+   *  backend samples nothing for this subscription: an event never acknowledged stops it after that one. */
+  ack(bytes: number): void
+}
 /** Test mode's counters (the grid's `__variaGrid.stats()`). */
 export interface ClientStats { workerBytes: number; workerPages: number; uiWindows: number; uiUnits: number; inflight: number }
 
@@ -79,6 +96,8 @@ const decoderFailed = 'Results cannot be displayed; reload the workbench.'
 const workerStopped = 'The results worker stopped. Try again.'
 const unavailable = 'These results are no longer available because the SQL backend restarted.'
 const released = 'These results were closed. Execute the query again to see them.'
+const liveEnded = 'This live view has ended.'
+const closedSentence = 'The workbench closed.'
 /** Result ids waiting to be closed while the port is down; more are dropped (the backend frees them with their tab). */
 const maxQueuedCloses = 100_000
 
@@ -93,9 +112,18 @@ interface ResultState {
   scheduled: boolean
 }
 interface Pending { resolve(message: WorkerResponse): void; reject(error: Error): void }
+/** `results` are the results this stream's events delivered that no later event retired: what its end releases. */
+interface LiveState {
+  readonly onEvent: (event: LiveEvent, bytes: number) => void
+  readonly results: Map<string, ResultKey>
+  sent: boolean
+  cancelled: boolean
+  end(result: ApiResult<LiveEnd>): void
+}
 
 const keyOf = (key: ResultKey): string => `${key.generation}:${key.resultId}`
 const abortError = (): Error => new DOMException('The request was aborted.', 'AbortError')
+const failureOf = (error: unknown): { ok: false; error: string; code: ErrorCode } => error instanceof ResultError ? { ok: false, error: error.message, code: error.code } : { ok: false, error: workerStopped, code: 'RESULT_DECODER_FAILED' }
 
 /**
  * The UI thread's windows of every result, least recently used first: at most 256 windows and 16,777,216 UTF-16 units of
@@ -166,6 +194,7 @@ export class ResultClient implements Disposable {
   private readonly queryListeners = new Map<string, Set<(event: QueryEvent) => void>>()
   private readonly memoryListeners = new Set<(memory: MemoryReport) => void>()
   private readonly generationListeners = new Set<(generation: number) => void>()
+  private readonly lives = new Map<number, LiveState>()
   /** Result ids to close, by generation, until the port is attached (or main has room for the request again). */
   private readonly closeQueue = new Map<number, Set<number>>()
   private readonly timers: Timers
@@ -212,6 +241,8 @@ export class ResultClient implements Disposable {
   get backendStatus(): BackendStatus { return this.status }
   /** Window requests waiting for the worker, across every result (grids share a limit of 16). */
   get windowsInFlight(): number { return this.windowRequests }
+  /** Live streams that have not ended. */
+  get liveStreams(): number { return this.lives.size }
   /** Result ids waiting for the port to close them. */
   get queuedCloses(): number { let count = 0; for (const ids of this.closeQueue.values()) count += ids.size; return count }
 
@@ -301,7 +332,7 @@ export class ResultClient implements Disposable {
       const state = this.results.get(keyOf(key))
       if (state) {
         this.publish(state, { ...state.snapshot, state: state.snapshot.state === 'lost' ? 'lost' : 'released' })
-        this.forget(state)
+        this.untrack(state)
       }
       if (this.generation !== 0 && key.generation !== this.generation) continue
       const ids = this.closeQueue.get(key.generation) ?? new Set<number>()
@@ -311,6 +342,88 @@ export class ResultClient implements Disposable {
       this.closeQueue.set(key.generation, ids)
     }
     return this.flushCloses()
+  }
+
+  /**
+   * Starts a live subscription. Each event reaches `onEvent` after the tables it carries are applied (`applyLive`) and
+   * the results it retires forgotten; the caller applies the event synchronously and then calls `ack`. When the stream
+   * ends, its results are forgotten too, except those a finished source kept, which stay readable until `release`. A
+   * failure (the port, the worker, a refused request, a lost backend) settles `done` as a value.
+   */
+  live(params: LiveSubscribeParams, onEvent: (event: LiveEvent, bytes: number) => void): LiveStream {
+    const id = this.nextId++
+    let settle!: (result: ApiResult<LiveEnd>) => void
+    const done = new Promise<ApiResult<LiveEnd>>(resolve => { settle = resolve })
+    let ended = false
+    const state: LiveState = {
+      onEvent, results: new Map(), sent: false, cancelled: false,
+      end: result => {
+        if (ended) return
+        ended = true
+        if (this.lives.get(id) === state) this.lives.delete(id)
+        settle(result)
+      }
+    }
+    const stream: LiveStream = {
+      subscriptionId: params.subscriptionId,
+      done,
+      update: async patch => {
+        if (ended || state.cancelled) return { ok: false, error: liveEnded, code: 'NOT_FOUND' }
+        try {
+          const response = await this.request(request => ({ type: 'liveUpdate', id: request, live: id, params: { ...patch, subscriptionId: params.subscriptionId, source: params.source } }))
+          return response.type === 'liveUpdated' ? { ok: true, value: response.result } : failureOf(undefined)
+        } catch (error) { return failureOf(error) }
+      },
+      cancel: () => {
+        if (ended || state.cancelled) return
+        state.cancelled = true
+        // Never sent (the port has not attached): nothing ran, so it ends now rather than when, or if, the port comes.
+        if (!state.sent) return state.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+        this.worker.postMessage({ type: 'cancel', id })
+      },
+      ack: bytes => { if (!ended && state.sent) this.worker.postMessage({ type: 'liveAck', id, bytes }) }
+    }
+    if (this.failure) state.end({ ok: false, error: this.failure, code: 'RESULT_DECODER_FAILED' })
+    else if (this.disposed) state.end({ ok: false, error: closedSentence, code: 'PORT_CLOSED' })
+    else {
+      this.lives.set(id, state)
+      const worker = this.worker
+      this.attached.then(() => {
+        if (ended || this.worker !== worker) return
+        state.sent = true
+        worker.postMessage({ type: 'live', id, params })
+      }, error => state.end(failureOf(error)))
+    }
+    return stream
+  }
+
+  /** A live table's descriptor: creates or updates its result as query events do, so a handle's listeners hear an append
+   *  table grow. */
+  applyLive(descriptor: ResultDescriptor): void {
+    this.update(this.state(descriptor), descriptor, false)
+  }
+
+  /** Results the backend already released (a live tick retired them, or their subscription ended): handles report them
+   *  released, their windows go, and the worker drops their pages, with no results.close. */
+  forget(keys: readonly ResultKey[]): void { this.drop(keys, 'released') }
+
+  /** Results gone from the backend: released by it, or lost with it. */
+  private drop(keys: readonly ResultKey[], as: 'released' | 'lost'): void {
+    const batches = new Map<number, number[]>()
+    for (const key of keys) {
+      const state = this.results.get(keyOf(key))
+      if (state) {
+        this.publish(state, { ...state.snapshot, state: state.snapshot.state === 'lost' ? 'lost' : as })
+        this.untrack(state)
+      }
+      // An earlier generation's pages are already gone from the worker.
+      if (this.generation !== 0 && key.generation !== this.generation) continue
+      const ids = batches.get(key.generation) ?? []
+      ids.push(key.resultId)
+      batches.set(key.generation, ids)
+    }
+    if (this.failure || this.disposed) return
+    for (const [generation, resultIds] of batches) this.worker.postMessage({ type: 'forget', generation, resultIds })
   }
 
   /** Test mode's cache counters; the worker's are 0 while it has no port. */
@@ -329,7 +442,8 @@ export class ResultClient implements Disposable {
     this.window.removeEventListener('message', this.onWindowMessage)
     if (this.closeRetry !== undefined) this.timers.clearTimeout(this.closeRetry)
     this.worker.terminate()
-    this.rejectAll(new ResultError('PORT_CLOSED', 'The workbench closed.'))
+    this.rejectAll(new ResultError('PORT_CLOSED', closedSentence))
+    this.endLives({ ok: false, error: closedSentence, code: 'PORT_CLOSED' })
     this.queryListeners.clear()
     this.memoryListeners.clear()
     this.generationListeners.clear()
@@ -403,6 +517,8 @@ export class ResultClient implements Disposable {
   private workerFailed(): void {
     this.portReady = false
     this.rejectAll(new ResultError('RESULT_DECODER_FAILED', workerStopped))
+    // Main cancels the old port's streams when the new worker's port opens, and the backend releases their results.
+    this.endLives({ ok: false, error: workerStopped, code: 'RESULT_DECODER_FAILED' })
     // Requests still waiting for the failed worker's port fail with it (a port it already had changes nothing).
     this.rejectAttached(new ResultError('RESULT_DECODER_FAILED', workerStopped))
     this.worker.terminate()
@@ -416,6 +532,10 @@ export class ResultClient implements Disposable {
     this.restarts.push(now)
     this.worker = this.startWorker()
     this.openPort()
+  }
+
+  private endLives(result: ApiResult<LiveEnd>): void {
+    for (const state of [...this.lives.values()]) this.liveEnded(state, result)
   }
 
   private rejectAll(error: Error): void {
@@ -446,22 +566,61 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'measure': case 'stats': {
+      case 'window': case 'cell': case 'closed': case 'measure': case 'stats': case 'liveUpdated': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)
         return
       }
       case 'error': {
+        const live = this.lives.get(message.id)
+        if (live) return this.liveEnded(live, { ok: false, error: message.message, code: message.code })
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.reject(new ResultError(message.code, message.message))
         return
       }
+      case 'live': return this.liveEvent(message.id, message.bytes, message.event)
+      case 'liveEnd': {
+        const live = this.lives.get(message.id)
+        return live && this.liveEnded(live, { ok: true, value: message.result })
+      }
       case 'query': return this.queryEvent(message.queryId, message.event)
       case 'memory': return this.memoryChanged({ usedBytes: message.usedBytes, globalBytes: message.globalBytes, generation: message.generation, seq: message.seq })
       case 'backend': return this.backend(message.generation, message.status)
     }
+  }
+
+  /** Tables are applied, and only this stream's own retired results forgotten (never a query's), before the page sees
+   *  the event; a cancelled stream's events still count its results, so its end releases them. */
+  private liveEvent(id: number, bytes: number, event: LiveEvent): void {
+    const state = this.lives.get(id)
+    if (!state) return
+    if (event.type === 'live.tick') {
+      for (const sample of event.samples) {
+        for (const entry of [...sample.tables ?? [], ...sample.append ?? []]) {
+          const { generation, resultId } = entry.descriptor
+          this.applyLive(entry.descriptor)
+          state.results.set(keyOf({ generation, resultId }), { generation, resultId })
+          const retired = (entry.retired ?? []).map(retiredId => ({ generation, resultId: retiredId })).filter(key => state.results.delete(keyOf(key)))
+          if (retired.length > 0) this.forget(retired)
+        }
+      }
+    }
+    if (state.cancelled) return
+    try { state.onEvent(event, bytes) } catch { /* The page's failure must not stop the stream's bookkeeping. */ }
+  }
+
+  /** The backend released every result of an ended stream but those a finished source kept; a stream that ended with
+   *  its backend lost them. A source can finish while its cancel is on the way: nobody reads what it kept then, so those
+   *  are closed at once rather than held against the budget until the backend restarts. */
+  private liveEnded(state: LiveState, result: ApiResult<LiveEnd>): void {
+    const kept = new Set(result.ok && result.value.ended === 'sourceEnded' ? result.value.kept ?? [] : [])
+    const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'RESULT_UNAVAILABLE')
+    const results = [...state.results.values()]
+    this.drop(results.filter(key => !kept.has(key.resultId)), lost ? 'lost' : 'released')
+    if (state.cancelled && kept.size > 0) void this.release(results.filter(key => kept.has(key.resultId)))
+    state.end(result)
   }
 
   /** Memory listeners hear what the backend holds; a `globalBytes` of 0 leaves the budget as last reported. */
@@ -480,12 +639,12 @@ export class ResultClient implements Disposable {
     for (const state of [...this.results.values()]) {
       if (state.key.generation === generation) continue
       if (state.snapshot.state !== 'lost') this.publish(state, { ...state.snapshot, state: 'lost' })
-      this.forget(state)
+      this.untrack(state)
     }
     for (const listener of [...this.generationListeners]) listener(generation)
   }
 
-  private forget(state: ResultState): void {
+  private untrack(state: ResultState): void {
     if (this.results.get(state.id) === state) this.results.delete(state.id)
     this.windows.dropResult(state.id)
   }

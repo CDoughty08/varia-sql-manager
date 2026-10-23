@@ -90,9 +90,10 @@ export interface LiveSourceSpec {
   /** Only main's test schemas (unpackaged smoke runs) and a backend with VARIA_BACKEND_TEST_HOOKS=1 accept it. */
   readonly testOnly: boolean
   readonly probes: readonly string[]
-  /** While its view is hidden: pause every probe (the default), or keep only its probes without tables, sampled at most
-   *  every limits.live.hiddenIntervalMs (an execution this window started, for its completion notice). The renderer
-   *  applies it through live.update. */
+  /** While its view is hidden (the renderer's LiveService applies it through live.update): pause every probe (the
+   *  default), or, for a view that asks for it, keep only its probes without tables, sampled at most every
+   *  limits.live.hiddenIntervalMs, so a completion is still seen (an execution this window started; at most 4 such views a
+   *  window). */
   readonly hidden?: 'pause' | 'statusOnly'
 }
 
