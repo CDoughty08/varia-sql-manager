@@ -58,12 +58,13 @@ const clip = (text: string) => text.length > explorerLimits.detail ? text.slice(
 function tooltipFacts(node: TreeNode): string[] {
   const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
   const error = node.error ?? node.connectionError
-  return [kind, node.detail && displayText(node.detail), node.lost ? lostSentence : node.status && statusSentences[node.status], error && `Could not load: ${displayText(error.message)}`]
+  return [kind, node.detail && displayText(node.detail), node.lost ? lostSentence : node.status && statusSentences[node.status], error && `Could not load: ${displayText(error.message)}`,
+    node.note && displayText(node.note.sentence)]
     .filter((line): line is string => !!line)
 }
 /** The row's tooltip: name, kind and creation date, facts, status, and any error. */
 export function rowTooltip(node: TreeNode): string {
-  const name = node.lost ? `${node.label} (connection lost)` : node.sublabel ? `${node.label} ${node.sublabel}` : node.label
+  const name = node.lost ? `${node.label} (connection lost)` : [node.label, node.sublabel, node.note?.label].filter(Boolean).join(' ')
   return clip([displayText(name), ...tooltipFacts(node)].join('\n'))
 }
 /**
@@ -77,7 +78,8 @@ export function rowDescription(node: TreeNode): string | undefined {
 export function rowName(node: TreeNode): string {
   const sublabel = node.lost ? '(connection lost)' : node.sublabel
   const state = node.load === 'error' || node.more === 'error' || node.connectionError ? ', could not load' : node.status ? statusWords[node.status] : ''
-  return `${displayText(node.label)}${node.filtered ? ' (filtered)' : ''}${sublabel ? ' ' + displayText(sublabel) : ''}${state}`
+  const note = !node.lost && node.note ? ' ' + displayText(node.note.label) : ''
+  return `${displayText(node.label)}${node.filtered ? ' (filtered)' : ''}${sublabel ? ' ' + displayText(sublabel) : ''}${note}${state}`
 }
 function badgeOf(node: TreeNode): BadgeName | undefined {
   if (node.lost) return 'lost'
@@ -164,6 +166,7 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
       : <bdi className="oe-label">{displayText(node.label)}</bdi>}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
     {node.lost ? <span className="oe-sublabel">(connection lost)</span> : node.sublabel && <span className="oe-sublabel">{displayText(node.sublabel)}</span>}
+    {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
     {node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}
   </div>
 }

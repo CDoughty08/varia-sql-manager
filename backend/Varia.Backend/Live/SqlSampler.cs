@@ -59,6 +59,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
     /// <summary>The session probe ran on the open connection (it waits for a gate, so a connection can open without it).</summary>
     private bool sessionRead;
     private string permission = "VIEW SERVER STATE";
+    /// <summary>An SSISDB source's login is sysadmin or in ssis_admin (read with the session): it may read catalog_properties.</summary>
+    private bool admin;
     private int band;
     private int? spid;
     /// <summary>The session that the next tick reports: set when a connection opens after the opened frame.</summary>
@@ -145,6 +147,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
             session = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
             allowed = Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture) == 1;
             if (ssisdb) prologue = LiveSql.Prologue(source.Scope, !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture) == 1);
+            admin = ssisdb && Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture) == 1;
         }
         catch (Exception error) when (budget.IsCancellationRequested && !token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
         {
@@ -285,7 +288,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
     {
         await using var command = connection!.CreateCommand();
         command.CommandTimeout = 0;
-        var text = query.Text(prologue);
+        // A server DMV source has no admin-only reads; an SSISDB login that is not an admin reads the text without them.
+        var text = query.Text(prologue, admin: !ssisdb || admin);
         command.CommandText = testText?.Invoke(item.Probe.Spec.Id, text) ?? text;
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, token).ConfigureAwait(false);
         // Values are read by their declared position, so a result shaped otherwise is a bug in LiveSql, never a sample.

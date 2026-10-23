@@ -1,44 +1,61 @@
-// The SSIS Catalog's live tree (D-ssis 6.1): while a connection's SSISDB node is open in Object Explorer, one
+// The SSIS Catalog's live tree (D-ssis 6.1): while a connection's SSISDB node is open and shown in Object Explorer, one
 // `ssis.catalogProbe` view per connection fingerprints the catalog, and a fingerprint that changed reconciles only the
 // expanded or listed nodes that show that view, in the background, keeping expansion and selection. The first sample of
 // a connection is a baseline; a later view of the same connection (the node closed and opened again, a pause, a new
 // subscription) compares with the last fingerprints seen, so what changed meanwhile still reloads. The probe pauses with
-// Object Explorer (the view's owner) and the window, as every live view does, and nothing here polls.
+// Object Explorer (the view's owner) and the window, as every live view does, and nothing here polls. A view that ends is
+// opened again after a growing back-off (the server or the window had no room for it, the backend restarted it), unless it
+// ended for good (no access, a refused sign-in): SSISDB then says why, and a Refresh of SSISDB or above tries again.
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import type { LiveTick } from '../../../shared/live/schema'
 import type { SettingsValues } from '../../../shared/settings/catalog'
-import { catalogFingerprints, type CatalogFingerprint } from '../../../shared/ssis/catalog'
+import { catalogFingerprints, catalogProbeRetryMs, type CatalogFingerprint } from '../../../shared/ssis/catalog'
 import { onUnexpectedError } from '../core/errors'
-import type { Disposable } from '../core/types'
-import type { ExplorerService, ReconcileOptions, TreeNode } from '../explorer/ExplorerService'
+import { browserTimers, type Timers } from '../core/timers'
+import type { Disposable, WorkbenchEvent } from '../core/types'
+import type { ExplorerService, NodeNote, ReconcileOptions, TreeNode } from '../explorer/ExplorerService'
 import type { LiveHandle, LiveOwner, LiveService } from '../live/LiveService'
 
 const probe: LiveProbeId = 'ssis.catalogProbe'
 const background: ReconcileOptions = { background: true }
+/** Ends no retry fixes: the login's access or sign-in, a server without the probe, or a workbench that closed. */
+const finalCodes: ReadonlySet<string> = new Set(['PERMISSION_DENIED', 'LOGIN_FAILED', 'NOT_SUPPORTED', 'INVALID_PARAMS', 'PORT_CLOSED'])
 
 export interface SsisTreeProbeOptions {
-  readonly explorer: Pick<ExplorerService, 'getSnapshot' | 'subscribe' | 'rootIds' | 'node' | 'reconcile'>
+  readonly explorer: Pick<ExplorerService, 'getSnapshot' | 'subscribe' | 'rootIds' | 'node' | 'reconcile' | 'setNote'>
   readonly live: Pick<LiveService, 'open'>
   /** Whether Object Explorer shows: the views pause while it does not. */
   readonly explorerVisible: { visible(): boolean; subscribe(listener: () => void): () => void }
   readonly settings: { getSnapshot(): { readonly values: SettingsValues }; subscribe(listener: () => void): () => void }
+  /** The user's refreshes: one of SSISDB, of anything in it or of a node above it opens a view that stopped again. */
+  readonly events: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
+  readonly timers?: Timers
 }
 
-interface View { readonly handle: LiveHandle; readonly ticks: Disposable }
+interface View { readonly handle: LiveHandle; readonly ticks: Disposable; readonly stopStatus: () => void }
+/** A connection whose view ended: when it opens again (after `timer`), or why it will not (`final`). */
+interface Stopped { attempts: number; timer: unknown; final?: NodeNote }
 
 export class SsisTreeProbe implements Disposable {
   private readonly views = new Map<string, View>()
   /** The last fingerprints seen per connection (status id → value), kept while its server stays in the tree. */
   private readonly seen = new Map<string, ReadonlyMap<string, number | string>>()
+  private readonly stopped = new Map<string, Stopped>()
   private readonly stops: (() => void)[]
+  private readonly timers: Timers
   private values: SettingsValues
+  private syncing = false
+  private again = false
   private disposed = false
 
   constructor(private readonly o: SsisTreeProbeOptions) {
     this.values = o.settings.getSnapshot().values
+    this.timers = o.timers ?? browserTimers
+    const events = o.events.subscribe(event => this.guard(() => { if (event.type === 'explorer.refreshed') this.refreshed(event.connectionId, event.nodeId) }))
     this.stops = [
       o.explorer.subscribe(() => this.guard(() => this.sync())),
-      o.settings.subscribe(() => this.guard(() => this.settingsChanged()))
+      o.settings.subscribe(() => this.guard(() => this.settingsChanged())),
+      () => events.dispose()
     ]
     this.sync()
   }
@@ -79,6 +96,7 @@ export class SsisTreeProbe implements Disposable {
     this.disposed = true
     for (const stop of this.stops) stop()
     for (const connectionId of [...this.views.keys()]) this.close(connectionId)
+    for (const connectionId of [...this.stopped.keys()]) this.forget(connectionId)
     this.seen.clear()
   }
 
@@ -98,19 +116,40 @@ export class SsisTreeProbe implements Disposable {
     if (before['integrationServices.treeLive'] !== this.values['integrationServices.treeLive']) this.sync()
   }
 
-  /** Opens a view for each connection with an open SSISDB node, and closes the others. */
+  /** Opens a view for each connection with an open SSISDB node that shows, and closes the others. A sync that notes or
+   *  opens something can cause another (the tree changed): it runs after this one rather than inside it. */
   private sync(): void {
+    if (this.syncing) { this.again = true; return }
+    this.syncing = true
+    try {
+      do { this.again = false; this.syncOnce() } while (this.again && !this.disposed)
+    } finally { this.syncing = false }
+  }
+
+  private syncOnce(): void {
     const servers = new Set<string>()
     const open = new Set<string>()
     for (const id of this.o.explorer.rootIds) {
       const root = this.o.explorer.node(id)
       if (!root || root.lost) continue
       servers.add(root.connectionId)
-      if (this.enabled && this.catalogs(root.connectionId, root).some(catalog => catalog.expanded || (catalog.load === 'loaded' && catalog.children?.length === 0))) open.add(root.connectionId)
+      if (this.enabled && this.catalogs(root.connectionId, root).some(catalog => this.shown(catalog) && (catalog.expanded || (catalog.load === 'loaded' && catalog.children?.length === 0)))) open.add(root.connectionId)
     }
     for (const connectionId of [...this.views.keys()]) if (!open.has(connectionId)) this.close(connectionId)
+    // A connection whose SSISDB closed or hid waits for nothing: opening it again tries at once.
+    for (const connectionId of [...this.stopped.keys()]) if (!open.has(connectionId)) this.forget(connectionId)
     for (const connectionId of [...this.seen.keys()]) if (!servers.has(connectionId)) this.seen.delete(connectionId)
-    for (const connectionId of open) if (!this.views.has(connectionId)) this.open(connectionId)
+    for (const connectionId of open) {
+      const stopped = this.stopped.get(connectionId)
+      if (stopped?.final) this.note(connectionId, stopped.final)
+      else if (!this.views.has(connectionId) && stopped?.timer === undefined) this.open(connectionId)
+    }
+  }
+
+  /** Whether a catalog's row shows: every node above it, up to its server, is expanded. */
+  private shown(catalog: TreeNode): boolean {
+    for (let node = this.o.explorer.node(catalog.parent); node; node = node.parent ? this.o.explorer.node(node.parent) : undefined) if (!node.expanded) return false
+    return true
   }
 
   private open(connectionId: string): void {
@@ -126,15 +165,64 @@ export class SsisTreeProbe implements Disposable {
     }
     const handle = this.o.live.open({ connectionId, source: 'ssis.catalog', probes: [{ probe, intervalMs: this.intervalMs }] }, owner)
     const ticks = handle.onTick(({ tick }) => this.guard(() => this.applied(connectionId, tick)))
-    this.views.set(connectionId, { handle, ticks })
+    const view: View = { handle, ticks, stopStatus: handle.subscribe(() => this.guard(() => this.statusChanged(connectionId, view))) }
+    this.views.set(connectionId, view)
+    // LiveService answers a view it has no room for (too many in this window) as one that has already ended.
+    this.statusChanged(connectionId, view)
   }
 
   private close(connectionId: string): void {
     const view = this.views.get(connectionId)
     if (!view) return
     this.views.delete(connectionId)
+    view.stopStatus()
     view.ticks.dispose()
     view.handle.dispose()
+  }
+
+  /** A view ended or was lost: it opens again after the back-off or, ended for good, SSISDB says why. */
+  private statusChanged(connectionId: string, view: View): void {
+    if (this.views.get(connectionId) !== view) return
+    const snapshot = view.handle.getSnapshot()
+    if (snapshot.status !== 'ended' && snapshot.status !== 'lost') return
+    this.close(connectionId)
+    const stopped = this.stopped.get(connectionId) ?? { attempts: 0, timer: undefined }
+    this.stopped.set(connectionId, stopped)
+    const code = snapshot.error?.code ?? snapshot.ended?.code
+    if (code && finalCodes.has(code)) {
+      const reason = snapshot.error?.message ?? snapshot.ended?.message ?? 'The SSIS Catalog could not be read.'
+      stopped.final = { label: '(not updating)', sentence: 'Live updates stopped. ' + reason + ' Refresh SSISDB to try again.' }
+    } else {
+      const delay = Math.min(catalogProbeRetryMs.max, catalogProbeRetryMs.first * 2 ** Math.min(stopped.attempts, 16))
+      stopped.attempts++
+      stopped.timer = this.timers.setTimeout(() => this.guard(() => { stopped.timer = undefined; this.sync() }), delay)
+    }
+    this.sync()
+  }
+
+  /** The user refreshed a node: SSISDB, something in it or a node above it tries a view that stopped again, at once. */
+  private refreshed(connectionId: string, nodeId: number): void {
+    if (!this.stopped.has(connectionId)) return
+    const node = this.o.explorer.node(nodeId)
+    if (!node || node.connectionId !== connectionId) return
+    let related = node.parent === 0 || (node.kind === 'folder' && node.folder === 'integrationServicesCatalogs')
+    for (let current: TreeNode | undefined = node; current && !related; current = current.parent ? this.o.explorer.node(current.parent) : undefined) related = current.kind === 'ssisCatalog'
+    if (!related) return
+    this.forget(connectionId)
+    this.sync()
+  }
+
+  /** Drops a stopped connection's back-off and note. */
+  private forget(connectionId: string): void {
+    const stopped = this.stopped.get(connectionId)
+    if (!stopped) return
+    this.stopped.delete(connectionId)
+    if (stopped.timer !== undefined) this.timers.clearTimeout(stopped.timer)
+    if (stopped.final) this.note(connectionId, undefined)
+  }
+
+  private note(connectionId: string, note: NodeNote | undefined): void {
+    for (const catalog of this.catalogs(connectionId)) this.o.explorer.setNote(catalog.id, note)
   }
 
   private applied(connectionId: string, tick: LiveTick): void {
@@ -146,6 +234,8 @@ export class SsisTreeProbe implements Disposable {
     }
     const status = tick.samples.find(sample => sample.probe === probe)?.status
     if (!status) return
+    // A view that samples has room: its next end starts the back-off over.
+    this.stopped.delete(connectionId)
     const next = new Map(status.map(value => [value.id, value.value]))
     const previous = this.seen.get(connectionId)
     this.seen.set(connectionId, next)

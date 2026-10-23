@@ -327,7 +327,10 @@ catalog, the folder answers a `NOT_SUPPORTED` value that says why; a catalog nod
 `NOT_FOUND`, one whose database is offline, restoring or single-user in use `DATABASE_UNAVAILABLE` (retryable), and one the
 login may not open `NO_DB_ACCESS`. While a catalog node is open, the renderer keeps the tree current through the `ssis.catalog`
 live source ([Live subscriptions](#live-subscriptions)): a catalog view whose fingerprint changed reconciles, in the
-background, only the listed nodes that show it (docs/integration-services.md, The live tree). `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
+background, only the listed nodes that show it (docs/integration-services.md, The live tree). The view runs only while the
+catalog node shows; one that ends opens again after a back-off (2 s doubling to 60 s), unless it ended `PERMISSION_DENIED` or
+`LOGIN_FAILED`: the catalog node then notes why until a refresh of it, of a node in it or of its server (`explorer.refreshed`
+names the refreshed node), or until it is closed and opened again. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
 target }` (the target an Object Explorer ref of the view's own SSIS kind; the catalog only by its database's name) answers
 `{ model?, revision?, elapsedMs, error? }`: one batch per view on the same pool, READ COMMITTED when the catalog's database
 runs RCSI and READ UNCOMMITTED otherwise, read once more after error 601. `model.view` names it: the catalog's profile
@@ -904,11 +907,14 @@ is reported for that tick's other due probes rather than tried again at once. Op
 probe (2 s budget, under a gate; with the gates full, the first tick runs it): `@@SPID` and `HAS_PERMS_BY_NAME` for VIEW
 SERVER PERFORMANCE STATE (SQL Server 2022 and later) or VIEW SERVER STATE (earlier, Managed Instance), the permission name
 a parameter; for an SSISDB source it also reads the catalog's `is_read_committed_snapshot_on` (`sys.databases` by the catalog's
-name, a parameter), which picks the prologue of its later commands and `live.opened`'s `isolation`. An SSISDB source whose
-connection cannot open the catalog's database (4060, 916, or an unavailable database's number) reads why on a connection of
-the same pool in the login's own database (`sys.databases` state and user access, under a gate and the probe's budget): no row
-is `CATALOG_MISSING` (terminal), a database that is not online or is single-user `DATABASE_UNAVAILABLE` (retried), and an online
-one the login may not open `PERMISSION_DENIED` (terminal), each with its own sentence; when that read fails too, the open's
+name, a parameter), which picks the prologue of its later commands and `live.opened`'s `isolation`, and whether the login is
+sysadmin or in ssis_admin (`IS_SRVROLEMEMBER` first, so a sysadmin's `IS_MEMBER` is never evaluated): only they may read
+`catalog.catalog_properties`, which the catalog probe reads in a statement of its own under `IF @admin = 1` (a bit parameter),
+so nobody else's sample runs it. An SSISDB source whose connection cannot open the catalog's database without saying why (4060,
+916) reads why on a connection of the same pool in the login's own database (`sys.databases` state and user access, under a gate
+and the probe's budget): no row is `CATALOG_MISSING` (terminal), a database that is not online, single-user or restricted
+`DATABASE_UNAVAILABLE` (retried), and an online one the login may not open `PERMISSION_DENIED` (terminal), each with its own
+sentence; an open whose errors already say the database is unavailable (942, 976 and the others below) is not looked up; when that read fails too, the open's
 own error is classified as below. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
 from its band, where Managed Instance counts as the newest; EngineEdition) exclude the server opens `unavailable`
 `NOT_SUPPORTED`; one that needs server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither ever runs.

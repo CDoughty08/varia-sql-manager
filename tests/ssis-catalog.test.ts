@@ -3,11 +3,11 @@ import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { kindScope } from '../src/shared/explorer/refs'
 import { nodeKinds } from '../src/shared/explorer/catalog'
 import {
-  catalogDatabase, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
+  catalogDatabase, catalogProbeRetryMs, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
   parameterObjectTypes, permissionTypes, securableTypes, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits, systemParameters
 } from '../src/shared/ssis/catalog'
 import { generatedMarker, renderSsisDocs } from '../src/shared/ssis/docs'
@@ -110,5 +110,20 @@ describe('generated SSIS files', () => {
     for (const feature of ssisFeatures) expect(docs, feature).toContain(`| \`${feature}\` |`)
     for (const key of Object.keys(ssisLimits)) expect(docs, key).toContain(`| \`${key}\` |`)
     expect(docs).toContain('| Packages | `ssisPackages` | Package (`ssisPackages`) | Name |')
+    expect(docs).toContain(`opens again after ${catalogProbeRetryMs.first / 1000} s, doubling to ${catalogProbeRetryMs.max / 1000} s`)
+  })
+  it('takes the live tree\'s interval from the probe\'s catalogue entry, as the settings do', async () => {
+    vi.resetModules()
+    vi.doMock('../src/shared/live/catalog.ts', async importOriginal => {
+      const original = await importOriginal<typeof import('../src/shared/live/catalog.ts')>()
+      return { ...original, liveProbes: { ...original.liveProbes, 'ssis.catalogProbe': { ...original.liveProbes['ssis.catalogProbe'], intervalMs: { default: 45_000, min: 15_000, max: 600_000 } } } }
+    })
+    try {
+      const { renderSsisDocs: render } = await import('../src/shared/ssis/docs')
+      expect(render()).toContain('every 45 s by default (Tools › Options › SQL Server Integration Services; 15 to 600 s, or off)')
+    } finally {
+      vi.doUnmock('../src/shared/live/catalog.ts')
+      vi.resetModules()
+    }
   })
 })

@@ -167,6 +167,9 @@ export const catalogFingerprints: readonly CatalogFingerprint[] = [
   { id: 'parameters', view: 'catalog.object_parameters', reloads: {} },
   { id: 'properties', view: 'catalog.catalog_properties', reloads: {} }
 ]
+/** A tree view of the catalog that ended for now (no room for it on the server or in the window, the backend restarted it)
+ *  opens again after `first` ms, doubling to `max` while it keeps ending before a sample. */
+export const catalogProbeRetryMs = { first: 2_000, max: 60_000 } as const
 /** The status values of `ssis.catalogProbe`, in order: each fingerprint's count, then its checksum. */
 export const catalogFingerprintStatus: readonly string[] = catalogFingerprints.flatMap(fingerprint => [fingerprint.id + 'Count', fingerprint.id + 'Checksum'])
 

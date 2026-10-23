@@ -28,6 +28,6 @@ export type WorkbenchEvent =
   | { type: 'query.connectRequested'; tabId: string }
   /** The query's SQL session ended (closed, or found lost), and its open transaction with it. */
   | { type: 'session.ended'; tabId: string }
-  /** Object Explorer reloaded a server, a databases folder, or another node of the connection. */
-  | { type: 'explorer.refreshed'; connectionId: string; scope: 'server' | 'databases' | 'other' }
+  /** Object Explorer reloaded a server, a databases folder, or another node of the connection, because the user asked. */
+  | { type: 'explorer.refreshed'; connectionId: string; scope: 'server' | 'databases' | 'other'; nodeId: number }
 export interface ExternalStore<T> { getSnapshot(): T; subscribe(listener: () => void): () => void }

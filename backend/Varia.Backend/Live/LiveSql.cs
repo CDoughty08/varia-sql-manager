@@ -12,10 +12,14 @@ internal sealed record LiveStatusColumn(string Status, string Column);
 
 /// <summary>One probe's constant text for one band: the statement after the prologue, the columns its one row has (in
 /// order), the server clock columns (ms_ticks and the start time in ticks, null where the probe cannot read them), where
-/// each catalogue series comes from, and each status value (whole numbers).</summary>
-internal sealed record LiveQuery(string Probe, int Band, string Body, string[] Columns, string? MsTicks, string? StartTicks, LiveSeriesColumn[] Series, LiveStatusColumn[]? Status = null)
+/// each catalogue series comes from, and each status value (whole numbers). <c>Restricted</c>, where there is one, is the
+/// statement for a login that is not an admin of what the probe reads (SSISDB: sysadmin or ssis_admin): it leaves out what only
+/// admins may read, as zeros, rather than gate it with a parameter, which would run the command through sp_executesql and
+/// scope the prologue's SET options to it.</summary>
+internal sealed record LiveQuery(string Probe, int Band, string Body, string[] Columns, string? MsTicks, string? StartTicks, LiveSeriesColumn[] Series, LiveStatusColumn[]? Status = null,
+    string? Restricted = null)
 {
-    public string Text(string prologue) => prologue + Body;
+    public string Text(string prologue, bool admin = true) => prologue + (admin || Restricted is null ? Body : Restricted);
 
     private static readonly Type[] Numeric = [typeof(byte), typeof(short), typeof(int), typeof(long), typeof(decimal), typeof(float), typeof(double)];
 
@@ -45,10 +49,13 @@ internal static partial class LiveSql
 
     /// <summary>Once per opened connection: its session id, whether the login may read server state (the permission name
     /// is a parameter: VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before and on Managed Instance),
-    /// and for an SSISDB source whether the catalog's database has READ_COMMITTED_SNAPSHOT on (@catalog; NULL for server
-    /// DMVs, which reads no row), which picks the prologue of its later commands.</summary>
+    /// and for an SSISDB source (@catalog; NULL for server DMVs, which reads no row and no role) whether the catalog's database
+    /// has READ_COMMITTED_SNAPSHOT on, which picks the prologue of its later commands, and whether the login is sysadmin or in
+    /// ssis_admin, the only ones who may read catalog.catalog_properties. A sysadmin's IS_MEMBER is never evaluated, so a
+    /// pending change to the role's members cannot block it; anyone else's waits at most the 1 s lock timeout (BLOCKED).</summary>
     public const string Session = "SELECT @@SPID, CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, @permission), 0)),"
-        + " (SELECT CONVERT(int, d.is_read_committed_snapshot_on) FROM sys.databases AS d WHERE d.name = @catalog);";
+        + " (SELECT CONVERT(int, d.is_read_committed_snapshot_on) FROM sys.databases AS d WHERE d.name = @catalog),"
+        + " CASE WHEN @catalog IS NULL THEN 0 WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE CONVERT(int, ISNULL(IS_MEMBER(N'ssis_admin'), 0)) END;";
 
     /// <summary>An SSISDB source whose connection could not open the catalog's database: its state and user access, read on
     /// a connection in the login's own database. No row: there is no catalog.</summary>
@@ -83,19 +90,21 @@ internal static partial class LiveSql
 
     /// <summary>What ssis.catalogProbe fingerprints, in the catalogue's order (src/shared/ssis/catalog.ts catalogFingerprints):
     /// each view's columns that the tree and its documents show, as text, and its sql_variant values as their bytes (text would
-    /// round a datetime to the minute).</summary>
-    private static readonly (string Id, string From, string Text, string[] Values)[] Fingerprints =
+    /// round a datetime to the minute). An admin-only view (catalog_properties: ssis_admin and sysadmin only) is left out of
+    /// everyone else's text (LiveQuery.Restricted), so their samples never touch it (a permission error would end the view) and
+    /// it reads 0 and 0 for them.</summary>
+    private static readonly (string Id, string From, string Text, string[] Values, bool Admin)[] Fingerprints =
     [
-        ("folders", "[catalog].[folders]", "x.folder_id, x.name, x.description", []),
-        ("projects", "[catalog].[projects]", "x.project_id, x.folder_id, x.name, x.description, x.deployed_by_name, x.last_deployed_time, x.object_version_lsn", []),
-        ("packages", "[catalog].[packages]", "x.package_id, x.project_id, x.name, x.entry_point, x.description", []),
-        ("environments", "[catalog].[environments]", "x.environment_id, x.folder_id, x.name, x.description", []),
-        ("variables", "[catalog].[environment_variables]", "x.variable_id, x.environment_id, x.name, x.description, x.type, x.sensitive", ["x.value"]),
-        ("references", "[catalog].[environment_references]", "x.reference_id, x.project_id, x.reference_type, x.environment_folder_name, x.environment_name", []),
+        ("folders", "[catalog].[folders]", "x.folder_id, x.name, x.description", [], false),
+        ("projects", "[catalog].[projects]", "x.project_id, x.folder_id, x.name, x.description, x.deployed_by_name, x.last_deployed_time, x.object_version_lsn", [], false),
+        ("packages", "[catalog].[packages]", "x.package_id, x.project_id, x.name, x.entry_point, x.description", [], false),
+        ("environments", "[catalog].[environments]", "x.environment_id, x.folder_id, x.name, x.description", [], false),
+        ("variables", "[catalog].[environment_variables]", "x.variable_id, x.environment_id, x.name, x.description, x.type, x.sensitive", ["x.value"], false),
+        ("references", "[catalog].[environment_references]", "x.reference_id, x.project_id, x.reference_type, x.environment_folder_name, x.environment_name", [], false),
         ("parameters", "[catalog].[object_parameters]",
             "x.parameter_id, x.project_id, x.object_type, x.object_name, x.parameter_name, x.data_type, x.required, x.sensitive, x.description, x.value_type, x.value_set, x.referenced_variable_name",
-            ["x.design_default_value", "x.default_value"]),
-        ("properties", "[catalog].[catalog_properties]", "x.property_name, x.property_value", [])
+            ["x.design_default_value", "x.default_value"], false),
+        ("properties", "[catalog].[catalog_properties]", "x.property_name, x.property_value", [], true)
     ];
 
     /// <summary>The view ids ssis.catalogProbe fingerprints, in order (the checks compare them with the catalogue).</summary>
@@ -105,19 +114,23 @@ internal static partial class LiveSql
     // row count below 2^29, so it is exact in JavaScript). CHECKSUM_AGG would be cheaper, but it XORs: two equal rows cancel,
     // and BINARY_CHECKSUM misses changes past a long string's first characters. Rows are what row-level security shows the
     // login, so a fingerprint changes only when something it may see does.
-    private static readonly string Catalog = BuildCatalog();
+    private static readonly string Catalog = BuildCatalog(admin: true);
+    private static readonly string CatalogRestricted = BuildCatalog(admin: false);
     private static readonly string[] CatalogColumns = [.. Fingerprints.SelectMany(view => new[] { view.Id + "_count", view.Id + "_checksum" })];
     private static readonly LiveStatusColumn[] CatalogStatus = [.. Fingerprints.SelectMany(view => new LiveStatusColumn[] { new(view.Id + "Count", view.Id + "_count"), new(view.Id + "Checksum", view.Id + "_checksum") })];
 
-    private static string BuildCatalog()
+    private static string BuildCatalog(bool admin)
     {
-        static string Row((string Id, string From, string Text, string[] Values) view)
+        static string Row((string Id, string From, string Text, string[] Values, bool Admin) view)
         {
             var text = "CONVERT(varbinary(max), CONCAT(" + string.Join(", NCHAR(31), ", view.Text.Split(", ")) + "))";
             return string.Concat(view.Values.Select(value => " + 0x1F + ISNULL(CONVERT(varbinary(8000), " + value + "), 0x)").Prepend(text));
         }
-        var selects = Fingerprints.Select((view, index) => "v" + (index + 1) + ".n AS " + view.Id + "_count, v" + (index + 1) + ".h AS " + view.Id + "_checksum");
-        var sources = Fingerprints.Select((view, index) => "(SELECT COUNT_BIG(*) AS n, ISNULL(SUM(CONVERT(bigint, SUBSTRING(HASHBYTES('SHA2_256', " + Row(view) + "), 1, 3))), 0) AS h\n"
+        var read = Fingerprints.Where(view => admin || !view.Admin).ToList();
+        var selects = Fingerprints.Select(view => read.IndexOf(view) is var index and >= 0
+            ? "v" + (index + 1) + ".n AS " + view.Id + "_count, v" + (index + 1) + ".h AS " + view.Id + "_checksum"
+            : "CONVERT(bigint, 0) AS " + view.Id + "_count, CONVERT(bigint, 0) AS " + view.Id + "_checksum");
+        var sources = read.Select((view, index) => "(SELECT COUNT_BIG(*) AS n, ISNULL(SUM(CONVERT(bigint, SUBSTRING(HASHBYTES('SHA2_256', " + Row(view) + "), 1, 3))), 0) AS h\n"
             + "    FROM " + view.From + " AS x) AS v" + (index + 1));
         return "SELECT " + string.Join(",\n    ", selects) + "\nFROM " + string.Join("\nCROSS JOIN ", sources) + ";";
     }
@@ -127,7 +140,7 @@ internal static partial class LiveSql
     public static LiveQuery? For(string probe, int band) => probe switch
     {
         OverviewProbe when band is >= MinBand and <= MaxBand => new(probe, band, Overview, OverviewColumns, "ms_ticks", "start_ticks", OverviewSeries),
-        CatalogProbe when band is >= MinBand - 1 and <= MaxBand => new(probe, band, Catalog, CatalogColumns, null, null, [], CatalogStatus),
+        CatalogProbe when band is >= MinBand - 1 and <= MaxBand => new(probe, band, Catalog, CatalogColumns, null, null, [], CatalogStatus, CatalogRestricted),
         _ => null
     };
 

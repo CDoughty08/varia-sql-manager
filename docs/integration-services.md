@@ -145,17 +145,24 @@ use, `DATABASE_UNAVAILABLE` (retry); one the login cannot open, `NO_DB_ACCESS`.
 
 ### The live tree (`ssis.catalogProbe`)
 
-While a connection's SSISDB node is open (expanded, or listed with no folders), Object Explorer holds one live view of the
-`ssis.catalog` source for that connection (docs/live.md): every 30 s by default (Tools › Options › SQL Server Integration Services;
-10 to 300 s, or off), one query fingerprints each catalog view below as its row count and a checksum (the sum of a SHA-256 prefix per
-row, over the columns the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets
-the login see. The first sample of a connection is its baseline; a later one, or the first of a new view on the same connection
-(SSISDB closed and opened again, Object Explorer shown again), reloads in the background only the expanded or listed nodes that show
-a view whose fingerprint changed, keeping expansion and selection and announcing what was added or removed; a reload never opens
-a node. The view pauses 2 s after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in
-the catalog's database, READ UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no
-longer exists ends the view (`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline is
-retried (`DATABASE_UNAVAILABLE`); one the login cannot open stops it (`PERMISSION_DENIED`).
+While a connection's SSISDB node is open (expanded, or listed with no folders) and shows (its server and Integration Services
+Catalogs folder are expanded), Object Explorer holds one live view of the `ssis.catalog` source for that connection (docs/live.md):
+every 30 s by default (Tools › Options › SQL Server Integration Services; 10 to 300 s, or off), one
+query fingerprints each catalog view below as its row count and a checksum (the sum of a SHA-256 prefix per row, over the columns
+the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets the login see.
+`catalog.catalog_properties` is read only for a login that is sysadmin or in ssis_admin (the only ones SSIS lets read it), in a
+statement of its own; for anyone else its fingerprint stays 0 and 0. The first sample of a connection is its baseline; a later one,
+or the first of a new view on the same connection (SSISDB closed and opened again, Object Explorer shown again), reloads in the
+background only the listed nodes that show a view whose fingerprint changed, keeping expansion and selection and announcing what
+was added or removed; a reload never opens a node, and one that a collapsed node hides waits until it shows. The view pauses 2 s
+after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in the catalog's database, READ
+UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no longer exists ends the view
+(`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline, restoring, single-user or
+restricted, or a replica that cannot be read, is retried (`DATABASE_UNAVAILABLE`). A view that ends for another reason (the server
+or the window has no room for another live view, the backend restarted it) opens again after 2 s, doubling to 60 s while it keeps
+ending before a sample. One that the login cannot read or open, or whose sign-in is refused, stops for good (`PERMISSION_DENIED`,
+`LOGIN_FAILED`): SSISDB reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it or of its server,
+or closing and opening SSISDB, tries again.
 
 | Fingerprint | Catalog view | Object Explorer reloads |
 | --- | --- | --- |

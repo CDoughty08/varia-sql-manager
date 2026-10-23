@@ -51,7 +51,9 @@ internal static class LiveSchedulerChecks
         var problems = queries.SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue)).Select(problem => query.Probe + " band " + query.Band + ": " + problem))
             .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.Session).Select(problem => "session: " + problem))
             .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.CatalogState).Select(problem => "catalog state: " + problem))
-            .Concat(queries.Where(query => query.Probe == LiveSql.CatalogProbe).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.CommittedPrologue))).Select(problem => "catalog probe, read committed: " + problem)).ToList();
+            .Concat(queries.Where(query => query.Probe == LiveSql.CatalogProbe).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.CommittedPrologue))).Select(problem => "catalog probe, read committed: " + problem))
+            .Concat(queries.Where(query => query.Restricted is not null).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue, admin: false))
+                .Concat(LiveSql.Lint(query.Text(LiveSql.CommittedPrologue, admin: false))).Select(problem => query.Probe + " band " + query.Band + ", restricted: " + problem))).ToList();
         check(queries.Count == 2 * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every SQL probe's text passes the live lint at every band, with the session probe and the catalog state read (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // Every series of a SQL probe comes from a column its query returns, and the clock columns are among them.
@@ -77,6 +79,17 @@ internal static class LiveSchedulerChecks
             && System.Text.RegularExpressions.Regex.Matches(fingerprint.Body, @"FROM (\S+) AS x").Select(match => match.Groups[1].Value).All(from => from.StartsWith("[catalog].[", StringComparison.Ordinal))
             && System.Text.RegularExpressions.Regex.Matches(fingerprint.Body, @"FROM (\S+) AS x").Count == 8,
             "the catalog probe sums a SHA-256 prefix per row of each of its 8 catalog views (no CHECKSUM_AGG), with sql_variant values as bytes");
+        // catalog_properties is readable only by ssis_admin and sysadmin (the session probe reads which, a sysadmin's without
+        // IS_MEMBER): everyone else's text leaves it out, as zeros, and is the admins' otherwise, with the same columns. Neither
+        // takes a parameter, so the command is a plain batch and its prologue's SET options stay on the session.
+        var restricted = fingerprint.Restricted ?? "";
+        check(fingerprint.Body.Contains("FROM [catalog].[catalog_properties] AS x", StringComparison.Ordinal) && !restricted.Contains("catalog_properties", StringComparison.Ordinal)
+            && restricted.Contains("CONVERT(bigint, 0) AS properties_count, CONVERT(bigint, 0) AS properties_checksum", StringComparison.Ordinal)
+            && System.Text.RegularExpressions.Regex.Matches(restricted, @"FROM (\S+) AS x").Count == 7 && fingerprint.Text(LiveSql.UncommittedPrologue, admin: false) == LiveSql.UncommittedPrologue + restricted
+            && fingerprint.Text(LiveSql.UncommittedPrologue) == LiveSql.UncommittedPrologue + fingerprint.Body && !fingerprint.Body.Contains('@') && !restricted.Contains('@')
+            && LiveSql.For(LiveSql.OverviewProbe, LiveSql.MaxBand) is { Restricted: null } overview && overview.Text("", admin: false) == overview.Body
+            && LiveSql.Session.Contains("WHEN @catalog IS NULL THEN 0 WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE CONVERT(int, ISNULL(IS_MEMBER(N'ssis_admin'), 0)) END", StringComparison.Ordinal),
+            "the catalog probe reads catalog_properties only in an admin's text (sysadmin or ssis_admin, as the session probe reads), and as zeros otherwise, with no parameter: " + restricted[..Math.Min(400, restricted.Length)]);
         // The lint catches what it is for.
         var bad = new Dictionary<string, string>
         {
@@ -534,10 +547,19 @@ internal static class LiveSchedulerChecks
         var restoring = LiveErrors.Catalog(LiveSql.CatalogProbe, 1, 0);
         var single = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 1);
         var closed = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 0);
+        var restricted = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 2);
         check(missing is { Code: "CATALOG_MISSING", Terminal: true, Message: LiveErrors.CatalogMissingMessage } && offline is { Code: "DATABASE_UNAVAILABLE", Terminal: false }
-            && restoring is { Code: "DATABASE_UNAVAILABLE", Terminal: false } && single is { Code: "DATABASE_UNAVAILABLE", Terminal: false }
+            && restoring is { Code: "DATABASE_UNAVAILABLE", Terminal: false } && single is { Code: "DATABASE_UNAVAILABLE", Terminal: false } && restricted is { Code: "DATABASE_UNAVAILABLE", Terminal: false }
             && closed is { Code: "PERMISSION_DENIED", Terminal: true, Message: LiveErrors.CatalogAccessMessage } && LiveErrors.CatalogMissingMessage.EndsWith('.') && LiveErrors.CatalogAccessMessage.EndsWith('.'),
-            "an SSISDB source whose catalog database cannot be opened says why: none (CATALOG_MISSING, terminal), offline, restoring or single-user (DATABASE_UNAVAILABLE, retried), or closed to the login (PERMISSION_DENIED, terminal)");
+            "an SSISDB source whose catalog database cannot be opened says why: none (CATALOG_MISSING, terminal), offline, restoring, single-user or restricted to its owners for maintenance (DATABASE_UNAVAILABLE, retried), or closed to the login (PERMISSION_DENIED, terminal)");
+        // Only an open that does not say why (4060, 916) is looked up in sys.databases; one that says the database is unavailable
+        // (alone, or before or after 4060) stays DATABASE_UNAVAILABLE, so a readable row never turns it into a terminal refusal.
+        int[] unavailable = [911, 922, 924, 926, 927, 942, 945, 952, 976, 978];
+        var lookedUp = new[] { ConnectionFailureChecks.Sql(4060), ConnectionFailureChecks.Sql(916), ConnectionFailureChecks.Sql(4060, 18456) }.All(LiveErrors.OpensNoDatabase);
+        var wrongUnavailable = unavailable.Where(number => LiveErrors.OpensNoDatabase(ConnectionFailureChecks.Sql(number)) || LiveErrors.OpensNoDatabase(ConnectionFailureChecks.Sql(number, 4060))
+            || LiveErrors.OpensNoDatabase(ConnectionFailureChecks.Sql(4060, number)) || LiveErrors.From(LiveSql.CatalogProbe, ConnectionFailureChecks.Sql(number, 4060)).Code != "DATABASE_UNAVAILABLE").ToList();
+        check(lookedUp && wrongUnavailable.Count == 0 && !LiveErrors.OpensNoDatabase(ConnectionFailureChecks.Sql(229)) && !LiveErrors.OpensNoDatabase(ConnectionFailureChecks.Sql(18456)),
+            "an SSISDB source looks the catalog's database up only when its open fails without saying why (4060, 916); one that says it is unavailable stays DATABASE_UNAVAILABLE: " + string.Join(", ", wrongUnavailable));
     }
 
     private static async Task LoopChecks(Action<bool, string> check)

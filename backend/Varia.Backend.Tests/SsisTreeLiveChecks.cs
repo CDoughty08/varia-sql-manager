@@ -12,16 +12,23 @@ namespace Varia.Backend.Tests;
 /// fingerprint alone (a sql_variant one second later included); no quick second sample for a probe without rates; an open
 /// writer's transaction neither blocking it nor hiding the change (READ UNCOMMITTED), and READ COMMITTED once the catalog
 /// has READ_COMMITTED_SNAPSHOT on; a catalog database that is offline (DATABASE_UNAVAILABLE, retried) or missing
-/// (CATALOG_MISSING, which ends the view). It drives its own LiveService over a copy of the catalogue whose tree probe may
-/// run every second, so the checks need not wait 10 s between samples. Nothing here claims real SSIS behaviour.</summary>
+/// (CATALOG_MISSING, which ends the view); and, with the scratch SQL Server login, catalog_properties read only by an
+/// ssis_admin (a login denied it still samples), a catalog view the login may not read and a catalog database it may not
+/// open (PERMISSION_DENIED with the catalog's sentence, which ends the view). It drives its own LiveService over a copy of
+/// the catalogue whose tree probe may run every second, so the checks need not wait 10 s between samples. Nothing here
+/// claims real SSIS behaviour.</summary>
 internal static class SsisTreeLiveChecks
 {
     private static string Literal(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
     private static string Dump(object? value) => JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    private static string View(string id) => id switch
+    {
+        "variables" => "environment_variables", "references" => "environment_references", "parameters" => "object_parameters", "properties" => "catalog_properties", _ => id
+    };
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, string db,
-        Func<string, string, string?, Task<SqlRun>> sql, Func<string, Task<object>> close)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> connect, JsonSerializerOptions json,
+        ScratchDatabase scratch, string db, Func<string, string, string?, Task<SqlRun>> sql, Func<string, Task<object>> close)
     {
         var options = service.Ssis.Options;
         var current = LiveCatalog.Current;
@@ -29,10 +36,10 @@ internal static class SsisTreeLiveChecks
             current.Sources.Values);
         using var live = new LiveService(service, fast);
         uint next = 9500;
-        (Task<LiveEnd> Task, LiveRecorder Recorder) Subscribe(int intervalMs)
+        (Task<LiveEnd> Task, LiveRecorder Recorder) Subscribe(int intervalMs, string? connectionId = null)
         {
             var recorder = new LiveRecorder(++next);
-            return (live.SubscribeAsync(new LiveSubscribeArgs(Guid.NewGuid().ToString(), info.Id, "ssis.catalog", [new LiveProbeArgs(LiveSql.CatalogProbe, intervalMs)]), recorder.Context, json), recorder);
+            return (live.SubscribeAsync(new LiveSubscribeArgs(Guid.NewGuid().ToString(), connectionId ?? info.Id, "ssis.catalog", [new LiveProbeArgs(LiveSql.CatalogProbe, intervalMs)]), recorder.Context, json), recorder);
         }
         static async Task<LiveEnd> Stop((Task<LiveEnd> Task, LiveRecorder Recorder) view)
         {
@@ -50,6 +57,9 @@ internal static class SsisTreeLiveChecks
             return seen ? [.. Latest(view.Recorder)!.Where(item => before[item.Key] != item.Value).Select(item => item.Key)] : null;
         }
         Task<SqlRun> Exec(string text, string? session = null) => sql(text, db, session);
+        // Each fingerprinted view's row count, in the catalogue's order, as a sysadmin reads it.
+        async Task<List<long>> Counts() => (await Exec(string.Join(" UNION ALL ", LiveSql.FingerprintIds.Select((id, index) => "SELECT " + index + ", COUNT_BIG(*) FROM [catalog].[" + View(id) + "]"))
+            + " ORDER BY 1;")).Sets[0].Select(row => long.Parse(row[1]!, CultureInfo.InvariantCulture)).ToList();
         try
         {
             options.CatalogDatabase = db;
@@ -68,10 +78,7 @@ internal static class SsisTreeLiveChecks
             var samples = view.Recorder.Ticks.Where(tick => tick.Samples.Count > 0).ToList();
             var opened = view.Recorder.Opened;
             var first = Status(samples.FirstOrDefault());
-            var counts = (await Exec(string.Join(" UNION ALL ", LiveSql.FingerprintIds.Select((id, index) => "SELECT " + index + ", COUNT_BIG(*) FROM [catalog].[" + id switch
-            {
-                "variables" => "environment_variables", "references" => "environment_references", "parameters" => "object_parameters", "properties" => "catalog_properties", _ => id
-            } + "]")) + " ORDER BY 1;")).Sets[0].Select(row => long.Parse(row[1]!, CultureInfo.InvariantCulture)).ToList();
+            var counts = await Counts();
             check(sampled && opened is { Source: "ssis.catalog", Isolation: "readUncommitted", Spid: > 0, Probes: [{ State: "ok" }] } && first is { Count: 16 }
                 && samples[0].Samples[0] is { Gap: null, Metrics: null } && samples[0].Samples[0].Status!.Select(value => value.Id).SequenceEqual(current.Probes[LiveSql.CatalogProbe].Status)
                 && LiveSql.FingerprintIds.Select((id, index) => first[id + "Count"] == counts[index]).All(match => match) && Status(samples[1])!.SequenceEqual(first),
@@ -147,6 +154,91 @@ internal static class SsisTreeLiveChecks
             {
                 var back = await sql("ALTER DATABASE " + Bracket(db) + " SET ONLINE;", "master", null);
                 if (back.Status != "completed") throw new InvalidOperationException("The fake catalog could not be brought back online: " + back.Error);
+            }
+
+            // A login that is neither sysadmin nor ssis_admin: the scratch SQL Server login, its user granted SELECT on the catalog
+            // schema (S1b). The real catalog shows catalog_properties only to ssis_admin and sysadmin, so here the login is denied it.
+            if (scratch.Login is null && !await scratch.CreateLoginAsync())
+                Console.WriteLine("The catalog probe's low-privilege checks are skipped: this server accepts Windows logins only.");
+            else
+            {
+                var login = scratch.Login!;
+                var user = Bracket(login);
+                async Task Must(string text)
+                {
+                    var run = await Exec(text);
+                    if (run.Status != "completed") throw new InvalidOperationException("Catalog probe fixture step failed: " + run.Error);
+                }
+                (Task<LiveEnd> Task, LiveRecorder Recorder) As(string connectionId)
+                {
+                    // Role and permission changes reach a new session: no pooled one from before them.
+                    service.ClearPoolsFor(connectionId, db);
+                    return Subscribe(1000, connectionId);
+                }
+                await Must("IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = " + Literal(login) + ") CREATE USER " + user + " FOR LOGIN " + user + ";\n"
+                    + "GRANT SELECT ON SCHEMA::[catalog] TO " + user + ";\nDENY SELECT ON [catalog].[catalog_properties] TO " + user + ";");
+                var reader = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(connect("master") with
+                {
+                    Authentication = "sql", Username = login, Password = scratch.Password
+                }, json), json);
+                try
+                {
+                    // The probe never reads catalog_properties for it: it samples every other view, and 0 for the properties.
+                    var plain = As(reader.Id);
+                    var read = await plain.Recorder.WaitAsync(recorder => Latest(recorder) is not null || recorder.Ticks.Any(tick => tick.Errors is not null), 15_000);
+                    var status = Latest(plain.Recorder);
+                    var plainErrors = plain.Recorder.Ticks.SelectMany(tick => tick.Errors ?? []).ToList();
+                    var running = !plain.Task.IsCompleted;
+                    await Stop(plain);
+                    var expected = await Counts();
+                    check(read && running && plainErrors.Count == 0 && status is { Count: 16 } && status["propertiesCount"] == 0 && status["propertiesChecksum"] == 0 && expected[^1] > 0
+                        && LiveSql.FingerprintIds.SkipLast(1).Select((id, index) => status[id + "Count"] == expected[index]).All(match => match),
+                        "a login that is not ssis_admin, denied catalog_properties, still samples the catalog: every other view's count, and 0 for the properties: " + Dump(status) + Dump(plainErrors));
+
+                    // An ssis_admin reads them as a sysadmin does.
+                    await Must("REVOKE SELECT ON [catalog].[catalog_properties] TO " + user + ";\nALTER ROLE [ssis_admin] ADD MEMBER " + user + ";");
+                    var admin = As(reader.Id);
+                    await admin.Recorder.WaitAsync(recorder => Latest(recorder) is not null || recorder.Ticks.Any(tick => tick.Errors is not null), 15_000);
+                    var adminStatus = Latest(admin.Recorder);
+                    await Stop(admin);
+                    var sysadmin = Subscribe(1000);
+                    await sysadmin.Recorder.WaitAsync(recorder => Latest(recorder) is not null, 15_000);
+                    var sysadminStatus = Latest(sysadmin.Recorder);
+                    await Stop(sysadmin);
+                    check(adminStatus is { } member && sysadminStatus is { } owner && member["propertiesCount"] == expected[^1] && member["propertiesChecksum"] == owner["propertiesChecksum"] && owner["propertiesChecksum"] > 0,
+                        "a member of ssis_admin, and a sysadmin, fingerprint catalog_properties: " + Dump(adminStatus) + Dump(sysadminStatus));
+
+                    // A catalog view it may not read (229): PERMISSION_DENIED with the catalog's sentence, which ends the view.
+                    await Must("ALTER ROLE [ssis_admin] DROP MEMBER " + user + ";\nDENY SELECT ON [catalog].[folders] TO " + user + ";");
+                    var denied = As(reader.Id);
+                    var deniedEnd = await denied.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                    var deniedError = denied.Recorder.Ticks.SelectMany(tick => tick.Errors ?? []).FirstOrDefault();
+                    denied.Recorder.Dispose();
+                    check(deniedError is { Code: "PERMISSION_DENIED", Number: 229, Terminal: true, Message: LiveErrors.CatalogAccessMessage } && deniedEnd is { Ended: "failed", Code: "PERMISSION_DENIED" },
+                        "a catalog view the login may not read is PERMISSION_DENIED with the catalog's sentence, which ends the view: " + Dump(deniedError) + Dump(deniedEnd));
+
+                    // A catalog database it may not open (4060, then sys.databases reads it online): PERMISSION_DENIED too.
+                    await Must("REVOKE SELECT ON [catalog].[folders] TO " + user + ";\nREVOKE CONNECT FROM " + user + ";");
+                    LiveEnd closedEnd;
+                    LiveProbeError? closedError;
+                    try
+                    {
+                        var closedView = As(reader.Id);
+                        closedEnd = await closedView.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                        closedError = closedView.Recorder.Ticks.SelectMany(tick => tick.Errors ?? []).FirstOrDefault();
+                        closedView.Recorder.Dispose();
+                    }
+                    finally { await Must("GRANT CONNECT TO " + user + ";"); }
+                    check(closedError is { Code: "PERMISSION_DENIED", Number: null, Terminal: true, Message: LiveErrors.CatalogAccessMessage } && closedEnd is { Ended: "failed", Code: "PERMISSION_DENIED" }
+                        && live.Gates.Busy == 0,
+                        "a catalog database the login may not open is PERMISSION_DENIED with the catalog's sentence (read from sys.databases), which ends the view: " + Dump(closedError) + Dump(closedEnd));
+                }
+                finally
+                {
+                    await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(reader.Id), json), json);
+                    await Exec("GRANT CONNECT TO " + user + ";\nREVOKE SELECT ON [catalog].[catalog_properties] TO " + user + ";\nREVOKE SELECT ON [catalog].[folders] TO " + user + ";\n"
+                        + "IF IS_ROLEMEMBER(N'ssis_admin', " + Literal(login) + ") = 1 ALTER ROLE [ssis_admin] DROP MEMBER " + user + ";");
+                }
             }
 
             // A catalog that does not exist: CATALOG_MISSING, terminal, which ends the view failed.
