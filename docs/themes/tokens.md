@@ -216,8 +216,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `documentTabs.closeForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Close buttons of query tabs. |
 | `documentTabs.iconForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | SQL badge of query tabs. |
 | `documentTabs.modifiedIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Dot that marks a query with unsaved changes. |
-| `breadcrumb.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | The bar that names an XML, JSON or execution plan document opened from the results. |
-| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#9298a4` | `#5c6370` | Unused since the query status bar replaced the query context line; themes that set it stay valid. |
+| `breadcrumb.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results. |
+| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#9298a4` | `#5c6370` | The chevrons between the steps of the location in a document header. |
 
 ### Editor, widgets, and empty states
 

@@ -138,8 +138,8 @@ const groups = {
     'documentTabs.closeForeground': ['X', '$textMuted', 'Close buttons of query tabs.', 'css'],
     'documentTabs.iconForeground': ['X', '$textTertiary', 'SQL badge of query tabs.', 'css'],
     'documentTabs.modifiedIndicator': ['X', '$textMuted', 'Dot that marks a query with unsaved changes.', 'css'],
-    'breadcrumb.foreground': ['V', '$textMuted', 'The bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
-    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'Unused since the query status bar replaced the query context line; themes that set it stay valid.', '']
+    'breadcrumb.foreground': ['V', '$textMuted', 'The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
+    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'The chevrons between the steps of the location in a document header.', 'css']
   },
   'Editor, widgets, and empty states': {
     'editor.background': ['V', '$canvas', 'Editor and application background; also the native window background.', 'css monaco native', { opaqueOver: 'base' }],
