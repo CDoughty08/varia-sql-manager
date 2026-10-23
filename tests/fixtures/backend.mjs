@@ -13,6 +13,7 @@
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
+//   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
 //   silent-<generation> that generation stops answering PING, as a hung backend would
@@ -265,7 +266,7 @@ const explorerRows = {
   databases: () => [explorerObject({ kind: 'database', name: 'AppData' }, 'AppData', { hasChildren: true })],
   tables: owner => [explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Orders' }, 'dbo.Orders', { hasChildren: true, created: '2024-05-01T09:30:00' })],
   columns: owner => [
-    explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'Id' }, 'Id', { sublabel: '(PK, int, not null)', icon: 'svg:key' }),
+    explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'Id' }, 'Id', { sublabel: '(PK, int, not null)', icon: 'key' }),
     explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'CustomerName' }, 'CustomerName', { sublabel: '(nvarchar(100), null)' })
   ],
   logins: () => [explorerObject({ kind: 'login', name: 'sa' }, 'sa')],
@@ -273,6 +274,11 @@ const explorerRows = {
   cryptographicProviders: () => [explorerObject({ kind: 'cryptographicProvider', name: 'Test EKM Provider' }, 'Test EKM Provider')],
   audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
   serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')]
+}
+// What extra/<folder> adds: a role or table created since the folder was first listed.
+const explorerExtras = {
+  serverRoles: () => explorerObject({ kind: 'serverRole', name: 'VariaAuditors' }, 'VariaAuditors'),
+  tables: owner => explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Shipments' }, 'dbo.Shipments', { hasChildren: true })
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {
@@ -282,7 +288,8 @@ async function explorerChildren({ node, subtype }) {
   if (node.type === 'folder' && node.folder === 'audits' && !await controlled(join('allow', 'audits'))) {
     return { nodes: statics, elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } }
   }
-  const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : [])]
+  const extra = node.type === 'folder' && explorerExtras[node.folder] && await controlled(join('extra', node.folder)) ? [explorerExtras[node.folder](owner)] : []
+  const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : []), ...extra]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come
@@ -638,7 +645,8 @@ async function workbench(id, method, params, credit) {
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0 }
+      // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }

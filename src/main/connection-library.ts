@@ -1,10 +1,10 @@
 import { z } from 'zod'
-import { connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type SecretStorageState } from '../shared/connections'
+import { connectionEnvironmentInputSchema, connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type SecretStorageState } from '../shared/connections'
 import type { ConnectionStore } from './connection-store'
 import type { SavedPasswordStore } from './saved-passwords'
 
 export interface ConnectionLibraryDeps {
-  connections: Pick<ConnectionStore, 'load' | 'save' | 'remove'>
+  connections: Pick<ConnectionStore, 'load' | 'save' | 'remove' | 'setEnvironment'>
   savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'state'>
 }
 
@@ -27,6 +27,10 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
     },
     async save(value: unknown): Promise<ConnectionLibraryView> {
       const { library, savedPasswords } = await view(await deps.connections.save(connectionProfileInputSchema.parse(value)))
+      return { library, savedPasswords }
+    },
+    async setEnvironment(value: unknown): Promise<ConnectionLibraryView> {
+      const { library, savedPasswords } = await view(await deps.connections.setEnvironment(connectionEnvironmentInputSchema.parse(value)))
       return { library, savedPasswords }
     },
     // The password goes first, so a failure leaves the entry listed with it rather than an orphaned password.

@@ -50,7 +50,7 @@ export default function TitleBar({ title }: { title: string }) {
   return <header className="title-bar" data-platform={platform} data-overlay={overlayVisible}>
     <div className="title-bar-content">
       <div className="title-bar-left">
-        <span className="title-bar-brand" title="Varia SQL Manager"><Icon name="database" /></span>
+        <span className="title-bar-brand" title="Varia SQL Manager"><Icon name="varia" /></span>
         {platform !== 'darwin' && <nav className="title-bar-menus" role="menubar" aria-label="Application menu" data-mnemonics={altHeld || (view.mnemonics && focused) ? 'visible' : 'hidden'}>
           {applicationMenus.map(menu => button(menu.id, menu.label, menu.mnemonic))}
         </nav>}

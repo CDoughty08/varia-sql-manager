@@ -37,7 +37,7 @@ function setup() {
   }
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
-  const explorer = { listingFolderOf: vi.fn(() => 3 as number | undefined), refresh: vi.fn() }
+  const explorer = { listingFolderOf: vi.fn(() => 3 as number | undefined), reconcile: vi.fn() }
   const documents = { newQuery: vi.fn() }, files = { saveCopy: vi.fn(async (name: string) => ({ id: 'f', name, path: '/x/' + name, encoding: 'utf8' as const, readOnly: false })) }
   let ids = 0
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, newId: () => `id-${++ids}` })
@@ -99,7 +99,7 @@ describe('ObjectDialogService', () => {
     await ok
     expect(dialogs.current).toBeUndefined()
     expect(explorer.listingFolderOf).toHaveBeenCalledWith(12)
-    expect(explorer.refresh.mock.calls).toEqual([[3]])
+    expect(explorer.reconcile.mock.calls).toEqual([[3]])
   })
   it('keeps DEPENDENTS and partial failures open with the steps, and a later OK can retry', async () => {
     const { dialogs, api, settle, execute } = setup()
@@ -137,7 +137,7 @@ describe('ObjectDialogService', () => {
     execute.resolve({ ok: true, value: { steps: [{ status: 'done', message: 'Close existing connections' }, { status: 'done', message: 'Drop the database' }, { status: 'cancelled', message: 'Delete backup and restore history' }], messages: [], elapsedMs: 1, error: stopped } })
     await ok
     expect(dialogs.current).toMatchObject({ phase: 'stopped', error: stopped, steps: [{ status: 'done' }, { status: 'done' }, { status: 'cancelled' }] })
-    expect(explorer.refresh).toHaveBeenCalledTimes(1)
+    expect(explorer.reconcile).toHaveBeenCalledTimes(1)
     expect(dialogs.close()).toBe(true)
   })
   it('turns a lost backend into the unknown-outcome sentence, and a disconnect into Close only', async () => {
@@ -237,7 +237,7 @@ describe('ObjectDialogService: Database Properties', () => {
     execute.resolve(done)
     await ok
     expect(dialogs.current).toBeUndefined()
-    expect(explorer.refresh.mock.calls).toEqual([[3]])
+    expect(explorer.reconcile.mock.calls).toEqual([[3]])
   })
   it('runs a change SSMS does not close connections for without asking, and never asks before Script', async () => {
     const { dialogs, api, execute } = await opened()
