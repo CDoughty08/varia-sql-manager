@@ -1,6 +1,6 @@
 import { themeFormatVersion, themeKind, themeLimits, themePatterns } from './format'
 import { builtinPalettes, paletteDescriptions, paletteSlots, type PaletteSlot } from './palette'
-import { colorGroups, colorKeys, colorRegistry, cssVariable, parentScope, scopeAliases, scopeDescriptions, sqlScopes, syntaxDefaults, type ColorKey, type ColorKeyInfo } from './registry'
+import { colorGroups, colorKeys, colorRegistry, cssVariable, parentScope, scopeAliases, scopeDescriptions, sqlScopes, syntaxDefaults, syntaxFontStyleDefaults, type ColorKey, type ColorKeyInfo } from './registry'
 import { resolveBuiltin, resolveTheme } from './resolve'
 import type { ThemeType } from './types'
 
@@ -113,11 +113,12 @@ export function renderTokenDocs(): string {
   }
   lines.push('', `## SQL syntax scopes (${sqlScopes.length})`, '',
     'Rules in `tokenColors` name these scopes. A sub-scope such as `keyword.block` inherits from its parent unless a rule names it.',
-    'Colors are made opaque over `editor.background`; `fontStyle` defaults to `""`.', '',
+    'Colors are made opaque over `editor.background`; `fontStyle` defaults to `""` unless the Default column names one.', '',
     row(['Scope', 'Monaco token', 'Default', 'Varia Dark', 'Varia Light', 'Matches']), row(['---', '---', '---', '---', '---', '---']))
   for (const scope of sqlScopes) {
-    const parent = parentScope(scope)
-    lines.push(row([code(scope), code(scope + '.sql'), syntaxDefaults[scope] ? code(syntaxDefaults[scope]!) : `inherits ${code(parent!)}`, code(dark().syntax[scope].foreground), code(light().syntax[scope].foreground), scopeDescriptions[scope]]))
+    const parent = parentScope(scope), fallback = syntaxDefaults[scope], fontStyle = syntaxFontStyleDefaults[scope]
+    const defaults = fallback ? code(fallback) + (fontStyle ? ', ' + code(fontStyle) : '') : `inherits ${code(parent!)}`
+    lines.push(row([code(scope), code(scope + '.sql'), defaults, code(dark().syntax[scope].foreground), code(light().syntax[scope].foreground), scopeDescriptions[scope]]))
   }
   lines.push('', '### Scope aliases', '', 'These TextMate scope names are accepted as exact matches, so rules copied from VS Code themes keep working.', '',
     row(['Alias', 'Scope']), row(['---', '---']), ...[...scopeAliases].map(([alias, scope]) => row([code(alias), code(scope)])), '')

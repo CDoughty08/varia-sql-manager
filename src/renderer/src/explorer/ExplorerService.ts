@@ -537,7 +537,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
   }
   private addRoot(connection: LiveConnection): number {
-    const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'svg:server')
+    const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.sublabel = serverSublabel(connection)
     const facts = [connection.displayName ? connection.server : '', connection.engineEdition !== undefined && (cloudEngineEditions as readonly number[]).includes(connection.engineEdition) ? 'Only databases can be browsed on this edition.' : '']
     node.detail = facts.filter(Boolean).join(' · ') || undefined

@@ -1,7 +1,7 @@
 import { alpha, canonical, composite, hexColor, opaqueHex, parseHex, type Rgba } from './color'
 import { createProblem, isFontStyle, quote, themeLimits, themePatterns } from './format'
 import { builtinPalettes, builtinThemes, isPaletteSlot, paletteSlots } from './palette'
-import { colorKeyOrder, colorKeys, colorRegistry, defaultFor, parentScope, sqlScopes, syntaxDefaults, type ColorKey, type SqlScope } from './registry'
+import { colorKeyOrder, colorKeys, colorRegistry, defaultFor, parentScope, sqlScopes, syntaxDefaults, syntaxFontStyleDefaults, type ColorKey, type SqlScope } from './registry'
 import type { ParsedTheme, ResolvedTheme, SyntaxStyle, ThemeProblem, ThemeResolution, ThemeType, ThemeValue } from './types'
 
 type Evaluated = { ok: true; color: Rgba; hops: number } | { ok: false; code: 'W_REF_UNKNOWN' | 'W_REF_CYCLE'; message: string }
@@ -128,7 +128,7 @@ export function resolveTheme(layers: readonly ParsedTheme[], variant: ThemeType)
     if (!fallback) continue
     const result = evaluateExpression(fallback)
     if (!result.ok) throw new Error(`The default of the ${scope} scope could not be resolved.`)
-    styles.set(scope, { foreground: result.color })
+    styles.set(scope, { foreground: result.color, fontStyle: syntaxFontStyleDefaults[scope] })
   }
   for (const layer of [...layers].reverse()) {
     for (const rule of layer.rules) {

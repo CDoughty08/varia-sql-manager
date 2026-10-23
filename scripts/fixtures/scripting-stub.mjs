@@ -23,11 +23,11 @@ export function installScriptingStub({ ipcMain }, { statics }) {
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
-    databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'svg:database')],
-    tables: owner => ['Orders', 'Slow', 'Warned'].map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'svg:table')),
+    databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database')],
+    tables: owner => ['Orders', 'Slow', 'Warned'].map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
     storedProcedures: owner => ['ShipOrder', 'Secret'].map(name => object({ kind: 'procedure', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'symbol-method', { subtype: 'sql' })),
-    logins: () => [object({ kind: 'login', name: 'sa' }, 'sa', 'svg:login', { hasChildren: false })]
+    logins: () => [object({ kind: 'login', name: 'sa' }, 'sa', 'login', { hasChildren: false })]
   }
   function children({ node }) {
     if (node.type === 'object') {
