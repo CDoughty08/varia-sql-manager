@@ -86,6 +86,15 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: IPC benchmarks
+        # Check exports and performance before the long smoke suite. Floors are enforced on Linux only; the table goes
+        # to the job summary.
+        timeout-minutes: 15
+        run: |
+          npm run bench
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
+          node scripts/check-bench.mjs --enforce
       - name: Electron smoke tests
         timeout-minutes: 25
         run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
@@ -93,15 +102,6 @@ jobs:
         # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere.
         timeout-minutes: 5
         run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/scripting-smoke.mjs
-      - name: IPC benchmarks
-        # The IPC and results grid benchmarks. Floors (tests/bench/floors.json) are enforced here only; the table goes to
-        # the job summary.
-        timeout-minutes: 15
-        run: |
-          npm run bench
-          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
-          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
-          node scripts/check-bench.mjs --enforce
       - name: Results grid smoke test on a 1024x768 display
         # Windows runners have a 1024x768 display; the grid, its strips and the toolbar must work and fit there too.
         timeout-minutes: 8

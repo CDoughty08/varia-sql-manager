@@ -1,5 +1,5 @@
 // A delayed native resize must finish before Tools > Options is opened by mnemonic.
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
@@ -11,6 +11,8 @@ const control = await mkdtemp(resolve('artifacts', 'options-resize-backend-'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
 let application, page
+let stage = 'launch'
+const failures = []
 const watchdog = setTimeout(() => { console.error('Options resize regression exceeded two minutes.'); application?.process()?.kill(); process.exitCode = 1 }, 120000)
 const tools = () => page.getByRole('menu', { name: 'Tools', exact: true })
 const options = () => page.getByRole('dialog', { name: 'Options', exact: true })
@@ -31,6 +33,7 @@ const held = () => page.evaluate(() => window.variaResizeGate.held)
 const releaseResize = () => page.evaluate(() => window.variaResizeGate.release())
 const replaceQuery = async () => {
   await editorTextbox(page).focus()
+  await expect(editorTextbox(page)).toBeFocused()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText('SELECT 1')
   await expect.poll(text).toBe('SELECT 1')
@@ -39,12 +42,18 @@ const replaceQuery = async () => {
 try {
   application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
   page = await application.firstWindow()
+  page.on('pageerror', error => failures.push(error.message))
+  stage = 'editor readiness'
   await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  // The fake connection can be ready before React has mounted and bound Monaco's model.
+  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  stage = 'initial query input'
   await replaceQuery()
   // Both heights fit the CI display; establish a different size so every held transition has a native event.
   await resizeContent(application, page, 1024, 700)
 
   // The old viewport-only barrier lets Tools open before resize dismisses it; O then reaches the editor.
+  stage = 'reproduce viewport-only barrier'
   await holdResize()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 740))
   await expect.poll(() => page.evaluate(() => innerHeight)).toBe(740)
@@ -57,6 +66,7 @@ try {
   await expect(options()).toHaveCount(0)
   console.log('Options resize regression reproduced: delayed resize dismisses Tools and sends O to the editor.')
 
+  stage = 'verify resize event barrier'
   await replaceQuery()
   await holdResize()
   let completed = false
@@ -73,8 +83,30 @@ try {
   await expect(options()).toHaveCount(0)
   await expect.poll(text).toBe('SELECT 1')
   // Repeating the same size has no native event and must still complete.
+  stage = 'verify same-size completion'
   await resizeContent(application, page, 1024, 700)
+  expect(failures).toEqual([])
   console.log('Options resize regression passed: the event barrier preserves the mnemonic and leaves the query unchanged.')
+} catch (error) {
+  const native = await application?.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(window => ({
+    contentSize: window.getContentSize(), focused: window.isFocused(), visible: window.isVisible(),
+    rendererPid: window.webContents.getOSProcessId(), crashed: window.webContents.isCrashed()
+  }))).catch(unavailable => ({ unavailable: unavailable.message }))
+  const renderer = await page?.evaluate(() => ({
+    readyState: document.readyState, visibility: document.visibilityState, focused: document.hasFocus(),
+    viewport: [innerWidth, innerHeight], active: document.activeElement ? {
+      tag: document.activeElement.tagName, role: document.activeElement.getAttribute('role'), label: document.activeElement.getAttribute('aria-label')
+    } : null, resizeHeld: window.variaResizeGate?.held, resizeObserved: window.variaResizeObserved
+  })).catch(unavailable => ({ unavailable: unavailable.message }))
+  const diagnostic = { stage, failures, native, renderer, editor: {
+    visible: await page?.locator('.monaco-editor').isVisible().catch(() => false),
+    textboxFocused: page ? await editorTextbox(page).evaluate(element => element === document.activeElement).catch(() => false) : false,
+    textLength: await text().then(value => value.length).catch(() => null)
+  } }
+  console.error('Options resize failure: ' + JSON.stringify(diagnostic))
+  await writeFile(resolve('artifacts', 'options-resize-failure.json'), JSON.stringify(diagnostic, null, 2)).catch(() => {})
+  await page?.screenshot({ path: resolve('artifacts', 'options-resize-failure.png') }).catch(() => {})
+  throw error
 } finally {
   clearTimeout(watchdog)
   await application?.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
