@@ -121,7 +121,7 @@ try {
       })`) }
     } finally { window.destroy(); probe.protocol.unhandle('file') }
   })
-  expect(chunkLost).toMatchObject({ failure: 'Varia SQL Manager could not start.', blocked: 1, buttons: ['Reload', 'Copy details'], headingSize: '18px' })
+  expect(chunkLost).toMatchObject({ failure: 'Varia SQL Manager could not start.', blocked: 1, buttons: ['Reload', 'Copy details'], headingSize: '20px' })
   expect(chunkLost.details).toMatch(/dynamically imported module/)
   // A rendering fault anywhere in the workbench shows the failure screen instead of a blank window, and still reaches
   // this suite as a page error. Copy details copies the error with where it happened; Reload starts a new workbench.

@@ -269,6 +269,22 @@ describe('LiveService', () => {
     expect(handle.getSnapshot().pausedBy).toBe('hidden')
   })
 
+  it('tells charts when the window hides or shows, the test override included', () => {
+    makeService()
+    let calls = 0
+    const stop = service.page.subscribe(() => { calls++ })
+    expect(service.page.hidden()).toBe(false)
+    page.set(true)
+    expect([service.page.hidden(), calls]).toEqual([true, 1])
+    service.setPageHidden(false)
+    expect([service.page.hidden(), calls]).toEqual([false, 2])
+    service.setPageHidden(undefined)
+    expect([service.page.hidden(), calls]).toEqual([true, 3])
+    stop()
+    page.set(false)
+    expect(calls).toBe(3)
+  })
+
   it('follows a tab: active and in the editor area, or hidden; closing the tab ends the view', async () => {
     makeService()
     let snapshot = { documents: [{ id: 'a', connectionId }, { id: 'b' }], activeId: 'a' } as unknown as ReturnType<Parameters<typeof documentOwner>[1]['getSnapshot']>
