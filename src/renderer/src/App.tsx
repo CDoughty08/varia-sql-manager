@@ -10,6 +10,7 @@ import QueryEditor from './QueryEditor'
 import QueryStatusBar from './QueryStatusBar'
 import EditorStatus from './EditorStatus'
 import Icon from './Icon'
+import EmptyState from './kit/EmptyState'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
@@ -259,7 +260,7 @@ export default function App() {
           <div className="editor-container" hidden={isDesigner}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
-        </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
+        </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
     <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}

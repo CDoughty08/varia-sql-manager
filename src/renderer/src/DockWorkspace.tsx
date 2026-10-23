@@ -7,6 +7,7 @@ import { DockingGuides } from './docking-guides'
 import Icon from './Icon'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useMenuTarget } from './menus/useMenuTarget'
+import EmptyState from './kit/EmptyState'
 import type { PaneLocation } from './services/panes'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
@@ -35,7 +36,7 @@ function paneHost(id: PaneId) { const host = document.createElement('div'); host
 function EmptyWorkspace() {
   const commands = useContext(PaneCommandContext)!, restored = useContext(RestoredContext)
   if (!restored) return null
-  return <div className="dock-empty"><p>All panels are closed.</p><p>Open a panel from the Window menu.</p><button onClick={() => commands.reveal('editor')}>Open Query editor</button></div>
+  return <EmptyState className="dock-empty" icon="layout" title="All panels are closed." detail="Open a panel from the Window menu." actions={[{ label: 'Open Query editor', run: () => commands.reveal('editor') }]} />
 }
 function PaneTab(props: IDockviewPanelHeaderProps) {
   const commands = useContext(PaneCommandContext)!, element = useRef<HTMLDivElement>(null)

@@ -17,7 +17,10 @@ const resolve = (file: Record<string, unknown>, variant: ThemeType = 'dark') => 
 // registry defaults. Where they depart: the active connection row keeps its tint, the only mark of the active query's
 // server; accentSurface is deeper, so the executing tint reaches 1.2:1 on the chrome and canvas; the status bar has a top
 // line (statusBar.border) to set it apart from Object Explorer's fill; and the disconnected text follows the status
-// bar's text, so a theme that recolors the bar keeps it readable.
+// bar's text, so a theme that recolors the bar keeps it readable. The states kit takes the design's pill tints and live
+// colors, but pill text uses the status surface texts (and a successText slot), which stay readable over selected rows and
+// tinted status bars where the plain status colors do not; skeleton bars use the pressed fill, as the hover fill is too
+// faint on dialogs.
 const specValues = `
 foreground #d9dce3 #1c1f26|descriptionForeground #9298a4 #5c6370|disabledForeground #9298a4 #5c6370|errorForeground #f39a9a #b42229
 warningForeground #e4bb6a #875800|successForeground #74d19c #146f3b|infoForeground #8f9cff #4453d0|focusBorder #8f9cff #4453d0
@@ -83,7 +86,16 @@ settings.headerForeground #f5f6f8 #0a0c10|notifications.background #1d2026 #ffff
 notifications.border #6b7286 #d4d8df|notificationsErrorIcon.foreground #f39a9a #b42229|notificationsWarningIcon.foreground #e4bb6a #875800
 notificationsInfoIcon.foreground #8f9cff #4453d0|quickInput.background #1d2026 #ffffff|quickInput.foreground #d9dce3 #1c1f26
 quickInputTitle.background #1c1f25 #f1f3f6|quickInputList.focusBackground #29314f #d9e0fb|quickInputList.focusForeground #d9dce3 #1c1f26
-pickerGroup.foreground #bcc5ff #3240b0|pickerGroup.border #30343c #dcdfe5|connection.red #e66767 #c42b3c|connection.orange #e09358 #b45309
+pickerGroup.foreground #bcc5ff #3240b0|pickerGroup.border #30343c #dcdfe5
+statusPill.runningBackground #232842 #dde1f9|statusPill.runningForeground #bcc5ff #3240b0|statusPill.successBackground #74d19c24 #146f3b24
+statusPill.successForeground #a6e8bf #0f5a2f|statusPill.warningBackground #e4bb6a24 #87580024|statusPill.warningForeground #f0d49e #6b4400
+statusPill.criticalBackground #f39a9a24 #b4222924|statusPill.criticalForeground #f6bcc1 #8f1d24|statusPill.infoBackground #8f9cff24 #4453d024
+statusPill.infoForeground #bcc5ff #3240b0|statusPill.neutralBackground #30343e #d6dae0|statusPill.neutralForeground #bcc1cb #3a404b
+chip.background #d9dce300 #1c1f2600|chip.foreground #bcc1cb #3a404b|chip.border #6b728673 #878e9b73|chip.activeBackground #21273b #e7ebfc
+chip.activeForeground #bcc5ff #3240b0|chip.activeBorder #8f9cff #4453d0|live.indicator #74d19c #146f3b|live.pausedForeground #9298a4 #5c6370
+live.staleForeground #f0d49e #6b4400|live.staleBackground #e4bb6a24 #87580024|tile.background #16181d #ffffff|tile.border #262a31 #e3e6eb
+tile.warningBorder #e4bb6a #875800|tile.criticalBorder #f39a9a #b42229|skeleton.background #30343e #d6dae0
+connection.red #e66767 #c42b3c|connection.orange #e09358 #b45309
 connection.yellow #d8bf5e #8f6b00|connection.green #6fbf8a #2e7d4f|connection.blue #6ea4ea #2563a8|connection.purple #ab95ea #7a4bbf
 connection.default #8d939f #6b7280|connection.favoriteForeground #d8bf5e #8f6b00`
 const specSyntax = { keyword: ['#93a4ff', '#3442c2'], operator: ['#9ea6b4', '#575e6b'], predefined: ['#d4a9f2', '#8338b4'], string: ['#9fd4a9', '#2c7440'],
@@ -113,10 +125,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 66 slots, 206 keys and 16 scopes, with an acyclic and complete reference graph', () => {
-    expect(paletteSlots).toHaveLength(66)
-    expect(colorKeys).toHaveLength(206)
-    expect(new Set(colorKeys).size).toBe(206)
+  it('have 67 slots, 233 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+    expect(paletteSlots).toHaveLength(67)
+    expect(colorKeys).toHaveLength(233)
+    expect(new Set(colorKeys).size).toBe(233)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -131,7 +143,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(206)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(233)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -233,7 +245,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(206)
+      expect(Object.keys(theme.colors)).toHaveLength(233)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

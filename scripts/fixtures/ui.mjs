@@ -53,6 +53,19 @@ export const part = {
   jobProgress: '.job-strip:not(.job-notice)',
   jobNotice: '.job-notice',
   outputEmpty: '.output-empty',
+  // The states kit's empty view (src/renderer/src/kit/EmptyState.tsx) and the surfaces that place one.
+  emptyState: '.empty-state',
+  emptyStateIcon: '.empty-state-icon',
+  emptyStateTitle: '.empty-state-title',
+  emptyStateDetail: '.empty-state-detail',
+  /** The filled action of an empty view; a view has at most one. */
+  primaryAction: 'button.primary',
+  explorerEmpty: '.explorer-empty',
+  workspaceEmpty: '.workspace-empty',
+  dockEmpty: '.dock-empty',
+  /** Object Explorer's fault view (an InlineError) and the outcome line of its Copy details. */
+  explorerFault: '.explorer-fault',
+  inlineErrorStatus: '.inline-error-status',
   errorMessage: '.msg.error',
   errorCount: '.error-count',
   resultItem: '.rs-item',
@@ -227,6 +240,17 @@ export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
 export const jobNotice = page => outputPane(page).locator(part.jobNotice)
 export const outputEmpty = page => outputPane(page).locator(part.outputEmpty)
+/** A surface's empty view, matched only when it is the states kit's (so a hand-made one fails), and its parts. */
+export const emptyState = surface => matching(surface, part.emptyState)
+export const explorerEmpty = page => page.locator(part.explorerEmpty)
+export const workspaceEmpty = page => page.locator(part.workspaceEmpty)
+export const dockEmpty = page => page.locator(part.dockEmpty)
+export const emptyStateIcon = view => view.locator(part.emptyStateIcon)
+export const emptyStateTitle = view => view.locator(part.emptyStateTitle)
+export const emptyStateDetail = view => view.locator(part.emptyStateDetail)
+export const primaryAction = view => view.locator(part.primaryAction)
+export const explorerFault = page => page.locator(part.explorerFault)
+export const copyOutcome = view => view.locator(part.inlineErrorStatus)
 export const messages = page => page.getByRole('log', { name: 'Messages', exact: true })
 /** Each message and tail line; an error's differs only in its colour. */
 export const messageLines = page => messages(page).locator('pre')
