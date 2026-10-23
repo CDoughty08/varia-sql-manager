@@ -15,11 +15,13 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { ResultMemoryService } from '../results/memory'
+import { documentPage, LiveService } from '../live/LiveService'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
 import { ExplorerService } from '../explorer/ExplorerService'
 import { DatabaseListService } from '../services/database-list'
+import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { ResultSelectionService } from '../services/result-selection'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
@@ -84,6 +86,8 @@ export interface Workbench extends Disposable {
   readonly results: ResultsService
   /** What the backend holds for results, for the status bar. */
   readonly resultMemory: ResultMemoryService
+  /** Live views (Activity Monitor, SSIS monitoring): their subscriptions, pauses while hidden, and history. */
+  readonly live: LiveService
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
   readonly files: FileService
@@ -104,6 +108,8 @@ export interface Workbench extends Disposable {
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
+  /** The SSIS Catalog's live tree: one catalog probe per connection whose SSISDB node is open, reconciling what changed. */
+  readonly ssisTree: SsisTreeProbe
   /** The databases of each connected server, for the toolbar's database picker. */
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
@@ -154,6 +160,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
+  const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) } })
+  const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
@@ -231,6 +239,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultClient,
     results,
     resultMemory,
+    live,
     ...gridStats ? { gridStats } : {},
     files,
     recentFiles,
@@ -243,6 +252,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     inputMode,
     panes,
     explorer,
+    ssisTree,
     databaseList,
     resultSelection,
     settings,
@@ -268,6 +278,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      // Before the client: its views cancel their subscriptions while the port is still there.
+      ssisTree.dispose()
+      live.dispose()
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
       designers.dispose()

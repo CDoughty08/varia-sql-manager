@@ -408,7 +408,7 @@ describe('ExplorerService: refresh', () => {
     expect(f.explorer.getSnapshot().selected).toBe(t1)
     // Expanded nodes below reload in turn; a collapsed one that was loaded waits to be expanded. One event says so.
     expect(f.calls().slice(from).map(params => params.node.type === 'folder' ? params.node.folder : params.node.object.kind)).toEqual(['databases', 'database', 'tables'])
-    expect(f.emitted.slice(events)).toEqual([{ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'databases' }])
+    expect(f.emitted.slice(events)).toEqual([{ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'databases', nodeId: expect.any(Number) }])
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
     expect(f.explorer.node(f.find('System Databases'))).toMatchObject({ load: 'none', expanded: false, children: expect.any(Array) })
     f.explorer.expand(f.find('System Databases'))
@@ -428,13 +428,13 @@ describe('ExplorerService: refresh', () => {
     expect(f.calls().at(-1)!.node).toMatchObject({ folder: 'databases' })
     expect(f.explorer.getSnapshot().selected).toBe(databases)
     expect(f.labels()).not.toContain('    Offline')
-    expect(f.emitted.at(-1)).toEqual({ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'databases' })
+    expect(f.emitted.at(-1)).toEqual({ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'databases', nodeId: expect.any(Number) })
     // A folder refreshes itself, and so does an empty one.
     const views = await f.open('AppData', 'Views')
     f.explorer.refresh(views)
     await settle()
     expect(f.calls().at(-1)!.node).toMatchObject({ folder: 'views' })
-    expect(f.emitted.at(-1)).toEqual({ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'other' })
+    expect(f.emitted.at(-1)).toEqual({ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'other', nodeId: expect.any(Number) })
   })
   it('keeps the old rows and puts an error first when a refresh fails', async () => {
     const f = fixture()
@@ -625,7 +625,7 @@ describe('ExplorerService: reconcile', () => {
     f.state.tables = ['dbo.T1', 'dbo.T2', 'dbo.T3']
     const from = f.calls().length
     f.explorer.reconcile(tables)
-    expect(f.emitted.at(-1)).toEqual({ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'other' })
+    expect(f.emitted.at(-1)).toEqual({ type: 'explorer.refreshed', connectionId: cid('server-a'), scope: 'other', nodeId: expect.any(Number) })
     await settle()
     expect(f.calls().slice(from).map(params => params.node)).toEqual([{ type: 'folder', owner: { kind: 'database', name: 'AppData' }, folder: 'tables' }])
     const at = f.labels().indexOf('      Tables')
@@ -879,6 +879,63 @@ describe('ExplorerService: reconcile', () => {
     expect(f.calls().slice(from).map(params => params.node.type === 'folder' ? params.node.folder : params.node.object.kind)).toEqual(['serverSecurity', 'tables'])
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added')
     expect(f.emitted.slice(events).filter(event => event.type === 'explorer.refreshed')).toEqual([])
+  })
+  it('never opens a node from a background reconcile: an empty one gets its expander back, while Varia\'s own change opens it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const views = await f.open('Databases', 'AppData', 'Views')
+    expect(f.explorer.node(views)).toMatchObject({ expanded: false, hasChildren: false, load: 'loaded' })
+    const from = f.calls().length
+    f.explorer.reconcile(views, { background: true })
+    await settle()
+    // Nothing loads until the user opens it; then it lists again.
+    expect(f.calls().length).toBe(from)
+    expect(f.explorer.node(views)).toMatchObject({ expanded: false, hasChildren: true, load: 'none' })
+    f.explorer.expand(views)
+    await settle()
+    expect(f.calls().slice(from).map(params => params.node)).toEqual([{ type: 'folder', owner: { kind: 'database', name: 'AppData' }, folder: 'views' }])
+    // Varia's own change (DDL) opens the folder on what it made.
+    f.explorer.reconcile(views)
+    expect(f.explorer.node(views)!.expanded).toBe(true)
+  })
+  it('defers a background reconcile of an expanded node that a collapsed one above hides until it shows, and names the node a user\'s refresh reloaded', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const appData = f.find('AppData')
+    f.explorer.collapse(appData)
+    await settle()
+    const from = f.calls().length, events = f.emitted.length
+    f.explorer.reconcile(tables, { background: true })
+    await settle()
+    expect(f.calls().length).toBe(from)
+    f.explorer.expand(appData)
+    await settle()
+    expect(f.calls().slice(from).map(params => params.node)).toEqual([{ type: 'folder', owner: { kind: 'database', name: 'AppData' }, folder: 'tables' }])
+    expect(f.emitted.slice(events).filter(event => event.type === 'explorer.refreshed')).toEqual([])
+    f.explorer.refresh(tables)
+    expect(f.emitted.slice(events).filter(event => event.type === 'explorer.refreshed')).toEqual([{ type: 'explorer.refreshed', connectionId: expect.any(String), scope: 'other', nodeId: tables }])
+  })
+  it('keeps another service\'s note on a node across reconciles until it is cleared', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const appData = f.find('AppData')
+    const note = { label: '(not updating)', sentence: 'Live updates stopped.' }
+    f.explorer.setNote(appData, note)
+    const rev = f.explorer.node(appData)!.rev
+    f.explorer.setNote(appData, { ...note })
+    expect(f.explorer.node(appData)!.rev).toBe(rev)
+    f.explorer.refresh(tables)
+    f.explorer.refresh(f.find('Databases'))
+    await settle()
+    expect(f.find('AppData')).toBe(appData)
+    expect(f.explorer.node(appData)!.note).toEqual(note)
+    f.explorer.setNote(appData, undefined)
+    expect(f.explorer.node(appData)!.note).toBeUndefined()
   })
   it('reconciles a folder of 99,000 rows page by page, each page within the budget', async () => {
     const f = fixture()
@@ -1362,6 +1419,22 @@ describe('ExplorerService: memory and speed', () => {
     expect(folderNode.ref.owner).toBe(table.ref.object)
     expect(id.ref.object.parent).toBe(name.ref.object.parent)
     expect(id.ref.object.parent).toEqual({ kind: 'table', schema: 'dbo', name: 'T0' })
+  })
+  it('shares a folder\'s owner only when every identity field matches, SSIS folder and project included', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const appData: ObjectRef = { kind: 'database', name: 'AppData' }
+    const databases = await f.open('Databases')
+    f.state.failNext = { ok: true, value: { nodes: [folder({ ...appData, ssisFolder: 'Finance' }, 'tables'), folder({ ...appData, ssisProject: 'Loads' }, 'views'), folder(appData, 'synonyms')], elapsedMs: 1, total: 3 } }
+    await f.open('AppData')
+    const database = f.explorer.node(f.find('AppData', databases))!
+    const [tables, views, synonyms] = database.children!
+    if (database.ref.type !== 'object' || tables.ref.type !== 'folder' || views.ref.type !== 'folder' || synonyms.ref.type !== 'folder') throw new Error('Unexpected refs.')
+    expect(tables.ref.owner).toEqual({ ...appData, ssisFolder: 'Finance' })
+    expect(views.ref.owner).toEqual({ ...appData, ssisProject: 'Loads' })
+    expect(synonyms.ref.owner).toBe(database.ref.object)
+    expect(new Set([tables, views, synonyms].map(node => f.explorer.keyOf(node.id))).size).toBe(3)
   })
   it('merges a 2,000-node page and republishes within the budget', async () => {
     const f = fixture()

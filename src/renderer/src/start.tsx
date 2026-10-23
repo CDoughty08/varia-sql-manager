@@ -23,6 +23,7 @@ import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
 import { SettingsService } from './settings/SettingsService'
 import { ShellErrorBoundary, ShellFaultProbe } from './ShellFailure'
+import { liveTestHooks } from './live/test-hooks'
 import 'dockview-react/dist/styles/dockview.css'
 import './styles.css'
 
@@ -35,8 +36,9 @@ export async function start(root: Root): Promise<void> {
   // editor's first frame has its font and options; neither waits for main longer than its timeout.
   const [theme, settings] = await Promise.all([ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia)])
   const workbench = createWorkbench(window.varia, monaco, theme, settings)
-  // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs) and save
-  // AutoRecover's copies on demand (files-smoke.mjs); main enables test mode only in unpackaged smoke runs.
+  // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs), save
+  // AutoRecover's copies on demand (files-smoke.mjs) and open live views (live-smoke.mjs); main enables test mode only in
+  // unpackaged smoke runs.
   if (window.varia.testMode) {
     const stats = workbench.gridStats
     Object.assign(window, {
@@ -47,7 +49,9 @@ export async function start(root: Root): Promise<void> {
         setScrollCap: (px?: number) => stats?.setScrollCap(px)
       },
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
-      __variaRecovery: { flush: () => workbench.recovery.flush() }
+      __variaRecovery: { flush: () => workbench.recovery.flush() },
+      // Live views on the synthetic source, the SSIS tree's views, and the window's visibility (live-smoke.mjs, explorer-smoke.mjs).
+      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, workbench.ssisTree)
     })
   }
   root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)

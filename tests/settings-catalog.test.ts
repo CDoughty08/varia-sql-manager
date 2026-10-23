@@ -20,6 +20,7 @@ const expectedTree = [
   '  Documents (environment.documents)',
   '  Fonts and Colors (environment.fontsAndColors)',
   '  Keyboard (environment.keyboard)',
+  '  Live Data (environment.liveData)',
   'Text Editor',
   '  General (textEditor.general)',
   '  Editor Tab and Status Bar (textEditor.editorTabAndStatusBar)',
@@ -35,7 +36,8 @@ const expectedTree = [
   '    Results to Grid (queryResults.sqlServer.grid)',
   'SQL Server Object Explorer',
   '  Commands (objectExplorer.commands)',
-  '  Scripting (objectExplorer.scripting)'
+  '  Scripting (objectExplorer.scripting)',
+  'SQL Server Integration Services (integrationServices)'
 ]
 function treeLines(): string[] {
   const lines: string[] = []

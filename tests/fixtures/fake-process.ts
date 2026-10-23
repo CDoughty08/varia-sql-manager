@@ -30,6 +30,7 @@ export class FakeBackend extends EventEmitter {
   exitOnEnd = true
   readonly requests: FakeRequest[] = []
   readonly cancels: { id: number; reason: number }[] = []
+  readonly credits: { id: number; bytes: number }[] = []
   readonly signals: string[] = []
   private readonly parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
 
@@ -90,6 +91,7 @@ export class FakeBackend extends EventEmitter {
     }
     if (frame.kind === FrameKind.PING) { if (this.pong) this.send(FrameKind.PONG, 0, frame.arg); return }
     if (frame.kind === FrameKind.CANCEL) { this.cancels.push({ id: frame.id, reason: frame.arg }); return }
+    if (frame.kind === FrameKind.CREDIT) { this.credits.push({ id: frame.id, bytes: frame.arg }); return }
     if (frame.kind !== FrameKind.REQUEST) return
     const { method, params } = decodeControl(frame.body) as { method: string; params: Record<string, unknown> }
     const request = { generation: this.generation, id: frame.id, method, params }

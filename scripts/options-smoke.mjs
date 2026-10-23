@@ -95,9 +95,17 @@ try {
   await expect(dialog().locator('.options-note').first()).toHaveText('Color theme: View › Theme')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click(fast)
   expect(await treeNames()).toEqual([
-    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
-    'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting'
+    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', '  Live Data', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
+    'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting',
+    'SQL Server Integration Services'
   ])
+  await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
+  // The SSIS page (S2) is a page of its own at the top level: the tree probe's switch, and its interval, which follows it.
+  await node('SQL Server Integration Services').click(fast)
+  await expect(heading()).toHaveText('SQL Server Integration Services')
+  await expect(field('Update the SSIS Catalog in Object Explorer as it changes')).toBeChecked()
+  await expect(field('Check the catalog for changes every')).toHaveValue('30')
+  await node('Commands').click(fast)
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
   // The tree's keys: Up and Down show the page they reach, Left goes to the parent, Home to the first node.
   await node('Scripting').focus()
@@ -126,7 +134,19 @@ try {
   await expect(field('Keep AutoRecover information for')).toBeDisabled()
   await field('Save AutoRecover information').check()
   await expect(field('Keep AutoRecover information for')).toBeEnabled()
-  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, the tree has SSMS\'s 22 nodes and keys, and AutoRecover has SSMS\'s defaults.')
+  // Environment › Live Data (Varia's own page): hidden views pause after 2 s and stop after 5 min; off greys both delays.
+  await node('Live Data').click(fast)
+  await expect(field('Pause live views that are hidden')).toBeChecked()
+  await expect(field('Pause after hidden for')).toHaveValue('2')
+  await expect(field('Stop after hidden for')).toHaveValue('5')
+  await expect(field('Keep chart history for')).toHaveValue('60')
+  await field('Pause live views that are hidden').uncheck()
+  await expect(field('Pause after hidden for')).toBeDisabled()
+  await expect(field('Stop after hidden for')).toBeDisabled()
+  await expect(field('Keep chart history for')).toBeEnabled()
+  await field('Pause live views that are hidden').check()
+  await expect(field('Pause after hidden for')).toBeEnabled()
+  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, the tree has SSMS\'s 22 nodes plus Live Data and its keys, AutoRecover has SSMS\'s defaults, and Live Data its own.')
 
   // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.
   await node('Keyboard').focus()
