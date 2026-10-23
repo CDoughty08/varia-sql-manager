@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, part, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
 import { glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
 
 await mkdir('artifacts', { recursive: true })
@@ -23,7 +23,7 @@ async function launch(options = {}) {
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
@@ -50,7 +50,9 @@ const backgroundOf = selector => page.locator(selector).first().evaluate(element
 const editorText = () => editorTextOf(page)
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
 // Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
-const dockTabFocusRing = () => page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] })
+// A key press first: Chromium shows a focus ring for programmatic focus only after keyboard input, not after the clicks
+// that moved panels through their ⋯ menus.
+const dockTabFocusRing = async () => { await page.keyboard.press('Shift'); return page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] }) }
 // The neutral status bar shares Object Explorer's fill; without a connection color its own top line sets it apart.
 const statusBarEdge = () => statusBar(page).evaluate(bar => { const style = getComputedStyle(bar); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
 const contextMenuBorder = () => openMenus(page).evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
@@ -96,6 +98,8 @@ try {
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['dark', 'dark'])
   await expect(themeNotice(page)).toHaveCount(0)
   await expect(statusBar(page)).toHaveAttribute('data-state', 'disconnected')
+  // The header's search box has its own colours (commandCenter.*) on the title bar's.
+  expect(await searchBox(page).evaluate(box => { const style = getComputedStyle(box); return [style.backgroundColor, style.color] })).toEqual([await colorOf('commandCenter.background'), await colorOf('commandCenter.foreground')])
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
 
   // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.
@@ -187,6 +191,9 @@ try {
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   console.log('Theme checks: floating groups use the theme colors.')
 
+  // Panels alone in their group hide their dock tabs; Window › Panel Tabs shows them, for the focus ring checks here and below.
+  await menu('window.togglePanelTabs')
+  await expect(paneTab(page, 'explorer')).toBeVisible()
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(143, 156, 255)'])
   // The editor's context menu is the workbench's: its border and highlighted item use the menu colors.
   await page.locator('.monaco-editor .view-lines').click({ button: 'right' })

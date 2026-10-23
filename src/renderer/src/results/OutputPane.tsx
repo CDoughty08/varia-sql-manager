@@ -1,4 +1,5 @@
 import { memo, useId, useRef, useState, type KeyboardEvent } from 'react'
+import PaneMenuButton from '../PaneMenuButton'
 import { useTicker } from '../core/useTicker'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ResultsStack from '../grid/ResultsStack'
@@ -77,6 +78,7 @@ function OutputPane({ tabId, query, connected, hint }: Props) {
       {jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
       {/* The live region below announces it; this is the visible copy. */}
       {tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
+      <PaneMenuButton pane="output" />
     </div>
     {!tab ? <div className="output-empty"><strong>Query results</strong><p>{!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>
       : <div className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[view ?? 'messages']}>

@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
-import { activeDocumentName, anyResultGrid, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryServer, querySession, toolbarButton } from './ui.mjs'
+import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryServer, querySession, toolbarButton } from './ui.mjs'
 
 const wait = ms => new Promise(done => setTimeout(done, ms))
 
@@ -54,7 +54,7 @@ async function launch(launchOptions, name) {
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   page.on('dialog', () => {})
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await mockPrompts(application)
   const run = async sql => {
@@ -248,7 +248,7 @@ export async function sessionPrompts(launchOptions) {
     expect(await application.evaluate(() => globalThis.variaAborted)).toEqual(['Uncommitted transactions'])
     // The page that asked is gone; the new one loads (Playwright's page for the crashed one cannot be used, so main asks).
     const js = source => application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code).catch(error => 'error: ' + error.message), source)
-    await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
+    await expect.poll(() => js("!!document.querySelector('[title^=\"SQL backend: fake\"]') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
     console.log('Session checks: a crash closes the open transaction prompt.')
   } finally { await app.cleanup() }
 }

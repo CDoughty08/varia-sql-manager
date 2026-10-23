@@ -376,6 +376,20 @@ describe('quick input filtering', () => {
     expect(labels()).toEqual(['Cancel Executing Query', 'Execute', 'Save', 'Save As'])
     expect(view().rows.map(row => row.group)).toEqual(['query', undefined, 'file', undefined])
   })
+  it('keeps the groups in provided order and ranks within each, with their labels, when grouped', () => {
+    const { service, labels, view } = controller()
+    const list: QuickPickItem[] = [{ id: '1', label: 'Save As', group: 'file' }, { id: '2', label: 'Execute', group: 'query' }, { id: '3', label: 'Cancel Executing Query', group: 'query' }, { id: '4', label: 'Save', group: 'file' }]
+    service.show(options({ items: list, sort: 'grouped' }))
+    expect(labels()).toEqual(['Save As', 'Save', 'Execute', 'Cancel Executing Query'])
+    expect(view().rows.map(row => row.group)).toEqual(['file', undefined, 'query', undefined])
+    service.filter('e')
+    // The file group first, as its first item came first; the best match leads each group.
+    expect(labels()).toEqual(['Save', 'Save As', 'Execute', 'Cancel Executing Query'])
+    expect(view().rows.map(row => row.group)).toEqual(['file', undefined, 'query', undefined])
+    service.filter('exe')
+    expect(labels()).toEqual(['Execute', 'Cancel Executing Query'])
+    expect(view().rows.map(row => row.group)).toEqual(['query', undefined])
+  })
   it('puts recently used rows first while the filter is empty, and prefers them on ties', () => {
     const { service, labels, view } = controller()
     service.show(options({ noun: 'commands', items: items('Load Layout', 'Reset Layout', 'Save Layout', 'Zoom'), recentIds: ['Zoom', 'Save Layout', 'gone', 'Zoom'] }))
@@ -665,6 +679,68 @@ describe('Go to Query', () => {
     await documents.runTask(() => documents.close(c.id))
     await key('workbench.quickOpen')
     expect(view().rows.map(row => row.item.id)).toEqual([b.id, a.id])
+  })
+})
+
+describe('Search', () => {
+  it('finds open queries, commands and loaded Object Explorer objects in that order, and brings a found object forward', async () => {
+    const { key, quickInput, view, labels, documents, explorer, api, connect, host } = palette()
+    const a = documents.create('Orders report.sql', '', 'master')
+    documents.create('b.sql', '', 'master')
+    documents.activate(a.id)
+    api.push(readyBackend())
+    connect(connectionInfo('server-a'))
+    const find = async (label: string) => { let id: number | undefined; await vi.waitFor(() => { id = explorer.getSnapshot().rows.nodes.find(node => node?.label === label)?.id; expect(id).toBeDefined() }); return id! }
+    const databases = await find('Databases')
+    for (const label of ['Databases', 'AppData', 'Tables']) explorer.expand(await find(label))
+    const orders = await find('dbo.Orders')
+    explorer.collapse(databases)
+    expect(explorer.getSnapshot().rows.nodes.some(node => node?.label === 'dbo.Orders')).toBe(false)
+    const loads = api.explorerChildren.mock.calls.length
+    await key('workbench.search')
+    expect(view()).toMatchObject({ visible: true, ariaLabel: 'Search', prefix: '' })
+    // The previous query is active, as in Go to Query.
+    expect(view().rows[view().activeIndex].item.label).toBe('b.sql')
+    quickInput.filter('orders')
+    expect(view().rows.map(row => [row.group, row.item.label])).toEqual([['open queries', 'Orders report.sql'], ['Object Explorer', 'dbo.Orders']])
+    expect(view().rows[1].item).toMatchObject({ icon: 'table', description: 'server-a.example › Databases › AppData › Tables' })
+    // Folders are not objects of their own (an object in one matches by its path), and nothing is loaded for a search.
+    quickInput.filter('tables')
+    expect(view().rows.filter(row => row.group === 'Object Explorer').map(row => row.item.label)).toEqual(['dbo.Orders'])
+    expect(api.explorerChildren.mock.calls).toHaveLength(loads)
+    quickInput.filter('new query')
+    expect(view().rows[0]).toMatchObject({ group: 'commands', item: { label: 'File: New Query' } })
+    quickInput.filter('orders')
+    quickInput.move('next')
+    quickInput.accept()
+    await settle()
+    // Its folders open again, it is selected, and Object Explorer comes forward with focus, as F8 brings it.
+    expect(explorer.getSnapshot().selected).toBe(orders)
+    expect(explorer.getSnapshot().rows.nodes.some(node => node?.label === 'dbo.Orders')).toBe(true)
+    expect(vi.mocked(host.reveal).mock.calls.at(-1)).toEqual(['explorer', { focus: true }])
+    expect(labels()).toEqual([])
+  })
+  it('switches to commands by prefix and back, and Go to Query or F1 take over', async () => {
+    const { key, quickInput, view, documents } = palette()
+    documents.create('a.sql', '', 'master')
+    await key('workbench.search')
+    quickInput.filter('>')
+    expect(view()).toMatchObject({ ariaLabel: 'Command Palette', prefix: '>' })
+    quickInput.filter('')
+    expect(view()).toMatchObject({ ariaLabel: 'Search', prefix: '' })
+    quickInput.filter('?')
+    expect(view().rows.map(row => [row.item.label, row.item.description])).toEqual([['…', 'Search'], ['>', 'Run Command']])
+    quickInput.filter('a.s')
+    const session = view().session
+    await key('workbench.search')
+    expect(view()).toMatchObject({ session, input: { value: 'a.s', selection: 'all' } })
+    await key('workbench.quickOpen')
+    expect(view()).toMatchObject({ ariaLabel: 'Go to Query', input: { value: '' } })
+    quickInput.hide('cancel')
+    // F1 on its own deletes back to Go to Query, not Search.
+    await key('workbench.showCommands')
+    quickInput.filter('')
+    expect(view()).toMatchObject({ ariaLabel: 'Go to Query' })
   })
 })
 

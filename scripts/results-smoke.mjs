@@ -10,7 +10,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindBadge, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindBadge, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -187,7 +187,7 @@ async function focusRingPixels() {
 }
 
 try {
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // A hidden window draws about once a second; the grid's frames and the scroll steps need real ones.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
   // Closing an unsaved query asks first; answer Don't Save.
@@ -861,10 +861,10 @@ try {
   await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
-  // Script As's segment and then the server and database give way to a long text; the backend status and the indicator
-  // keep their size. Every segment keeps one line (step 17 fits a long server name into a small window).
+  // Script As's segment, then the query's facts and the editor's segments, give way to a long text; the backend status and
+  // the indicator keep their size. Every segment keeps one line (step 17 fits a long server name into a small window).
   expect(await statusBar(page).locator(`:scope > :not(${part.statusSegment})`).evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
-    .toEqual(['0 nowrap', '1 nowrap', '0 nowrap'])
+    .toEqual(['0 nowrap', '1 nowrap', '1 nowrap', '0 nowrap'])
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
   // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
   await cell(0, 0).click()
@@ -1032,7 +1032,7 @@ try {
   await expect(paneTab(page, 'output')).toHaveCount(0)
   await expect(outputPane(page)).toBeHidden()
   await page.keyboard.press('Control+R')
-  await expect(paneTab(page, 'output')).toBeVisible()
+  await expect(paneTab(page, 'output')).toHaveCount(1)
   await expect(outputPane(page)).toBeVisible()
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
@@ -1103,7 +1103,7 @@ try {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024)
   await queryTabs().nth(1).click()
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
   const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
   await connect.getByRole('button', { name: 'Connect', exact: true }).click()
@@ -1229,7 +1229,7 @@ try {
     page.on('pageerror', error => failures.push(error.message))
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
     await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-    await expect(statusBar(page).getByText(/· Ready/)).toBeVisible({ timeout: 30000 })
+    await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
     await connectLive(page, expect)
     await enlargeOutput(page)
     // The session opens with the first run, so the timed one below measures rows, not the login.

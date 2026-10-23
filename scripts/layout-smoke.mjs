@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { closePaneButton, editorText, layoutError, movePane, pane as paneOf, paneTab, part } from './fixtures/ui.mjs'
+import { backendReady, closePaneButton, editorText, layoutError, movePane, pane as paneOf, paneMenuButton, paneTab, part } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'layout-profile-'))
@@ -24,7 +24,7 @@ async function dialogs(settings = {}) {
 }
 async function ready(editorVisible = true) {
   page = await application.firstWindow()
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toHaveCount(1, { timeout: 30000 })
   if (editorVisible) await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   else await expect(page.locator('.monaco-editor')).toBeHidden()
@@ -45,10 +45,14 @@ async function drag(locator, dx, dy) {
   await page.mouse.move(x, y); await page.mouse.down()
   await page.mouse.move(x + dx, y + dy, { steps: 5 }); await page.mouse.up()
 }
-async function manage() { await page.getByRole('button', { name: 'Layouts', exact: true }).click(); await expect(page.getByRole('dialog', { name: 'Workspace layouts' })).toBeVisible() }
+async function manage() { await menu('layout.load'); await expect(page.getByRole('dialog', { name: 'Workspace layouts' })).toBeVisible() }
 async function done() { await page.getByRole('button', { name: 'Done', exact: true }).click() }
-async function windowPane(id) { await application.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById('window.' + id).click(), id) }
+async function menu(id) { await application.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).click(), id) }
+async function windowPane(id) { await menu('window.' + id) }
+const x = async id => (await pane(id).boundingBox()).x
 async function aimGuide(source, destination, position, scope = 'panel') {
+  // Dockview finishes laying out a moved or redocked panel over the next frames; the drag starts where its tab ends up.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   const headerBox = await source.boundingBox(), target = await pane(destination).boundingBox()
   await page.mouse.move(headerBox.x + 20, headerBox.y + headerBox.height / 2); await page.mouse.down()
   await page.mouse.move(target.x + target.width / 2 + 95, target.y + target.height / 2, { steps: 5 })
@@ -63,6 +67,25 @@ async function aimGuide(source, destination, position, scope = 'panel') {
 try {
   await ready()
   await expect(page.getByRole('menuitem', { name: 'Window', exact: true })).toBeVisible()
+  // A panel alone in its dock group shows no dock tab: its own header names it and holds its ⋯ menu, which moves it.
+  for (const id of ['explorer', 'editor', 'output']) {
+    await expect(paneTab(page, id)).toBeHidden()
+    await expect(paneMenuButton(page, id)).toBeVisible()
+  }
+  await movePane(page, 'explorer', 'right')
+  await expect.poll(async () => await x('explorer') > await x('editor')).toBe(true)
+  await expect(paneTab(page, 'explorer')).toBeHidden()
+  // Tabbed together, a group shows its tabs again; alone again, it hides them.
+  await movePane(page, 'output', 'tab:explorer')
+  await expect(paneTab(page, 'output')).toBeVisible()
+  await expect(paneTab(page, 'explorer')).toBeVisible()
+  await expect(pane('explorer')).toBeHidden()
+  await movePane(page, 'output', 'bottom')
+  await expect(paneTab(page, 'output')).toBeHidden()
+  await movePane(page, 'explorer', 'left')
+  await expect.poll(async () => await x('explorer') < await x('editor')).toBe(true)
+  await expect(paneTab(page, 'explorer')).toBeHidden()
+  console.log('Layout checks: panels alone in a group hide their tabs and move through their ⋯ menus.')
   await typeSql('SELECT 42 AS preserved;')
   const typed = await text()
   await page.evaluate(() => { globalThis.layoutEditor = document.querySelector('.monaco-editor') })
@@ -88,14 +111,20 @@ try {
   expect(exported.kind).toBe('varia-workspace-layout')
   expect(JSON.stringify(exported)).not.toContain('SELECT 42')
   expect(Object.keys(exported.layout.panels).sort()).toEqual(['editor', 'explorer', 'output'])
+  // Which tabs hide follows Window › Panel Tabs, not the layout.
+  expect(JSON.stringify(exported)).not.toContain('hideHeader')
   await done()
   console.log('Layout checks: splitter resizing, named save, and export passed.')
 
+  // Dragging a panel by its tab needs the tab: Window › Panel Tabs shows it, and stays on for the rest of the suite.
+  await menu('window.togglePanelTabs')
+  await expect(paneTab(page, 'explorer')).toBeVisible()
+  await expect.poll(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('window.togglePanelTabs').checked)).toBe(true)
   // Real pointer docking, followed by a keyboard-accessible move action.
   await aimGuide(paneTab(page, 'explorer'), 'editor', 'right')
   await page.screenshot({ path: resolve('artifacts', 'docking-guides.png') })
   await page.mouse.up()
-  await expect.poll(async () => (await pane('explorer').boundingBox()).x).toBeGreaterThan((await pane('editor').boundingBox()).x)
+  await expect.poll(async () => await x('explorer') > await x('editor')).toBe(true)
   await expect(page.locator(part.dockingGuides)).toBeHidden()
   console.log('Layout checks: pointer docking passed.')
   await movePane(page, 'output', 'float')

@@ -11,6 +11,7 @@ import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
 import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
+import { ShellOptionsService } from '../../src/renderer/src/services/shell-options'
 import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
 import { RecentFilesService } from '../../src/renderer/src/services/recent-files'
@@ -258,7 +259,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // Seeded values apply at once, as if main had answered before the workbench was created.
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
   settings.subscribe(() => documents.refreshOptions())
-  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
+  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
   // Monaco's command and keybinding registries, for the editor chords the bridge registers.
   const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
@@ -296,6 +297,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     editorOptions,
     inputMode,
     panes,
+    shell: shellOptions,
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
@@ -314,7 +316,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
     disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
-    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn()
+    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn()
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())
   // tests/theme-picker.test.ts drives a real ThemeService; here the theme commands only need somewhere to go.
@@ -335,6 +337,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     editorOptions,
+    shellOptions,
     bookmarks,
     editorDialogs,
     inputMode,
@@ -407,6 +410,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
+    shellOptions.dispose()
     settings.dispose()
     documents.dispose()
     backend.dispose()
@@ -417,6 +421,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    shellOptions,
     bookmarks,
     editorDialogs,
     monaco,

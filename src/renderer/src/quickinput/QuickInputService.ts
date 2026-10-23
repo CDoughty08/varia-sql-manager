@@ -40,8 +40,11 @@ export interface QuickPickOptions<T extends QuickPickItem> {
   /** What the rows are, in the plural, for messages: 'commands', 'databases'. */
   readonly noun: string
   readonly items: readonly T[] | ((signal: AbortSignal) => Promise<readonly T[]>)
-  /** 'score' (the default) orders matches best first; 'none' keeps the provided order. */
-  readonly sort?: 'score' | 'none'
+  /**
+   * 'score' (the default) orders matches best first; 'none' keeps the provided order; 'grouped' keeps the groups in the
+   * order they are provided, each under its label, and orders the matches within each group best first.
+   */
+  readonly sort?: 'score' | 'none' | 'grouped'
   readonly matchOnDescription?: boolean
   /** Most recent first. With an empty filter these rows come first, under "recently used". */
   readonly recentIds?: readonly string[]
@@ -342,6 +345,10 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     const text = session.value.startsWith(prefix) ? session.value.slice(prefix.length) : session.value
     const query = prepareQuery(text)
     let ordered: { entry: Entry; ranges: readonly MatchRange[]; descriptionRanges: readonly MatchRange[]; group?: string }[]
+    // 'grouped': each group where its first item is, so a group's rows stay together under one label.
+    const groupOrder = new Map<string | undefined, number>()
+    if (sort === 'grouped') for (const entry of session.entries) if (!groupOrder.has(entry.view.group)) groupOrder.set(entry.view.group, groupOrder.size)
+    const byGroup = (a: { group?: string }, b: { group?: string }) => groupOrder.get(a.group)! - groupOrder.get(b.group)!
     if (!query.words.length) {
       session.matched = undefined
       const recent = session.entries.filter(entry => entry.recentRank !== undefined).sort((a, b) => a.recentRank! - b.recentRank!)
@@ -349,6 +356,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
         ? [...recent.map(entry => ({ entry, group: 'recently used' })), ...session.entries.filter(entry => entry.recentRank === undefined).map(entry => ({ entry, group: `other ${noun}` }))]
           .map(row => ({ ...row, ranges: [], descriptionRanges: [] }))
         : session.entries.map(entry => ({ entry, ranges: [], descriptionRanges: [], group: entry.view.group }))
+      if (sort === 'grouped' && !recent.length) ordered.sort(byGroup)
     } else {
       const narrowing = session.matched && text.startsWith(session.matched.text)
       const candidates = narrowing ? session.matched!.entries : session.entries
@@ -360,12 +368,13 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
         if (description) scored.push({ entry, score: description.score * descriptionWeight, ranges: [], descriptionRanges: description.ranges, group: entry.view.group })
       }
       session.matched = { text, entries: scored.map(match => match.entry) }
+      const ranked = (a: typeof scored[number], b: typeof scored[number]) => compareRanked({ score: a.score, label: a.entry.view.label, disabled: a.entry.view.disabled, recentRank: a.entry.recentRank },
+        { score: b.score, label: b.entry.view.label, disabled: b.entry.view.disabled, recentRank: b.entry.recentRank })
       if (sort === 'score') {
         // Ranked rows interleave groups, so their labels would repeat; they are shown only in provided order.
-        scored.sort((a, b) => compareRanked({ score: a.score, label: a.entry.view.label, disabled: a.entry.view.disabled, recentRank: a.entry.recentRank },
-          { score: b.score, label: b.entry.view.label, disabled: b.entry.view.disabled, recentRank: b.entry.recentRank }))
+        scored.sort(ranked)
         for (const match of scored) match.group = undefined
-      }
+      } else if (sort === 'grouped') scored.sort((a, b) => byGroup(a, b) || ranked(a, b))
       ordered = scored
     }
     const shown = ordered.length > quickInputLimits.rows ? ordered.slice(0, quickInputLimits.rows) : ordered

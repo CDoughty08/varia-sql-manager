@@ -40,13 +40,33 @@ documentTab.context, for an unsaved query's tab
   Copy Full &Path  ----
   Reveal in Finder  ----
 dockTab.context, for a docked panel's tab
+  Dock &Left  ++++
+  Dock &Right  ++++
+  Dock &Top  ++++
+  Dock &Bottom  ++++
+  ---
+  Tab with Query &Editor  ++++
+  Tab with Q&uery Output  ++++
+  ---
   &Float  ++++
   ---
   &Close  ++++
+  ---
+  &Show Panel Tabs [ ]  ++++
 dockTab.context, for a floating panel's tab
+  Dock &Left  ++++
+  Dock &Right  ++++
+  Dock &Top  ++++
+  Dock &Bottom  ++++
+  ---
+  Tab with &Object Explorer  ++++
+  Tab with Query &Editor  ++++
+  ---
   &Dock  ++++
   ---
   &Close  ++++
+  ---
+  &Show Panel Tabs [ ]  ++++
 input.context, for a text field with selected text
   &Undo  ⌘Z  ++++
   &Redo  ⇧⌘Z  ----

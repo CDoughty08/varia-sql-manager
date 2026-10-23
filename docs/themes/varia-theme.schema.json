@@ -511,6 +511,26 @@
           "description": "(Varia) Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over titleBar.activeBackground. Default $text (Dark #d9dce3, Light #1c1f26).",
           "markdownDescription": "(Varia) Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. Default `$text` (Dark `#d9dce3`, Light `#1c1f26`)."
         },
+        "commandCenter.background": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Search box in the title bar (the command centre). Default $raised (Dark #1c1f25, Light #f1f3f6).",
+          "markdownDescription": "(VS Code) Search box in the title bar (the command centre). Default `$raised` (Dark `#1c1f25`, Light `#f1f3f6`)."
+        },
+        "commandCenter.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Search box text, icon and key. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(VS Code) Search box text, icon and key. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+        },
+        "commandCenter.activeBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Search box while hovered. Default $hover (Dark #262a32, Light #dfe2e7).",
+          "markdownDescription": "(VS Code) Search box while hovered. Default `$hover` (Dark `#262a32`, Light `#dfe2e7`)."
+        },
+        "commandCenter.border": {
+          "$ref": "#/definitions/value",
+          "description": "(VS Code) Outline of the search box. Default $controlBorder/45 (Dark #6b728673, Light #878e9b73).",
+          "markdownDescription": "(VS Code) Outline of the search box. Default `$controlBorder/45` (Dark `#6b728673`, Light `#878e9b73`)."
+        },
         "menubar.selectionBackground": {
           "$ref": "#/definitions/value",
           "description": "(VS Code) Open title-bar menu. Default $active (Dark #30343e, Light #d6dae0).",
@@ -668,8 +688,8 @@
         },
         "sideBarTitle.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Side bar section titles. Not used yet; reserved for side bar section titles. Default $textTertiary (Dark #a3a9b5, Light #4d5461).",
-          "markdownDescription": "(VS Code) Side bar section titles. Not used yet; reserved for side bar section titles. Default `$textTertiary` (Dark `#a3a9b5`, Light `#4d5461`)."
+          "description": "(VS Code) Section titles of side panels, such as the Object Explorer header. Default $textTertiary (Dark #a3a9b5, Light #4d5461).",
+          "markdownDescription": "(VS Code) Section titles of side panels, such as the Object Explorer header. Default `$textTertiary` (Dark `#a3a9b5`, Light `#4d5461`)."
         },
         "sideBarSectionHeader.border": {
           "$ref": "#/definitions/value",

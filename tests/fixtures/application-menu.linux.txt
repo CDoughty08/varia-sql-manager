@@ -62,6 +62,7 @@
 {"id":"menu.view","label":"View"}
   {"accelerator":"Ctrl+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Ctrl+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
+  {"id":"workbench.search","label":"Search…","registerAccelerator":false,"type":"normal","click":[["command","workbench.search"]]}
   {"type":"separator"}
   {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
@@ -117,6 +118,7 @@
   {"id":"window.editor","label":"Query Editor","registerAccelerator":false,"type":"normal","click":[["command","window.editor"]]}
   {"id":"window.output","label":"Query Output","registerAccelerator":false,"type":"normal","click":[["command","window.output"]]}
   {"accelerator":"Ctrl+R","id":"view.toggleResultsPane","label":"Show Results Pane","registerAccelerator":false,"type":"checkbox","click":[["command","view.toggleResultsPane"]],"checkedAfterClick":false}
+  {"id":"window.togglePanelTabs","label":"Panel Tabs","registerAccelerator":false,"type":"checkbox","click":[["command","window.togglePanelTabs"]],"checkedAfterClick":false}
   {"type":"separator"}
   {"accelerator":"Ctrl+Tab","id":"document.next","label":"Next Query","registerAccelerator":false,"type":"normal","click":[["command","document.next"]]}
   {"accelerator":"Ctrl+Shift+Tab","id":"document.previous","label":"Previous Query","registerAccelerator":false,"type":"normal","click":[["command","document.previous"]]}

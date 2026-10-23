@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
-import { activeDocument, banner as bannerOf, caretStatus, documentTab, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, part, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTab, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, part, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'files-profile-'))
@@ -73,7 +73,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await stubDialogs()
 
@@ -265,8 +265,9 @@ try {
   await expect(toolbarButton(page, 'Save All')).toBeDisabled()
   console.log('Files checks: Save All saves every changed query in tab order, asking for each untitled one\'s file in turn.')
 
-  // 9. The query status bar: below the query, SSMS's state sentence, then server (version), login (SPID), database,
-  // elapsed time and rows; the Options place it on top and switch segments off.
+  // 9. The query's facts: SSMS's state sentence, then server (version), login (SPID), database, elapsed time and rows, in
+  // the window's status bar. Options bring SSMS's query window status bar back below the query, place it on top, and
+  // switch segments off.
   await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
@@ -286,7 +287,13 @@ try {
   await expect(queryFact(page, 'time')).toHaveText(/^Elapsed time: \d\d:\d\d:\d\d$/)
   await expect(queryFact(page, 'rows')).toHaveText('Rows: 10 rows')
   const order = () => page.getByRole('main').evaluate((main, part) => [...main.children].map(child => child.matches(part.queryStatus) ? 'bar' : child.matches(part.editorPane) ? 'editor' : 'tabs'), part)
+  expect(await order()).toEqual(['tabs', 'editor'])
+  expect(await queryBar().evaluate((bar, status) => !!bar.parentElement?.matches(status), part.statusBar)).toBe(true)
+  await statusBar(page).screenshot({ path: resolve('artifacts', 'files-status-bar.png') })
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': true }))).toMatchObject({ ok: true })
+  await expect(queryBar()).toHaveAttribute('data-location', 'bottom')
   expect(await order()).toEqual(['tabs', 'editor', 'bar'])
+  await expect(queryFact(page, 'rows')).toHaveText('Rows: 10 rows')
   expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.location': 'top', 'textEditor.statusBar.showRowCount': false, 'textEditor.statusBar.showLogin': false }))).toMatchObject({ ok: true })
   await expect(queryBar()).toHaveAttribute('data-location', 'top')
   expect(await order()).toEqual(['tabs', 'bar', 'editor'])
@@ -296,8 +303,10 @@ try {
   await expect(queryBar().locator(part.querySegment)).toHaveCount(5)
   expect(await order()).toEqual(['tabs', 'editor', 'bar'])
   await queryBar().screenshot({ path: resolve('artifacts', 'files-query-status.png') })
-  await statusBar(page).screenshot({ path: resolve('artifacts', 'files-status-bar.png') })
-  console.log('Files checks: the query status bar shows SSMS\'s segments below the query, and its Options move it and switch segments off.')
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': null }))).toMatchObject({ ok: true })
+  expect(await order()).toEqual(['tabs', 'editor'])
+  await expect(queryFact(page, 'rows')).toHaveText('Rows: 10 rows')
+  console.log('Files checks: the status bar shows the query\'s SSMS segments, and Options bring back the query window status bar, move it and switch segments off.')
 
   // 10. In a small window a long server name gives way first, and the database stays whole; a 127-character database
   // name gives way too (both whole in the tooltip), while the time and rows always stay whole inside the bar.
@@ -333,7 +342,7 @@ try {
   await connectAndRun(longDatabase)
   expect(await layout()).toEqual({ inside: true, whole: ['time', 'rows'], page: true })
   await queryBar().screenshot({ path: resolve('artifacts', 'files-query-status-small.png') })
-  console.log('Files checks: in a small window the server, then the login and database, give way in the query status bar, and the time and rows stay whole.')
+  console.log('Files checks: in a small window the server, then the login and database, give way in the status bar, and the time and rows stay whole.')
 
   // 11. A second instance, started with a file, hands it to this one and quits; the file opens here.
   const second = join(folder, 'second.sql')
@@ -475,7 +484,7 @@ try {
     title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', buttons: ['Reload', 'Close'],
     detail: 'Queries saved by AutoRecover can be recovered after reloading; changes from the last 5 minutes may be lost. Connections were closed and uncommitted transactions were rolled back.'
   }])
-  await expect.poll(() => js(`document.body.innerText.includes('fake · Ready') && !!document.querySelector(${JSON.stringify('[role="dialog"] ' + part.recoveryGrid)})`), { timeout: 30000 }).toBe(true)
+  await expect.poll(() => js(`!!document.querySelector(${JSON.stringify(part.statusBar + ' [title^="SQL backend: fake"]')}) && !!document.querySelector(${JSON.stringify('[role="dialog"] ' + part.recoveryGrid)})`), { timeout: 30000 }).toBe(true)
   const rows = await js(`[...document.querySelectorAll(${JSON.stringify(part.recoveryGrid + ' tbody tr')})].map(row => [...row.cells].slice(1).map(cell => cell.textContent))`)
   expect(rows).toHaveLength(kept)
   const row = rows.find(cells => cells[0] === recovered)
@@ -508,7 +517,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await stubDialogs()
   await expect(recoverDialog()).toBeVisible({ timeout: 30000 })
   await expect(recoverDialog().locator('tbody tr')).toHaveCount(kept)
