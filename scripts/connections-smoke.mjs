@@ -38,6 +38,23 @@ async function open() {
   await expect(page.getByText('Loading saved connections…')).toHaveCount(0)
   return page.getByRole('dialog', { name: 'Connect', exact: true })
 }
+/** Custom Properties (Name, Color, Environment) starts collapsed; this opens it, and it stays open for the window. */
+async function customProperties(dialog) {
+  const toggle = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+/** The dialog's layout: the two panes side by side inside 720x520, and what sits under Connect inside the dialog. */
+const layout = dialog => dialog.evaluate(form => {
+  const box = element => element?.getBoundingClientRect()
+  const outer = box(form), sources = box(form.querySelector('.connect-sources-pane')), fields = box(form.querySelector('.connect-form-pane'))
+  const connect = box([...form.querySelectorAll('.connection-footer button')].find(button => button.textContent === 'Connect' || button.textContent === 'Connecting…'))
+  const failure = box(form.querySelector('.connect-failure'))
+  return {
+    size: outer.width <= 720.5 && outer.height <= 520.5, sideBySide: sources.right <= fields.left + 0.5 && Math.abs(sources.top - fields.top) < 1,
+    connectInside: connect.bottom <= outer.bottom + 0.5, failureUnderConnect: failure ? failure.top >= connect.bottom - 0.5 && failure.bottom <= outer.bottom + 0.5 : null
+  }
+})
 /** A saved connection's row by its name: the Environment list has a Development option too. */
 const savedNamed = (dialog, name) => dialog.locator('.connection-choice strong', { hasText: new RegExp('^' + name + '$') })
 async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
@@ -50,6 +67,22 @@ try {
   await dialog.getByLabel('Filter connections').fill('not-a-match')
   await expect(dialog.getByText('recent-server', { exact: true })).toHaveCount(0)
   await dialog.getByLabel('Filter connections').fill('')
+  // Connect v2: saved connections on the left, the form on the right, one bounded size.
+  expect(await layout(dialog)).toEqual({ size: true, sideBySide: true, connectInside: true, failureUnderConnect: null })
+  // Up and Down move from the filter box through the rows and back.
+  await dialog.getByLabel('Filter connections').focus()
+  await page.keyboard.press('ArrowDown')
+  await expect(dialog.locator('.connection-choice').first()).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(dialog.locator('.connection-choice').nth(1)).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('ArrowUp')
+  await expect(dialog.getByLabel('Filter connections')).toBeFocused()
+  // Custom Properties starts collapsed, with nothing set to summarise.
+  const customToggle = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
+  await expect(customToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(dialog.getByLabel('Name', { exact: true })).toBeHidden()
+  await expect(dialog.locator('#connect-custom-summary')).toHaveText('No name, color or environment')
   // Integrated authentication needs a Kerberos ticket off Windows, so the dialog opens, and Reset returns, to SQL Server
   // authentication there. The options read as SSMS's on every platform.
   const defaultAuthentication = process.platform === 'win32' ? 'windows' : 'sql'
@@ -65,6 +98,12 @@ try {
   await authentication.selectOption('windows')
   await expect(userName).toHaveValue(windowsIdentity)
   await expect(userName).toBeDisabled()
+  // Only the types with a password show Password and Remember password.
+  await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByLabel('Remember password', { exact: true })).toHaveCount(0)
+  await authentication.selectOption('sql')
+  await expect(dialog.getByLabel('Password', { exact: true })).toBeVisible()
+  await expect(dialog.getByLabel('Remember password', { exact: true })).toBeVisible()
   await authentication.selectOption(defaultAuthentication === 'windows' ? 'sql' : 'windows')
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
   await expect(authentication).toHaveValue(defaultAuthentication)
@@ -73,8 +112,16 @@ try {
   // SQL Server Authentication's field is Login, as in SSMS 22.
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
+  await customProperties(dialog)
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
   await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
+  // Collapsed again, the header still says what is set (the colour as its dot); open, it stays open.
+  await customToggle.click()
+  await expect(dialog.locator('#connect-custom-summary')).toContainText('Development')
+  await expect(dialog.locator('#connect-custom-summary .visually-hidden')).toHaveText('Name Development, Color Red')
+  await expect(dialog.locator('#connect-custom-summary .connection-swatch')).toHaveCount(1)
+  await expect(customToggle).toHaveAttribute('aria-describedby', 'connect-custom-summary')
+  await customProperties(dialog)
   await dialog.getByRole('button', { name: 'Add favorite', exact: false }).click()
   await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: false })).toBeEnabled()
   await dialog.getByRole('button', { name: 'Register server', exact: true }).click()
@@ -104,6 +151,9 @@ try {
   await advanced.getByLabel('Packet size', { exact: true }).fill('8192')
   await advanced.screenshot({ path: resolve('artifacts', 'advanced-connection-properties.png') })
   await advanced.getByRole('button', { name: 'OK', exact: true }).click()
+  // Advanced stays behind its button, which says how many properties the connection sets.
+  await expect(dialog.locator('#connect-advanced-summary')).toHaveText('10 properties set')
+  await expect(dialog.getByRole('button', { name: 'Advanced…', exact: true })).toHaveAttribute('aria-describedby', 'connect-advanced-summary')
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
   // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
   // OK stores only the fields changed or touched (Always Encrypted and secure enclaves went back to False), so the
@@ -375,6 +425,8 @@ try {
   await expect(dialog.getByRole('alert')).toContainText('not trusted')
   const trust = dialog.getByRole('button', { name: 'Trust server certificate and connect', exact: true })
   await expect(dialog.locator('.connect-failure')).toBeInViewport()
+  expect(await layout(dialog)).toEqual({ size: true, sideBySide: true, connectInside: true, failureUnderConnect: true })
+  await dialog.screenshot({ path: resolve('artifacts', 'connect-dialog-failure.png') })
   await dialog.locator('.connect-failure').screenshot({ path: resolve('artifacts', 'connect-certificate-fix.png') })
   await trust.click()
   await expect(dialog.getByRole('alert')).toContainText('Login failed after trusting the certificate.')
@@ -407,6 +459,7 @@ try {
   expect(history.value.library.profiles.some(item => item.options.server === 'connect-error')).toBe(false)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connected-server')
   await dialog.getByLabel('Database Name', { exact: true }).fill('AppData')
+  await customProperties(dialog)
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
   // Leaving a saved profile for another server drops that profile's name and color, so choose them for this server.
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('')
@@ -433,7 +486,7 @@ try {
   expect(failures).toEqual([])
   await environmentLabels()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error under Connect), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
@@ -452,7 +505,7 @@ async function entraChecks(dialog, windowsIdentity) {
   const connect = dialog.getByRole('button', { name: 'Connect', exact: true })
   const user = dialog.getByLabel('User name', { exact: true })
   await authentication.selectOption('entraMfa')
-  await expect(password).toBeDisabled()
+  await expect(password).toHaveCount(0)
   await user.fill('')
   await expect(user).toHaveAttribute('placeholder', 'user@contoso.com (optional)')
   await expect(connect).toBeEnabled()
@@ -465,7 +518,7 @@ async function entraChecks(dialog, windowsIdentity) {
   await expect(password).toBeEnabled()
   await authentication.selectOption('entraManagedIdentity')
   await expect(dialog.getByLabel('User assigned identity', { exact: true })).toBeEnabled()
-  await expect(password).toBeDisabled()
+  await expect(password).toHaveCount(0)
   await authentication.selectOption('entraIntegrated')
   await expect(user).toBeDisabled()
   await expect(user).toHaveValue(windowsIdentity)
@@ -661,10 +714,10 @@ async function rememberPassword() {
   dialog = await remembered()
   await dialog.getByRole('button', { name: 'Remove saved password-check', exact: true }).first().click()
   await expect.poll(async () => ({ saved: await entries(), entry: await historyId('password-check') })).toEqual({ saved: [], entry: undefined })
-  // (10) Windows Authentication has no password to remember.
+  // (10) Windows Authentication has no password to remember: neither Password nor Remember password shows.
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await expect(form(dialog).remember).toBeDisabled()
-  await expect(form(dialog).remember).not.toBeChecked()
+  await expect(form(dialog).remember).toHaveCount(0)
+  await expect(form(dialog).password).toHaveCount(0)
   await noSecrets()
   // (11) Stop through main's own handlers (varia:request registers the dialog's requestId, varia:connections-cancel sends
   // CANCEL): the fake ends a Microsoft Entra sign-in wait only on a CANCEL frame, and logs it.
@@ -742,6 +795,7 @@ async function environmentLabels() {
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('any-password')
+  await customProperties(dialog)
   await expect(dialog.getByLabel('Environment', { exact: true }).locator('option')).toHaveText(['<none>', 'Production', 'Staging', 'Test', 'Development', 'Custom…'])
   await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
   await dialog.getByLabel('Environment', { exact: true }).selectOption('Production')
@@ -795,6 +849,8 @@ async function environmentLabels() {
   await expect.poll(saved).toBe('Staging')
   // (4) The history row shows it, choosing the entry fills it in, and another server drops it with the name and colour.
   dialog = await open()
+  // Opened once, Custom Properties stays open for this window's later dialogs.
+  await expect(dialog.getByRole('button', { name: 'Custom Properties', exact: true })).toHaveAttribute('aria-expanded', 'true')
   const entry = dialog.locator('.connection-choice', { hasText: 'prod-server' }).first()
   await expect(entry.locator('.status-pill')).toHaveText('STAGING')
   await entry.click()
@@ -819,6 +875,17 @@ async function environmentLabels() {
   await dialog.getByLabel('Custom environment label', { exact: true }).fill('Test')
   await dialog.getByLabel('Custom environment label', { exact: true }).pressSequentially('ing')
   await expect(dialog.getByLabel('Custom environment label', { exact: true })).toHaveValue('Testing')
+  // Collapsed, the summary keeps the label in view; a blank Custom label there makes Connect open the section at the label.
+  await dialog.getByRole('button', { name: 'Custom Properties', exact: true }).click()
+  await expect(dialog.locator('#connect-custom-summary .status-pill')).toHaveText('Testing')
+  await customProperties(dialog)
+  await dialog.getByLabel('Custom environment label', { exact: true }).fill('')
+  await dialog.getByRole('button', { name: 'Custom Properties', exact: true }).click()
+  await expect(dialog.getByLabel('Custom environment label', { exact: true })).toBeHidden()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('Enter an environment label.')
+  await expect(dialog.getByRole('button', { name: 'Custom Properties', exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await expect(dialog.getByLabel('Custom environment label', { exact: true })).toBeFocused()
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   // (4c) The dialog opens on the last connection, whose form still says Production: the saved entry's label wins.

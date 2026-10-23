@@ -510,6 +510,44 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connect-error-details dl > div { display: contents; }
 .connect-error-details dt { color: var(--varia-descriptionForeground); }
 .connect-error-details dd { margin: 0; color: var(--varia-foreground); overflow-wrap: anywhere; user-select: text; }
+/* Connect v2: saved and discovered servers on the left, the form on the right, each scrolling on its own, so the dialog
+   keeps one size and Connect, with any error under it, never leaves the view. */
+.connection-modal.connect-dialog { width: min(720px, calc(100vw - 40px)); height: min(520px, calc(100vh - 40px)); max-height: none; }
+.connect-dialog .connection-heading { padding: var(--varia-space-3) var(--varia-space-4); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-panes { display: flex; flex: 1; min-height: 0; }
+.connect-sources-pane { display: flex; flex-direction: column; flex: none; width: 272px; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); border-right: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-sources-pane .connection-sources { flex: 1; height: auto; min-height: 0; border-bottom: 0; padding-bottom: 0; }
+/* A narrow pane: a long label gives way with the name, so both stay inside the row (its tooltip has the label whole). */
+.connect-sources-pane .environment-tag[data-place="list"] { flex: 0 1 auto; max-width: 50%; }
+.connect-sources-pane .browse-toolbar { flex-wrap: wrap; }
+.connection-filter-box { position: relative; display: flex; align-items: center; margin-bottom: var(--varia-space-2); }
+.connection-filter-box > .codicon { position: absolute; left: var(--varia-space-2); color: var(--varia-icon-foreground); pointer-events: none; }
+.connect-dialog .connection-filter-box > input.connection-filter { width: 100%; margin: 0; padding-left: 28px; }
+.connect-form-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.connect-form-pane > .connection-property-tabs { flex: none; margin: 0; padding: var(--varia-space-2) var(--varia-space-4) 0; }
+.connect-form-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-4) var(--varia-space-3); }
+.connect-dialog .property-row { grid-template-columns: 152px minmax(0, 1fr); }
+.connect-dialog .property-row > label { font-size: var(--varia-size-sm); }
+.connect-dialog .connection-preview textarea { height: 220px; }
+.connect-dialog .connection-footer { padding: var(--varia-space-2) var(--varia-space-4); }
+/* Under Connect: busy, notices and the failure, bounded so a long message scrolls here instead of pushing Connect out. */
+.connect-outcome { flex: none; max-height: 45%; overflow-y: auto; padding: 0 var(--varia-space-4) var(--varia-space-3); }
+.connect-outcome > .field-note { margin: var(--varia-space-1) 0 0; }
+.connect-dialog .advanced-action { align-items: center; gap: var(--varia-space-2); }
+.advanced-summary { color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); }
+.custom-properties-header { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; }
+.custom-properties-toggle { display: inline-flex; flex: none; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-1) var(--varia-space-0) 0; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); }
+.custom-properties-summary { display: inline-flex; flex: 1; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); }
+.custom-properties-summary .connection-swatch { width: 8px; height: 8px; border-radius: 50%; }
+.custom-properties-summary .environment-tag[data-place="list"] { margin-left: 0; }
+.custom-properties-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connect-dialog .custom-properties > .property-grid { margin-top: var(--varia-space-2); }
+.connect-dialog .custom-properties > .property-grid[hidden] { display: none; }
+/* A narrow window stacks the panes: the saved servers above, the form below, each still scrolling. */
+@media (max-width: 760px) {
+  .connect-panes { flex-direction: column; }
+  .connect-sources-pane { width: auto; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+}
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 .dialog-actions button { padding: 8px 17px; }
 .keybinding { display: inline-flex; gap: 3px; flex-shrink: 0; }
