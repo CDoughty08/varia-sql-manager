@@ -432,6 +432,30 @@ describe('LiveService', () => {
     expect(handle.table('debug.synthetic.table')?.tracked).toEqual({ seq: 2, rows: [4] })
   })
 
+  it('keeps every track list a sample may still answer, however many went while one sample ran', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.table']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    // Holding Down while one sample runs: each new active row sends a list, and the backend accepts each in turn.
+    for (let id = 10; id < 16; id++) { handle.track('debug.synthetic.table', [String(id)]); await settle() }
+    expect(fake.updates.map(update => update.track?.[0].seq)).toEqual([1, 2, 3, 4, 5, 6])
+    const sample = (tracked: { seq: number; rows: number[] }) => ({
+      type: 'live.tick', seq: ++seq, sampledAt: Date.now(),
+      samples: [{ probe: 'debug.synthetic.table', costMs: 1, effectiveIntervalMs: 1000, tables: [{ table: 0, descriptor: descriptor(), revision: seq, tracked }] }]
+    }) as unknown as LiveTick
+    // The sample came due with the first list.
+    deliver(fake, sample({ seq: 1, rows: [3] }))
+    expect(handle.table('debug.synthetic.table')?.tracked).toEqual({ seq: 1, rows: [3], keys: ['10'] })
+    deliver(fake, sample({ seq: 4, rows: [5] }))
+    expect(handle.table('debug.synthetic.table')?.tracked?.keys).toEqual(['13'])
+    // Answered lists before the newest answer can never be answered again: they go.
+    deliver(fake, sample({ seq: 2, rows: [5] }))
+    expect(handle.table('debug.synthetic.table')?.tracked?.keys).toBeUndefined()
+    deliver(fake, sample({ seq: 6, rows: [1] }))
+    expect(handle.table('debug.synthetic.table')?.tracked?.keys).toEqual(['15'])
+  })
+
   it('holds every update until live.opened, so a pause or tracked keys sent at once are never refused NOT_FOUND', async () => {
     makeService()
     const view = owner()

@@ -29,7 +29,10 @@ export const liveServiceLimits = {
   ringBytes: 32 * MiB,
   settingsDebounceMs: 150,
   /** An update refused for now (too many requests, busy, timed out) is sent again after 1 s, doubling to 30 s. */
-  retryMs: { first: 1000, max: 30_000 }
+  retryMs: { first: 1000, max: 30_000 },
+  /** Track lists kept per table for the samples that answer them: well above what one sample can span (a list per row
+   *  of a held arrow key, one update in flight at a time, samples of at most 5 s). */
+  trackHistory: 64
 } as const
 
 /** What a live view belongs to: its visibility pauses the view, and its end ends it. */
@@ -104,7 +107,7 @@ export interface LiveTable {
   readonly segment?: number
   readonly diff?: { readonly added: number; readonly removed: number; readonly changed: number }
   /** Where each tracked key went (-1: gone), in the order of the track list with this seq; `keys` is that list when the
-   *  view still knows it (one of its last few), so a grid can map its rows without asking again. */
+   *  view still knows it (every list since the newest one answered), so a grid can map its rows without asking again. */
   readonly tracked?: { readonly seq: number; readonly rows: readonly number[]; readonly keys?: readonly string[] }
   /** Rows of this revision that left the source and stay one revision because they were tracked (LiveGrid mutes them). */
   readonly departed?: readonly number[]
@@ -368,7 +371,8 @@ class Handle implements LiveHandle {
   private readonly rings = new Map<LiveProbeId, MetricRing>()
   private readonly tables = new Map<LiveProbeId, Map<number, LiveTable>>()
   private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number }>()
-  /** The last few track lists sent per table, by seq: a sample names the list it answers by seq alone. */
+  /** The track lists sent per table since the newest one a sample answered, by seq: a sample names the list it answers by
+   *  seq alone, and while one sample runs the grid may send many (each active row of a held Down arrow). */
   private readonly trackHistory = new Map<string, { seq: number; keys: readonly string[] }[]>()
   private args: LiveArgs | undefined
   private readonly whileHidden: 'statusOnly' | undefined
@@ -555,7 +559,7 @@ class Handle implements LiveHandle {
       const ring = this.rings.get(sample.probe)
       if (ring && sample.metrics) ring.push(tick.sampledAt, sample.metrics, sample.gap === 'reset' ? ringGap | ringReset : sample.gap ? ringGap : 0)
       for (const entry of sample.tables ?? []) {
-        const keys = entry.tracked && this.trackHistory.get(sample.probe + '/' + entry.table)?.find(item => item.seq === entry.tracked!.seq)?.keys
+        const keys = entry.tracked && this.answered(sample.probe + '/' + entry.table, entry.tracked.seq)
         this.setTable(sample.probe, {
           probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision,
           ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: { ...entry.tracked, ...keys ? { keys } : {} } } : {}, ...entry.departed ? { departed: entry.departed } : {}
@@ -940,15 +944,24 @@ class Handle implements LiveHandle {
     this.queueSync()
   }
 
-  /** Keeps a track list as it is sent, for the samples that answer it by seq: the last 4 per table (updates go one at a
-   *  time, so the samples of a tick answer the newest accepted list or the one before). */
+  /** Keeps a track list as it is sent, for the samples that answer it by seq: every list since the newest answered one
+   *  (answered), at most liveServiceLimits.trackHistory per table. */
   private remember(key: string, seq: number, keys: readonly string[]): void {
     const history = this.trackHistory.get(key) ?? []
     // A list sent again (after a refusal) is the same list.
     if (history.at(-1)?.seq === seq) return
     history.push({ seq, keys })
-    if (history.length > 4) history.shift()
+    if (history.length > liveServiceLimits.trackHistory) history.shift()
     this.trackHistory.set(key, history)
+  }
+  /** The keys of the list a sample answers. The backend accepts lists in seq order and answers the one it held when the
+   *  sample came due, so once a sample answers a seq, no later sample answers an older one: those lists go. */
+  private answered(key: string, seq: number): readonly string[] | undefined {
+    const history = this.trackHistory.get(key)
+    const index = history?.findIndex(item => item.seq === seq) ?? -1
+    if (!history || index < 0) return undefined
+    history.splice(0, index)
+    return history[0].keys
   }
 
   ring(probe: LiveProbeId): MetricRing | undefined { return this.rings.get(probe) }

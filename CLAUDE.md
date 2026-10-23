@@ -56,7 +56,8 @@ pages, limits, error codes, display formats, benchmarks).
   cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
   holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
   `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, `window.__variaLive`, which opens views on
-  the synthetic live source and stands in for a hidden window, and `window.__variaTestShellFault()`, which makes the
+  the synthetic live source, stands in for a hidden window and mounts a `LiveGridPane` over one (`mountGrid`, `grid`,
+  `sortGrid`, `saveGrid`, `unmountGrid`), and `window.__variaTestShellFault()`, which makes the
   workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations

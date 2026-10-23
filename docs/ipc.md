@@ -1046,7 +1046,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   hidden or stale view reads stale.
 - **Tables.** `handle.table(probe, index)` is the table's latest result as a `ResultHandle`, with its revision, diff and
   departed rows (snapshot) or segment, `rolledFrom` and `restarted` (append). `tracked` carries the rows the backend
-  found and, when the view still has it (one of the last 4 lists it sent for the table), the key list that `seq` answers.
+  found and, when the view still has it, the key list that `seq` answers: the view keeps every list it sent for the table
+  since the newest one a sample answered (at most 64), since many may go while one sample runs.
 
 **LiveGrid** (`live/LiveGrid.ts`, its React shell `live/LiveGridPane.tsx`): a live table in a results grid. It wraps
 `GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys, selection, Copy) with three additions:
@@ -1072,9 +1073,18 @@ follow tail.
   back and follows again). A roll swaps to the new segment and keeps following; a restart (a new filter or args) keeps the
   view's intent: the tail if it followed, else the top of the new rows.
 - **Sort, Copy, Save.** `sortBy(column, descending)` sets the probe's sort by catalogue column id (never the tone; append
-  tables are in id order), and the next revision arrives sorted. Copy and Save act on the revision the grid shows, through
-  `results.copy` and `results.export`, which lease it: the samples after it may retire it mid-job and the job still
-  completes. An append segment saves once it is complete (a roll or the source's end).
+  tables are in id order), and the next revision arrives sorted. Copy acts on the revision the grid shows, through
+  `results.copy`, which leases it: the samples after it may retire it mid-copy and the copy still completes. Save names
+  that revision too, but a revision is retired two samples on, sooner than most save dialogs close, and the backend's
+  lease starts only with the export: so for a live snapshot table main saves the table's newest revision the renderer owns
+  once the file is chosen (`ResultsPortHost.liveNewest`, from the ticks it relays), the one the grid shows by then; it
+  fails `RESULT_UNAVAILABLE` only if the subscription ended meanwhile. An append segment saves once it is complete (a roll
+  or the source's end).
+- **What the owner sees.** The grid's snapshot carries the table shown, the new-rows count, the sort, `lost` (the shown
+  result was lost with the backend; the pane then shows its overlay), the selection as the grid last reported it (a swap
+  that moves it reports it, as a click does) and the active row's key once known (`activeKey`), for a details pane, Kill
+  or a context menu. It is published only when one of these changed, so scrolling renders nothing. Copy with Headers,
+  Save's command and the context menu are the owning view's (later PRs).
 
 
 ## Results port and results worker
@@ -1492,13 +1502,21 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   core and `ResultClient`, and a `LiveService` view on it hidden, shown, lost with a restart and back after a Reconnect.
   `tests/live-service.test.ts` drives `LiveService` against a fake client with fake timers (the hysteresis, user pause,
   update order, debounce, stale, lost and Reconnect, kept tables, the 16-view cap, status-only views, `peek`, ring
-  memory), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the indicator text.
+  memory, the track lists a sample may answer), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the
+  indicator text. `tests/live-grid.test.ts` covers `LiveGrid` against a stand-in grid and view (the swap's row map and
+  selection, the tone column, tracked keys, prepare, follow tail and new rows, the selection and lost state it publishes,
+  sort, Copy), and `tests/results-jobs.test.ts` and `tests/results-port.test.ts` a Save of a live revision retired while
+  its dialog is open.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
   backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
   `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
   runs `LiveService` views in the app on the fake backend through `window.__variaLive`: ticks acknowledged in turn, a
   hidden window pausing the view within 3 s and its frames stopping, a resume with a gap, a tab switch, the owner tab
-  closing, and a killed backend reported lost and back after Reconnect. `scripts/results-smoke.mjs` drives the grid on
+  closing, and a killed backend reported lost and back after Reconnect. `scripts/live-grid-smoke.mjs` mounts
+  `LiveGridPane` (`window.__variaLive.mountGrid`) over the real backend's synthetic grid and log: tones and the hidden tone
+  column, the selected item kept across revisions, muted once it leaves and then moved to a neighbour (with its key
+  reported), Copy without the tone, a Save whose dialog stays open across samples, the sort hook, follow tail and "n new
+  rows", and a killed backend's overlay. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.

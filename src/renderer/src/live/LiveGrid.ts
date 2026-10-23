@@ -3,7 +3,8 @@
 // block and the first row shown follow their keys, which the backend tracks for the grid); a row that left the source
 // stays one revision, muted. An append table grows in place and follows its tail while the view is at the end; when the
 // user scrolls up, the rows that arrive since are counted for a "n new rows" button. A roll or restart swaps to the new
-// segment. Copy and Save read the revision the grid shows; the backend leases it, so a retire mid-copy loses nothing.
+// segment. Copy reads the revision the grid shows (the backend leases it, so a retire mid-copy loses nothing); Save writes
+// the table's newest revision once the file is chosen, since the samples retire the one shown while the dialog is open.
 import type { ApiResult, ResultsFormat, ResultsJobResult, SavedResults, VariaApi } from '../../../shared/contracts'
 import { limits } from '../../../shared/ipc/wire/protocol'
 import { liveProbes, type LiveProbeId, type LiveTableSpec } from '../../../shared/live/catalog'
@@ -40,6 +41,13 @@ export interface LiveGridSnapshot {
   readonly following: boolean
   /** The sort the grid asked for (sortBy), by catalogue column id. */
   readonly sort?: readonly LiveSort[]
+  /** The shown result is lost (the backend restarted): the pane says so, since the grid can no longer read its rows. */
+  readonly lost: boolean
+  /** The grid's selection as it last reported it, including where a swap moved it. */
+  readonly selection?: GridSelection
+  /** The active row's key (its key columns' stored texts joined with U+001F), once the grid knows it: what an owner's
+   *  details pane, Kill or context menu acts on. */
+  readonly activeKey?: string
 }
 export interface LiveGridOptions {
   readonly live: Pick<LiveHandle, 'table' | 'onTick' | 'track' | 'setProbe'>
@@ -132,6 +140,11 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
   /** The rows there were when the view left its last row. */
   private seenRows = 0
   private sort: readonly LiveSort[] | undefined
+  private selection: GridSelection | undefined
+  /** The rows the grid's last frame had (the new segment's after a swap, until its first frame). */
+  private viewRows = 0
+  /** The shown table's handle this grid listens to (its state: lost), and how to stop. */
+  private watched: { readonly handle: LiveTable['handle']; readonly stop: () => void } | undefined
   /** A snapshot revision whose first rows are being read before it swaps in. */
   private pending: { readonly table: LiveTable; readonly abort: AbortController; timer: unknown } | undefined
   private readonly timers: Timers
@@ -139,7 +152,7 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
   private disposed = false
 
   constructor(o: LiveGridOptions) {
-    super({ newRows: 0, following: true })
+    super({ newRows: 0, following: true, lost: false })
     this.o = o
     this.index = o.table ?? 0
     this.timers = o.timers ?? browserTimers
@@ -186,7 +199,8 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     if (parts.length === 0) return undefined
     return this.o.api.copyResults({ jobId: this.newId(), generation: table.descriptor.generation, resultId: table.descriptor.resultId, headers, parts })
   }
-  /** Save Results As of the revision the grid shows (main asks for the file). An append segment saves once complete. */
+  /** Save Results As (main asks for the file): of a snapshot table, the revision it has once the file is chosen (main's
+   *  ResultsPortHost.liveNewest); of an append table, the segment shown, once it is complete. */
   async save(suggestedName: string, format?: ResultsFormat): Promise<ApiResult<SavedResults | null> | undefined> {
     const table = this.table
     if (!table || !this.o.api) return undefined
@@ -197,6 +211,8 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     if (this.disposed) return
     this.disposed = true
     this.stopTick.dispose()
+    this.watched?.stop()
+    this.watched = undefined
     this.cancelPending()
     this.view?.dispose()
     this.view = undefined
@@ -215,7 +231,7 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     if (!next || next === latest) return
     if (!this.view) {
       this.table = next
-      this.view = this.o.createView(next, { onViewport: viewport => this.viewportChanged(viewport), onSelection: () => this.updateTracking() })
+      this.view = this.o.createView(next, { onViewport: viewport => this.viewportChanged(viewport), onSelection: selection => this.selectionChanged(selection) })
       this.changed()
       return
     }
@@ -259,12 +275,13 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     this.table = next
     if (next.mode === 'snapshot') {
       const map = trackedRowMap(this.known, next.tracked)
-      this.revision++
-      view.swap(next.handle, next.descriptor, map, next.departed ? { muted: next.departed } : {})
-      // The tracked keys are where the backend put them; other rows are read again when wanted.
+      // The tracked keys are where the backend put them; other rows are read again when wanted. Known before the swap, so
+      // the selection it reports already has its active row's key.
       const known = new Map<number, string>()
       next.tracked?.keys?.forEach((key, index) => { const row = next.tracked!.rows[index]; if (row >= 0) known.set(row, key) })
       this.known = known
+      this.revision++
+      view.swap(next.handle, next.descriptor, map, next.departed ? { muted: next.departed } : {})
       this.updateTracking()
     } else {
       // A new segment holds other rows: nothing maps. A roll keeps following the tail; a restart keeps the view's intent,
@@ -273,15 +290,22 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
       this.revision++
       this.known = new Map()
       view.swap(next.handle, next.descriptor, () => -1, follow ? {} : { top: 0 })
-      this.seenRows = 0
+      // Scrolled up, only rows that arrive after the restart are new.
+      this.viewRows = this.seenRows = follow ? 0 : next.handle.getSnapshot().rowsAvailable
       if (follow) view.revealEnd()
     }
     this.changed()
   }
 
   private viewportChanged(viewport: GridViewport): void {
+    this.viewRows = viewport.rows
     if (viewport.atEnd) { this.following = true; this.seenRows = viewport.rows }
     else if (this.following) { this.following = false; this.seenRows = Math.min(this.seenRows || viewport.rows, viewport.rows) }
+    this.changed()
+    this.updateTracking()
+  }
+  private selectionChanged(selection: GridSelection): void {
+    this.selection = selection
     this.changed()
     this.updateTracking()
   }
@@ -312,7 +336,7 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     Promise.allSettled(reads).then(() => {
       this.reading = false
       if (this.disposed) return
-      if (revision === this.revision) this.sendTrack(rows)
+      if (revision === this.revision) { this.sendTrack(rows); this.changed() }
       if (this.again || revision !== this.revision) { this.again = false; this.track() }
     }, onUnexpectedError)
   }
@@ -330,9 +354,26 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
   }
   private newId(): string { return this.o.newId?.() ?? crypto.randomUUID() }
 
+  /** Publishes what the pane and the owner see, only when some of it changed: a scrolled frame of a snapshot table
+   *  changes none of it, and each publish renders the pane. */
   private changed(): void {
     if (this.disposed) return
-    const newRows = this.following || this.table?.mode !== 'append' ? 0 : Math.max(0, (this.view?.lastViewport()?.rows ?? 0) - this.seenRows)
-    this.publish({ ...this.table ? { table: this.table } : {}, newRows, following: this.following, ...this.sort ? { sort: this.sort } : {} })
+    const table = this.table
+    this.watch(table)
+    const newRows = this.following || table?.mode !== 'append' ? 0 : Math.max(0, this.viewRows - this.seenRows)
+    const lost = table?.handle.getSnapshot().state === 'lost'
+    const activeKey = this.selection && this.known.get(this.selection.active.row)
+    const now = this.getSnapshot()
+    if (now.table === table && now.newRows === newRows && now.following === this.following && now.sort === this.sort && now.lost === lost && now.selection === this.selection && now.activeKey === activeKey) return
+    this.publish({
+      ...table ? { table } : {}, newRows, following: this.following, lost, ...this.sort ? { sort: this.sort } : {},
+      ...this.selection ? { selection: this.selection } : {}, ...activeKey !== undefined ? { activeKey } : {}
+    })
+  }
+  /** Listens to the shown result: a backend loss marks it lost, and nothing else would tell the pane. */
+  private watch(table: LiveTable | undefined): void {
+    if (this.watched?.handle === table?.handle) return
+    this.watched?.stop()
+    this.watched = table && { handle: table.handle, stop: table.handle.subscribe(() => this.changed()) }
   }
 }

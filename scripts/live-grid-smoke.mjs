@@ -1,10 +1,11 @@
 // Live grids in the real app, on the real backend's debug.synthetic source (its test hooks; no SQL Server), through
 // window.__variaLive.mountGrid: a snapshot table's rows are toned and its tone column is hidden; the selected row keeps
-// its key as revisions swap in, stays one revision muted once it leaves, and then the selection moves to a neighbour;
-// Copy leaves the tone out; the sort hook reorders the next revision; an append log follows its tail, counts the rows that
-// arrive while it is scrolled up, and jumps back to the tail.
+// its key as revisions swap in, stays one revision muted once it leaves, and then the selection moves to a neighbour,
+// which the grid reports to its owner with the row's key; Copy leaves the tone out; a Save whose dialog stays open across
+// samples saves the newest revision; the sort hook reorders the next revision; an append log follows its tail, counts the
+// rows that arrive while it is scrolled up, and jumps back to the tail; a killed backend's grid says it lost its rows.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 await mkdir('artifacts', { recursive: true })
@@ -76,6 +77,8 @@ try {
   expect(Number(moved.id) - Number(chosen.cells[0])).toBeGreaterThanOrEqual(1)
   expect(Number(moved.id) - Number(chosen.cells[0])).toBeLessThanOrEqual(2)
   expect(moved.index).toBeLessThanOrEqual(1)
+  // The owner hears where the swap moved the selection, and the key of the row it is on now.
+  await expect.poll(async () => { const state = await live('grid'); return [state.activeRow, state.activeKey] }).toEqual([moved.index, moved.id])
   console.log('Key-stable selection passed: the selected item kept its selection across revisions, lingered muted, then the selection moved on.')
 
   step = 'copy'
@@ -88,6 +91,22 @@ try {
   expect(copied).toHaveLength(4)
   expect(copied.some(text => ['error', 'warning', 'running'].includes(text))).toBe(false)
   console.log('Copy passed: a row copies its shown columns only.')
+
+  step = 'save'
+  // The dialog stays open for more than two samples, which retire the revision shown when Save was chosen.
+  const saved = resolve(profile, 'live-grid.csv')
+  await app.evaluate(({ dialog }, path) => { dialog.showSaveDialog = () => new Promise(done => setTimeout(() => done({ canceled: false, filePath: path }), 4000)) }, saved)
+  const shownRevision = (await live('grid')).revision
+  const result = await live('saveGrid', 'Live grid')
+  // Twelve items, and one more while a tracked item that left lingers.
+  expect(result).toMatchObject({ ok: true, value: { fileName: 'live-grid.csv' } })
+  expect([12, 13]).toContain(result.value.rows)
+  expect((await live('grid')).revision).toBeGreaterThanOrEqual(shownRevision + 2)
+  const lines = (await readFile(saved, 'utf8')).trim().split(/\r?\n/)
+  // Column headers are off by default (Tools › Options), and the tone column is never saved.
+  expect(lines).toHaveLength(result.value.rows)
+  expect(lines.filter(line => !/^\d+,G\d,Item \d+,\d+$/.test(line))).toEqual([])
+  console.log('Save passed: a dialog open across samples saved the newest revision.')
 
   step = 'sort'
   await live('sortGrid', 'amount', true)
@@ -121,6 +140,20 @@ try {
   await live('dispose', log)
   await expect.poll(() => page.evaluate(() => window.__variaResults.liveStreams)).toBe(0)
   console.log('Follow tail passed: the log followed its tail, counted new rows while scrolled up, and jumped back.')
+
+  step = 'lost'
+  // The backend restarts: the grid can no longer read its rows, and says so over them.
+  const lost = await live('subscribeSynthetic', { probes: ['debug.synthetic.grid'], tickMs: 1200, rows: 12 })
+  expect(await live('mountGrid', lost, 'debug.synthetic.grid', 0)).toBe(true)
+  await expect.poll(async () => (await rows()).length).toBe(12)
+  await expect(page.locator('.live-grid-test .rg-overlay')).toHaveCount(0)
+  await app.evaluate(() => globalThis.__variaTest.kill())
+  await expect(page.locator('.live-grid-test .rg-overlay')).toHaveText('This live view lost its rows because the SQL backend restarted.')
+  expect((await live('grid')).lost).toBe(true)
+  await page.screenshot({ path: 'artifacts/live-grid-lost.png' })
+  await live('unmountGrid')
+  await live('dispose', lost)
+  console.log('Lost passed: the grid of a killed backend shows that it lost its rows.')
 
   expect(failures).toEqual([])
   console.log('Live grids passed.')

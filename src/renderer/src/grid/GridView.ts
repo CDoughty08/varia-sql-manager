@@ -17,7 +17,7 @@ import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
-import { remapSelection, remapTop, type RowMap } from './swap'
+import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { tileKey } from './tiles'
 
 // A cell's look is one of 128 class strings, picked by these bits.
@@ -302,7 +302,11 @@ export class GridView {
     this.stopHandle = handle.subscribe(() => this.schedule())
     this.muted = new Set(o.muted ?? [])
     const selection = this.selection()
-    if (selection) state.selection = remapSelection(selection, mapRow, handle.getSnapshot().rowsAvailable, this.columns)
+    if (selection) {
+      state.selection = remapSelection(selection, mapRow, handle.getSnapshot().rowsAvailable, this.columns)
+      // The owner hears of a moved selection as of any other (a details pane, Kill, the active row's key).
+      if (state.selection && !sameSelection(selection, state.selection)) this.o.onSelection(state.selection)
+    }
     this.pendingTop = o.top ?? remapTop(this.pendingTop ?? state.virtualTop, mapRow)
     if (this.hovered) { this.hovered.removeAttribute('title'); this.hovered = undefined }
     this.schedule()

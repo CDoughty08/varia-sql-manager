@@ -19,7 +19,8 @@ export interface LiveGridPaneProps {
   readonly toneLabel?: (tone: LiveTone) => string | undefined
   /** Scroll, widths and selection, kept by the owner across remounts; the pane keeps its own otherwise. */
   readonly state?: GridViewState
-  /** The LiveGrid, for the owner's commands (sort, copy, save); undefined once the pane unmounts. */
+  /** The LiveGrid, for the owner's commands (sort, copy, save) and its snapshot (the selection and the active row's key);
+   *  undefined once the pane unmounts. */
   onGrid?(grid: LiveGrid | undefined): void
 }
 
@@ -71,7 +72,7 @@ export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, 
     if (event.defaultPrevented || (event.target as Element).closest('button')) return
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
   }
-  const lost = snapshot.table?.handle.getSnapshot().state === 'lost'
+  const lost = snapshot.lost
   const retry = () => viewRef.current?.retry()
   return <div className="rg-frame live-grid" data-live-probe={probe} data-live-table={table}>
     <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} aria-label={label} aria-multiselectable="true" aria-readonly="true" onKeyDown={keyDown}>
@@ -88,5 +89,5 @@ export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, 
 }
 
 const noSubscribe = () => () => {}
-const empty: LiveGridSnapshot = { newRows: 0, following: true }
+const empty: LiveGridSnapshot = { newRows: 0, following: true, lost: false }
 const noSnapshot = () => empty

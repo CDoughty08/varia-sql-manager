@@ -29,7 +29,10 @@ const defaultProbes: readonly LiveProbeId[] = ['debug.synthetic.metrics', 'debug
 export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, mount?: (handle: LiveHandle, probe: LiveProbeId, table: number) => TestGrid) {
   const handles = new Map<string, LiveHandle>()
   let mounted: TestGrid | undefined
-  const gridState = (snapshot: LiveGridSnapshot | undefined) => snapshot && { newRows: snapshot.newRows, following: snapshot.following, sort: snapshot.sort, revision: snapshot.table?.revision, resultId: snapshot.table?.descriptor.resultId, rows: snapshot.table?.handle.getSnapshot().rowsAvailable }
+  const gridState = (snapshot: LiveGridSnapshot | undefined) => snapshot && {
+    newRows: snapshot.newRows, following: snapshot.following, sort: snapshot.sort, revision: snapshot.table?.revision, resultId: snapshot.table?.descriptor.resultId,
+    rows: snapshot.table?.handle.getSnapshot().rowsAvailable, lost: snapshot.lost, activeRow: snapshot.selection?.active.row, activeKey: snapshot.activeKey
+  }
   const handle = (id: string) => handles.get(id)
   return {
     snapshot: (id?: string) => id === undefined ? live.getSnapshot() : handle(id)?.getSnapshot(),
@@ -64,6 +67,8 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
     unmountGrid: () => { mounted?.dispose(); mounted = undefined },
     grid: () => gridState(mounted?.grid()?.getSnapshot()),
     sortGrid: (column: number | string | undefined, descending?: boolean) => mounted?.grid()?.sortBy(column, descending),
+    /** Save Results As of the mounted grid, as its owner's command would (main's dialog is the suite's stub). */
+    saveGrid: (suggestedName: string) => mounted?.grid()?.save(suggestedName, 'csv'),
     table: (id: string, probe: LiveProbeId) => { const table = handle(id)?.table(probe); return table && { descriptor: table.descriptor, revision: table.revision, state: table.handle.getSnapshot().state } }
   }
 }

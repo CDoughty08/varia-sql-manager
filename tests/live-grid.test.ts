@@ -4,7 +4,7 @@ import type { LiveTableSpec } from '../src/shared/live/catalog'
 import { GridData } from '../src/renderer/src/grid/data'
 import { toneColumnOf, type GridViewport } from '../src/renderer/src/grid/GridView'
 import type { GridSelection } from '../src/renderer/src/grid/selection'
-import { remapSelection, remapTop, survivingRow, type RowMap } from '../src/renderer/src/grid/swap'
+import { remapSelection, remapTop, sameSelection, survivingRow, type RowMap } from '../src/renderer/src/grid/swap'
 import { tileColumnOf, tileRowOf } from '../src/renderer/src/grid/tiles'
 import { keyOfRow, LiveGrid, prepareMs, readSpans, trackedRowMap, wantedRows, type LiveGridHooks, type LiveGridView } from '../src/renderer/src/live/LiveGrid'
 import type { AppliedTick, LiveTable } from '../src/renderer/src/live/LiveService'
@@ -26,6 +26,8 @@ describe('grid swap', () => {
     expect(survivingRow(5, map({ 5: 9 }), 20)).toBe(9)
     // Gone: the next row down went to 4, so the selection lands there, among the rows the user was looking at.
     expect(survivingRow(5, map({ 5: -1, 6: 4 }), 20)).toBe(4)
+    // Both neighbours survived, at different places: below wins.
+    expect(survivingRow(5, row => ({ 5: -1, 6: 8, 4: 2 } as Record<number, number>)[row] ?? -1, 20)).toBe(8)
     // Gone, and nothing below survived within reach: the row above.
     expect(survivingRow(5, row => row === 4 ? 3 : -1, 20)).toBe(3)
     // Nothing survived: the old index, within the new rows.
@@ -54,6 +56,15 @@ describe('grid swap', () => {
     expect(remapTop(20 * 10 + 7, map({ 10: 30 }))).toBe(20 * 30 + 7)
     expect(remapTop(0, map({ 0: 5 }))).toBe(0)
     expect(remapTop(20 * 10, map({ 10: -1 }))).toBe(200)
+  })
+  it('tells a moved selection from one that stayed, which a swap reports to the grid\'s owner', () => {
+    const before = selection({ active: cell(4, 1), blocks: [{ kind: 'cells', anchor: cell(2), focus: cell(4, 1) }] })
+    expect(sameSelection(before, remapSelection(before, map({}), 10, 2))).toBe(true)
+    expect(sameSelection(before, remapSelection(before, map({ 4: 5 }), 10, 2))).toBe(false)
+    expect(sameSelection(before, remapSelection(before, map({ 2: 1 }), 10, 2))).toBe(false)
+    expect(sameSelection(before, { ...before, blocks: [...before.blocks, before.blocks[0]] })).toBe(false)
+    expect(sameSelection(undefined, undefined)).toBe(true)
+    expect(sameSelection(before, undefined)).toBe(false)
   })
 })
 
@@ -126,19 +137,22 @@ describe('LiveGrid helpers', () => {
 const keySpec: LiveTableSpec = { id: 'items', mode: 'snapshot', key: ['id'], columns: [{ id: 'id', name: 'id', dataType: 'int' }, { id: 'name', name: 'name', dataType: 'nvarchar' }, { id: 'tone', name: 'tone', dataType: 'nvarchar', role: 'tone' }] }
 const logSpec: LiveTableSpec = { id: 'log', mode: 'append', key: ['id'], columns: [{ id: 'id', name: 'id', dataType: 'bigint' }, { id: 'text', name: 'text', dataType: 'nvarchar' }] }
 let nextId = 1
-function table(o: { ids?: string[]; mode?: 'snapshot' | 'append'; rows?: number; resultId?: number; tracked?: LiveTable['tracked']; departed?: number[]; rolledFrom?: number; restarted?: boolean } = {}): LiveTable & { reads: number[] } {
-  const ids = o.ids ?? [], reads: number[] = []
+function table(o: { ids?: string[]; mode?: 'snapshot' | 'append'; rows?: number; resultId?: number; tracked?: LiveTable['tracked']; departed?: number[]; rolledFrom?: number; restarted?: boolean } = {}): LiveTable & { reads: number[]; lose(): void; listeners: Set<() => void> } {
+  const ids = o.ids ?? [], reads: number[] = [], listeners = new Set<() => void>()
+  let state = 'complete'
   const descriptor = { generation: 1, resultId: o.resultId ?? nextId++, columns: o.mode === 'append' ? logSpec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true })) : keySpec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...column.role ? { role: column.role } : {} })) } as unknown as ResultDescriptor
   const handle = {
     key: { generation: 1, resultId: descriptor.resultId },
-    getSnapshot: () => ({ rowsAvailable: o.rows ?? ids.length, state: 'complete' }),
+    getSnapshot: () => ({ rowsAvailable: o.rows ?? ids.length, state }),
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     getWindow: (first: number, count: number, w: WindowOptions = {}) => {
       reads.push(first)
       expect(w).toMatchObject({ colStart: 0, colEnd: 1, display: false })
       return Promise.resolve(windowOf(first, ids.slice(first, first + count).map(id => [id])))
     }
   } as unknown as ResultHandle
-  return { probe: 'debug.synthetic.grid', index: 0, mode: o.mode ?? 'snapshot', descriptor, handle, reads, ...o.tracked ? { tracked: o.tracked } : {}, ...o.departed ? { departed: o.departed } : {}, ...o.rolledFrom !== undefined ? { rolledFrom: o.rolledFrom } : {}, ...o.restarted ? { restarted: true } : {} }
+  const lose = () => { state = 'lost'; for (const listener of [...listeners]) listener() }
+  return { probe: 'debug.synthetic.grid', index: 0, mode: o.mode ?? 'snapshot', descriptor, handle, reads, lose, listeners, ...o.tracked ? { tracked: o.tracked } : {}, ...o.departed ? { departed: o.departed } : {}, ...o.rolledFrom !== undefined ? { rolledFrom: o.rolledFrom } : {}, ...o.restarted ? { restarted: true } : {} }
 }
 function harness(spec: LiveTableSpec = keySpec) {
   let current: LiveTable | undefined
@@ -152,11 +166,12 @@ function harness(spec: LiveTableSpec = keySpec) {
     prepares: [] as { handle: ResultHandle; firstRow: number; signal?: AbortSignal; finish(): void }[], hold: false
   }
   const fake: LiveGridView = {
-    // As GridView does: the selection and the first row shown move through mapRow.
+    // As GridView does: the selection and the first row shown move through mapRow, and a moved selection is reported.
     swap: (handle, _descriptor, mapRow, o) => {
       view.swaps.push({ handle, mapRow, ...o?.muted ? { muted: o.muted } : {}, ...o?.top !== undefined ? { top: o.top } : {} })
-      const rows = handle.getSnapshot().rowsAvailable
+      const rows = handle.getSnapshot().rowsAvailable, before = view.selection
       view.selection = remapSelection(view.selection, mapRow, rows, 2)
+      if (view.selection && !sameSelection(before, view.selection)) view.hooks!.onSelection(view.selection)
       if (view.viewport) view.viewport = { ...view.viewport, rows, firstRow: Math.max(0, Math.min(rows - 1, mapRow(view.viewport.firstRow))) }
     },
     revealEnd: () => { view.ends++ },
@@ -316,8 +331,69 @@ describe('LiveGrid', () => {
     expect(view.ends).toBe(2)
     expect(view.swaps.at(-1)?.top).toBe(0)
     expect(view.swaps[0].top).toBeUndefined()
+    // No row arrived since the restart: none is new, before or after the grid's first frame of it.
+    expect(grid.getSnapshot().newRows).toBe(0)
+    frame({ viewport: { firstRow: 0, lastRow: 3, rows: 4, atEnd: false } })
+    expect(grid.getSnapshot().newRows).toBe(0)
     emit(table({ mode: 'append', rows: 2, rolledFrom: 1 }))
     expect(view.ends).toBe(3)
+  })
+
+  it('counts only the rows that arrive after a restart while scrolled up, however many the new segment starts with', () => {
+    const { grid, emit, frame } = harness(logSpec)
+    emit(table({ mode: 'append', rows: 100 }))
+    frame({ viewport: { firstRow: 80, lastRow: 99, rows: 100, atEnd: true } })
+    frame({ viewport: { firstRow: 20, lastRow: 39, rows: 100, atEnd: false } })
+    const restarted = table({ mode: 'append', rows: 1000, restarted: true })
+    emit(restarted)
+    frame({ viewport: { firstRow: 0, lastRow: 19, rows: 1000, atEnd: false } })
+    expect(grid.getSnapshot()).toMatchObject({ following: false, newRows: 0 })
+    emit({ ...restarted })
+    frame({ viewport: { firstRow: 0, lastRow: 19, rows: 1012, atEnd: false } })
+    expect(grid.getSnapshot().newRows).toBe(12)
+  })
+
+  it('reports where a swap moved the selection, with the active row\'s key, to the grid\'s owner', async () => {
+    const { grid, emit, frame } = harness()
+    emit(table({ ids: ['10', '11', '12', '13', '14'] }))
+    frame({ selection: selection({ active: cell(3, 1) }), viewport: { firstRow: 0, lastRow: 4, rows: 5, atEnd: true } })
+    await settle()
+    expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(3, 1) }, activeKey: '13' })
+    // 13 left the source; the row below it (14) is now at row 2, so the selection moves there, and the owner hears of it.
+    emit(table({ ids: ['10', '12', '14', '15'], tracked: { seq: 1, rows: [-1, 2, 1, 0], keys: ['13', '14', '12', '10'] } }))
+    await settle()
+    expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(2, 1) }, activeKey: '14' })
+  })
+
+  it('says when the result it shows is lost, and listens only to the result it shows', async () => {
+    const { grid, emit } = harness()
+    const shown = table({ ids: ['1'] })
+    emit(shown)
+    expect(grid.getSnapshot().lost).toBe(false)
+    const published = vi.fn()
+    grid.subscribe(published)
+    shown.lose()
+    expect(grid.getSnapshot().lost).toBe(true)
+    expect(published).toHaveBeenCalledTimes(1)
+    const next = table({ ids: ['1'] })
+    emit(next)
+    await settle()
+    expect(grid.getSnapshot()).toMatchObject({ table: next, lost: false })
+    expect([shown.listeners.size, next.listeners.size]).toEqual([0, 1])
+    grid.dispose()
+    expect(next.listeners.size).toBe(0)
+  })
+
+  it('publishes only what changed: scrolling a snapshot table renders nothing', async () => {
+    const { grid, emit, frame } = harness()
+    emit(table({ ids: Array.from({ length: 100 }, (_, index) => String(index)) }))
+    frame({ viewport: { firstRow: 0, lastRow: 10, rows: 100, atEnd: false } })
+    await settle()
+    const published = vi.fn()
+    grid.subscribe(published)
+    for (let first = 1; first <= 20; first++) frame({ viewport: { firstRow: first, lastRow: first + 10, rows: 100, atEnd: false } })
+    await settle()
+    expect(published).not.toHaveBeenCalled()
   })
 
   it('sorts a snapshot by catalogue column id, never by the tone, and clears the sort', () => {

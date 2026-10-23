@@ -31,6 +31,11 @@ export function survivingRow(oldRow: number, mapRow: RowMap, rows: number): numb
 }
 
 const sameBlock = (a: SelectionBlock, b: SelectionBlock) => a.kind === b.kind && a.anchor.row === b.anchor.row && a.anchor.column === b.anchor.column && a.focus.row === b.focus.row && a.focus.column === b.focus.column
+/** Whether two selections select the same cells with the same active cell (a swap tells the grid's owner only of a change). */
+export function sameSelection(a: GridSelection | undefined, b: GridSelection | undefined): boolean {
+  if (!a || !b) return a === b
+  return a.resultIndex === b.resultIndex && a.active.row === b.active.row && a.active.column === b.active.column && a.blocks.length === b.blocks.length && a.blocks.every((block, index) => sameBlock(block, b.blocks[index]))
+}
 
 /**
  * The selection over the new revision: the active cell moves with its row (survivingRow); a block of cells or rows moves
