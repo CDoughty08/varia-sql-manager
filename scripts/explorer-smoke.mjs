@@ -41,6 +41,7 @@ const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
 const tabs = () => page.locator('.query-tabs').getByRole('tab')
 const toolbarButton = name => page.getByRole('toolbar', { name: 'Object Explorer toolbar' }).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
+const filterBox = () => page.getByRole('textbox', { name: 'Filter loaded objects', exact: true })
 const isFolder = (params, folder) => params.node.type === 'folder' && params.node.folder === folder
 /** The row `aria-activedescendant` names, as a screen reader finds it. */
 const active = () => page.evaluate(() => {
@@ -152,6 +153,12 @@ try {
   await launch()
   await application.evaluate(installExplorerStub, explorerStubData())
   await expect(page.getByText('Connect to SQL Server to browse databases and objects.')).toBeVisible()
+  // The empty pane is the states kit's centred empty state, with Connect as its one filled action.
+  const emptyExplorer = page.locator('.explorer-empty.empty-state')
+  await expect(emptyExplorer.locator('.empty-state-icon[data-icon="server"]')).toHaveCount(1)
+  await expect(emptyExplorer.locator('.empty-state-detail')).toHaveText('Connect to SQL Server to browse databases and objects.')
+  await expect(emptyExplorer.getByRole('button', { name: 'Connect to server', exact: true })).toHaveClass('primary')
+  await expect(emptyExplorer).toHaveCSS('justify-content', 'center')
 
   // 1. One focusable ARIA tree: a new server is expanded, its folders are collapsed, and nothing below them is loaded.
   // Connecting the first server by keyboard from the empty state moves focus to the tree, which replaced the button.
@@ -255,12 +262,16 @@ try {
   // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Shift+Tab')
+  await expect(filterBox()).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
   for (let step = 0; step < 6 && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
   expect(await focusedTool()).toBe('Stop')
   await page.keyboard.press('Enter')
   await expect(stopped).toBeVisible()
   await expect(toolbarButton('Stop')).toBeDisabled()
   await expect.poll(focusedTool).toBe('Filter Settings')
+  await page.keyboard.press('Tab')
+  await expect(filterBox()).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
   console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
@@ -555,9 +566,10 @@ try {
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
   }
-  // The toolbar is one tab stop: Shift+Tab from the tree reaches it, the arrows, Home and End move between its enabled
-  // buttons (wrapping), Tab goes on to the tree, and the toolbar remembers the button last used.
+  // The toolbar is one tab stop: Shift+Tab from the tree reaches it past the filter box, the arrows, Home and End move
+  // between its enabled buttons (wrapping), Tab goes on to the box and the tree, and the toolbar remembers the button last used.
   await tree().focus()
+  await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   const tools = await enabledTools(), first = tools.indexOf(await focusedTool())
   expect(first).toBeGreaterThanOrEqual(0)
@@ -572,12 +584,91 @@ try {
   await page.keyboard.press('End')
   expect(await focusedTool()).toBe(tools.at(-1))
   await page.keyboard.press('Tab')
+  await expect(filterBox()).toBeFocused()
+  await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   expect(await focusedTool()).toBe(tools.at(-1))
   await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
   console.log('Object Explorer checks: Ctrl+N on a database, F8, Filter Settings in the palette, and the toolbar\'s arrow keys.')
+
+  // 10b. The server row, item counts, the footer's freshness and the Filter loaded objects box.
+  await setStub({ tables: 3 })
+  await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables')
+  await select('server-a', 'Databases', 'AppData', 'Tables')
+  await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
+  const serverRow = await explorerRow(page, 'server-a'), tablesFolder = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')
+  // Servers are 30 px rows with their version and login in brief and a filled dot; other rows are 22 px, in 13 px text.
+  expect(await serverRow.evaluate(row => row.getBoundingClientRect().height)).toBe(30)
+  expect(await tablesFolder.evaluate(row => row.getBoundingClientRect().height)).toBe(22)
+  await expect(tablesFolder.locator('.oe-label')).toHaveCSS('font-size', '13px')
+  await expect(serverRow.locator('.oe-sublabel')).toHaveText('16.0 · sa')
+  await expect(serverRow).toHaveAttribute('title', /^server-a \(SQL Server 16\.0\.4135\.4 - sa\)/)
+  await expect(serverRow.locator('.oe-dot')).toHaveAttribute('data-state', 'online')
+  // The row below a server row starts where it ends.
+  const gap = await page.evaluate(() => {
+    const [server, next] = [...document.querySelectorAll('.explorer-tree [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+    return next.getBoundingClientRect().top - server.getBoundingClientRect().bottom
+  })
+  expect(gap).toBe(0)
+  // Tables lists 3 objects after its static folders; the count is muted and right-aligned, and the tooltip says it.
+  await expect(tablesFolder.locator('.oe-count')).toHaveText('3')
+  await expect(tablesFolder).toHaveAttribute('title', /\n3 items/)
+  const ends = await tablesFolder.evaluate(row => ({ count: row.querySelector('.oe-count').getBoundingClientRect().right, row: row.getBoundingClientRect().right }))
+  expect(ends.row - ends.count).toBeLessThan(16)
+  // The footer: the selected folder's listing was just loaded, and a row is described by the listing it is in.
+  await expect(page.locator('.explorer-freshness')).toHaveText(/^Tables·Updated (just now|\d+ s ago)$/)
+  await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.table1')
+  await expect(page.locator('.explorer-freshness-scope')).toHaveText('Tables')
+  await expect(page.locator('.explorer-servers')).toHaveText('2 connected servers')
+  // Typing narrows the tree to loaded matches with their parents, bold where they match, without asking the backend.
+  const requested = (await stubCalls()).length
+  await filterBox().click()
+  await page.keyboard.type('ORD')
+  // dbo.Orders matches, so its expanded rows show as they are (an earlier step left Columns open).
+  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [true]', '5 dbo.Orders [true]', '6 Columns [true]', '7 Id', '7 CustomerName',
+    '6 Keys [false]', '6 Constraints [false]', '6 Triggers [false]', '6 Indexes [false]', '6 Statistics [false]', '1 server-b [true]'])
+  await expect(page.locator('.explorer-tree .oe-match')).toHaveText(['Ord'])
+  await expect(liveRegion()).toHaveText('Filter: 1 loaded item matches')
+  expect((await stubCalls()).length).toBe(requested)
+  // ↓ moves to the first match in the tree; Escape in the box clears it and shows the selection in context again.
+  await page.keyboard.press('ArrowDown')
+  await expect(tree()).toBeFocused()
+  await expect.poll(async () => (await active())?.label).toBe('dbo.Orders')
+  await filterBox().focus()
+  await page.keyboard.press('Escape')
+  await expect(filterBox()).toHaveValue('')
+  await expect(filterBox()).toBeFocused()
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
+  await expect(page.locator('.explorer-tree .oe-match')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  expect(await activeInView()).toBe(true)
+  if (process.platform !== 'darwin') {
+    // The palette's Filter Loaded Objects focuses the box.
+    await page.keyboard.press('F1')
+    await page.keyboard.type('filter loaded')
+    await expect(page.locator('.quick-input').getByRole('option', { name: /^Object Explorer: Filter Loaded Objects/ })).toHaveCount(1)
+    await page.keyboard.press('Enter')
+    await expect(filterBox()).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(tree()).toBeFocused()
+  }
+  // Forced colors: the dot keeps its shape, in the system's text colour.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const dot = await serverRow.locator('.oe-dot').evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopColor } })
+  await page.emulateMedia({ forcedColors: null })
+  expect(dot.background).toBe(dot.border)
+  expect(dot.background).not.toBe('rgba(0, 0, 0, 0)')
+  await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
+  // Later steps start from what they found before: AppData collapsed.
+  await select('server-a', 'Databases', 'AppData')
+  await press('ArrowLeft', 'AppData')
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData')).toHaveAttribute('aria-expanded', 'false')
+  console.log('Object Explorer checks: 30 px server rows with version, login and connection dot, muted item counts, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })
@@ -624,6 +715,14 @@ try {
   await expect(page.getByText('Object Explorer stopped because of a rendering error.')).toBeVisible()
   // Focus went with the tree to the Reload button, and after Reload to the new tree, which repeats no old announcement.
   await expect(page.getByRole('button', { name: 'Reload Object Explorer', exact: true })).toBeFocused()
+  // Copy details puts the fault and where it happened on the clipboard, through main, and says so.
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await page.locator('.explorer-fault').getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(page.locator('.explorer-fault .inline-error-status')).toHaveText('Details copied.')
+  await expect.poll(clipboard).toContain('Message: Object Explorer stopped because of a rendering error.')
+  expect(await clipboard()).toContain('Object Explorer test fault.')
+  expect(await clipboard()).toContain('Component stack:')
+  await page.getByRole('button', { name: 'Reload Object Explorer', exact: true }).focus()
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-b')).toHaveAttribute('aria-expanded', 'true')
   await expect(tree()).toBeFocused()

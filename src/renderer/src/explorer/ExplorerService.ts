@@ -12,7 +12,7 @@ import type { Disposable, ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import { ExplorerLoader, type ExplorerLimitValues, type LoaderLimits, type LoadOutcome, type LoadPriority, type LoadTask } from './loader'
-import { emptyRows, flatten, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
+import { emptyRows, filterText, flatten, flattenFiltered, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
 
 export type { TreeNode } from './tree-model'
 /** A sentence for the tree's live region; `id` changes with every announcement, so a repeated sentence is heard again. */
@@ -25,7 +25,13 @@ export interface ExplorerSnapshot {
   readonly announcement?: Announcement
   /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
   readonly reveal?: number
+  /** The Filter loaded objects box narrows `rows`: its text as rows match it (`filterText`), and how many nodes match. */
+  readonly filter?: { readonly text: string; readonly matches: number }
 }
+/** The box's text as typed, and a count that changes when Filter Loaded Objects asks the box to take focus. */
+export interface QuickFilterState { readonly input: string; readonly focus: number }
+/** How fresh the listing that shows a row is: the node it is a child of (or itself, expanded), for the pane's footer. */
+export interface ListingFreshness { readonly label: string; readonly updatedAt: number; readonly staleSince?: number }
 /**
  * The Object Explorer context keys (state scope), from the selected node; the Script As keys come from `scriptMenuState`
  * and the object action keys from `actionMenuState`.
@@ -44,7 +50,7 @@ export const noExplorerContext: ExplorerContextState = {
   explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), explorerLoading: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
-export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
+export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice' | 'quickFilter'>
 export interface ExplorerServiceOptions {
   readonly api: Pick<VariaApi, 'explorerChildren' | 'explorerCancel'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -54,6 +60,8 @@ export interface ExplorerServiceOptions {
   readonly schedule?: (callback: () => void) => void
   readonly newId?: () => string
   readonly limits?: Partial<ExplorerServiceLimits>
+  /** The wall clock (epoch ms) a listing's freshness is stamped with. */
+  readonly now?: () => number
 }
 
 /**
@@ -120,6 +128,13 @@ const targetOf = (node: TreeNode): ExplorerTarget =>
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : `(SQL Server ${connection.serverVersion})`
 }
+/** What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). */
+export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
+  // "16.0.4135.4" from the profile, or "16.00.4135" as SqlClient reports it.
+  const [major, minor] = (connection.productVersion || connection.serverVersion).split('.').map(part => /^\d+$/.test(part) ? String(Number(part)) : part)
+  const version = minor === undefined ? major : `${major}.${minor}`
+  return [version, connection.productVersion && connection.login].filter(Boolean).join(' · ')
+}
 
 /**
  * Object Explorer's model: a table of numbered nodes loaded page by page from `explorer.children`, flattened into rows
@@ -167,6 +182,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly contextStore = new (class extends SnapshotStore<ExplorerContextState> { set(value: ExplorerContextState) { this.publish(value) } clear() { this.clearListeners() } })(noExplorerContext)
   private readonly dialogStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
   private readonly renameStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
+  // Published at once, not with the next tick's rows, so the box shows each key as it is typed.
+  private readonly quickFilterStore = new (class extends SnapshotStore<QuickFilterState> { set(value: QuickFilterState) { this.publish(value) } clear() { this.clearListeners() } })({ input: '', focus: 0 })
+  /** The filter the rows were last flattened with, so a change of filter is announced once. */
+  private filtered = ''
+  private focusTaken = 0
+  private readonly now: () => number
   /** The child `reconcile` selects when a page of its folder brings it. */
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   private readonly unsubscribe: () => void
@@ -180,6 +201,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.timers = options.timers ?? browserTimers
     this.schedule = options.schedule ?? (callback => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => callback()); else queueMicrotask(callback) })
     this.limits = { ...explorerLimits, ...options.limits }
+    this.now = options.now ?? Date.now
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
     this.syncConnections()
@@ -389,6 +411,39 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   closeFilter(): void { this.dialogStore.set(undefined) }
 
+  /** The Filter loaded objects box (unlike Filter Settings, it narrows the rows already loaded and asks for nothing). */
+  get quickFilter(): ExternalStore<QuickFilterState> { return this.quickFilterStore }
+  /** Narrows the rows to the loaded nodes whose label contains the text; clearing it shows the selection again. */
+  setQuickFilter(input: string): void {
+    const value = input.slice(0, this.limits.quickFilter), current = this.quickFilterStore.getSnapshot()
+    if (value === current.input) return
+    this.quickFilterStore.set({ ...current, input: value })
+    if (!filterText(value) && this.filtered) this.reveals++
+    this.invalidate()
+  }
+  /** Filter Loaded Objects: the box takes focus once it is shown. */
+  focusQuickFilter(): void {
+    const current = this.quickFilterStore.getSnapshot()
+    this.quickFilterStore.set({ ...current, focus: current.focus + 1 })
+  }
+  /** Whether the box should take focus now: once per request, so a box mounted later (the pane was hidden) still takes it. */
+  takeQuickFilterFocus(): boolean {
+    const { focus } = this.quickFilterStore.getSnapshot()
+    if (focus === this.focusTaken) return false
+    this.focusTaken = focus
+    return true
+  }
+  /**
+   * The listing a row belongs to, for the footer's "Updated 4 s ago": an expanded node that has loaded its children, else
+   * the node it is listed under. Undefined before that listing's first page arrived.
+   */
+  listingFreshness(rowId: number | undefined): ListingFreshness | undefined {
+    let node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
+    if (node && rowId! > 0 && !(node.expanded && node.updatedAt !== undefined) && node.parent) node = this.nodes.get(node.parent)
+    if (!node || node.updatedAt === undefined || !this.attached(node)) return undefined
+    return { label: node.label, updatedAt: node.updatedAt, ...(node.staleSince !== undefined ? { staleSince: node.staleSince } : {}) }
+  }
+
   /** The node whose label is an inline Rename box. */
   get renaming(): ExternalStore<number | undefined> { return this.renameStore }
   /**
@@ -503,6 +558,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.contextStore.clear()
     this.dialogStore.clear()
     this.renameStore.clear()
+    this.quickFilterStore.clear()
   }
 
   // Connections
@@ -537,8 +593,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
   }
   private addRoot(connection: LiveConnection): number {
-    const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'svg:server')
+    const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.sublabel = serverSublabel(connection)
+    node.brief = serverBrief(connection)
     const facts = [connection.displayName ? connection.server : '', connection.engineEdition !== undefined && (cloudEngineEditions as readonly number[]).includes(connection.engineEdition) ? 'Only databases can be browsed on this edition.' : '']
     node.detail = facts.filter(Boolean).join(' · ') || undefined
     node.hasChildren = !connection.lost
@@ -559,7 +616,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private markLost(root: TreeNode): void {
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
-    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0 })
+    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined })
     // A lost root never loads again (reconnecting adds a new one); this only lets go of the rows a reconcile held.
     const state = this.state(root)
     state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
@@ -655,7 +712,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const truncated = this.replaceChildren(node, wires)
     const state = this.state(node)
     state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
-    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none' })
+    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
     node.rev++
     if (!node.children!.length) {
       node.hasChildren = false
@@ -681,7 +738,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     state.reconciling = reconciling
     node.staticCount = wires.reduce((sum, wire) => sum + (wire.ref.type === 'folder' ? 1 : 0), 0)
     const truncated = this.reconcileRows(node, reconciling, wires, cursor)
-    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none' })
+    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
     node.rev++
     if (!node.children!.length) {
       node.hasChildren = false
@@ -811,7 +868,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.generation++
     this.abortWithin(new Set([node.id]), 'detach')
     this.detach(node, node.children ?? [])
-    Object.assign(node, { children: undefined, total: undefined, cursor: undefined, staticCount: 0, load: 'none', more: 'none', error: undefined })
+    Object.assign(node, { children: undefined, total: undefined, cursor: undefined, staticCount: 0, load: 'none', more: 'none', error: undefined, updatedAt: undefined, staleSince: undefined })
     const state = this.state(node)
     state.pendingMode = state.retryMode = state.deep = state.budgetExempt = state.held = state.reconciling = undefined
     node.rev++
@@ -850,6 +907,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       node.load = 'error'
       node.more = 'none'
       if (mode === 'reconcile') this.restorePaging(node)
+      // The rows a refresh kept are as old as their listing; the footer says so until a load succeeds.
+      if (mode === 'reconcile' && node.children?.length && node.updatedAt !== undefined) node.staleSince ??= this.now()
     }
     node.error = error
     node.rev++
@@ -1175,14 +1234,22 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!this.dirty || this.disposed) return
     this.dirty = false
     const previous = this.getSnapshot()
-    const rows = flatten(this.nodes, this.roots, previous.rows.count + 64)
+    const filter = filterText(this.quickFilterStore.getSnapshot().input)
+    const filtered = filter ? flattenFiltered(this.nodes, this.roots, filter, previous.rows.count + 64) : undefined
+    const rows = filtered?.rows ?? flatten(this.nodes, this.roots, previous.rows.count + 64)
+    // Spoken once per change of filter, not again as later pages bring more matches.
+    if (filter !== this.filtered) {
+      this.filtered = filter
+      if (filtered) this.announce(filtered.matches ? `Filter: ${count(filtered.matches)} loaded ${filtered.matches === 1 ? 'item matches' : 'items match'}` : 'Filter: no loaded items match')
+      else this.announce('Filter cleared')
+    }
     const renaming = this.renameStore.getSnapshot(), renamed = renaming === undefined ? undefined : this.nodes.get(renaming)
     if (renaming !== undefined && (!renamed || renamed.lost || !this.attached(renamed) || this.rootOf(renamed)?.lost)) this.renameStore.set(undefined)
     // A synthetic row can disappear (a load finished); its owner is selected instead.
     if (this.selected !== undefined && this.selected < 0 && rowIndex(rows, this.selected) < 0) this.selected = rowOwner(this.selected)
     if (this.selected !== undefined && !this.nodes.has(rowOwner(this.selected))) this.selected = undefined
     this.publish({ version: ++this.version, rows, ...(this.selected !== undefined ? { selected: this.selected } : {}), ...(this.announcement ? { announcement: this.announcement } : {}),
-      ...(this.reveals ? { reveal: this.reveals } : {}) })
+      ...(this.reveals ? { reveal: this.reveals } : {}), ...(filtered ? { filter: { text: filter, matches: filtered.matches } } : {}) })
     this.updateContext()
   }
   private updateContext(): void {

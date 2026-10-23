@@ -216,6 +216,13 @@ try {
   application = await electron.launch(launchOptions)
   await ready(false)
   await expect(page.getByText('All panels are closed.', { exact: true })).toBeVisible()
+  // The closed-panels view is the states kit's empty state: a glyph, the title, a line, and an outlined (not filled) action.
+  const closedPanels = page.locator('.dock-empty.empty-state')
+  await expect(closedPanels.locator('.empty-state-icon[data-icon="layout"]')).toHaveCount(1)
+  await expect(closedPanels.locator('.empty-state-title')).toHaveText('All panels are closed.')
+  await expect(closedPanels.locator('.empty-state-detail')).toHaveText('Open a panel from the Window menu.')
+  await expect(closedPanels.getByRole('button', { name: 'Open Query editor', exact: true })).not.toHaveClass('primary')
+  await expect(closedPanels).toHaveCSS('justify-content', 'center')
   // The saved layout loads after the window shows, and opening the file can take seconds on Windows. Main's read of it
   // is held here across a reload: the workspace shows nothing rather than "All panels are closed", and a Window choice
   // made meanwhile applies once the layout has loaded instead of being dropped.

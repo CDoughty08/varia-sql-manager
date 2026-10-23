@@ -122,7 +122,7 @@ try {
       })`) }
     } finally { window.destroy(); probe.protocol.unhandle('file') }
   })
-  expect(chunkLost).toMatchObject({ failure: 'Varia SQL Manager could not start.', blocked: 1, buttons: ['Reload', 'Copy details'], headingSize: '18px' })
+  expect(chunkLost).toMatchObject({ failure: 'Varia SQL Manager could not start.', blocked: 1, buttons: ['Reload', 'Copy details'], headingSize: '20px' })
   expect(chunkLost.details).toMatch(/dynamically imported module/)
   // A rendering fault anywhere in the workbench shows the failure screen instead of a blank window, and still reaches
   // this suite as a page error. Copy details copies the error with where it happened; Reload starts a new workbench.
@@ -318,6 +318,12 @@ try {
     await expect(page.locator('.query-tabs').getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
+  // The empty workspace is the states kit's empty state: a title, a glyph, and one filled action.
+  const emptyWorkspace = page.locator('.workspace-empty')
+  await expect(emptyWorkspace.locator('.empty-state-title')).toHaveText('No open queries')
+  await expect(emptyWorkspace.getByRole('button', { name: 'New query', exact: true })).toHaveClass('primary')
+  await expect(emptyWorkspace.getByRole('button', { name: 'Open SQL file', exact: true })).not.toHaveClass('primary')
+  await page.screenshot({ path: artifact('empty-workspace.png') })
   await nativeKey('N', ['control'])
   await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(1)
   await expect(page.locator('.monaco-editor')).toBeVisible()

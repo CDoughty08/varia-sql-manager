@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
-import ExplorerRow, { rowDescription, rowName, rowTooltip, type RowActions } from '../src/renderer/src/explorer/ExplorerRow'
+import ExplorerRow, { connectionState, itemCount, Label, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
 import { RowKind } from '../src/renderer/src/explorer/tree-model'
 import type { TreeNode } from '../src/renderer/src/explorer/tree-model'
 
@@ -11,7 +11,7 @@ const tableRef: ExplorerNodeRef = { type: 'object', object: { kind: 'table', dat
 function node(fields: Partial<TreeNode> = {}): TreeNode {
   return {
     id: 7, parent: 3, connectionId: 'c', ref: tableRef, kind: 'table', folder: undefined, level: 5, label: 'dbo.Orders', lower: 'dbo.orders', sublabel: undefined, detail: undefined,
-    icon: 'svg:table', subtype: undefined, status: undefined, created: undefined, hasChildren: true, expanded: false, children: undefined, staticCount: 0, total: undefined,
+    icon: 'table', subtype: undefined, status: undefined, created: undefined, hasChildren: true, expanded: false, children: undefined, staticCount: 0, total: undefined,
     cursor: undefined, load: 'none', more: 'none', error: undefined, connectionError: undefined, filtered: false, lost: false, showLoading: false, generation: 0, rev: 0,
     lastUsed: 0, descendants: 0, ...fields
   }
@@ -53,7 +53,7 @@ describe('Object Explorer rows', () => {
   it('render the inline Rename box in place of the label: the name without its schema, at most 128 units, named for the kind', () => {
     const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
     const render = (renaming: boolean) => renderToStaticMarkup(createElement(ExplorerRow, {
-      rowId: 7, kind: RowKind.Node, index: 0, level: 5, posinset: 1, setsize: 1, node: node(), rev: 0, text: '', selected: true, draggable: true, active: false, color: undefined, actions, menuTarget: () => {}, renaming
+      rowId: 7, kind: RowKind.Node, top: 0, level: 5, posinset: 1, setsize: 1, node: node(), rev: 0, text: '', selected: true, draggable: true, active: false, color: undefined, actions, menuTarget: () => {}, renaming
     }))
     const editing = render(true)
     expect(editing).toContain('<input class="explorer-rename" maxLength="128" aria-label="Rename Table"')
@@ -64,5 +64,52 @@ describe('Object Explorer rows', () => {
     const plain = render(false)
     expect(plain).toContain('<bdi class="oe-label">dbo.Orders</bdi>')
     expect(plain).not.toContain('explorer-rename')
+  })
+})
+
+describe('Object Explorer row visuals', () => {
+  const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
+  // Folder and object rows need no workbench (server rows read the theme for their connection color).
+  const render = (value: TreeNode, props: Partial<RowProps> = {}) => renderToStaticMarkup(createElement(ExplorerRow, {
+    rowId: value.id, kind: RowKind.Node, top: 52, level: value.level, posinset: 1, setsize: 1, node: value, rev: 0, text: '', selected: false, draggable: false, active: false,
+    color: undefined, actions, menuTarget: () => {}, ...props
+  }))
+  const tables = (fields: Partial<TreeNode> = {}) => node({ kind: 'folder', folder: 'tables', label: 'Tables', lower: 'tables', ref: { type: 'folder', owner: { kind: 'database', name: 'AppData' }, folder: 'tables' }, ...fields })
+  const server = (fields: Partial<TreeNode> = {}) => node({ parent: 0, level: 1, kind: 'server', label: 'localhost', sublabel: '(SQL Server 17.0.1000.7 - sa)', brief: '17.0 · sa', ...fields })
+  it('count the objects a listing folder holds, without its static subfolders, once it has loaded', () => {
+    expect(itemCount(tables({ total: 72, staticCount: 1 }))).toBe(71)
+    expect(itemCount(tables())).toBeUndefined()
+    expect(itemCount(node({ total: 3 }))).toBeUndefined()
+    // A folder that lists nothing of its own (Security) has no count.
+    expect(itemCount(node({ kind: 'folder', folder: 'serverSecurity', total: 2 }))).toBeUndefined()
+    const markup = render(tables({ total: 1_235, staticCount: 1 }))
+    expect(markup).toContain('<span class="oe-end"><span class="oe-count" aria-hidden="true">1,234</span></span>')
+    expect(rowTooltip(tables({ total: 2, staticCount: 1 }))).toBe('Tables\n1 item')
+    expect(rowDescription(tables({ total: 1_235, staticCount: 1 }))).toBe('1,234 items')
+    // Placed by its offset, so rows below a taller server row sit lower; a row with nothing at its end has an empty one.
+    expect(markup).toContain('transform:translateY(52px)')
+    expect(render(node())).toContain('<span class="oe-end"></span>')
+  })
+  it('show a server\'s version and login in brief, keeping SSMS\'s text for its name and tooltip, and end with its connection', () => {
+    expect(shownSublabel(server())).toBe('17.0 · sa')
+    expect(shownSublabel(server({ lost: true }))).toBe('(connection lost)')
+    expect(shownSublabel(node({ sublabel: '(int, not null)' }))).toBe('(int, not null)')
+    expect(rowName(server())).toBe('localhost (SQL Server 17.0.1000.7 - sa)')
+    expect(rowTooltip(server())).toBe('localhost (SQL Server 17.0.1000.7 - sa)\nServer')
+    expect([connectionState(server()), connectionState(server({ connectionError: { code: 'CONNECTION_LOST', message: 'x', retryable: true } })), connectionState(server({ lost: true }))]).toEqual(['online', 'error', 'lost'])
+    const end = (props: Parameters<typeof RowEnd>[0]) => renderToStaticMarkup(createElement(RowEnd, props))
+    expect(end({ connection: 'online' })).toBe('<span class="oe-end"><span class="oe-dot" data-state="online" title="Connected" aria-hidden="true"></span></span>')
+    expect(end({ connection: 'error' })).toContain('data-state="error" title="Connection failed"')
+    // Later indicators come first, then the count and dot, then a lost server's buttons.
+    expect(end({ connection: 'lost', count: 3, children: createElement('i', null, 'PROD'), actions: createElement('b', null, 'Reconnect') }))
+      .toBe('<span class="oe-end"><i>PROD</i><span class="oe-count" aria-hidden="true">3</span><span class="oe-dot" data-state="lost" title="Connection lost" aria-hidden="true"></span><b>Reconnect</b></span>')
+  })
+  it('mark the part of the label that matches the filter, keeping the label\'s text whole', () => {
+    expect(render(node(), { match: 'ord' })).toContain('<bdi class="oe-label">dbo.<span class="oe-match">Ord</span>ers</bdi>')
+    expect(render(node(), { match: 'zzz' })).toContain('<bdi class="oe-label">dbo.Orders</bdi>')
+    // The match is found in the text as shown, markers for hidden characters included.
+    expect(renderToStaticMarkup(createElement(Label, { text: 'dbo.a\u202eorders', match: 'ord' }))).toBe('<bdi class="oe-label">dbo.a⟨U+202E⟩<span class="oe-match">ord</span>ers</bdi>')
+    // Where lower-casing changes the length, nothing is marked rather than the wrong letters.
+    expect(renderToStaticMarkup(createElement(Label, { text: 'İstanbul', match: 'stan' }))).toBe('<bdi class="oe-label">İstanbul</bdi>')
   })
 })

@@ -2,6 +2,7 @@ import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { TextRange } from './text-ops'
+import { codiconClass } from '../../../shared/icons'
 
 /** The model calls bookmarks make: decorations live on the model, so they survive tab switches and die with it. */
 export interface BookmarkModel {
@@ -30,7 +31,7 @@ export const maxBookmarksPerDocument = 1000
 const neverGrowsWhenTypingAtEdges = 1
 const bookmarkOptions = {
   isWholeLine: true, stickiness: neverGrowsWhenTypingAtEdges,
-  glyphMarginClassName: 'codicon codicon-bookmark varia-bookmark', glyphMarginHoverMessage: { value: 'Bookmark' }
+  glyphMarginClassName: codiconClass('bookmark') + ' varia-bookmark', glyphMarginHoverMessage: { value: 'Bookmark' }
 }
 
 /**

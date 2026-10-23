@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import { queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
 import { statusLeads } from '../src/renderer/src/results/status'
+import { iconSpec } from '../src/shared/icons'
 
 const settings = defaultSettings
 const connection = { server: 'sql01', serverVersion: '16.00.4135', productVersion: '16.0.4135.4' }
@@ -65,11 +66,8 @@ describe('the query status bar', () => {
     // A lost connection has no session to show.
     expect(queryStatusModel(input({ connection: { ...connection, lost: true }, session: { login: 'sa', spid: 52 } })).segments.map(segment => segment.key)).toEqual(['server', 'database'])
   })
-  it('uses codicons that exist in the bundled font', async () => {
-    const library = 'monaco-editor/base/common/codiconsLibrary.js', util = 'monaco-editor/base/common/codiconsUtil.js'
-    await import(library)
-    const { getCodiconFontCharacters } = await import(util) as { getCodiconFontCharacters(): Record<string, number> }
-    const characters = getCodiconFontCharacters()
-    for (const icon of ['plug', 'debug-disconnect', 'loading', 'check', 'warning', 'error', 'debug-stop', 'watch', 'lock']) expect(Object.hasOwn(characters, icon), icon).toBe(true)
+  it('uses codicons of the icon registry', () => {
+    // The spinner spins with codicon-modifier-spin, which only the codicon font's glyphs take.
+    for (const icon of ['plug', 'debug-disconnect', 'loading', 'check', 'warning', 'error', 'debug-stop', 'watch', 'lock']) expect(iconSpec(icon)?.source, icon).toBe('codicon')
   })
 })
