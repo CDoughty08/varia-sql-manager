@@ -24,7 +24,8 @@ export const liveServiceLimits = {
   handles: limits.live.portStreams,
   /** Hidden views that keep their status probes running (a source's `hidden: 'statusOnly'`). */
   statusOnly: 4,
-  statusOnlyIntervalMs: 30_000,
+  /** A status-only view samples at most this often: the catalogue's hidden interval, which docs/live.md states. */
+  statusOnlyIntervalMs: limits.live.hiddenIntervalMs,
   ringBytesPerHandle: 4 * MiB,
   ringBytes: 32 * MiB,
   settingsDebounceMs: 150,
@@ -91,7 +92,7 @@ export interface LiveSnapshot {
   /** How the last subscription ended (status ended). */
   readonly ended?: LiveEnd
   /** Why the view cannot run (status ended or lost), or why its last settings change failed. */
-  readonly error?: { readonly code: ErrorCode; readonly message: string }
+  readonly error?: { readonly code: ErrorCode | LiveErrorCode; readonly message: string }
 }
 /** A table of a probe's latest sample: an ordinary stored result. */
 export interface LiveTable {
@@ -371,7 +372,7 @@ class Handle implements LiveHandle {
   private kept: ResultKey[] = []
   private resume: string | undefined
   private ended: LiveEnd | undefined
-  private error: { code: ErrorCode; message: string } | undefined
+  private error: { code: ErrorCode | LiveErrorCode; message: string } | undefined
   /** The error is a refused update's (a later accepted one clears it), not the stream's end. */
   private updateError = false
   private spid: number | undefined

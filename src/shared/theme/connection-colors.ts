@@ -1,5 +1,4 @@
 import { composite, ensureContrast, hexColor, opaqueHex, parseHex, type Rgba } from './color'
-import { builtinPalettes } from './palette'
 import { cssVariable, type ColorKey } from './registry'
 import type { ResolvedTheme } from './types'
 
@@ -7,14 +6,21 @@ export const connectionColorNames = ['red', 'orange', 'yellow', 'green', 'blue',
 export type ConnectionColorName = typeof connectionColorNames[number]
 export interface ConnectionPreset { name: ConnectionColorName; label: string; stored: string; key: ColorKey }
 /**
- * The connection dialog presets, in its order. `stored` is the value already saved in connections.json (the Varia
- * Dark value), so existing profiles keep their meaning and follow the active theme.
+ * What connections.json holds for each preset: an identifier, never painted. They are the first Varia Dark values and
+ * stay fixed when the palette changes, so saved profiles keep their preset and follow the active theme.
  */
+const storedPresets: Readonly<Record<ConnectionColorName, string>> = { red: '#e66b73', orange: '#e6a15c', yellow: '#dec766', green: '#79bb8b', blue: '#71a7df', purple: '#ad8bd8' }
+/** The connection dialog presets, in its order. */
 export const connectionPresets: readonly ConnectionPreset[] = connectionColorNames.map(name => ({
-  name, label: name[0].toUpperCase() + name.slice(1), stored: builtinPalettes.dark[name], key: `connection.${name}` as ColorKey
+  name, label: name[0].toUpperCase() + name.slice(1), stored: storedPresets[name], key: `connection.${name}` as ColorKey
 }))
-/** The surfaces a connection accent is drawn on: Object Explorer, query tab strip, editor, and status bar. */
-export const connectionAccentSurfaces: readonly ColorKey[] = ['sideBar.background', 'documentTabs.background', 'editor.background', 'statusBar.background']
+/**
+ * The surfaces a connection accent is drawn on: Object Explorer, query tab strip, editor, and both status bars in every
+ * state, since their connection edge stays while a query runs or fails.
+ */
+export const connectionAccentSurfaces: readonly ColorKey[] = ['sideBar.background', 'documentTabs.background', 'editor.background', 'statusBar.background',
+  'statusBar.executingBackground', 'statusBar.disconnectedBackground', 'statusBar.errorBackground', 'queryStatusBar.background', 'queryStatusBar.executingBackground',
+  'queryStatusBar.errorBackground']
 
 /**
  * The CSS color for a stored connection color: a preset becomes its theme variable (so it switches live), a custom

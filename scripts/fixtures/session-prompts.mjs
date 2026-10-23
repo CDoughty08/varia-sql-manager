@@ -11,6 +11,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
+import { activeDocumentName, anyResultGrid, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryServer, querySession, toolbarButton } from './ui.mjs'
 
 const wait = ms => new Promise(done => setTimeout(done, ms))
 
@@ -78,11 +79,11 @@ async function launch(launchOptions, name) {
   }
   return {
     application, child, page, control, errors, state, run, connectDialog, cleanup,
-    tabs: page.locator('.query-tabs').getByRole('tab'), server: page.getByLabel('Query server', { exact: true }), session: page.locator('.status-session'),
-    newQuery: () => page.locator('.toolbar').getByRole('button', { name: 'New query', exact: true }).click(),
-    activeName: () => page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label'),
-    closeTab: name => page.getByRole('button', { name: 'Close ' + name, exact: true }).click(),
-    idle: () => expect(page.locator('.toolbar').getByRole('button', { name: 'Open', exact: true })).toBeEnabled(),
+    tabs: documentTabs(page).getByRole('tab'), server: queryServer(page), session: querySession(page),
+    newQuery: () => toolbarButton(page, 'New query').click(),
+    activeName: () => activeDocumentName(page),
+    closeTab: name => closeDocumentButton(page, name).click(),
+    idle: () => expect(toolbarButton(page, 'Open')).toBeEnabled(),
     // How sessions ended with a transaction to end; choosing a server for a disconnected query also closes its (empty) session.
     sessionCloses: async () => (await calls(control, 'query.session.close')).flatMap(call => call.params.transaction ? [call.params.transaction] : [])
   }
@@ -100,7 +101,7 @@ export async function sessionPrompts(launchOptions) {
     expect(await calls(control, 'query.execute')).toEqual([])
     await connectDialog()
     await expect.poll(async () => (await calls(control, 'query.execute')).map(call => call.params.sql)).toEqual(['BEGIN TRAN; SELECT 1'])
-    await expect(page.locator('.results-grid')).toContainText('server-a')
+    await expect(anyResultGrid(page)).toContainText('server-a')
     await expect(session).toHaveText('fake (51)')
     // As in SSMS, nothing asks the session about its transaction after a script; only ending it does.
     expect(await calls(control, 'query.session.state')).toEqual([])
@@ -121,7 +122,7 @@ export async function sessionPrompts(launchOptions) {
     await writeFile(join(control, 'fail-commit'), '')
     await answerNext(application, 'Yes')
     await closeTab(first)
-    await expect(page.locator('.global-error')).toContainText('The transaction was not committed, and the query stays open.')
+    await expect(banner(page)).toContainText('The transaction was not committed, and the query stays open.')
     await expect(tabs).toHaveCount(1)
     await rm(join(control, 'fail-commit'))
     await answerNext(application, 'Yes')
@@ -150,12 +151,12 @@ export async function sessionPrompts(launchOptions) {
     // 4. A query still executing: Keep Running keeps it; Cancel Query and Close cancels it, then rolls back and closes.
     await server.selectOption({ label: 'server-a' })
     await run('BEGIN TRAN\nWAIT_FOR_CANCEL')
-    await expect(page.locator('.query-tabs .online')).toHaveCount(1)
+    await expect(executingMark(documentTabs(page))).toHaveCount(1)
     await closeTab(second)
     await expect.poll(async () => (await lastPrompt(application))?.title).toBe('Query executing')
     expect(await lastPrompt(application)).toMatchObject({ message: `${second} is still executing.`, buttons: ['Cancel Query and Close', 'Keep Running'], defaultId: 1, cancelId: 1 })
     await idle()
-    await expect(page.locator('.query-tabs .online')).toHaveCount(1)
+    await expect(executingMark(documentTabs(page))).toHaveCount(1)
     expect(await calls(control, 'query.cancel')).toEqual([])
     await answerNext(application, 'Cancel Query and Close')
     await closeTab(second)
@@ -172,7 +173,7 @@ export async function sessionPrompts(launchOptions) {
     await expect(session).toHaveText('fake (54)')
     const fifth = await activeName()
     await (await explorerRow(page, 'server-a')).click()
-    const disconnect = page.locator('.explorer-toolbar').getByRole('button', { name: 'Disconnect', exact: true })
+    const disconnect = explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true })
     await disconnect.click()
     await expect.poll(async () => (await lastPrompt(application))?.message).toBe('There are uncommitted transactions. Do you wish to commit these transactions before disconnecting the server?')
     expect(await lastPrompt(application)).toMatchObject({ detail: `• ${fifth}\n\nYes commits every nesting level; No rolls back.` })
@@ -186,7 +187,7 @@ export async function sessionPrompts(launchOptions) {
     console.log('Session checks: disconnecting a server asks about its queries\' open transactions, and commits them first.')
 
     // 6. A quit asks once for every open transaction: Cancel keeps the app; Yes commits each in its session, then it exits.
-    await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+    await toolbarButton(page, 'Connect').click()
     await connectDialog()
     await run('BEGIN TRAN')
     await expect(session).toHaveText('fake (55)')
@@ -207,7 +208,7 @@ export async function sessionPrompts(launchOptions) {
     // the app; Cancel Query and Close then asks about the transactions, whose Cancel still cancels nothing.
     await newQuery()
     await run('WAIT_FOR_CANCEL')
-    await expect(page.locator('.query-tabs .online')).toHaveCount(1)
+    await expect(executingMark(documentTabs(page))).toHaveCount(1)
     const executing = await activeName()
     const cancels = (await calls(control, 'query.cancel')).length
     await quit(application, child)
@@ -221,7 +222,7 @@ export async function sessionPrompts(launchOptions) {
     expect(await lastPrompt(application)).toMatchObject({ title: 'Uncommitted transactions', detail: `• ${third}\n• ${fourth} (2 nested levels)\n\nYes commits every nesting level; No rolls back.`, defaultId: 0, cancelId: 2 })
     await idle()
     expect((await calls(control, 'query.cancel')).length).toBe(cancels)
-    await expect(page.locator('.query-tabs .online')).toHaveCount(1)
+    await expect(executingMark(documentTabs(page))).toHaveCount(1)
     expect(state.exited).toBe(false)
     await answerNext(application, 'Cancel Query and Close', 'Yes')
     await quit(application, child)

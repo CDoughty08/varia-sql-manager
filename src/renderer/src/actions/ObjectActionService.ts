@@ -18,7 +18,7 @@ export interface ObjectActionServiceOptions {
     beginRename(nodeId: number): boolean
     endRename(): void
     listingFolderOf(nodeId: number): number | undefined
-    refreshAndSelect(folderNodeId: number, ref: ExplorerNodeRef): void
+    reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void
   }
   readonly documents: { newQuery(sql: string, name: string | undefined, connectionId: string, database: string, unsaved: boolean): unknown }
   readonly queries: { canExecute(): boolean; execute(): Promise<unknown> }
@@ -96,7 +96,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
 
   /**
    * Enter or leaving the box. An unchanged or empty name ends it silently; an invalid one reports why and keeps the box
-   * (false). Otherwise the box ends and the rename runs; on success the listing folder reloads with the new name selected.
+   * (false). Otherwise the box ends and the rename runs; on success the listing folder is reconciled, with the new name selected.
    */
   async commitRename(node: ExplorerMenuNode, text: string): Promise<boolean> {
     const object = objectOf(node)
@@ -133,7 +133,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     // Stop cancelled the statement in SQL Server, so the object keeps its name, as the label already shows.
     if (result.value.error?.code === 'CANCELLED') return true
     if (result.value.error) { this.options.report.error(`Rename failed for ${node.label}: ${result.value.error.message}`); return true }
-    if (folder !== undefined) this.options.explorer.refreshAndSelect(folder, { type: 'object', object: { ...object, name: text } })
+    if (folder !== undefined) this.options.explorer.reconcile(folder, { select: { type: 'object', object: { ...object, name: text } } })
     // sp_rename's caution is a warning; MODIFY NAME's "The database name 'x' has been set." only confirms the rename.
     const caution = object.kind === 'database' ? '' : result.value.messages.join(' ')
     if (caution) this.options.report.warning(object.kind === 'table' ? caution : `${caution} ${moduleRenameNote}`)

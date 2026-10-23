@@ -1,3 +1,4 @@
+import { connectionKey } from '../../../shared/connections'
 import type { ConnectionInfo, ConnectionOptions } from '../../../shared/contracts'
 import { SnapshotStore } from '../core/store'
 
@@ -12,6 +13,9 @@ function withoutPassword(options: ConnectionOptions): SavedOptions {
   delete saved.password
   return saved
 }
+
+/** The saved entry a connection belongs to; undefined for options the library would refuse. */
+function keyOf(options: SavedOptions): string | undefined { try { return connectionKey(options) } catch { return undefined } }
 
 // Connection metadata only; the app's connect and disconnect flows own the IPC.
 export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> {
@@ -28,6 +32,19 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   replace(oldId: string, info: ConnectionInfo, options: ConnectionOptions): void {
     const entry = this.entry(info, options), current = this.getSnapshot()
     this.publish(current.some(connection => connection.id === oldId) ? current.map(connection => connection.id === oldId ? entry : connection) : [...current, entry])
+  }
+  /**
+   * Gives `id`'s connection a new environment (undefined for None), and every other connection to the same saved entry
+   * (the same server, database, login and settings) with it, since the label belongs to the entry. Lost ones keep it for
+   * Reconnect. Returns the options the entry is saved with, or undefined when the connection is gone.
+   */
+  relabel(id: string, environment: string | undefined): SavedOptions | undefined {
+    const target = this.get(id)
+    if (!target) return undefined
+    const key = keyOf(target.options)
+    const label = (options: SavedOptions): SavedOptions => { const next = { ...options }; if (environment) next.environment = environment; else delete next.environment; return next }
+    this.publish(this.getSnapshot().map(connection => connection === target || (key !== undefined && keyOf(connection.options) === key) ? { ...connection, options: label(connection.options) } : connection))
+    return label(target.options)
   }
   remove(id: string): void { this.publish(this.getSnapshot().filter(connection => connection.id !== id)) }
   /** The backend moved on to `generation`: every connection held by an earlier one is gone with its process. */

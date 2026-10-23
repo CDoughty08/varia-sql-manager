@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ResultDescriptor } from '../src/shared/contracts'
+import { limits } from '../src/shared/ipc/wire/protocol'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceSpec } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick, LiveUpdateResult } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
@@ -704,6 +705,10 @@ describe('LiveService', () => {
     expect(client.released).toEqual([[{ generation: 1, resultId: right.resultId }]])
   })
 
+  it('samples a status-only view no more often than the catalogue hidden interval', () => {
+    expect(liveServiceLimits.statusOnlyIntervalMs).toBe(limits.live.hiddenIntervalMs)
+  })
+
   it('frees a status-only slot when its view ends, is lost or closes, and hands it to a hidden view waiting for one', async () => {
     const source: LiveSourceSpec = { ...liveSources['debug.synthetic'], hidden: 'statusOnly' }
     const catalog: LiveCatalog = { sources: { 'debug.synthetic': source }, probes: liveProbes as Record<string, LiveProbeSpec> }
@@ -963,7 +968,7 @@ describe('LiveService', () => {
   })
 
   it('sizes history by the setting and the interval, within 4 MiB a view and 32 MiB in all', () => {
-    const series = Array.from({ length: 64 }, (_, index) => ({ id: 's' + index, unit: 'count' as const, label: 'S' + index }))
+    const series = Array.from({ length: 64 }, (_, index) => ({ id: 's' + index, unit: 'count' as const, label: 'S' + index, counter: 'gauge' as const }))
     const wide: LiveProbeSpec = { id: 'debug.synthetic.metrics', source: 'debug.synthetic', label: 'Wide', description: 'Wide.', intervalMs: { default: 1000, min: 1000, max: 3_600_000 }, series }
     const catalog: LiveCatalog = { sources: liveSources, probes: { ...liveProbes, 'debug.synthetic.metrics': wide } }
     makeService({ catalog, settings: { 'liveData.historyMinutes': 5 } })

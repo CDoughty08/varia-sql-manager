@@ -4,6 +4,7 @@ import { identityAllowed, parseTypeText } from '../../../shared/designer/type-te
 import { useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import SubDialog from '../dialogs/SubDialog'
+import Icon from '../Icon'
 import PropertyGrid, { type GridGroup, type GridRow } from '../settings/PropertyGrid'
 import DesignerGrid, { typeChoices } from './DesignerGrid'
 import { parameterRows, type DesignerRow, type DesignerState, type TableDesignerService } from './TableDesignerService'
@@ -56,10 +57,10 @@ function Toolbar({ state }: { state: DesignerState }) {
   const properties = useKeybindingLabel('tableDesigner.properties')
   return <div className="table-designer-toolbar" role="toolbar" aria-label="Table Designer">
     {ids.map((id, index) => <button key={id} className="icon-button" aria-label={commands[id].title} title={commands[id].title} disabled={!enabled[index]}
-      onClick={() => void service.execute(id, { tabId: state.id }, 'toolbar')}><span className={`codicon codicon-${commands[id].icon}`} aria-hidden="true" /></button>)}
+      onClick={() => void service.execute(id, { tabId: state.id }, 'toolbar')}>{commands[id].icon && <Icon name={commands[id].icon} />}</button>)}
     <span className="toolbar-divider" />
     <button className="icon-button" aria-label="Properties" aria-pressed={state.propertiesVisible} title={properties ? `Properties (${properties.text})` : 'Properties'}
-      onClick={() => void service.execute('tableDesigner.properties', { tabId: state.id }, 'toolbar')}><span className="codicon codicon-settings-gear" aria-hidden="true" /></button>
+      onClick={() => void service.execute('tableDesigner.properties', { tabId: state.id }, 'toolbar')}><Icon name="settings-gear" /></button>
   </div>
 }
 
@@ -113,8 +114,8 @@ export default function TableDesigner({ documentId }: { documentId: string }) {
     <Toolbar state={state} />
     {state.phase === 'loading' && <div className="table-designer-bar" role="status">Reading the database…</div>}
     {state.phase === 'saving' && <div className="table-designer-bar" role="status">Saving the table… <button onClick={() => void workbench.commands.execute('tableDesigner.stop', { tabId: state.id }, 'toolbar')}>Stop</button></div>}
-    {state.error && <div className="table-designer-bar error" role="alert"><span>{state.error}</span>{state.phase !== 'loadFailed' && <button aria-label="Dismiss" onClick={() => service.dismissError(state.id)}><span className="codicon codicon-close" aria-hidden="true" /></button>}</div>}
-    {state.notice && <div className="table-designer-bar info" role="status"><span className="codicon codicon-info" aria-hidden="true" /><span>{state.notice}</span></div>}
+    {state.error && <div className="table-designer-bar error" role="alert"><span>{state.error}</span>{state.phase !== 'loadFailed' && <button aria-label="Dismiss" onClick={() => service.dismissError(state.id)}><Icon name="close" /></button>}</div>}
+    {state.notice && <div className="table-designer-bar info" role="status"><Icon name="info" /><span>{state.notice}</span></div>}
     <div className="table-designer-main">
       <div className="table-designer-content" ref={content}>
         <div className="table-designer-top" style={{ flexBasis: `${split * 100}%` }}>
@@ -125,8 +126,8 @@ export default function TableDesigner({ documentId }: { documentId: string }) {
         <section className="table-designer-column-properties" aria-label="Column Properties">
           <div className="table-designer-section-head">
             <span>Column Properties</span>
-            <button className="icon-button" aria-label="Categorized" aria-pressed={state.order === 'categorized'} title="Categorized" onClick={() => service.setOrder(state.id, 'categorized')}><span className="codicon codicon-list-tree" aria-hidden="true" /></button>
-            <button className="icon-button" aria-label="Alphabetical" aria-pressed={state.order === 'alphabetical'} title="Alphabetical" onClick={() => service.setOrder(state.id, 'alphabetical')}><span className="codicon codicon-case-sensitive" aria-hidden="true" /></button>
+            <button className="icon-button" aria-label="Categorized" aria-pressed={state.order === 'categorized'} title="Categorized" onClick={() => service.setOrder(state.id, 'categorized')}><Icon name="list-tree" /></button>
+            <button className="icon-button" aria-label="Alphabetical" aria-pressed={state.order === 'alphabetical'} title="Alphabetical" onClick={() => service.setOrder(state.id, 'alphabetical')}><Icon name="case-sensitive" /></button>
           </div>
           {row ? <PropertyGrid label="Column Properties" groups={columnRows} order={state.order} idPrefix={`${state.id}-column-`} focused={focusedProperty} onFocusRow={setFocusedProperty}
             onToggle={() => service.toggleIdentity(state.id)} onChange={(key, text) => service.setColumnProperty(state.id, state.current.row, key as Parameters<TableDesignerService['setColumnProperty']>[2], text)} />
