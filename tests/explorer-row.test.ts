@@ -51,7 +51,7 @@ describe('Object Explorer rows', () => {
     expect(rowDescription(node({ detail: 'x'.repeat(2000) }))).toHaveLength(512)
   })
   it('render the inline Rename box in place of the label: the name without its schema, at most 128 units, named for the kind', () => {
-    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
     const render = (renaming: boolean) => renderToStaticMarkup(createElement(ExplorerRow, {
       rowId: 7, kind: RowKind.Node, index: 0, level: 5, posinset: 1, setsize: 1, node: node(), rev: 0, text: '', selected: true, draggable: true, active: false, color: undefined, actions, menuTarget: () => {}, renaming
     }))

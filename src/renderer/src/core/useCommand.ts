@@ -20,6 +20,13 @@ export function useCommandsEnabled(items: readonly { readonly id: CommandId; rea
   return useMemo(() => Array.from(mask, flag => flag === '1'), [mask])
 }
 
+/** Whether each command's `toggled` condition holds, for buttons that show it (`aria-pressed`), in their order. */
+export function useCommandsToggled(ids: readonly CommandId[]): readonly boolean[] {
+  const { commands } = useWorkbench()
+  const mask = useSyncExternalStore(useEnablementChanges(), () => ids.map(id => commands.isToggled(id) ? '1' : '0').join(''))
+  return useMemo(() => Array.from(mask, flag => flag === '1'), [mask])
+}
+
 function useEnablementChanges(): (listener: () => void) => () => void {
   const { commands, context } = useWorkbench()
   return useCallback((listener: () => void) => {

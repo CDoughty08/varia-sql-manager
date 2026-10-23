@@ -419,12 +419,14 @@ try {
   await expect(cell(1, 3)).toHaveClass(/is-trunc/)
   await page.keyboard.press('ArrowLeft')
   await page.keyboard.press('ArrowLeft')
-  // A NULL and a value that could not be read look alike; their labels tell them apart.
+  // A NULL and a value that could not be read both show NULL; their labels tell them apart, and so does more than hue.
   await expect.poll(async () => (await active()).label).toBe('NULL, null value')
   await page.keyboard.press('ArrowDown')
   for (let column = 0; column < 3; column++) await page.keyboard.press('ArrowRight')
   await expect.poll(async () => (await active()).label).toBe('NULL, could not be read')
-  expect(await cell(2, 4).evaluate(element => getComputedStyle(element).fontStyle)).toBe('italic')
+  const cue = element => { const style = getComputedStyle(element); return `${style.fontStyle} ${style.textDecorationLine} ${style.textDecorationStyle}` }
+  expect(await cell(1, 1).evaluate(cue)).toBe('italic none solid')
+  expect(await cell(2, 4).evaluate(cue)).toBe('normal underline wavy')
   console.log('Results checks: the active descendant follows every grid key with its row, column, selection and label.')
 
   // 6. Selection and copy: clicks, Shift, a drag that scrolls, Ctrl+click on columns and rows, headers and the corner;
@@ -633,6 +635,10 @@ try {
   await expect(page.locator('.quick-input .quick-input-row.active')).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
   await expect(page.locator('.output-empty')).toHaveText('Results were closed to free memory. Execute the query again to see them.')
+  // A line only, centred by the states kit's empty state, with nothing to click.
+  await expect(page.locator('.output-empty.empty-state .empty-state-detail')).toHaveCount(1)
+  await expect(page.locator('.output-empty.empty-state')).toHaveCSS('justify-content', 'center')
+  await expect(page.locator('.output-empty .empty-state-title, .output-empty button')).toHaveCount(0)
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
   // Run from the editor, it leaves focus there.
   await expect(textbox()).toBeFocused()
@@ -684,6 +690,9 @@ try {
   await expect(server()).toHaveValue('')
   await expect(page.locator('.toolbar-actions button.execute')).toBeDisabled()
   await expect(page.locator('.output-empty')).toContainText('Query results appear here for query tabs.')
+  await expect(page.locator('.output-empty.empty-state .empty-state-title')).toHaveText('Query results')
+  await expect(page.locator('.output-empty .empty-state-icon.codicon-table')).toHaveCount(1)
+  await expect(page.locator('.output-empty.empty-state')).toHaveCSS('justify-content', 'center')
   const forXmlText = '<objects>\n  <o>\n    <name>Orders</name>\n    <object_id>1</object_id>\n  </o>\n  <o>\n    <name>Customers</name>\n    <object_id>2</object_id>\n  </o>\n</objects>'
   expect(await editorText()).toBe(forXmlText)
   await page.keyboard.press('F5')
@@ -945,6 +954,7 @@ try {
     // The set's rows are painted a frame or more after the run completes.
     const nullColors = { color: await tokenColor('resultsGrid.nullForeground'), background: await tokenColor('resultsGrid.nullBackground') }
     await expect.poll(() => computed(nullCell)).toEqual(nullColors)
+    expect(await nullCell.evaluate(element => getComputedStyle(element).fontStyle)).toBe('italic')
     expect((await computed(cell(1, 3), '::after')).color).toBe(await tokenColor('resultsGrid.truncationForeground'))
     expect((await computed(cell(2, 4))).color).toBe(await tokenColor('errorForeground'))
     await cell(0, 0).click()

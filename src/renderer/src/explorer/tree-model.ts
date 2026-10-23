@@ -198,6 +198,8 @@ export type TreeAction =
   | { readonly type: 'continue'; readonly id: number }
   /** Enter on a capped row opens Filter Settings for its folder. */
   | { readonly type: 'filter'; readonly id: number }
+  /** Enter on a node that does not expand: its default action, if its kind has one (an SSIS package's Properties). */
+  | { readonly type: 'activate'; readonly id: number }
   | { readonly type: 'none' }
 const none: TreeAction = { type: 'none' }
 
@@ -249,7 +251,7 @@ export function treeKey(rows: VisibleRows, index: number, key: TreeKey, pageRows
       default: return none
     }
   }
-  const node = rows.nodes[index]
+  const node = rows.nodes[index], live = !!node && !node.lost
   switch (key) {
     case 'right':
       if (!expandable(node)) return none
@@ -260,7 +262,7 @@ export function treeKey(rows: VisibleRows, index: number, key: TreeKey, pageRows
       const parent = parentIndex(rows, index)
       return parent < 0 ? none : select(parent)
     }
-    case 'enter': return expandable(node) ? { type: 'toggle', id } : none
+    case 'enter': return expandable(node) ? { type: 'toggle', id } : live ? { type: 'activate', id } : none
     case 'expand': return expandable(node) && !node.expanded ? { type: 'expand', id } : none
     case 'collapse': return node?.expanded ? { type: 'collapse', id } : none
     case 'expandSiblings': return node ? { type: 'expandSiblings', id } : none

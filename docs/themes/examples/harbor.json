@@ -14,12 +14,16 @@
     "accentHover": { "dark": "#7fe0d6", "light": "#0b5e58" },
     "onAccent":    { "dark": "#04201d", "light": "#ffffff" },
     "focus":       "$accent",
+    "accentSurface": { "dark": "#0f2c33", "light": "#d3ecea" },
+    "textAccent":  { "dark": "#8fe6dd", "light": "#0b5e58" },
+    "controlBorder": { "light": "#6f7a84" },
+    "inputBorder": { "light": "#6f7a84" },
     "deepSea":     "#0b3d4a"
   },
   "colors": {
     "statusBar.background": { "dark": "$deepSea", "light": "#d7eef0" },
     "statusBar.foreground": { "dark": "#cfeff2", "light": "#0b3d4a" },
-    "list.inactiveSelectionBackground": "$accent/20",
+    "list.inactiveSelectionBackground": { "dark": "$accent/20", "light": "$accent/10" },
     "resultsGrid.nullForeground": { "dark": "#c8a96b", "light": "#7a5a1e" },
     "editorLineNumber.foreground": { "dark": "#7b8794" }
   },

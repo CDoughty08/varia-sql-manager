@@ -4,6 +4,7 @@ import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerN
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { actionContextValues, actionMenuState, type ActionContextValues } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
+import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -28,9 +29,9 @@ export interface ExplorerSnapshot {
 }
 /**
  * The Object Explorer context keys (state scope), from the selected node; the Script As keys come from `scriptMenuState`
- * and the object action keys from `actionMenuState`.
+ * the object action keys from `actionMenuState`, and the SSIS verb keys from `ssisVerbMenuState`.
  */
-export interface ExplorerContextState extends ScriptContextValues, ActionContextValues {
+export interface ExplorerContextState extends ScriptContextValues, ActionContextValues, SsisVerbContextValues {
   readonly explorerHasSelection: boolean
   readonly explorerSelectionKind: '' | 'folder' | NodeKind
   readonly explorerSelectionFolder: '' | FolderId
@@ -41,7 +42,8 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
-  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), explorerLoading: false
+  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
+  explorerLoading: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
 export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
@@ -981,6 +983,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       explorerSelectionInsertable: !!node && (node.kind === 'server' || this.insertable(node)),
       ...scriptContextValues(scriptMenuState(node && { kind: node.kind, subtype: node.subtype, parentKind: node.ref.type === 'object' ? node.ref.object.parent?.kind : undefined })),
       ...actionContextValues(actionMenuState(node && { kind: node.kind, subtype: node.subtype })),
+      ...ssisVerbContextValues(ssisVerbMenuState(node?.kind)),
       explorerLoading: this.loader.pending > 0
     }
     const current = this.contextStore.getSnapshot()
