@@ -16,7 +16,8 @@ namespace Varia.Backend.Ssis;
 /// transaction: the catalog's procedures manage their own. Failures are values. The reply never waits on blocked I/O: the
 /// request awaits the job with its token, and the job alone owns the connection and its gates until it ends. Stop (the
 /// request's own token) is the exception, bounded by StopGrace: its reply waits for SQL Server to end the statement, so it
-/// says which steps completed. A disconnect answers CANCELLED. Nothing is logged.</summary>
+/// says which steps completed (Create Catalog's past the grace too: it lets its restore end, then removes what it made). A
+/// disconnect answers CANCELLED. Nothing is logged.</summary>
 internal sealed class SsisActionService : IDisposable
 {
     private readonly ISsisHost host;
@@ -59,10 +60,18 @@ internal sealed class SsisActionService : IDisposable
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
         if (args.Action?.Verb is not { } verb || catalog.Action(verb) is not { } spec) throw Invalid("verb.");
+        var action = args.Action;
         switch (verb)
         {
             case "stopOperation":
-                if (args.Action.OperationId is not (>= 1 and <= MaxSafeInteger)) throw Invalid("operationId.");
+                if (action.OperationId is not (>= 1 and <= MaxSafeInteger)) throw Invalid("operationId.");
+                if (action.Password is not null || action.EnableClr is not null || action.StartupProcedure is not null) throw Invalid("Stop Operation takes only an operationId.");
+                break;
+            case "createCatalog":
+                // The password's length and characters only: SQL Server's own policy decides the rest, and nothing echoes it.
+                if (action.Password is not { Length: > 0 } password || password.Length > catalog.Limit("catalogPassword") || password.Contains('\0')) throw Invalid("password.");
+                if (action.EnableClr is null || action.StartupProcedure is null) throw Invalid("Create Catalog needs enableClr and startupProcedure.");
+                if (action.OperationId is not null) throw Invalid("Create Catalog takes no operationId.");
                 break;
             default:
                 throw Invalid("verb.");
@@ -79,36 +88,65 @@ internal sealed class SsisActionService : IDisposable
         var server = host.Profile(args.ConnectionId);
         var served = server.Explorer(explorer);
         SsisExecuteResult Failed(SsisError error) => new([], watch.ElapsedMilliseconds, error);
-        if (served.Band < 13) return Failed(Error("NOT_SUPPORTED", "The SSIS Catalog needs SQL Server 2016 or later."));
-        if (served.Linux && !Options.IgnoreLinuxHost) return Failed(Error("NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux."));
+        if (spec.Server)
+        {
+            if (SsisCreate.Unsupported(catalog, served, server.EngineEdition, Options.IgnoreLinuxHost) is { } unsupported) return Failed(unsupported);
+        }
+        else
+        {
+            if (served.Band < 13) return Failed(Error("NOT_SUPPORTED", "The SSIS Catalog needs SQL Server 2016 or later."));
+            if (served.Linux && !Options.IgnoreLinuxHost) return Failed(Error("NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux."));
+        }
         // A box server's SSISDB refuses a SQL Server login (27123) before it changes anything (S0); Azure SQL Database (5) and
         // Managed Instance (8) host the catalog of an Azure-SSIS integration runtime instead.
         if (spec.WindowsAuthOnBox && server.EngineEdition is not (5 or 8) && host.Authentication(args.ConnectionId) == "sql" && !Options.IgnoreSqlAuthentication)
             return Failed(Error("WINDOWS_AUTH_REQUIRED", SsisErrors.WindowsAuthRequired));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
+        var progress = new JobProgress();
         try
         {
             // A request cancelled before it ran (a CANCEL frame read right after its REQUEST) takes no gate.
             token.ThrowIfCancellationRequested();
             var jobSource = CancellationTokenSource.CreateLinkedTokenSource(source.Token);
-            var job = Task.Run(() => JobAsync(args, spec, jobSource), CancellationToken.None);
-            _ = job.ContinueWith(done => _ = done.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+            var job = Task.Run(() => JobAsync(args, spec, jobSource, progress), CancellationToken.None);            _ = job.ContinueWith(done => _ = done.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             try { return (await job.WaitAsync(source.Token)) with { ElapsedMs = watch.ElapsedMilliseconds }; }
             catch (OperationCanceledException) when (entry.Forgotten && !token.IsCancellationRequested) { throw new RequestException("CANCELLED", "The operation was cancelled."); }
             catch (OperationCanceledException) when (token.IsCancellationRequested && !entry.Forgotten)
             {
-                // Stop: SQL Server has the attention already (the job's token); the reply says what completed once it ends.
-                try { return (await job.WaitAsync(Options.StopGrace, CancellationToken.None)) with { ElapsedMs = watch.ElapsedMilliseconds }; }
-                catch (TimeoutException) { throw new OperationCanceledException(token); }
-                // Only the gates, the sign-in or the preflight throw on cancellation: no step had started.
-                catch (Exception error) when (error is OperationCanceledException or SqlException) { return Failed(Error("CANCELLED", "The action was stopped before it changed anything.")); }
+                return (await AfterStopAsync(job, progress, entry.ForgottenToken, token)) with { ElapsedMs = watch.ElapsedMilliseconds };
             }
         }
         finally { running.Unregister(args.RequestId, entry); }
     }
 
-    private async Task<SsisExecuteResult> JobAsync(SsisExecuteArgs args, SsisActionSpec spec, CancellationTokenSource jobSource)
+    /// <summary>Stop's reply. SQL Server has the attention already (the job's token), and the reply says what completed once the job
+    /// ends, within StopGrace. A job that answers Stop itself (<see cref="JobProgress.Committed"/>: Create Catalog from its restore on,
+    /// which lets the restore end and then removes what it created) is waited for past the grace, so the reply says which; a
+    /// disconnect (<paramref name="forgotten"/>) still answers at once. Otherwise past the grace the request answers CANCELLED.</summary>
+    internal async Task<SsisExecuteResult> AfterStopAsync(Task<SsisExecuteResult> job, JobProgress progress, CancellationToken forgotten, CancellationToken stop)
+    {
+        try { return await job.WaitAsync(Options.StopGrace, CancellationToken.None); }
+        catch (TimeoutException) when (progress.Committed)
+        {
+            try { return await job.WaitAsync(forgotten); }
+            catch (OperationCanceledException) { throw new RequestException("CANCELLED", "The operation was cancelled."); }
+        }
+        catch (TimeoutException) { throw new OperationCanceledException(stop); }
+        // Only the gates, the sign-in or the preflight throw on cancellation: no step had started.
+        catch (Exception error) when (error is OperationCanceledException or SqlException) { return new([], 0, Error("CANCELLED", "The action was stopped before it changed anything.")); }
+    }
+
+    /// <summary>Whether a job answers Stop itself once SQL Server lets it (Create Catalog from the start of its restore, which Stop
+    /// cannot end, through the removal of what it created): its Stop reply then waits for it.</summary>
+    internal sealed class JobProgress
+    {
+        private int committed;
+        public bool Committed => Volatile.Read(ref committed) == 1;
+        public void Commit() => Volatile.Write(ref committed, 1);
+    }
+
+    private async Task<SsisExecuteResult> JobAsync(SsisExecuteArgs args, SsisActionSpec spec, CancellationTokenSource jobSource, JobProgress progress)
     {
         Interlocked.Increment(ref activeJobs);
         try
@@ -123,7 +161,8 @@ internal sealed class SsisActionService : IDisposable
                 try
                 {
                     var name = Options.CatalogDatabase;
-                    await using var connection = host.SsisActionConnection(args.ConnectionId, name);
+                    // Create Catalog runs in master, where SSMS runs it: its catalog does not exist yet.
+                    await using var connection = host.SsisActionConnection(args.ConnectionId, spec.Server ? "master" : name);
                     try { await host.OpenAsync(connection, token); }
                     catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return Failed(Error(error.Code, error.Message)); }
                     // Nothing ran yet, so the outcome is known: the action did not start.
@@ -139,6 +178,7 @@ internal sealed class SsisActionService : IDisposable
                         return args.Action.Verb switch
                         {
                             "stopOperation" => await StopOperationAsync(connection, args.Action.OperationId!.Value, spec, token),
+                            "createCatalog" => await CreateCatalogAsync(connection, args.ConnectionId, args.Action, spec, progress, token),
                             _ => throw new InvalidOperationException("Unknown SSIS verb.")
                         };
                     }
@@ -164,6 +204,7 @@ internal sealed class SsisActionService : IDisposable
     private static string Doing(SsisActionDto action) => action.Verb switch
     {
         "stopOperation" => "stop " + Subject(action.OperationId!.Value).ToLowerInvariant(),
+        "createCatalog" => "create the SSIS Catalog",
         _ => action.Verb
     };
 
@@ -289,6 +330,199 @@ internal sealed class SsisActionService : IDisposable
             }
         }
         return new(steps, 0, failure);
+    }
+
+    // --- Create Catalog -----------------------------------------------------------------------------------------------------
+
+    /// <summary>The catalog's database Create Catalog makes: SSISDB, or the live checks' scratch database in a dry run.</summary>
+    private string CreateName => Options.CreateScratch ?? catalog.CatalogDatabase;
+
+    private async Task<SsisExecuteResult> CreateCatalogAsync(SqlConnection connection, string connectionId, SsisActionDto action, SsisActionSpec spec, JobProgress progress, CancellationToken token)
+    {
+        var name = CreateName;
+        var dryRun = Options.CreateScratch is not null;
+        var band = host.Profile(connectionId).Explorer(explorer).Band;
+        CatalogFacts facts;
+        CatalogBackupLayout layout;
+        using (var preflight = CancellationTokenSource.CreateLinkedTokenSource(token))
+        {
+            preflight.CancelAfter(Options.PreflightBudget);
+            try
+            {
+                facts = await SsisCreate.ReadAsync(connection, catalog, name, band, preflight.Token);
+                if (SsisCreate.Refusal(catalog, facts, name) is { } refused) return new([], 0, refused);
+                var (found, unusable) = await SsisCreate.LayoutAsync(connection, catalog, facts.BackupFile!, preflight.Token);
+                if (unusable is not null) return new([], 0, unusable);
+                layout = found!;
+            }
+            catch (Exception error) when (error is OperationCanceledException or SqlException && preflight.IsCancellationRequested && !token.IsCancellationRequested)
+            {
+                return new([], 0, Error("TIMEOUT", "Checking the server took longer than " + (int)Options.PreflightBudget.TotalSeconds + " seconds. Try again."));
+            }
+            catch (SqlException error) when (!token.IsCancellationRequested)
+            {
+                return new([], 0, SsisErrors.FromSql(catalog, error, connection, "master", "the server", "create the SSIS Catalog", sent: false));
+            }
+        }
+        var enableClr = !facts.ClrEnabled && !dryRun;
+        if (enableClr && action.EnableClr != true)
+            return new([], 0, Error("CLR_REQUIRED", "Integration Services uses CLR stored procedures. Enable CLR integration to create the catalog."));
+        if (Options.BeforeWrite is { } hook) await hook(token);
+
+        var steps = new List<ActionStepDto>();
+        var titles = spec.Steps;
+        if (enableClr)
+        {
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                await RunAsync(connection, SsisCreateSql.EnableClr, [], token);
+                steps.Add(new("done", titles[0]));
+            }
+            catch (Exception exception) when (token.IsCancellationRequested && exception is SqlException or OperationCanceledException)
+            {
+                steps.Add(new("cancelled", titles[0]));
+                return new(steps, 0, Error("CANCELLED", "Create Catalog was stopped at \"" + titles[0] + "\"; SQL Server cancelled that statement, so CLR integration may or may not be enabled. Nothing else changed."));
+            }
+            catch (SqlException sql)
+            {
+                var value = SsisErrors.FromSql(catalog, sql, connection, "master", "the server", "enable CLR integration");
+                steps.Add(new("failed", value.Message));
+                return new([.. steps, .. titles.Skip(1).Select(title => new ActionStepDto("skipped", title))], 0, value);
+            }
+        }
+        // From here the job answers Stop itself, and the reply waits for it (ExecuteAsync): the restore runs to its end, because a
+        // half-restored catalog is worse than waiting, and every later statement takes Stop, after which what was created goes.
+        progress.Commit();
+        var clr = enableClr ? " CLR integration stays enabled." : "";
+        if (token.IsCancellationRequested)
+            return new(steps, 0, Error("CANCELLED", "Create Catalog was stopped before its restore." + (steps.Count > 0 ? clr + " Nothing else changed." : " Nothing changed.")));
+
+        var created = new CreatedObjects();
+        var plan = new List<(string Title, Func<Task> Run)>
+        {
+            (titles[1], async () =>
+            {
+                created.Restored = true;
+                await RunAsync(connection, SsisCreateSql.Restore,
+                [
+                    SsisCreate.Name("@catalog", name), SsisCreate.Path(catalog, "@backup", facts.BackupFile), SsisCreate.Name("@data_name", layout.DataName), SsisCreate.Path(catalog, "@data_file", facts.DataFile),
+                    SsisCreate.Name("@second_name", layout.SecondName), SsisCreate.Path(catalog, "@second_file", layout.SecondName is null ? null : Path.ChangeExtension(facts.DataFile, ".ndf")),
+                    SsisCreate.Name("@log_name", layout.LogName), SsisCreate.Path(catalog, "@log_file", facts.LogFile)
+                ], CancellationToken.None);
+                created.Recovered = true;
+                // Part of the restore Stop waits for: ROLLBACK IMMEDIATE waits for no lock in a database nobody else could use yet.
+                await RunAsync(connection, SsisCreateSql.ReadWrite, [SsisCreate.Name("@catalog", name)], CancellationToken.None);
+            }),
+            (titles[2], async () =>
+            {
+                await connection.ChangeDatabaseAsync(name, token);
+                try { await RunAsync(connection, SsisCreateSql.MasterKey, [SsisCreate.Name("@password", action.Password)], token); }
+                finally { if (connection.State == ConnectionState.Open) await connection.ChangeDatabaseAsync("master", CancellationToken.None); }
+            })
+        };
+        if (!dryRun)
+        {
+            plan.Add((titles[3], async () =>
+            {
+                created.Assembly = true;
+                await using (var command = Command(connection, SsisCreateSql.Assembly, [SsisCreate.Path(catalog, "@assembly", facts.AssemblyFile)]))
+                await using (var reader = await command.ExecuteReaderAsync(token))
+                {
+                    if (await reader.ReadAsync(token) && !reader.IsDBNull(0) && reader.GetBoolean(0) && !reader.IsDBNull(1)) created.TrustedHash = (byte[])reader.GetValue(1);
+                    while (await reader.NextResultAsync(token)) { }
+                }
+                created.Startup = true;
+                await RunAsync(connection, SsisCreateSql.DropStartup, [], token);
+                await RunAsync(connection, SsisCreateSql.CreateStartup, [], token);
+                await RunAsync(connection, SsisCreateSql.StartupOn, [SsisCreate.StartupParameter(action)], token);
+            }));
+            plan.Add((titles[4], async () =>
+            {
+                created.Jobs = true;
+                await RunAsync(connection, SsisCreateSql.CleanupLogin, [], token);
+                await connection.ChangeDatabaseAsync(name, token);
+                try { await RunAsync(connection, SsisCreateSql.CleanupUser, [], token); }
+                finally { if (connection.State == ConnectionState.Open) await connection.ChangeDatabaseAsync("master", CancellationToken.None); }
+                await RunAsync(connection, SsisCreateSql.CleanupGrant, [], token);
+                await RunAsync(connection, SsisCreateSql.MaintenanceJob, [], token);
+            }));
+        }
+        for (var index = 0; index < plan.Count; index++)
+        {
+            var (title, run) = plan[index];
+            try
+            {
+                if (Options.BeforeCreateStep is { } before) await before(title);
+                token.ThrowIfCancellationRequested();
+                await run();
+                steps.Add(new("done", title));
+            }
+            // Stop where SQL Server allows it: before the restore, or at any statement after it; a restore that fails is a failure.
+            catch (Exception exception) when (token.IsCancellationRequested && (!created.Restored || created.Recovered) && exception is SqlException or OperationCanceledException)
+            {
+                if (!created.Restored) return new(steps, 0, Error("CANCELLED", "Create Catalog was stopped before its restore." + (steps.Count > 0 ? clr + " Nothing else changed." : " Nothing changed.")));
+                steps.Add(new("cancelled", title));
+                steps.AddRange(plan.Skip(index + 1).Select(item => new ActionStepDto("skipped", item.Title)));
+                var removed = await RemoveAsync(connection, name, created, restoring: false, facts.Version);
+                steps.Add(new(removed is null ? "done" : "failed", removed is null ? catalog.CleanupStep : catalog.CleanupStep + ": " + removed));
+                return new(steps, 0, Error("CANCELLED", "Create Catalog was stopped at \"" + title + "\"" + (exception is SqlException ? "; SQL Server cancelled that statement." : ".") + Removed(name, removed, clr)));
+            }
+            catch (SqlException sql)
+            {
+                var exists = sql.Number == 27135;
+                var value = exists ? Error("CATALOG_EXISTS", "There already exists a catalog (" + name + "), and only one catalog is supported on a server.")
+                    : SsisErrors.FromSql(catalog, sql, connection, name, "the SSIS Catalog", "create the SSIS Catalog");
+                steps.Add(new("failed", value.Message));
+                steps.AddRange(plan.Skip(index + 1).Select(item => new ActionStepDto("skipped", item.Title)));
+                // A refused restore made nothing; a failed one may have left the database restoring, which only this restore made.
+                if (exists) return new(steps, 0, value);
+                var removed = await RemoveAsync(connection, name, created, restoring: !created.Recovered, facts.Version);
+                steps.Add(new(removed is null ? "done" : "failed", removed is null ? catalog.CleanupStep : catalog.CleanupStep + ": " + removed));
+                return new(steps, 0, Error(value.Code, value.Message + Removed(name, removed, clr)));
+            }
+        }
+        return new(steps, 0);
+    }
+
+    private static string Removed(string name, string? failure, string clr) => failure is null
+        ? " Varia removed what Create Catalog had created, so the catalog does not exist." + clr
+        : " Removing what Create Catalog had created failed too (" + failure + "): delete the " + name + " database, master.dbo.sp_ssis_startup, the SSIS Server Maintenance Job and the "
+            + "##MS_SSISServerCleanupJobLogin## login before you try again.";
+
+    /// <summary>SSMS's DropCatalogInternal after a Stop or a failed step, limited to what this Create Catalog made
+    /// (<see cref="SsisCreate.Removal"/>). It cannot be stopped, so its statements wait at most 30 s for a lock (the cleanup
+    /// prologue, which also ends a transaction a cancelled step left open). Each part runs even when one before it failed; null when
+    /// all succeeded, otherwise what failed.</summary>
+    private static async Task<string?> RemoveAsync(SqlConnection connection, string name, CreatedObjects created, bool restoring, string version)
+    {
+        if (connection.State != ConnectionState.Open) return "the connection to the server was lost";
+        var failures = new List<string>();
+        async Task Try(SsisCreateCommand command, SqlParameter[] parameters)
+        {
+            try { await RunAsync(connection, command, parameters, CancellationToken.None); }
+            catch (SqlException error) { failures.Add(error.Message); }
+        }
+        await Try(SsisCreateSql.CleanupPrologue, []);
+        try { if (connection.Database != "master") await connection.ChangeDatabaseAsync("master", CancellationToken.None); }
+        catch (SqlException error) { return error.Message; }
+        foreach (var (command, parameters) in SsisCreate.Removal(created, name, restoring, version)) await Try(command, parameters);
+        return failures.Count == 0 ? null : string.Join(" ", failures.Distinct());
+    }
+
+    private static SqlCommand Command(SqlConnection connection, SsisCreateCommand template, SqlParameter[] parameters)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = template.Text;
+        command.CommandTimeout = 0;
+        command.Parameters.AddRange(parameters);
+        return command;
+    }
+
+    private static async Task RunAsync(SqlConnection connection, SsisCreateCommand template, SqlParameter[] parameters, CancellationToken token)
+    {
+        await using var command = Command(connection, template, parameters);
+        await command.ExecuteNonQueryAsync(token);
     }
 
     private static string Completed(List<ActionStepDto> steps, string before)

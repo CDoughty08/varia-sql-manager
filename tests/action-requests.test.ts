@@ -17,13 +17,13 @@ describe('object action cancellation in main', () => {
   it('routes every action method, and only the cancellable methods, to their cancel channel, so Stop reaches DDL', () => {
     const channels = { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', connections: 'connections' }
     const routed = Object.fromEntries(Object.keys(methodPolicies).flatMap(method => { const channel = cancellableRequests(method, channels); return channel ? [[method, channel]] : [] }))
-    expect(routed).toEqual({ 'explorer.children': 'explorer', 'scripting.script': 'scripting', 'actions.describe': 'actions', 'actions.script': 'actions', 'actions.execute': 'actions', 'ssis.describe': 'ssis', 'ssis.execute': 'ssis' })
+    expect(routed).toEqual({ 'explorer.children': 'explorer', 'scripting.script': 'scripting', 'actions.describe': 'actions', 'actions.script': 'actions', 'actions.execute': 'actions', 'ssis.describe': 'ssis', 'ssis.execute': 'ssis', 'ssis.catalogSetup': 'ssis' })
   })
   it('routes a connect and Load databases to the Connect dialog Stop only when they carry a requestId', () => {
     const channels = { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', connections: 'connections' }
     const id = crypto.randomUUID()
     const routed = Object.fromEntries(Object.keys(methodPolicies).flatMap(method => { const channel = cancellableRequests(method, channels, id); return channel ? [[method, channel]] : [] }))
-    expect(routed).toEqual({ 'connections.connect': 'connections', 'connections.databases': 'connections', 'explorer.children': 'explorer', 'scripting.script': 'scripting', 'actions.describe': 'actions', 'actions.script': 'actions', 'actions.execute': 'actions', 'ssis.describe': 'ssis', 'ssis.execute': 'ssis' })
+    expect(routed).toEqual({ 'connections.connect': 'connections', 'connections.databases': 'connections', 'explorer.children': 'explorer', 'scripting.script': 'scripting', 'actions.describe': 'actions', 'actions.script': 'actions', 'actions.execute': 'actions', 'ssis.describe': 'ssis', 'ssis.execute': 'ssis', 'ssis.catalogSetup': 'ssis' })
   })
   it('uses the action limits: 16 ids per cancel, 128 running, 64 tombstones for 60 s', () => {
     expect(actionRequestLimits).toEqual({ tombstones: actionLimits.tombstones, tombstoneMs: actionLimits.tombstoneMs, running: actionLimits.registered, cancelBatch: actionLimits.cancelIds })

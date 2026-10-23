@@ -595,6 +595,23 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
+/* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
+.create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
+.create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }
+.create-catalog-dialog fieldset:disabled .checkbox-label, .create-catalog-dialog fieldset:disabled .field-note { opacity: .6; }
+.create-catalog-caption { font-size: 11px; color: var(--varia-settings-headerForeground); }
+.create-catalog-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.create-catalog-steps li { display: flex; align-items: flex-start; gap: 6px; overflow-wrap: anywhere; user-select: text; }
+.create-catalog-steps .codicon { flex-shrink: 0; margin-top: 1px; }
+.create-catalog-steps li[data-status="pending"], .create-catalog-steps li[data-status="skipped"] { color: var(--varia-descriptionForeground); }
+.create-catalog-steps li[data-status="done"] .codicon { color: var(--varia-successForeground); }
+.create-catalog-steps li[data-status="failed"] .codicon { color: var(--varia-errorForeground); }
+.create-catalog-files { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 4px 0 0; font-size: 11px; }
+.create-catalog-files dt { color: var(--varia-descriptionForeground); }
+.create-catalog-files dd { margin: 0; }
+.create-catalog-path { font-family: var(--varia-font-mono); overflow-wrap: anywhere; user-select: text; }
+.create-catalog-dialog .connect-error, .create-catalog-status { margin: 10px 0 0; }
+.create-catalog-dialog .connect-error.info { color: var(--varia-banner-warningForeground); background: var(--varia-banner-warningBackground); }
 @media (forced-colors: active) {
   .object-dialog-pages > button[aria-current="page"], .object-dialog-script-list > li[aria-selected="true"] { outline: 1px solid CanvasText; outline-offset: -1px; }
 }

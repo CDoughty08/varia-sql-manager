@@ -3,7 +3,7 @@
 import {
   catalogDatabase, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
-  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, stoppableOperationTypes, type CodeLabel
+  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, stoppableOperationTypes, createCatalog, type CodeLabel, type SsisActionSpec
 } from './catalog.ts'
 import { folderSpecs, kindSpecs } from '../explorer/catalog.ts'
 
@@ -40,7 +40,9 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   registeredWrites: 'SSIS writes registered at once',
   preflightLockTimeoutMs: 'LOCK_TIMEOUT of a write\'s preflight, in ms (`BLOCKED`)',
   preflightMs: 'A write\'s preflight budget, in ms, answered as `TIMEOUT`',
-  stopGraceMs: 'How long a stopped write\'s reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown)'
+  stopGraceMs: 'How long a stopped write\'s reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown)',
+  catalogPassword: 'UTF-16 code units in Create Catalog\'s encryption password (at least 1; the server\'s password policy applies too)',
+  serverPath: 'Characters in a path Create Catalog reads on the server (the catalog backup, the assembly, the database files)'
 }
 
 const viewNotes: Readonly<Record<typeof describeViews[number], string>> = {
@@ -97,17 +99,18 @@ export function renderSsisDocs(): string {
     '### Writes (`ssis.execute`)',
     '',
     'A write runs on a connection of its own, opened for the request and closed after it: unpooled, never retried, in the catalog\'s',
-    'database, under the program name plus " - Integration Services Actions", so DBAs can tell it from the read pool. It takes the SSIS',
-    `write gates (${ssisLimits.writePerConnection} per connection, ${ssisLimits.writeTotal} in all), then runs a preflight in the same connection at READ COMMITTED with`,
-    `\`LOCK_TIMEOUT ${ssisLimits.preflightLockTimeoutMs}\` (within ${ssisLimits.preflightMs / 1000} s), then its steps in order, each one statement from \`SsisSql\`'s constant templates`,
-    'with values as parameters, waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), with no outer transaction. Stop (`varia:ssis-cancel`)',
-    `ends it at any time: the reply waits up to ${ssisLimits.stopGraceMs / 1000} s for SQL Server to end the statement and lists the steps that completed (done,`,
-    'failed, cancelled, skipped). On a box server SSISDB changes nothing for a SQL Server login (error 27123), so a verb that needs',
+    'database (Create Catalog\'s in `master`), under the program name plus " - Integration Services Actions", so DBAs can tell it from the',
+    `read pool. It takes the SSIS write gates (${ssisLimits.writePerConnection} per connection, ${ssisLimits.writeTotal} in all), then runs a preflight in the same connection at READ`,
+    `COMMITTED with \`LOCK_TIMEOUT ${ssisLimits.preflightLockTimeoutMs}\` (within ${ssisLimits.preflightMs / 1000} s), then its steps in order, from \`SsisSql\`'s constant templates (Create`,
+    'Catalog\'s from `SsisCreateSql`) with values as parameters, waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), with no outer transaction.',
+    `Stop (\`varia:ssis-cancel\`) ends it at any time (Create Catalog at any statement but its restore): the reply waits up to ${ssisLimits.stopGraceMs / 1000} s for SQL Server to`,
+    'end the statement and lists the steps that completed (done, failed, cancelled, skipped). On a box server SSISDB changes nothing for a SQL Server login (error 27123), so a verb that needs',
     'Windows authentication answers `WINDOWS_AUTH_REQUIRED` before it connects. Nothing is logged: not names, values, SQL or messages.',
     '',
-    table(['Verb', 'Title', 'Steps', 'Calls', 'Takes a revision', 'On a box server'], ssisActionVerbs.map(verb => {
-      const spec = ssisActions[verb]
-      return [code(verb), spec.title, spec.steps.join('; '), spec.procedures.map(name => code('catalog.' + name)).join(', '), spec.revision ? 'Yes' : 'No',
+    table(['Verb', 'Title', 'Runs in', 'Steps', 'Calls', 'Takes a revision', 'On a box server'], ssisActionVerbs.map(verb => {
+      const spec: SsisActionSpec = ssisActions[verb]
+      return [code(verb), spec.title, spec.scope === 'catalog' ? 'The catalog\'s database' : code('master'), spec.steps.join('; '),
+        spec.procedures.length ? spec.procedures.map(name => code('catalog.' + name)).join(', ') : '—', spec.revision ? 'Yes' : 'No',
         spec.windowsAuthOnBox ? 'Windows authentication only' : 'Any authentication']
     })),
     '',
@@ -122,6 +125,53 @@ export function renderSsisDocs(): string {
     'never reaches its error path, so Stop during `catalog.stop_operation` (waiting on a lock) rolls the stop back but may leave that',
     'Stop operation Running until SQL Server restarts and the catalog\'s startup procedure ends it; the `CANCELLED` reply says so.',
     '',
+    '#### Create Catalog',
+    '',
+    'Create Catalog does what SSMS 22\'s `Catalog.Create` does (read from its object model), on a write connection of its own in `master`.',
+    'Its dialog first reads `ssis.catalogSetup` on the SSIS read pool, and the write reads the same again before its first step:',
+    'sysadmin, whether the catalog\'s database exists, `clr enabled` in use and `scan for startup procs` (SSMS\'s default for the startup',
+    'procedure), the Integration Services folder from the registry value',
+    '`HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\<major>0\\SSIS\\Setup\\DTSPath` (`xp_regread` on the server, as SSMS reads it),',
+    `the catalog backup in its \`Binn\` folder (${createCatalog.backupFiles.map(item => `${code(item.file)} from ${versions[item.since]}`).join(', ')}) and ${code(createCatalog.assemblyFile)}`,
+    'beside it, whether the backup exists (`xp_fileexist`), the database files\' folder (the master database\'s, from `SERVERPROPERTY(\'MasterFile\')`,',
+    'where SSMS puts them) and that `SSISDB.mdf` and `SSISDB.ldf` are not there yet, and the backup\'s logical files (`RESTORE FILELISTONLY`).',
+    'It is refused before it connects on SQL Server before 2016, on Linux, and on Azure SQL Database and Managed Instance (an Azure-SSIS',
+    'integration runtime creates that catalog); then without sysadmin (`PERMISSION_DENIED`), when the catalog exists (`CATALOG_EXISTS`),',
+    'when the backup or the folders cannot be found or the files exist (`NOT_SUPPORTED`, in SSMS\'s words), and when CLR integration is',
+    'off and the request did not agree to enable it (`CLR_REQUIRED`), or when CLR integration is off and other dynamic `sp_configure` changes',
+    'wait for a `RECONFIGURE` (`CONFIGURATION_PENDING`, naming them; `min server memory (MB)` at 0 never counts, because SQL Server always',
+    'shows it in use as 16): the user agreed to CLR integration, not to them. Then, in order:',
+    '',
+    '1. **Enable CLR integration** (only when it is off): `sp_configure \'clr enabled\', 1` and `RECONFIGURE`, as SMO does for SSMS\'s dialog.',
+    '2. **Restore the catalog database**: `RESTORE DATABASE` with the name, the backup, the logical names and the new files as parameters,',
+    '   refused (27135) if the database appeared meanwhile, then `SET READ_WRITE` if it restored read-only. Unlike SSMS it does not use',
+    '   `WITH REPLACE`, so nothing that appeared meanwhile is overwritten.',
+    '3. **Create the master key**: SSMS\'s statement, after dropping a master key the backup might hold, with the password a parameter',
+    '   that the server quotes (`REPLACE` of each quote inside `EXEC`). Unlike SSMS the literal is an `N` literal, so a password with',
+    '   characters outside the server\'s code page keeps them, and the `REPLACE` compares in `Latin1_General_BIN2`: in a width-insensitive',
+    '   collation it would double U+FF07 (fullwidth apostrophe), which the literal reads as an ASCII quote, so the key\'s password would',
+    '   not be the one typed. The assembly\'s path and the cleanup login\'s random password are quoted the same way.',
+    '4. **Register the Integration Services assembly and startup procedure**: after 14.0.800.11 (SQL Server 2017 and later, as SSMS',
+    '   decides it) the assembly\'s SHA2_512 hash with `sys.sp_add_trusted_assembly`; before, the asymmetric key',
+    '   `MS_SQLEnableSystemAssemblyLoadingKey`, its login and `UNSAFE ASSEMBLY`. Then `master.dbo.sp_ssis_startup` (SSMS\'s text), and',
+    '   `sp_procoption` when the startup procedure was chosen.',
+    '5. **Create the maintenance job**: `##MS_SSISServerCleanupJobLogin##` with a random password the server generates, disabled, its user',
+    '   in the catalog with EXECUTE on the two cleanup procedures, `VIEW SERVER STATE`, and the `SSIS Server Maintenance Job` (two T-SQL',
+    '   steps, daily at 00:00), as SSMS\'s CreateCleanupJobLogin.sql and CreateMaintenanceJob.sql do. Like SSMS it creates no',
+    '   `SSIS Failover Monitor Job`: that belongs to Always On support.',
+    '',
+    `When a step after the restore fails or is stopped, Create Catalog does what SSMS does after a failure and adds the step "${createCatalog.cleanupStep}":`,
+    'it ends a transaction the cancelled statement left open, then drops what this request made: the trusted assembly hash it added,',
+    '`sp_ssis_startup`, both SSIS jobs and the cleanup login, and then the database it restored, so the server is as before (CLR stays',
+    'enabled, as in SSMS). Its statements wait at most 30 s for a lock, because nothing can stop them. A refused restore (the database',
+    'appeared meanwhile) removes nothing, and a database left restoring by a failed restore is dropped only while no other session holds a',
+    'lock on it (another restore of the same name holds an exclusive one). Stop ends Create Catalog at any statement but the restore',
+    'itself (and its switch to read-write), because a half-restored catalog is worse than waiting: Stop during the restore lets it end,',
+    'then removes what it created; Stop at a later statement, waiting for a lock or not, has SQL Server cancel it and removes what was',
+    'created. Its reply waits for that, past the usual grace, and lists the steps (a disconnect still answers at once). The password is',
+    'a parameter only: it is never in SQL text Varia builds, in messages, in logs or on disk, and the request\'s frame is zeroed on both sides.',
+    '',
+
     '### Code tables',
     '',
     `Operation types (\`catalog.operations.operation_type\`):`,
