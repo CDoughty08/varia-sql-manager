@@ -1038,8 +1038,8 @@
         },
         "emptyState.iconForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Decorative glyph of empty views. Default $iconMuted/60 (Dark #7f869499, Light #6b728099).",
-          "markdownDescription": "(Varia) Decorative glyph of empty views. Default `$iconMuted/60` (Dark `#7f869499`, Light `#6b728099`)."
+          "description": "(Varia) Decorative glyph of empty views. Not used yet; reserved for the empty views of the output pane and documents. Default $iconMuted/60 (Dark #7f869499, Light #6b728099).",
+          "markdownDescription": "(Varia) Decorative glyph of empty views. Not used yet; reserved for the empty views of the output pane and documents. Default `$iconMuted/60` (Dark `#7f869499`, Light `#6b728099`)."
         },
         "panel.background": {
           "$ref": "#/definitions/value",

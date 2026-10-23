@@ -3,6 +3,7 @@ import { useServiceSnapshot, useWorkbench } from '../../core/WorkbenchContext'
 import type { DeleteTarget } from '../../../../shared/actions/schema.ts'
 import type { DeleteDraft } from '../definitions'
 import type { PageProps } from '../ObjectDialog'
+import Icon from '../../Icon'
 
 const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
 
@@ -28,8 +29,8 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
         : <tr><td><bdi>{open.label}</bdi></td><td /><td /><td>{open.phase === 'loading' ? 'Loading…' : status}</td><td /></tr>}</tbody>
     </table>
     {model && model.warnings.length > 0 && <ul className="object-dialog-warnings" aria-label="Warnings">
-      {model.warnings.map((warning, index) => <li key={index}><span className="codicon codicon-warning" aria-hidden="true" /><span>{warning.text}</span></li>)}
-      {model.dependentsTruncated && <li><span className="codicon codicon-warning" aria-hidden="true" /><span>More objects depend on it than are listed.</span></li>}
+      {model.warnings.map((warning, index) => <li key={index}><Icon name="warning" /><span>{warning.text}</span></li>)}
+      {model.dependentsTruncated && <li><Icon name="warning" /><span>More objects depend on it than are listed.</span></li>}
     </ul>}
     {database && model && draft && <fieldset className="object-dialog-options" disabled={!editable}>
       <label className="checkbox-label"><input type="checkbox" checked={draft.deleteHistory && !model.isSnapshot} disabled={!!model.isSnapshot}

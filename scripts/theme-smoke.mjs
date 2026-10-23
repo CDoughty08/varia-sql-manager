@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
 import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, part, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -118,6 +119,65 @@ try {
   })), part)
   expect(await spinners()).toEqual({ status: 'none', tree: 'none' })
   console.log('Theme checks: metric tokens apply, with no text under 11 px and no spinner turning under reduced motion.')
+
+  // The font stacks apply, and where Windows has the fonts, the first family is the one drawn: Chromium falls back
+  // silently when a family name does not match (Windows 11's variable font matches only as 'Segoe UI Variable Text').
+  const fonts = await page.evaluate(() => {
+    const context = document.createElement('canvas').getContext('2d')
+    const width = family => { context.font = `13px ${family}`; return context.measureText('Object Explorer: 0123456789 Wwi').width }
+    const stack = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+    const view = document.querySelector('.monaco-editor .view-lines'), editor = getComputedStyle(view)
+    return {
+      body: getComputedStyle(document.body).fontFamily, ui: width(stack('--varia-font-ui')), variable: width("'Segoe UI Variable Text', monospace"), segoe: width("'Segoe UI', monospace"), monospace: width('monospace'),
+      mono: width(stack('--varia-font-mono')), cascadia: width("'Cascadia Mono', serif"), consolas: width('Consolas, serif'), serif: width('serif'),
+      editor: [editor.fontSize, editor.fontFeatureSettings]
+    }
+  })
+  expect(fonts.body.startsWith('"Segoe UI Variable Text", "Segoe UI", ')).toBe(true)
+  // Monaco turns ligatures off with font-feature-settings, so Cascadia Code draws <= and <> as two glyphs; 13 px is the default size.
+  expect(fonts.editor[0]).toBe('13px')
+  expect(fonts.editor[1]).toMatch(/"liga" (?:0|off)/)
+  expect(fonts.editor[1]).toMatch(/"calt" (?:0|off)/)
+  if (process.platform === 'win32') {
+    const windowsFonts = join(process.env.SystemRoot ?? 'C:\\Windows', 'Fonts'), has = file => readdir(windowsFonts).then(names => names.some(name => name.toLowerCase() === file), () => false)
+    if (await has('seguivar.ttf')) {
+      expect(fonts.variable).not.toBe(fonts.monospace)
+      expect([fonts.ui === fonts.variable, fonts.ui === fonts.segoe]).toEqual([true, false])
+    }
+    if (await has('cascadiamono.ttf')) expect([fonts.mono === fonts.cascadia, fonts.mono === fonts.consolas, fonts.cascadia === fonts.serif]).toEqual([true, false, false])
+  }
+  // Icons come from the registry: Varia's SVGs and codicons share the 16 px grid, and a document tab shows an icon, not a badge.
+  const icons = await page.evaluate(({ titleBarBrand, documentTabs, tabIcon }) => {
+    const box = element => { const rect = element?.getBoundingClientRect(); return rect && [rect.width, rect.height] }
+    const brand = document.querySelector(titleBarBrand + ' [data-icon]'), tab = document.querySelector(documentTabs + ' ' + tabIcon)
+    return { brand: [brand?.tagName.toLowerCase(), brand?.dataset.icon, box(brand), brand && getComputedStyle(brand.querySelector('path')).strokeLinecap], tab: [tab?.dataset.icon, box(tab), tab?.closest('[role="tab"]')?.textContent] }
+  }, part)
+  expect(icons).toEqual({ brand: ['svg', 'varia', [16, 16], 'round'], tab: ['database', [16, 16], expect.stringMatching(/^SQLQuery\d+\.sql$/)] })
+  // Under forced colours an svg keeps a colour set on itself (Chromium's preserve-parent-color), so the tab's kind icon
+  // would stay the theme's pale amber on the system's Canvas; it takes the tab text's system colour instead.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const forcedTab = await documentTabs(page).getByRole('tab').first().evaluate((tab, { tabIcon, tabName }) => [getComputedStyle(tab.querySelector(tabIcon + ' path')).stroke, getComputedStyle(tab.querySelector(tabName)).color], part)
+  await page.emulateMedia({ forcedColors: null })
+  expect(forcedTab[0]).toBe(forcedTab[1])
+  // Every glyph size rule wins over Monaco's codicon.css (16px/1 codicon), so each icon glyphUse names is drawn at its size.
+  const glyphs = await page.evaluate(use => Object.fromEntries(Object.entries(use).flatMap(([name, selectors]) => selectors.map(selector => {
+    // A probe that matches the selector (class compounds joined by descendant or child combinators): Icon.tsx draws a
+    // codicon as a span with the codicon classes, and Varia's own icons as an svg.icon.
+    const compounds = selector.split(/\s*>\s*|\s+/)
+    let parent = document.body, root
+    compounds.forEach((compound, index) => {
+      const classes = compound.split('.').filter(Boolean), svg = classes.includes('icon'), last = index === compounds.length - 1
+      const element = parent.appendChild(svg ? document.createElementNS('http://www.w3.org/2000/svg', 'svg') : document.createElement('span'))
+      element.setAttribute('class', [...classes, ...last && !svg ? ['codicon', 'codicon-close'] : []].join(' '))
+      root ??= element
+      parent = element
+    })
+    const size = getComputedStyle(parent).fontSize
+    root.remove()
+    return [selector, `${name} ${size}`]
+  }))), glyphUse)
+  expect(glyphs).toEqual(Object.fromEntries(Object.entries(glyphUse).flatMap(([name, selectors]) => selectors.map(selector => [selector, `${name} ${glyphSizes[name].px}px`]))))
+  console.log('Theme checks: the font stacks are the ones drawn, the editor has no ligatures, and icons sit on the 16 px grid.')
 
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.
   await movePane(page, 'output', 'float')

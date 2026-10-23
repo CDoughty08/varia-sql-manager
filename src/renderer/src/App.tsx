@@ -223,15 +223,15 @@ export default function App() {
     <TitleBar title={windowTitle} />
     <div className="toolbar" role="toolbar" aria-label="Standard">
       <div className="toolbar-actions">
-        <button className="primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="plus" />Connect</button>
+        <button className="primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="add" />Connect</button>
         <span className="toolbar-divider" />
-        <button disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="plus" />New query</button>
-        <button disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="open" />Open</button>
+        <button disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="add" />New query</button>
+        <button disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="folder-opened" />Open</button>
         <button disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
         <button disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
         <span className="toolbar-divider" />
         <button className="execute" disabled={!enabled.execute} title={connection?.lost ? lostHint : undefined} onClick={() => run('query.execute')}><Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
-        <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="stop" />Cancel</button>
+        <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
         <span className="toolbar-divider" />
         <button onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
       </div>
@@ -250,7 +250,7 @@ export default function App() {
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
         <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}>{kindInfo[documentKind(tab)].icon ? <span className={`sql-icon codicon codicon-${kindInfo[documentKind(tab)].icon}`} role="img" aria-label={kindInfo[documentKind(tab)].badge} /> : <span className="sql-icon" role="img" aria-label={kindInfo[documentKind(tab)].badge}>{kindInfo[documentKind(tab)].badge}</span>}<span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <span className="tab-readonly codicon codicon-lock" role="img" aria-label="Read-only" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" role="img" aria-label="Executing" />}</button>
+          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" role="img" aria-label="Executing" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div>)}</div>
         {active.id ? <>

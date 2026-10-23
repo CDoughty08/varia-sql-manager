@@ -155,7 +155,7 @@ describe('ExplorerService: loading', () => {
     expect(f.labels()).toEqual(['server-a.example', '  Databases', '  Security', '  Server Objects'])
     expect(f.calls().map(params => params.node)).toEqual([{ type: 'object', object: { kind: 'server' } }])
     const root = f.explorer.node(f.find('server-a.example'))!
-    expect([root.sublabel, root.icon, root.expanded, root.level]).toEqual(['(SQL Server 16.0.4135.4 - sa)', 'svg:server', true, 1])
+    expect([root.sublabel, root.icon, root.expanded, root.level]).toEqual(['(SQL Server 16.0.4135.4 - sa)', 'server', true, 1])
     expect(f.explorer.getSnapshot().selected).toBe(root.id)
     expect(serverSublabel({ serverVersion: '15.0', productVersion: undefined, login: undefined })).toBe('(SQL Server 15.0)')
     expect(serverSublabel({ serverVersion: '15.0', productVersion: '15.0.2000.5', login: undefined })).toBe('(SQL Server 15.0.2000.5)')
